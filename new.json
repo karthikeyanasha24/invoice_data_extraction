@@ -1,0 +1,176 @@
+[
+    {
+      "SegmentDelimiter": "~",
+      "DataElementDelimiter": "*",
+      "ISA": {
+        "AuthorizationInformationQualifier_1": "00",
+        "AuthorizationInformation_2": "          ",
+        "SecurityInformationQualifier_3": "00",
+        "SecurityInformation_4": "          ",
+        "SenderIDQualifier_5": "12",
+        "InterchangeSenderID_6": "58671830621    ",
+        "ReceiverIDQualifier_7": "12",
+        "InterchangeReceiverID_8": "58671830621    ",
+        "InterchangeDate_9": "250223",
+        "InterchangeTime_10": "0557",
+        "InterchangeControlStandardsIdentifier_11": "U",
+        "InterchangeControlVersionNumber_12": "00401",
+        "InterchangeControlNumber_13": "000000000",
+        "AcknowledgementRequested_14": "0",
+        "UsageIndicator_15": "P",
+        "ComponentElementSeparator_16": ">"
+      },
+      "Groups": [
+        {
+          "GS": {
+            "CodeIdentifyingInformationType_1": "IN",
+            "SenderIDCode_2": "58671830621",
+            "ReceiverIDCode_3": "58671830621",
+            "Date_4": "20250223",
+            "Time_5": "0557",
+            "GroupControlNumber_6": "000000",
+            "TransactionTypeCode_7": "X",
+            "VersionAndRelease_8": "004010"
+          },
+          "Transactions": [
+            {
+              "ST": {
+                "TransactionSetIdentifierCode_01": "810",
+                "TransactionSetControlNumber_02": "0000"
+              },
+              "BIG": {
+                "Date_01": "20120723",
+                "InvoiceNumber_02": "0090039049"
+              },
+              "CUR": {
+                "EntityIdentifierCode_01": "BY",
+                "CurrencyCode_02": "AUD"
+              },
+              "REF": [
+                {
+                  "ReferenceIdentificationQualifier_01": "CT",
+                  "ReferenceIdentification_02": "0000000171"
+                }
+              ],
+              "PER": [
+                {
+                  "ContactFunctionCode_01": "IC",
+                  "Name_02": "SAP Australia",
+                  "CommunicationNumberQualifier_03": "TE",
+                  "CommunicationNumber_04": "(02) 9935 4"
+                }
+              ],
+              "N1Loop": [
+                {
+                  "N1": {
+                    "EntityIdentifierCode_01": "SU",
+                    "Name_02": "SAP Australia",
+                    "IdentificationCodeQualifier_03": "12",
+                    "IdentificationCode_04": "58671830621"
+                  },
+                  "N3": [
+                    {
+                      "AddressInformation_01": "Walker Street"
+                    }
+                  ],
+                  "N4": {
+                    "CityName_01": "North Sydney",
+                    "StateorProvinceCode_02": "NS",
+                    "PostalCode_03": "2060",
+                    "CountryCode_04": "AUS"
+                  }
+                },
+                {
+                  "N1": {
+                    "EntityIdentifierCode_01": "BY",
+                    "Name_02": "RUN BEST PTY LTD",
+                    "IdentificationCodeQualifier_03": "12",
+                    "IdentificationCode_04": "58671830621"
+                  },
+                  "N3": [
+                    {
+                      "AddressInformation_01": "Green Patch"
+                    }
+                  ],
+                  "N4": {
+                    "CityName_01": "Port Lincoln",
+                    "StateorProvinceCode_02": "SA",
+                    "PostalCode_03": "5606",
+                    "CountryCode_04": "AUS"
+                  }
+                }
+              ],
+              "ITD": [
+                {
+                  "TermsTypeCode_01": "01",
+                  "TermsBasisDateCode_02": "1"
+                }
+              ],
+              "DTM": [
+                {
+                  "DateTimeQualifier_01": "011",
+                  "Date_02": "20120723"
+                }
+              ],
+              "FOB": {
+                "ShipmentMethodofPayment_01": "CC"
+              },
+              "IT1Loop": [
+                {
+                  "IT1": {
+                    "AssignedIdentification_01": "1",
+                    "QuantityInvoiced_02": "1.0",
+                    "UnitorBasisforMeasurementCode_03": "EA",
+                    "UnitPrice_04": "4900",
+                    "BasisofUnitPriceCode_05": "CP",
+                    "ProductServiceIDQualifier_06": "VP",
+                    "ProductServiceID_07": "SRV1_4_ERP"
+                  }
+                },
+                {
+                  "IT1": {
+                    "AssignedIdentification_01": "2",
+                    "QuantityInvoiced_02": "1.0",
+                    "UnitorBasisforMeasurementCode_03": "EA",
+                    "UnitPrice_04": "19400",
+                    "BasisofUnitPriceCode_05": "CP",
+                    "ProductServiceIDQualifier_06": "VP",
+                    "ProductServiceID_07": "R-1160"
+                  }
+                }
+              ],
+              "TDS": {
+                "Amount_01": "26730"
+              },
+              "CTT": {
+                "NumberofLineItems_01": "2",
+                "HashTotal_02": "30"
+              },
+              "SE": {
+                "NumberofIncludedSegments_01": "19",
+                "TransactionSetControlNumber_02": "0000"
+              },
+              "Model": "EdiNation.X12.ASC.004010"
+            }
+          ],
+          "GETrailers": [
+            {
+              "NumberOfIncludedSets_1": "1",
+              "GroupControlNumber_2": "000000"
+            }
+          ]
+        }
+      ],
+      "IEATrailers": [
+        {
+          "NumberOfIncludedGroups_1": "1",
+          "InterchangeControlNumber_2": "000000000"
+        }
+      ],
+      "Result": {
+        "LastIndex": 23,
+        "Details": [],
+        "Status": "success"
+      }
+    }
+  ]
