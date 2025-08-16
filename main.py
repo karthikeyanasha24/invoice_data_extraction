@@ -6,7 +6,7 @@ from starlette.responses import StreamingResponse
 from invoice_converter import convert_xml_to_x12
 
 app = FastAPI()
-
+# datbase : mysql://root:oiMWqHDrdteezdJlbWQJRrHcYDjlDvrT@turntable.proxy.rlwy.net:24719/railway
 # https://steadfast-dream-production.up.railway.app/
 
 @app.get("/")
@@ -41,3 +41,4 @@ async def convert():
 if __name__ == "__main__":
 
     uvicorn.run(app, host="0.0.0.0", port=5000)
+
