@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from passlib.context import CryptContext
 from datetime import datetime
 import uuid
+import bcrypt
 
 from ..database import Base
 
@@ -28,7 +29,30 @@ class ZodiacUser(Base):
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its hash."""
+    try:
+        # Truncate password to 72 bytes if necessary
+        if len(plain_password.encode('utf-8')) > 72:
+            plain_password = plain_password[:72]
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        # Fallback to direct bcrypt verification
+        try:
+            if len(plain_password.encode('utf-8')) > 72:
+                plain_password = plain_password[:72]
+            return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+        except Exception:
+            return False
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    """Hash a password."""
+    try:
+        # Truncate password to 72 bytes if necessary
+        if len(password.encode('utf-8')) > 72:
+            password = password[:72]
+        return pwd_context.hash(password)
+    except Exception as e:
+        # Fallback to direct bcrypt hashing
+        if len(password.encode('utf-8')) > 72:
+            password = password[:72]
+        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
