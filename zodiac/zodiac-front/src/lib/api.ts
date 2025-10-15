@@ -656,7 +656,10 @@ export const fileApi = {
       console.error('📁 File API - Get failed invoice by tracking ID failed:', {
         error: error.response?.data || error.message,
         status: error.response?.status,
-        trackingId
+        trackingId,
+        fullError: error,
+        url: `/api/v1/invoices/failed/${trackingId}`,
+        method: 'GET'
       });
       
       if (error.response?.status === 401) {

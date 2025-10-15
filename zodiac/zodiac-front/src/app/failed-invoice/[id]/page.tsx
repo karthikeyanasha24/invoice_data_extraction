@@ -56,7 +56,7 @@ export default function FailedInvoicePage() {
         // Set default tab based on error type
         const hasProcessingStepsError = invoice.processing_steps_error && invoice.processing_steps_error.length > 0;
         const isEdiFormatValidationError = hasProcessingStepsError && 
-          invoice.processing_steps_error.some(error => error.step === 'EDI_FORMAT_VALIDATION');
+          invoice.processing_steps_error?.some(error => error.step === 'EDI_FORMAT_VALIDATION');
         
         if (isEdiFormatValidationError) {
           setActiveTab('errors'); // Default to Error Details for format validation errors
@@ -693,7 +693,7 @@ export default function FailedInvoicePage() {
                       {(() => {
                         const hasProcessingStepsError = invoice.processing_steps_error && invoice.processing_steps_error.length > 0;
                         const isEdiFormatValidationError = hasProcessingStepsError && 
-                          invoice.processing_steps_error.some(error => error.step === 'EDI_FORMAT_VALIDATION');
+                          invoice.processing_steps_error?.some(error => error.step === 'EDI_FORMAT_VALIDATION');
                         
                         if (isEdiFormatValidationError) {
                           // EDI Format Validation Error - 3 tabs: Original XML, Generated EDI, Error Details

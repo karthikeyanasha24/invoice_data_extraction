@@ -54,7 +54,7 @@ zodiac-api/
 
    Or with uvicorn directly:
    ```bash
-   uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   uv run uvicorn app.server:app --reload --host 0.0.0.0 --port 8000
    ```
 
 ## API Endpoints

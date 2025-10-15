@@ -1686,6 +1686,9 @@ def get_failed_invoice_by_tracking_id(
         
         if not result:
             logger.warning(f"⚠️ Failed invoice not found for tracking ID: {tracking_id}")
+            logger.warning(f"⚠️ User ID: {current_user.id}")
+            logger.warning(f"⚠️ Tracking ID type: {type(tracking_id)}")
+            logger.warning(f"⚠️ User ID type: {type(current_user.id)}")
             raise HTTPException(status_code=404, detail="Failed invoice not found")
         
         # Convert to model instance

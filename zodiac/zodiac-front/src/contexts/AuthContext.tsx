@@ -25,31 +25,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const clearAuthData = () => {
     console.log('🔐 AuthContext - Clearing all auth data');
     
-    // Clear all auth-related data from localStorage
-    const authKeys = [
-      'access_token',
-      'refresh_token', 
-      'user_data',
-      'auth_state',
-      'token_expiry',
-      'last_login',
-      'remember_me'
-    ];
-    
-    authKeys.forEach(key => {
-      localStorage.removeItem(key);
-      sessionStorage.removeItem(key);
-    });
-    
-    // Clear any cached API responses (if using a cache)
-    if (typeof window !== 'undefined' && 'caches' in window) {
-      caches.keys().then(cacheNames => {
-        cacheNames.forEach(cacheName => {
-          if (cacheName.includes('api') || cacheName.includes('auth')) {
-            caches.delete(cacheName);
-          }
-        });
+    // Only access localStorage/sessionStorage on client side
+    if (typeof window !== 'undefined') {
+      // Clear all auth-related data from localStorage
+      const authKeys = [
+        'access_token',
+        'refresh_token', 
+        'user_data',
+        'auth_state',
+        'token_expiry',
+        'last_login',
+        'remember_me'
+      ];
+      
+      authKeys.forEach(key => {
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
       });
+      
+      // Clear any cached API responses (if using a cache)
+      if ('caches' in window) {
+        caches.keys().then(cacheNames => {
+          cacheNames.forEach(cacheName => {
+            if (cacheName.includes('api') || cacheName.includes('auth')) {
+              caches.delete(cacheName);
+            }
+          });
+        });
+      }
     }
     
     // Clear any axios interceptors or cached requests
@@ -64,6 +67,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     const checkAuth = async () => {
+      // Only run on client side
+      if (typeof window === 'undefined') {
+        setLoading(false);
+        return;
+      }
+      
       console.log('🔐 AuthContext - Checking authentication...');
       
       // First, clear any potentially stale auth data
@@ -102,7 +111,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       const response = await authApi.login({ email, password });
       console.log('🔐 AuthContext - Login successful, storing token');
-      localStorage.setItem('access_token', response.access_token);
+      
+      // Only access localStorage on client side
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('access_token', response.access_token);
+      }
+      
       setUser(response.user);
       setIsAuthenticated(true);
       return true;
@@ -127,7 +141,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       const response = await authApi.signup({ email, username, password });
       console.log('🔐 AuthContext - Signup successful, storing token');
-      localStorage.setItem('access_token', response.access_token);
+      
+      // Only access localStorage on client side
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('access_token', response.access_token);
+      }
+      
       setUser(response.user);
       setIsAuthenticated(true);
       return true;

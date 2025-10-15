@@ -1,5 +1,5 @@
 # Zodiac API Application Package
-from .main import app
+from .server import app
 
 __all__ = ["app"]
 

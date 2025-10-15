@@ -1018,16 +1018,15 @@ function FileUploadComponent({ onUpload, error, success, uploading, onDismissErr
               </div>
             </>
           )}
-            <input
-              id="file-upload"
-              name="file-upload"
-              type="file"
-              className="sr-only"
-              onChange={handleChange}
-              disabled={uploading}
-              accept=".edi,.xml,.txt,.x12"
-            />
-          </div>
+          <input
+            id="file-upload"
+            name="file-upload"
+            type="file"
+            className="sr-only"
+            onChange={handleChange}
+            disabled={uploading}
+            accept=".edi,.xml,.txt,.x12"
+          />
         </div>
       </div>
     </div>

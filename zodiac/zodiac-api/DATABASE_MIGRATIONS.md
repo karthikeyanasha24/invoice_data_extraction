@@ -52,7 +52,7 @@ Migrations run automatically when you start the application:
 
 ```bash
 # Start the API server - migrations run automatically
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
 
 ### Manual Status Check
