@@ -1,0 +1,677 @@
+import axios from 'axios';
+import { AuthResponse, LoginRequest, SignupRequest, User, FileUploadResponse, Invoice } from '@/types';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+export const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Add request interceptor to include auth token and log requests
+api.interceptors.request.use(
+  (config) => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('access_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+    
+    // Log request details
+    console.group(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`);
+    console.log('Headers:', config.headers);
+    console.log('Data:', config.data);
+    console.log('Params:', config.params);
+    console.groupEnd();
+    
+    return config;
+  },
+  (error) => {
+    console.error('❌ Request interceptor error:', error);
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor for better error handling and logging
+api.interceptors.response.use(
+  (response) => {
+    // Log successful responses
+    console.group(`✅ API Response: ${response.config.method?.toUpperCase()} ${response.config.url}`);
+    console.log('Status:', response.status);
+    console.log('Headers:', response.headers);
+    console.log('Data:', response.data);
+    console.groupEnd();
+    
+    return response;
+  },
+  (error) => {
+    // Log error responses
+    console.group(`❌ API Error: ${error.config?.method?.toUpperCase()} ${error.config?.url}`);
+    console.log('Status:', error.response?.status);
+    console.log('Status Text:', error.response?.statusText);
+    console.log('Headers:', error.response?.headers);
+    console.log('Error Data:', error.response?.data);
+    console.log('Error Message:', error.message);
+    console.log('Full Error:', error);
+    console.groupEnd();
+    
+    if (error.response?.status === 401) {
+      // Clear invalid token and all auth data
+      if (typeof window !== 'undefined') {
+        // Clear all auth-related data
+        const authKeys = [
+          'access_token',
+          'refresh_token', 
+          'user_data',
+          'auth_state',
+          'token_expiry',
+          'last_login',
+          'remember_me'
+        ];
+        
+        authKeys.forEach(key => {
+          localStorage.removeItem(key);
+          sessionStorage.removeItem(key);
+        });
+        
+        console.log('🔐 API - 401 detected, clearing all auth data and redirecting to login');
+        // Redirect to login page
+        window.location.href = '/';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+// Auth API
+export const authApi = {
+  login: async (data: LoginRequest): Promise<AuthResponse> => {
+    console.log('🔐 Auth API - Login attempt:', { email: data.email, passwordLength: data.password.length });
+    try {
+      const response = await api.post('/api/v1/user/auth/login', data);
+      console.log('🔐 Auth API - Login success:', { user: response.data.user?.username, tokenLength: response.data.access_token?.length });
+      return response.data;
+    } catch (error: any) {
+      console.error('🔐 Auth API - Login failed:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Invalid email or password. Please check your credentials and try again.');
+      } else if (error.response?.status === 422) {
+        throw new Error('Please check your email format and try again.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        // Extract specific error message from response if available
+        const errorMessage = error.response?.data?.detail || 
+                           error.response?.data?.message || 
+                           error.message || 
+                           'Login failed. Please try again.';
+        throw new Error(errorMessage);
+      }
+    }
+  },
+
+  signup: async (data: SignupRequest): Promise<AuthResponse> => {
+    console.log('🔐 Auth API - Signup attempt:', { email: data.email, username: data.username, passwordLength: data.password.length });
+    try {
+      const response = await api.post('/api/v1/user/auth/create-user', data);
+      console.log('🔐 Auth API - Signup success:', { user: response.data.user?.username, tokenLength: response.data.access_token?.length });
+      return response.data;
+    } catch (error: any) {
+      console.error('🔐 Auth API - Signup failed:', error.response?.data || error.message);
+      if (error.response?.status === 400) {
+        throw new Error('User already exists or invalid data. Please try with different credentials.');
+      } else if (error.response?.status === 422) {
+        throw new Error('Please check your email format and password requirements.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Signup failed. Please try again.');
+      }
+    }
+  },
+
+  fetchUser: async (): Promise<User> => {
+    console.log('🔐 Auth API - Fetch user attempt');
+    try {
+      const response = await api.get('/api/v1/user/auth/fetch_user');
+      console.log('🔐 Auth API - Fetch user success:', { user: response.data?.username, email: response.data?.email });
+      return response.data;
+    } catch (error: any) {
+      console.error('🔐 Auth API - Fetch user failed:', error.response?.data || error.message);
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error('Failed to fetch user data.');
+      }
+    }
+  },
+};
+
+// File upload API
+export const fileApi = {
+  uploadFile: async (file: File): Promise<{ 
+    success: boolean; 
+    data?: FileUploadResponse; 
+    error?: string; 
+    isProcessingError?: boolean;
+    errorDetails?: any[];
+    errorSummary?: any;
+    suggestedActions?: string[];
+    fileContentPreview?: string;
+    warnings?: string[];
+  }> => {
+    console.log('📁 File API - Upload attempt:', { 
+      fileName: file.name, 
+      fileSize: file.size, 
+      fileType: file.type,
+      lastModified: new Date(file.lastModified).toISOString(),
+      apiBaseUrl: API_BASE_URL,
+      hasToken: typeof window !== 'undefined' ? !!localStorage.getItem('access_token') : 'N/A'
+    });
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      console.log('📁 File API - Making request to:', `${API_BASE_URL}/api/v1/invoices/process`);
+      console.log('📁 File API - FormData contents:', {
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        hasFile: formData.has('file')
+      });
+      
+      // Check if we have authentication token
+      const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+      console.log('📁 File API - Auth token present:', !!token);
+      
+      let response;
+      try {
+        console.log('📁 File API - About to make axios request...');
+        response = await api.post('/api/v1/invoices/process', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        console.log('📁 File API - Axios request completed successfully');
+      } catch (axiosError: any) {
+        console.error('📁 File API - Axios request failed:', axiosError);
+        console.error('📁 File API - Axios error type:', typeof axiosError);
+        console.error('📁 File API - Axios error constructor:', axiosError?.constructor?.name);
+        
+        // Handle 400 Bad Request - should only be for actual upload failures now
+        if (axiosError.response?.status === 400) {
+          console.log('📁 File API - Handling 400 Bad Request (should be upload failure only)');
+          const errorData = axiosError.response.data;
+          
+          // 400 should only occur for actual upload failures (file_upload_pass: false)
+          console.log('📁 File API - File upload failed');
+          let errorMessage = 'File upload failed.';
+          if (errorData.file_upload_message) {
+            errorMessage = `File upload failed: ${errorData.file_upload_message}`;
+          }
+          
+          // Include enhanced error information if available
+          const enhancedError = {
+            success: false,
+            error: errorMessage,
+            data: errorData,
+            errorDetails: errorData.processing_steps || [],
+            errorSummary: errorData.error_summary || null,
+            suggestedActions: errorData.suggested_actions || []
+          };
+          
+          console.log('📁 File API - Enhanced error response:', enhancedError);
+          return enhancedError;
+        }
+        
+        // For other errors, re-throw them
+        throw axiosError;
+      }
+      
+      console.log('📁 File API - Upload response:', { 
+        responseData: response.data,
+        responseStatus: response.status
+      });
+      
+      // Handle success case (201 Created)
+      if (response.status === 201) {
+        console.log('📁 File API - Invoice processing completed successfully (201 Created)');
+        return { 
+          success: true, 
+          data: response.data,
+          warnings: response.data.warnings || []
+        };
+      } else if (response.status === 200) {
+        // Handle 200 OK responses - could be processing failure or unexpected success
+        console.log('📁 File API - Received 200 OK response:', response.data);
+        const responseData = response.data;
+        
+        // Check if this is a processing failure (file upload succeeded but processing failed)
+        if (responseData && responseData.file_upload_pass === true && responseData.invoice_operation_success === false) {
+          console.log('📁 File API - Processing failure detected in 200 OK response');
+          return { 
+            success: false, 
+            error: 'Processing failed', 
+            data: responseData,
+            isProcessingError: true, // Flag to indicate this is a processing error, not upload error
+            errorDetails: responseData.processing_steps || [],
+            errorSummary: responseData.error_summary || null,
+            suggestedActions: responseData.suggested_actions || [],
+            fileContentPreview: responseData.file_content_preview || null,
+            warnings: responseData.warnings || []
+          };
+        } else {
+          // Unexpected 200 response - treat as success
+          console.log('📁 File API - Unexpected 200 OK response, treating as success');
+          return { 
+            success: true, 
+            data: responseData,
+            warnings: responseData.warnings || []
+          };
+        }
+      } else {
+        // Handle unexpected success status codes
+        console.log('📁 File API - Unexpected success status code:', response.status);
+        return { 
+          success: true, 
+          data: response.data,
+          warnings: response.data.warnings || []
+        };
+      }
+    } catch (error: any) {
+      // First, let's log the raw error to understand what we're dealing with
+      console.log('📁 File API - Raw error object:', error);
+      console.log('📁 File API - Error constructor:', error?.constructor?.name);
+      console.log('📁 File API - Error is Error instance:', error instanceof Error);
+      
+      // Try to extract meaningful information from the error
+      let errorInfo: any = {};
+      
+      try {
+        errorInfo = {
+          error: error.response?.data || error.message || 'Unknown error',
+          status: error.response?.status,
+          fileName: file.name,
+          fullError: error,
+          responseHeaders: error.response?.headers,
+          requestUrl: error.config?.url,
+          requestMethod: error.config?.method,
+          errorType: typeof error,
+          errorKeys: Object.keys(error || {}),
+          errorString: String(error),
+          errorStack: error.stack,
+          errorName: error.name,
+          errorCode: error.code,
+          errorCause: error.cause,
+          isAxiosError: error.isAxiosError,
+          axiosErrorCode: error.code,
+          axiosErrorMessage: error.message,
+          axiosResponse: error.response,
+          axiosRequest: error.request
+        };
+      } catch (extractionError) {
+        console.error('📁 File API - Error extracting error info:', extractionError);
+        errorInfo = {
+          rawError: error,
+          extractionError: extractionError,
+          fileName: file.name
+        };
+      }
+      
+      console.error('📁 File API - Upload failed:', errorInfo);
+      
+      let errorMessage = 'Upload failed. Please try again.';
+      
+      // Handle manually thrown errors (like unexpected status codes)
+      if (error.message && error.message.includes('Unexpected response status')) {
+        errorMessage = error.message;
+      }
+      // Handle specific zodiac-api error responses
+      else if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        console.log('📁 File API - Processing error detail:', detail);
+        
+        if (typeof detail === 'object') {
+          // Check for specific error messages in the detail object
+          if (detail.file_upload_message) {
+            errorMessage = `File upload failed: ${detail.file_upload_message}`;
+          } else if (detail.xml_convert_message) {
+            errorMessage = `XML validation failed: ${detail.xml_convert_message}`;
+          } else if (detail.edi_convert_message) {
+            errorMessage = `EDI conversion failed: ${detail.edi_convert_message}`;
+          } else {
+            // Try to extract any meaningful error message from the detail object
+            const messages = Object.values(detail).filter(val => typeof val === 'string' && val.length > 0);
+            if (messages.length > 0) {
+              errorMessage = `Processing failed: ${messages[0]}`;
+            }
+          }
+        } else if (typeof detail === 'string') {
+          errorMessage = `Upload failed: ${detail}`;
+        }
+      } else if (error.response?.status === 400) {
+        // This should not happen anymore since we handle 400 in the axios try-catch above
+        console.log('📁 File API - Unexpected 400 error in catch block:', error.response.data);
+        errorMessage = 'Invalid request. Please check your file and try again.';
+      } else if (error.response?.status === 401) {
+        errorMessage = 'Session expired. Please log in again to upload files.';
+      } else if (error.response?.status === 403) {
+        errorMessage = 'Access denied. You do not have permission to upload files.';
+      } else if (error.response?.status === 404) {
+        errorMessage = 'Upload endpoint not found. Please contact support.';
+      } else if (error.response?.status === 413) {
+        errorMessage = 'File too large. Please choose a smaller file.';
+      } else if (error.response?.status === 415) {
+        errorMessage = 'Unsupported file type. Please upload XML files only.';
+      } else if (error.response?.status === 422) {
+        errorMessage = 'Invalid file format. Please check your file and try again.';
+      } else if (error.response?.status === 429) {
+        errorMessage = 'Too many requests. Please wait a moment and try again.';
+      } else if (error.response?.status >= 500) {
+        errorMessage = 'Server error during upload. Please try again later.';
+      } else if (!error.response) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else {
+        // Handle any other status codes (including unexpected 201 responses)
+        errorMessage = `Upload failed (${error.response.status}). Please try again.`;
+      }
+      
+      return { success: false, error: errorMessage };
+    }
+  },
+
+  getFiles: async (): Promise<Invoice[]> => {
+    console.log('📁 File API - Get files attempt');
+    try {
+      console.log('📁 File API - Making API calls to success and failed endpoints...');
+      
+      // Get both successful and failed invoices
+      const [successResponse, failedResponse] = await Promise.all([
+        api.get('/api/v1/invoices/success'),
+        api.get('/api/v1/invoices/failed')
+      ]);
+      
+      console.log('📁 File API - API responses received:', {
+        successStatus: successResponse.status,
+        failedStatus: failedResponse.status,
+        successData: successResponse.data,
+        failedData: failedResponse.data
+      });
+      
+      const successfulInvoices = successResponse.data || [];
+      const failedInvoices = failedResponse.data || [];
+      
+      console.log('📁 File API - Raw API responses:', {
+        successful: successfulInvoices,
+        failed: failedInvoices
+      });
+      
+      // Combine and format the invoices to match Invoice interface
+      const allInvoices = [
+        ...successfulInvoices.map((invoice: any) => ({
+          id: invoice.id,
+          filename: invoice.xml_path ? invoice.xml_path.split('/').pop() : `${invoice.tracking_id}_invoice.xml`,
+          status: 'successful',
+          accepted: 1,
+          rejected: 0,
+          customerName: 'N/A',
+          formate: 'XML',
+          export: false,
+          uploaded_at: invoice.uploaded_at,
+          tracking_id: invoice.tracking_id,
+          xml_validation_pass: invoice.xml_validation_pass,
+          xml_convert_message: invoice.xml_convert_message,
+          edi_convert_pass: invoice.edi_convert_pass,
+          edi_convert_message: invoice.edi_convert_message
+        })),
+        ...failedInvoices.map((invoice: any) => ({
+          id: invoice.id,
+          filename: invoice.xml_path ? invoice.xml_path.split('/').pop() : `${invoice.tracking_id}_invoice.xml`,
+          status: 'failed',
+          accepted: 0,
+          rejected: 1,
+          customerName: 'N/A',
+          formate: 'XML',
+          export: false,
+          uploaded_at: invoice.uploaded_at,
+          tracking_id: invoice.tracking_id,
+          xml_validation_pass: invoice.xml_validation_pass,
+          xml_convert_message: invoice.xml_convert_message,
+          edi_convert_pass: invoice.edi_convert_pass,
+          edi_convert_message: invoice.edi_convert_message
+        }))
+      ];
+      
+      console.log('📁 File API - Get files success:', { 
+        successfulCount: successfulInvoices.length,
+        failedCount: failedInvoices.length,
+        totalCount: allInvoices.length
+      });
+      
+      return allInvoices;
+    } catch (error: any) {
+      console.error('📁 File API - Get files failed:', {
+        error: error,
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        stack: error.stack
+      });
+      
+      // Handle different types of errors
+      if (error.response?.status === 401) {
+        console.log('📁 File API - Authentication error, redirecting to login');
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 403) {
+        console.log('📁 File API - Forbidden error, user may not be authenticated');
+        throw new Error('Access denied. Please log in again.');
+      } else if (!error.response) {
+        console.log('📁 File API - Network error, backend may be down');
+        throw new Error('Network error. Please check your connection and ensure the backend server is running.');
+      } else if (error.response?.status >= 500) {
+        console.log('📁 File API - Server error');
+        throw new Error('Server error. Please try again later.');
+      } else {
+        console.log('📁 File API - Unknown error');
+        throw new Error('Failed to load files. Please try again.');
+      }
+    }
+  },
+
+  getFileById: async (id: number): Promise<Invoice> => {
+    console.log('📁 File API - Get file by ID attempt:', { fileId: id });
+    try {
+      // Get all files first, then find the specific one
+      const allFiles = await fileApi.getFiles();
+      const file = allFiles.find((f: Invoice) => f.id === id);
+      
+      if (!file) {
+        console.error('📁 File API - File not found:', { fileId: id, availableFiles: allFiles.map((f: Invoice) => f.id) });
+        throw new Error('File not found');
+      }
+      
+      console.log('📁 File API - Get file by ID success:', { fileId: id, file });
+      return file;
+    } catch (error: any) {
+      console.error('📁 File API - Get file by ID failed:', error.response?.data || error.message);
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error('Failed to load file details.');
+      }
+    }
+  },
+
+  deleteFile: async (id: number): Promise<{ success: boolean; error?: string }> => {
+    console.log('📁 File API - Delete file attempt:', { fileId: id });
+    try {
+      const response = await api.delete(`/api/v1/invoices/${id}`);
+      
+      console.log('📁 File API - Delete file success:', { 
+        fileId: id,
+        responseStatus: response.status
+      });
+      
+      return { success: true };
+    } catch (error: any) {
+      console.error('📁 File API - Delete file failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fileId: id
+      });
+      
+      let errorMessage = 'Delete failed. Please try again.';
+      
+      if (error.response?.status === 401) {
+        errorMessage = 'Session expired. Please log in again.';
+      } else if (error.response?.status === 403) {
+        errorMessage = 'Access denied. You do not have permission to delete this file.';
+      } else if (error.response?.status === 404) {
+        errorMessage = 'File not found. It may have already been deleted.';
+      } else if (error.response?.status >= 500) {
+        errorMessage = 'Server error during deletion. Please try again later.';
+      } else if (!error.response) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      }
+      
+      return { success: false, error: errorMessage };
+    }
+  },
+
+  restoreFile: async (id: number): Promise<{ success: boolean; error?: string }> => {
+    console.log('📁 File API - Restore file attempt:', { fileId: id });
+    try {
+      const response = await api.post(`/api/v1/invoices/${id}/restore`);
+      
+      console.log('📁 File API - Restore file success:', { 
+        fileId: id,
+        responseStatus: response.status
+      });
+      
+      return { success: true };
+    } catch (error: any) {
+      console.error('📁 File API - Restore file failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fileId: id
+      });
+      
+      let errorMessage = 'Restore failed. Please try again.';
+      
+      if (error.response?.status === 401) {
+        errorMessage = 'Session expired. Please log in again.';
+      } else if (error.response?.status === 403) {
+        errorMessage = 'Access denied. You do not have permission to restore this file.';
+      } else if (error.response?.status === 404) {
+        errorMessage = 'File not found in recycle bin.';
+      } else if (error.response?.status >= 500) {
+        errorMessage = 'Server error during restore. Please try again later.';
+      } else if (!error.response) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      }
+      
+      return { success: false, error: errorMessage };
+    }
+  },
+
+  getDeletedFiles: async (): Promise<Invoice[]> => {
+    console.log('📁 File API - Get deleted files attempt');
+    try {
+      const response = await api.get('/api/v1/invoices/deleted');
+      const deletedInvoices = response.data || [];
+      
+      // Format the deleted invoices
+      const formattedInvoices = deletedInvoices.map((invoice: any) => ({
+        id: invoice.id,
+        filename: invoice.xml_path ? invoice.xml_path.split('/').pop() : 'Unknown',
+        status: 'deleted',
+        customerName: 'Unknown',
+        formate: 'XML',
+        export: 'EDI',
+        uploaded_at: invoice.uploaded_at,
+        tracking_id: invoice.tracking_id,
+        deleted_at: invoice.deleted_at
+      }));
+      
+      console.log('📁 File API - Get deleted files success:', { 
+        deletedCount: formattedInvoices.length
+      });
+      
+      return formattedInvoices;
+    } catch (error: any) {
+      console.log('📁 File API - Get deleted files endpoint not available, returning empty array');
+      
+      // If the endpoint doesn't exist (404) or server error (500), return empty array
+      if (error.response?.status === 404 || error.response?.status >= 500) {
+        return [];
+      }
+      
+      // For authentication errors, still throw the error
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      }
+      
+      // For other errors, return empty array gracefully
+      console.warn('📁 File API - Get deleted files failed, returning empty array:', error.response?.data || error.message);
+      return [];
+    }
+  },
+
+  getFailedInvoiceByTrackingId: async (trackingId: string): Promise<any> => {
+    console.log('📁 File API - Get failed invoice by tracking ID attempt:', trackingId);
+    try {
+      const response = await api.get(`/api/v1/invoices/failed/${trackingId}`);
+      
+      console.log('📁 File API - Get failed invoice by tracking ID success:', { 
+        trackingId,
+        responseData: response.data
+      });
+      
+      console.log('🔍 API Response - processing_steps_error:', response.data.processing_steps_error);
+      console.log('🔍 API Response - All keys:', Object.keys(response.data));
+      console.log('🔍 API Response - XML content length:', response.data.xml_content?.length || 0);
+      console.log('🔍 API Response - EDI content length:', response.data.edi_content?.length || 0);
+      console.log('🔍 API Response - Full response:', JSON.stringify(response.data, null, 2));
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('📁 File API - Get failed invoice by tracking ID failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        trackingId
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('Failed invoice not found.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to load invoice details. Please try again.');
+      }
+    }
+  },
+};
+
+export default api;

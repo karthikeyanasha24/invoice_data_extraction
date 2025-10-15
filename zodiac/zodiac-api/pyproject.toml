@@ -1,0 +1,14 @@
+[project]
+name = "zodiac-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.118.3",
+    "psycopg2-binary>=2.9.11",
+    "python-dotenv>=1.1.1",
+    "python-multipart>=0.0.20",
+    "sqlalchemy>=2.0.44",
+    "uvicorn>=0.37.0",
+]
