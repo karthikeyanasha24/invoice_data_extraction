@@ -2,14 +2,14 @@
     "version": 2,
     "builds": [
       {
-        "src": "app/server.py",
+        "src": "app/server.py:app",
         "use": "@vercel/python"
       }
     ],
     "routes": [
       {
         "src": "/(.*)",
-        "dest": "app/server.py",
+        "dest": "app/server.py:app",
         "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         "headers": {
           "Access-Control-Allow-Origin": "*",
