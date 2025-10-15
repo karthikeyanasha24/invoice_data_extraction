@@ -1,6 +1,5 @@
 # Zodiac API Application Package
-from .server import app
-
-__all__ = ["app"]
+# Removed circular import to fix deployment issues
+__all__ = []
 
 
