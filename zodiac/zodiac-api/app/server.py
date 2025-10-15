@@ -51,11 +51,11 @@ app = FastAPI(
 )
 
 # CORS middleware configuration
-CORS_ORIGINS = os.getenv("CORS_ORIGINS")
-if not CORS_ORIGINS:
-    raise ValueError("CORS_ORIGINS environment variable is required")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "https://zodiac-front.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
 
 origins = CORS_ORIGINS.split(",")
+logger.info(f"🌐 CORS origins configured: {origins}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
