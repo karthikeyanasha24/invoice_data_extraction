@@ -40,7 +40,10 @@ if not VERCEL_BLOB_AVAILABLE:
 # Environment configuration
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
-USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None and VERCEL_BLOB_AVAILABLE
+
+# Determine if we MUST use blob storage (PROD + token provided)
+MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None
+USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
 
 # Detailed logging for file storage selection
 logger.info("=" * 60)
@@ -52,7 +55,19 @@ logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
 logger.info(f"🎯 DEPLOY_ENV == 'PROD': {DEPLOY_ENV == 'PROD'}")
 logger.info(f"🔑 BLOB_READ_WRITE_TOKEN is not None: {BLOB_READ_WRITE_TOKEN is not None}")
 logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
+logger.info(f"🚨 MUST_USE_BLOB_STORAGE: {MUST_USE_BLOB_STORAGE}")
 logger.info(f"✅ FINAL DECISION - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+
+if MUST_USE_BLOB_STORAGE:
+    logger.info("🚨 MANDATORY BLOB STORAGE REQUIRED")
+    logger.info("📋 Reason: DEPLOY_ENV=PROD and BLOB_READ_WRITE_TOKEN provided")
+    if not VERCEL_BLOB_AVAILABLE:
+        logger.error("❌ CRITICAL ERROR: Vercel Blob package not available!")
+        logger.error("💥 Cannot proceed - blob storage is mandatory in PROD mode")
+        raise RuntimeError("Vercel Blob package not available but required for PROD deployment")
+else:
+    logger.info("📁 OPTIONAL BLOB STORAGE")
+    logger.info("ℹ️ Local storage is acceptable for this environment")
 
 if USE_BLOB_STORAGE:
     logger.info("🚀 STORAGE MODE: VERCEL BLOB STORAGE")
@@ -82,9 +97,17 @@ if USE_BLOB_STORAGE:
         logger.info("🚀 Ready to use Vercel Blob storage for file operations")
     except Exception as e:
         logger.error(f"❌ Failed to initialize Vercel Blob API: {e}")
-        logger.error("🔄 Falling back to local file storage")
-        USE_BLOB_STORAGE = False
-        blob_api = None
+        logger.error(f"🔍 Error type: {type(e).__name__}")
+        logger.error(f"📝 Error details: {str(e)}")
+        
+        if MUST_USE_BLOB_STORAGE:
+            logger.error("💥 CRITICAL ERROR: Blob storage is mandatory but initialization failed!")
+            logger.error("🚨 Cannot proceed - blob storage is required for PROD deployment")
+            raise RuntimeError(f"Failed to initialize mandatory Vercel Blob API: {str(e)}")
+        else:
+            logger.error("🔄 Falling back to local file storage")
+            USE_BLOB_STORAGE = False
+            blob_api = None
 else:
     logger.info("📁 Skipping Vercel Blob API initialization (not needed)")
 
@@ -97,11 +120,15 @@ if USE_BLOB_STORAGE:
     logger.info("🌐 All file operations will use Vercel Blob storage")
     logger.info("📦 Files will be accessible via blob URLs")
     logger.info("🔧 BlobApi instance ready for use")
+    if MUST_USE_BLOB_STORAGE:
+        logger.info("🚨 MANDATORY MODE: Blob storage is required for this deployment")
 else:
     logger.info("✅ LOCAL FILE STORAGE ACTIVE")
     logger.info("📁 All file operations will use local file system")
     logger.info("💾 Files will be stored in uploads/ and converted/ directories")
     logger.info("📂 Local directories created and ready")
+    if MUST_USE_BLOB_STORAGE:
+        logger.error("💥 CRITICAL ERROR: Should be using blob storage but it's not available!")
 logger.info("=" * 60)
 
 # Create upload directories (only for local storage)
@@ -121,6 +148,16 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
     logger.info(f"📂 Subdirectory: {subdirectory}")
     logger.info(f"📊 File size: {len(file_content)} bytes")
     logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
+    logger.info(f"🚨 Mandatory blob storage: {MUST_USE_BLOB_STORAGE}")
+    
+    # Validate mandatory blob storage requirement
+    if MUST_USE_BLOB_STORAGE and not USE_BLOB_STORAGE:
+        logger.error("💥 CRITICAL ERROR: Blob storage is mandatory but not available!")
+        logger.error("🚨 Cannot save file - blob storage is required for PROD deployment")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Blob storage is mandatory but not available"
+        )
     
     if USE_BLOB_STORAGE:
         try:
@@ -174,6 +211,16 @@ async def read_file_from_storage(file_path: str) -> bytes:
     logger.info("=" * 50)
     logger.info(f"📁 File path: {file_path}")
     logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
+    logger.info(f"🚨 Mandatory blob storage: {MUST_USE_BLOB_STORAGE}")
+    
+    # Validate mandatory blob storage requirement
+    if MUST_USE_BLOB_STORAGE and not USE_BLOB_STORAGE:
+        logger.error("💥 CRITICAL ERROR: Blob storage is mandatory but not available!")
+        logger.error("🚨 Cannot read file - blob storage is required for PROD deployment")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Blob storage is mandatory but not available"
+        )
     
     if USE_BLOB_STORAGE:
         try:
