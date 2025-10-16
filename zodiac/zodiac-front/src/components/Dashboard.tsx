@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { fileApi } from '@/lib/api';
 import { Invoice } from '@/types';
-import { Upload, FileText, BarChart3, Activity, LogOut, User, Eye, MessageCircle, Share2, Trash2, Download, Trash } from 'lucide-react';
+import { Upload, FileText, BarChart3, Activity, LogOut, User, Eye, MessageCircle, Share2, Trash2, Download, Trash, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import AIAssistantPanel from './AIAssistantPanel';
 import SuccessfulInvoiceModal from './SuccessfulInvoiceModal';
@@ -27,6 +27,15 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
   const [latestInvoice, setLatestInvoice] = useState<Invoice | null>(null);
   const [uploading, setUploading] = useState(false);
   
+  // Counts state
+  const [counts, setCounts] = useState({
+    successful: 0,
+    failed: 0,
+    deleted: 0,
+    total: 0,
+    processing: 0
+  });
+  
   // Panel states
   const [showAIAssistant, setShowAIAssistant] = useState(initialShowAI);
   const [selectedSuccessfulInvoice, setSelectedSuccessfulInvoice] = useState<Invoice | null>(null);
@@ -43,7 +52,28 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
   useEffect(() => {
     fetchInvoices();
     fetchDeletedInvoices();
+    fetchCounts();
   }, []);
+
+  const fetchCounts = async () => {
+    console.log('📊 Dashboard - Fetching counts...');
+    try {
+      const data = await fileApi.getInvoiceCounts();
+      console.log('📊 Dashboard - Counts data received:', data);
+      setCounts(data);
+    } catch (error: any) {
+      console.error('📊 Dashboard - Failed to fetch counts:', error);
+      
+      // Check if it's an authentication error
+      if (error.message?.includes('Session expired') || error.message?.includes('log in again')) {
+        console.log('📊 Dashboard - Authentication error detected, redirecting to login');
+        handleAuthError();
+        return;
+      }
+      
+      // Don't show error to user here, just log it and keep default counts
+    }
+  };
 
   const fetchInvoices = async () => {
     console.log('📊 Dashboard - Fetching invoices...');
@@ -184,6 +214,9 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
         setInvoices(prev => [newInvoice, ...prev]);
         setLatestInvoice(newInvoice);
         
+        // Refresh counts after successful upload
+        await fetchCounts();
+        
         // Show success message with navigation options
         const successMessage = result.data.invoice_operation_success 
           ? `File "${file.name}" processed successfully!`
@@ -219,6 +252,10 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
         
         setInvoices(prev => [newInvoice, ...prev]);
         setLatestInvoice(newInvoice);
+        
+        // Refresh counts after processing failure
+        await fetchCounts();
+        
         setUploadSuccess(`File "${file.name}" uploaded but processing failed. Check details for more information.`);
         
         // Clear success message after 8 seconds
@@ -300,7 +337,8 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
         // Refresh both active and deleted invoices from server
         await Promise.all([
           fetchInvoices(),
-          fetchDeletedInvoices()
+          fetchDeletedInvoices(),
+          fetchCounts()
         ]);
         
         // Close modal
@@ -358,7 +396,8 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
         // Refresh both active and deleted invoices from server
         await Promise.all([
           fetchInvoices(),
-          fetchDeletedInvoices()
+          fetchDeletedInvoices(),
+          fetchCounts()
         ]);
       } else {
         console.error('♻️ Dashboard - Restore failed:', result.error);
@@ -399,11 +438,11 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
   };
 
   const stats = {
-    totalFiles: invoices.filter(inv => inv.status !== 'deleted').length,
-    completed: invoices.filter(inv => inv.status && (inv.status.toLowerCase() === 'successful' || inv.status.toLowerCase() === 'completed')).length,
-    processing: invoices.filter(inv => inv.status && inv.status.toLowerCase() === 'processing').length,
-    failed: invoices.filter(inv => inv.status && (inv.status.toLowerCase() === 'failed' || inv.status.toLowerCase() === 'error')).length,
-    deleted: deletedInvoices.length,
+    totalFiles: counts.total,
+    completed: counts.successful,
+    processing: counts.processing,
+    failed: counts.failed,
+    deleted: counts.deleted,
   };
 
   return (
@@ -423,6 +462,13 @@ export default function Dashboard({ initialTab = 'overview', initialShowAI = fal
                 <User className="h-5 w-5 text-gray-400" />
                 <span className="text-sm font-medium text-gray-700">{user?.username}</span>
               </div>
+              <button
+                onClick={() => router.push('/settings')}
+                className="flex items-center space-x-2 text-sm text-gray-500 hover:text-gray-700"
+              >
+                <Settings className="h-4 w-4" />
+                <span>Settings</span>
+              </button>
               <button
                 onClick={logout}
                 className="flex items-center space-x-2 text-sm text-gray-500 hover:text-gray-700"

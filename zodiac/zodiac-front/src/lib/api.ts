@@ -25,6 +25,8 @@ api.interceptors.request.use(
     console.log('Headers:', config.headers);
     console.log('Data:', config.data);
     console.log('Params:', config.params);
+    console.log('Base URL:', config.baseURL);
+    console.log('Full URL:', `${config.baseURL}${config.url}`);
     console.groupEnd();
     
     return config;
@@ -55,6 +57,10 @@ api.interceptors.response.use(
     console.log('Headers:', error.response?.headers);
     console.log('Error Data:', error.response?.data);
     console.log('Error Message:', error.message);
+    console.log('Error Code:', error.code);
+    console.log('Error Config:', error.config);
+    console.log('Error Request:', error.request);
+    console.log('Full Error Object:', error);
     console.log('Full Error:', error);
     console.groupEnd();
     
@@ -511,7 +517,13 @@ export const fileApi = {
         message: error.message,
         response: error.response?.data,
         status: error.response?.status,
-        stack: error.stack
+        stack: error.stack,
+        config: error.config,
+        request: error.request,
+        code: error.code,
+        errno: error.errno,
+        syscall: error.syscall,
+        hostname: error.hostname
       });
       
       // Handle different types of errors
@@ -712,6 +724,263 @@ export const fileApi = {
         throw new Error('Network error. Please check your connection and try again.');
       } else {
         throw new Error('Failed to load invoice details. Please try again.');
+      }
+    }
+  },
+
+  getInvoiceCounts: async (): Promise<{
+    successful: number;
+    failed: number;
+    deleted: number;
+    total: number;
+    processing: number;
+  }> => {
+    console.log('📊 File API - Get invoice counts attempt');
+    try {
+      const response = await api.get('/api/v1/invoices/counts');
+      
+      console.log('📊 File API - Get invoice counts success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('📊 File API - Get invoice counts failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to load invoice counts. Please try again.');
+      }
+    }
+  },
+
+  // API Key Management
+  getApiKey: async (): Promise<{
+    has_key: boolean;
+    is_active?: boolean;
+    api_user_identifier?: string;
+    created_at?: string;
+    updated_at?: string;
+    allow_list?: string[];
+    message: string;
+  }> => {
+    console.log('🔑 API Key - Get API key attempt');
+    try {
+      const response = await api.get('/api/v1/invoices/api-key');
+      
+      console.log('🔑 API Key - Get API key success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('🔑 API Key - Get API key failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 403) {
+        throw new Error('API access is not allowed for this user.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to get API key information. Please try again.');
+      }
+    }
+  },
+
+  generateApiKey: async (): Promise<{
+    success: boolean;
+    api_key: string;
+    api_user_identifier: string;
+    created_at: string;
+    message: string;
+  }> => {
+    console.log('🔑 API Key - Generate API key attempt');
+    try {
+      const response = await api.post('/api/v1/invoices/api-key/generate');
+      
+      console.log('🔑 API Key - Generate API key success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('🔑 API Key - Generate API key failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 403) {
+        throw new Error('API access is not allowed for this user.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to generate API key. Please try again.');
+      }
+    }
+  },
+
+  regenerateApiKey: async (): Promise<{
+    success: boolean;
+    api_key: string;
+    api_user_identifier: string;
+    updated_at: string;
+    message: string;
+  }> => {
+    console.log('🔑 API Key - Regenerate API key attempt');
+    try {
+      const response = await api.post('/api/v1/invoices/api-key/regenerate');
+      
+      console.log('🔑 API Key - Regenerate API key success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('🔑 API Key - Regenerate API key failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 403) {
+        throw new Error('API access is not allowed for this user.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to regenerate API key. Please try again.');
+      }
+    }
+  },
+
+  suspendApiKey: async (): Promise<{
+    success: boolean;
+    deactivated_at: string;
+    message: string;
+  }> => {
+    console.log('🔑 API Key - Suspend API key attempt');
+    try {
+      const response = await api.post('/api/v1/invoices/api-key/suspend');
+      
+      console.log('🔑 API Key - Suspend API key success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('🔑 API Key - Suspend API key failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('No API key found to suspend.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to suspend API key. Please try again.');
+      }
+    }
+  },
+
+  activateApiKey: async (): Promise<{
+    success: boolean;
+    updated_at: string;
+    message: string;
+  }> => {
+    console.log('🔑 API Key - Activate API key attempt');
+    try {
+      const response = await api.post('/api/v1/invoices/api-key/activate');
+      
+      console.log('🔑 API Key - Activate API key success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('🔑 API Key - Activate API key failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('No API key found to activate.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to activate API key. Please try again.');
+      }
+    }
+  },
+
+  updateApiKeyAllowList: async (allowList: string[]): Promise<{
+    success: boolean;
+    allow_list: string[];
+    updated_at: string;
+    message: string;
+  }> => {
+    console.log('🔑 API Key - Update allow list attempt:', allowList);
+    try {
+      const response = await api.post('/api/v1/invoices/api-key/allow-list', allowList);
+      
+      console.log('🔑 API Key - Update allow list success:', { 
+        responseData: response.data
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('🔑 API Key - Update allow list failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        fullError: error
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('No API key found to update.');
+      } else if (error.response?.status === 400) {
+        throw new Error('Invalid IP address format provided.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error('Failed to update API key allow list. Please try again.');
       }
     }
   },

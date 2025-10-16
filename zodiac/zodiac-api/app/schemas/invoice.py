@@ -98,7 +98,7 @@ class ZodiacInvoiceFailedEdi(BaseModel):
     blob_edi_path: Optional[str] = None
     xml_content: Optional[str] = None
     edi_content: Optional[str] = None
-    processing_steps_error: Optional[List[ProcessingStepResult]] = None
+    processing_steps_error: Optional[List[ErrorDetail]] = None
     
     class Config:
         from_attributes = True

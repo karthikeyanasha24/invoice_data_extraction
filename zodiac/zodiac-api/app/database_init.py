@@ -8,6 +8,7 @@ import logging
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
@@ -226,6 +227,143 @@ class DatabaseInitializer:
             logger.error(f"Unexpected error during blob path migration: {e}")
             raise
     
+    def add_api_key_columns(self):
+        """Add API key related columns to users table"""
+        logger.info("Checking for API key columns...")
+        
+        migrations = [
+            {
+                "table": "zodiac_users",
+                "column": "api_user_identifier",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_user_identifier VARCHAR UNIQUE;"
+            },
+            {
+                "table": "zodiac_users",
+                "column": "api_user_allowed",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_user_allowed BOOLEAN DEFAULT TRUE;"
+            },
+            {
+                "table": "zodiac_users",
+                "column": "api_key_hashed",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_key_hashed VARCHAR NULL;"
+            },
+            {
+                "table": "zodiac_users",
+                "column": "api_key_created_at",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_key_created_at TIMESTAMP WITH TIME ZONE NULL;"
+            },
+            {
+                "table": "zodiac_users",
+                "column": "api_key_updated_at",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_key_updated_at TIMESTAMP WITH TIME ZONE NULL;"
+            },
+            {
+                "table": "zodiac_users",
+                "column": "api_key_deactivated_at",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_key_deactivated_at TIMESTAMP WITH TIME ZONE NULL;"
+            },
+            {
+                "table": "zodiac_users",
+                "column": "api_key_allow_list",
+                "sql": "ALTER TABLE zodiac_users ADD COLUMN IF NOT EXISTS api_key_allow_list JSON NULL;"
+            }
+        ]
+        
+        indexes = [
+            {
+                "name": "idx_zodiac_users_api_user_identifier",
+                "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_users_api_user_identifier ON zodiac_users(api_user_identifier);"
+            },
+            {
+                "name": "idx_zodiac_users_api_user_allowed",
+                "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_users_api_user_allowed ON zodiac_users(api_user_allowed);"
+            }
+        ]
+        
+        try:
+            with self.engine.connect() as conn:
+                # Add columns
+                for migration in migrations:
+                    if not self.check_column_exists(migration["table"], migration["column"]):
+                        logger.info(f"Adding {migration['column']} column to {migration['table']}...")
+                        conn.execute(text(migration["sql"]))
+                    else:
+                        logger.info(f"Column {migration['column']} already exists in {migration['table']}")
+                
+                # Add indexes
+                for index in indexes:
+                    if not self.check_index_exists(index["name"]):
+                        logger.info(f"Creating index {index['name']}...")
+                        conn.execute(text(index["sql"]))
+                    else:
+                        logger.info(f"Index {index['name']} already exists")
+                
+                conn.commit()
+                logger.info("✅ API key columns migration completed")
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error during API key migration: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during API key migration: {e}")
+            raise
+    
+    def add_request_type_columns(self):
+        """Add request_type columns to invoice tables"""
+        logger.info("Checking for request_type columns...")
+        
+        migrations = [
+            {
+                "table": "zodiac_invoice_success_edi",
+                "column": "request_type",
+                "sql": "ALTER TABLE zodiac_invoice_success_edi ADD COLUMN IF NOT EXISTS request_type VARCHAR DEFAULT 'web' NOT NULL;"
+            },
+            {
+                "table": "zodiac_invoice_failed_edi",
+                "column": "request_type",
+                "sql": "ALTER TABLE zodiac_invoice_failed_edi ADD COLUMN IF NOT EXISTS request_type VARCHAR DEFAULT 'web' NOT NULL;"
+            }
+        ]
+        
+        indexes = [
+            {
+                "name": "idx_zodiac_invoice_success_edi_request_type",
+                "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_invoice_success_edi_request_type ON zodiac_invoice_success_edi(request_type);"
+            },
+            {
+                "name": "idx_zodiac_invoice_failed_edi_request_type",
+                "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_invoice_failed_edi_request_type ON zodiac_invoice_failed_edi(request_type);"
+            }
+        ]
+        
+        try:
+            with self.engine.connect() as conn:
+                # Add columns
+                for migration in migrations:
+                    if not self.check_column_exists(migration["table"], migration["column"]):
+                        logger.info(f"Adding {migration['column']} column to {migration['table']}...")
+                        conn.execute(text(migration["sql"]))
+                    else:
+                        logger.info(f"Column {migration['column']} already exists in {migration['table']}")
+                
+                # Add indexes
+                for index in indexes:
+                    if not self.check_index_exists(index["name"]):
+                        logger.info(f"Creating index {index['name']}...")
+                        conn.execute(text(index["sql"]))
+                    else:
+                        logger.info(f"Index {index['name']} already exists")
+                
+                conn.commit()
+                logger.info("✅ Request type columns migration completed")
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error during request type migration: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during request type migration: {e}")
+            raise
+    
     def verify_tables_exist(self):
         """Verify that required tables exist"""
         required_tables = [
@@ -269,6 +407,8 @@ class DatabaseInitializer:
             self.add_deleted_at_columns()
             self.add_processing_steps_columns()
             self.add_blob_path_columns()
+            self.add_api_key_columns()
+            self.add_request_type_columns()
             
             logger.info("✅ All database migrations completed successfully!")
             return True
@@ -297,6 +437,21 @@ class DatabaseInitializer:
                     "blob_xml_path": self.check_column_exists("zodiac_invoice_failed_edi", "blob_xml_path"),
                     "blob_edi_path": self.check_column_exists("zodiac_invoice_failed_edi", "blob_edi_path")
                 }
+            },
+            "api_key_columns": {
+                "zodiac_users": {
+                    "api_user_identifier": self.check_column_exists("zodiac_users", "api_user_identifier"),
+                    "api_user_allowed": self.check_column_exists("zodiac_users", "api_user_allowed"),
+                    "api_key_hashed": self.check_column_exists("zodiac_users", "api_key_hashed"),
+                    "api_key_created_at": self.check_column_exists("zodiac_users", "api_key_created_at"),
+                    "api_key_updated_at": self.check_column_exists("zodiac_users", "api_key_updated_at"),
+                    "api_key_deactivated_at": self.check_column_exists("zodiac_users", "api_key_deactivated_at"),
+                    "api_key_allow_list": self.check_column_exists("zodiac_users", "api_key_allow_list")
+                }
+            },
+            "request_type_columns": {
+                "zodiac_invoice_success_edi": self.check_column_exists("zodiac_invoice_success_edi", "request_type"),
+                "zodiac_invoice_failed_edi": self.check_column_exists("zodiac_invoice_failed_edi", "request_type")
             },
             "indexes": {
                 "deleted_at_indexes": [

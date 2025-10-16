@@ -35,7 +35,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
+        user_id: str = payload.get("sub")
         if user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -49,13 +49,30 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = db.query(ZodiacUser).filter(ZodiacUser.id == user_id).first()
+    user = db.query(ZodiacUser).filter(ZodiacUser.id == int(user_id)).first()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    return user
+
+def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)), db: Session = Depends(get_db)):
+    """Optional JWT authentication - returns None if no valid token provided"""
+    if not credentials:
+        return None
+    
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+    except JWTError:
+        return None
+    
+    user = db.query(ZodiacUser).filter(ZodiacUser.id == int(user_id)).first()
     return user
 
 @router.post("/create-user", response_model=AuthResponse)

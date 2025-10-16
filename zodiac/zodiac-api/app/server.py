@@ -128,13 +128,15 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with database migration status"""
+    """Health check endpoint"""
     try:
+        # Simple database connectivity test
         db_status = get_database_status()
+        
+        # Only return basic health status
         return {
             "status": "healthy", 
-            "service": "zodiac-api",
-            "database_migrations": db_status
+            "service": "zodiac-api"
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")

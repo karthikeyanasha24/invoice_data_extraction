@@ -1,5 +1,5 @@
 import vercel_blob
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -18,10 +18,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from ..database import get_db
-from ..models.user import ZodiacUser
+from ..models.user import ZodiacUser, generate_api_key, hash_api_key, verify_api_key, encode_api_key_for_transport, decode_api_key_from_transport
 from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
 from ..schemas.invoice import InvoiceProcessingResponse, ErrorDetail, ProcessingStepResult, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse
-from ..api.auth import get_current_user
+from ..api.api_key_auth import get_api_user_optional, get_client_ip, get_api_user
+from ..api.auth import get_current_user, get_current_user_optional
 
 router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
 
@@ -1247,23 +1248,56 @@ def _convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
 async def process_invoice(
     file: UploadFile = File(...),
     strict_validation: bool = False,
-    current_user: ZodiacUser = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    request: Request = None,
+    current_user: ZodiacUser = Depends(get_current_user)
+):
+    """Process uploaded invoice file with XML validation and EDI conversion (Web UI)"""
+    return await _process_invoice_internal(file, strict_validation, db, request, current_user, "web")
+
+@router.post("/api/process", response_model=InvoiceProcessingResponse)
+async def process_invoice_api(
+    file: UploadFile = File(...),
+    strict_validation: bool = False,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    api_user: ZodiacUser = Depends(get_api_user)
+):
+    """Process uploaded invoice file with XML validation and EDI conversion (API Key)"""
+    return await _process_invoice_internal(file, strict_validation, db, request, api_user, "api")
+
+async def _process_invoice_internal(
+    file: UploadFile,
+    strict_validation: bool,
+    db: Session,
+    request: Request,
+    current_user: ZodiacUser,
+    request_type: str
 ):
     """Process uploaded invoice file with XML validation and EDI conversion
+    Supports both web authentication (JWT) and API key authentication
     
     Args:
         file: Uploaded XML file
         strict_validation: If True, performs strict XML content validation (default: False for old API compatibility)
-        current_user: Authenticated user
         db: Database session
+        request: HTTP request object
+        api_user: Optional API key authenticated user
     """
     
     import time
     start_time = time.time()
     
+    # Authentication method determined by caller
+    if request_type == "api":
+        client_ip = get_client_ip(request) if request else "unknown"
+        logger.info(f"🔑 API request from IP: {client_ip}, User: {current_user.id}")
+    else:
+        logger.info(f"🌐 Web request, User: {current_user.id}")
+    
     logger.info(f"🚀 ===== INVOICE PROCESSING STARTED =====")
     logger.info(f"👤 User ID: {current_user.id}")
+    logger.info(f"📋 Request Type: {request_type}")
     logger.info(f"📁 File details: filename={file.filename}, content_type={file.content_type}, size={file.size}")
     logger.info(f"🔍 Strict validation mode: {strict_validation}")
     logger.info(f"⏰ Start time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
@@ -1463,7 +1497,8 @@ async def process_invoice(
                 edi_convert_message="Skipped due to XML validation failure",
                 processing_steps_error=[error.dict() for error in all_errors],
                 blob_xml_path=blob_xml_path,
-                blob_edi_path=None
+                blob_edi_path=None,
+                request_type=request_type
             )
             db.add(failed_invoice)
             db.commit()
@@ -1839,7 +1874,8 @@ async def process_invoice(
             edi_convert_pass=True,
             edi_convert_message="EDI conversion and format validation completed successfully",
             blob_xml_path=blob_xml_path,
-            blob_edi_path=blob_edi_path
+            blob_edi_path=blob_edi_path,
+            request_type=request_type
         )
         db.add(success_invoice)
         db.commit()
@@ -1924,6 +1960,338 @@ async def process_invoice(
         
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response_dict)
 
+# API Key Management Endpoints
+@router.get("/api-key")
+async def get_api_key(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get the current user's API key information"""
+    try:
+        logger.info(f"🔑 API Key request for user {current_user.id}")
+        
+        # Check if user has API access
+        if not current_user.api_user_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="API access is not allowed for this user"
+            )
+        
+        # Check if user has an API key
+        if not current_user.api_key_hashed:
+            return {
+                "has_key": False,
+                "message": "No API key generated yet"
+            }
+        
+        # Check if key is deactivated
+        if current_user.api_key_deactivated_at:
+            return {
+                "has_key": True,
+                "is_active": False,
+                "deactivated_at": current_user.api_key_deactivated_at.isoformat(),
+                "message": "API key is deactivated"
+            }
+        
+        return {
+            "has_key": True,
+            "is_active": True,
+            "api_user_identifier": current_user.api_user_identifier,
+            "created_at": current_user.api_key_created_at.isoformat() if current_user.api_key_created_at else None,
+            "updated_at": current_user.api_key_updated_at.isoformat() if current_user.api_key_updated_at else None,
+            "allow_list": current_user.api_key_allow_list or [],
+            "message": "API key is active"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to get API key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get API key: {str(e)}"
+        )
+
+@router.post("/api-key/generate")
+async def generate_new_api_key(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate a new API key for the current user"""
+    try:
+        logger.info(f"🔑 Generating new API key for user {current_user.id}")
+        
+        # Check if user has API access
+        if not current_user.api_user_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="API access is not allowed for this user"
+            )
+        
+        # Generate new API key
+        new_api_key = generate_api_key()
+        hashed_key = hash_api_key(new_api_key)
+        
+        # Update user record
+        current_user.api_key_hashed = hashed_key
+        current_user.api_key_created_at = datetime.utcnow()
+        current_user.api_key_updated_at = datetime.utcnow()
+        current_user.api_key_deactivated_at = None  # Reactivate if previously deactivated
+        
+        db.commit()
+        db.refresh(current_user)
+        
+        logger.info(f"✅ New API key generated for user {current_user.id}")
+        
+        return {
+            "success": True,
+            "api_key": encode_api_key_for_transport(new_api_key),
+            "api_user_identifier": current_user.api_user_identifier,
+            "created_at": current_user.api_key_created_at.isoformat(),
+            "message": "New API key generated successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to generate API key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate API key: {str(e)}"
+        )
+
+@router.post("/api-key/regenerate")
+async def regenerate_api_key(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Regenerate API key for the current user (confirmation required)"""
+    try:
+        logger.info(f"🔑 Regenerating API key for user {current_user.id}")
+        
+        # Check if user has API access
+        if not current_user.api_user_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="API access is not allowed for this user"
+            )
+        
+        # Generate new API key
+        new_api_key = generate_api_key()
+        hashed_key = hash_api_key(new_api_key)
+        
+        # Update user record
+        current_user.api_key_hashed = hashed_key
+        current_user.api_key_updated_at = datetime.utcnow()
+        current_user.api_key_deactivated_at = None  # Reactivate if previously deactivated
+        
+        db.commit()
+        db.refresh(current_user)
+        
+        logger.info(f"✅ API key regenerated for user {current_user.id}")
+        
+        return {
+            "success": True,
+            "api_key": encode_api_key_for_transport(new_api_key),
+            "api_user_identifier": current_user.api_user_identifier,
+            "updated_at": current_user.api_key_updated_at.isoformat(),
+            "message": "API key regenerated successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to regenerate API key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to regenerate API key: {str(e)}"
+        )
+
+@router.post("/api-key/suspend")
+async def suspend_api_key(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Suspend the current user's API key"""
+    try:
+        logger.info(f"🔑 Suspending API key for user {current_user.id}")
+        
+        # Check if user has an API key
+        if not current_user.api_key_hashed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No API key found to suspend"
+            )
+        
+        # Suspend the API key
+        current_user.api_key_deactivated_at = datetime.utcnow()
+        current_user.api_key_updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(current_user)
+        
+        logger.info(f"✅ API key suspended for user {current_user.id}")
+        
+        return {
+            "success": True,
+            "deactivated_at": current_user.api_key_deactivated_at.isoformat(),
+            "message": "API key suspended successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to suspend API key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to suspend API key: {str(e)}"
+        )
+
+@router.post("/api-key/activate")
+async def activate_api_key(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Activate the current user's API key"""
+    try:
+        logger.info(f"🔑 Activating API key for user {current_user.id}")
+        
+        # Check if user has an API key
+        if not current_user.api_key_hashed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No API key found to activate"
+            )
+        
+        # Activate the API key
+        current_user.api_key_deactivated_at = None
+        current_user.api_key_updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(current_user)
+        
+        logger.info(f"✅ API key activated for user {current_user.id}")
+        
+        return {
+            "success": True,
+            "updated_at": current_user.api_key_updated_at.isoformat(),
+            "message": "API key activated successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to activate API key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to activate API key: {str(e)}"
+        )
+
+@router.post("/api-key/allow-list")
+async def update_api_key_allow_list(
+    allow_list: list[str],
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the API key allow list (IP addresses)"""
+    try:
+        logger.info(f"🔑 Updating API key allow list for user {current_user.id}")
+        
+        # Check if user has an API key
+        if not current_user.api_key_hashed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No API key found to update"
+            )
+        
+        # Validate IP addresses (basic validation)
+        import re
+        ip_pattern = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
+        
+        for ip in allow_list:
+            if not ip_pattern.match(ip):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid IP address format: {ip}"
+                )
+        
+        # Update allow list
+        current_user.api_key_allow_list = allow_list
+        current_user.api_key_updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(current_user)
+        
+        logger.info(f"✅ API key allow list updated for user {current_user.id}: {allow_list}")
+        
+        return {
+            "success": True,
+            "allow_list": current_user.api_key_allow_list,
+            "updated_at": current_user.api_key_updated_at.isoformat(),
+            "message": "API key allow list updated successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to update API key allow list: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update API key allow list: {str(e)}"
+        )
+
+@router.get("/counts")
+async def get_invoice_counts(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get invoice counts for the current user"""
+    try:
+        # Get counts for the current user
+        successful_count = db.query(SuccessModel).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None)
+        ).count()
+        
+        failed_count = db.query(FailedModel).filter(
+            FailedModel.user_id == current_user.id,
+            FailedModel.deleted_at.is_(None)
+        ).count()
+        
+        deleted_count = db.query(FailedModel).filter(
+            FailedModel.user_id == current_user.id,
+            FailedModel.deleted_at.isnot(None)
+        ).count()
+        
+        # Also count deleted successful invoices
+        deleted_success_count = db.query(SuccessModel).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.isnot(None)
+        ).count()
+        
+        total_deleted = deleted_count + deleted_success_count
+        total_files = successful_count + failed_count
+        
+        logger.info(f"📊 Invoice counts for user {current_user.id}:")
+        logger.info(f"📊 - Successful: {successful_count}")
+        logger.info(f"📊 - Failed: {failed_count}")
+        logger.info(f"📊 - Deleted: {total_deleted}")
+        logger.info(f"📊 - Total: {total_files}")
+        
+        return {
+            "successful": successful_count,
+            "failed": failed_count,
+            "deleted": total_deleted,
+            "total": total_files,
+            "processing": 0  # We don't track processing state currently
+        }
+    except Exception as e:
+        logger.error(f"❌ Failed to get invoice counts: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get invoice counts: {str(e)}"
+        )
+
 @router.get("/test")
 def test_endpoint(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2006,10 +2374,12 @@ def get_successful_invoices(
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=row.processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path,
-                xml_content="",  # Successful invoices don't need content in list view
-                edi_content=""  # Successful invoices don't need content in list view
+                blob_edi_path=row.blob_edi_path
             )
+            
+            # Add computed fields after model creation
+            invoice.xml_content = ""  # Successful invoices don't need content in list view
+            invoice.edi_content = ""  # Successful invoices don't need content in list view
             invoices.append(invoice)
         
         return invoices
@@ -2116,10 +2486,12 @@ async def get_failed_invoices(
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path,
-                xml_content=xml_content,
-                edi_content=edi_content
+                blob_edi_path=row.blob_edi_path
             )
+            
+            # Add computed fields after model creation
+            invoice.xml_content = xml_content
+            invoice.edi_content = edi_content
             
             invoices.append(invoice)
         

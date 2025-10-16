@@ -25,6 +25,8 @@ class ZodiacInvoiceSuccessEdi(Base):
     # Store blob paths for blob-stored files
     blob_xml_path = Column(Text, nullable=True)
     blob_edi_path = Column(Text, nullable=True)
+    # Request type: 'web' or 'api'
+    request_type = Column(String, default='web', nullable=False)
     
     # Relationships
     user = relationship("ZodiacUser", back_populates="successful_invoices")
@@ -48,6 +50,8 @@ class ZodiacInvoiceFailedEdi(Base):
     # Store blob paths for blob-stored files
     blob_xml_path = Column(Text, nullable=True)
     blob_edi_path = Column(Text, nullable=True)
+    # Request type: 'web' or 'api'
+    request_type = Column(String, default='web', nullable=False)
     
     # Relationships
     user = relationship("ZodiacUser", back_populates="failed_invoices")

@@ -94,6 +94,14 @@ export interface Invoice {
   warnings?: string[]; // XML validation warnings
   processing_steps?: ProcessingStepResult[]; // Detailed processing step results
   processing_steps_error?: ErrorDetail[]; // Stored detailed error information
+  // File paths and storage information
+  xml_path?: string;
+  edi_path?: string;
+  blob_xml_path?: string;
+  blob_edi_path?: string;
+  use_blob_storage?: boolean;
+  xml_content?: string;
+  edi_content?: string;
 }
 
 export interface FailedInvoiceDetails {
@@ -122,6 +130,12 @@ export interface FailedInvoiceDetails {
   file_content_preview?: string;
   suggested_actions?: string[];
   warnings?: string[]; // XML validation warnings
+  // File paths and storage information
+  xml_path?: string;
+  edi_path?: string;
+  blob_xml_path?: string;
+  blob_edi_path?: string;
+  use_blob_storage?: boolean;
 }
 
 export interface LLMMessage {
@@ -137,4 +151,23 @@ export interface LLMConversation {
   messages: LLMMessage[];
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ApiKeyInfo {
+  has_key: boolean;
+  is_active?: boolean;
+  api_user_identifier?: string;
+  created_at?: string;
+  updated_at?: string;
+  allow_list?: string[];
+  message: string;
+}
+
+export interface ApiKeyResponse {
+  success: boolean;
+  api_key: string;
+  api_user_identifier: string;
+  created_at?: string;
+  updated_at?: string;
+  message: string;
 }

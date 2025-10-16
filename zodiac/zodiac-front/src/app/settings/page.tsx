@@ -1,323 +1,672 @@
 'use client';
 
-import { useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
-import { User, Bell, Palette, Database, Download } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { User, Key, Settings, Shield, Copy, Eye, EyeOff, Plus, Trash2, Save, AlertCircle, CheckCircle, Globe } from 'lucide-react';
+import { fileApi } from '@/lib/api';
+import { ApiKeyInfo, ApiKeyResponse } from '@/types';
 import { cn } from '@/lib/utils';
-import LoadingSpinner from '@/components/LoadingSpinner';
 import MainLayout from '@/components/MainLayout';
 import TopSection from '@/components/TopSection';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'notifications' | 'appearance' | 'data'>('profile');
-  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
-  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [apiKeyInfo, setApiKeyInfo] = useState<ApiKeyInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [generatedApiKey, setGeneratedApiKey] = useState('');
+  const [newIpAddress, setNewIpAddress] = useState('');
+  const [ipAddresses, setIpAddresses] = useState<string[]>([]);
+  const [hasChanges, setHasChanges] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const tabs = [
-    { id: 'profile', label: 'Profile', icon: User },
-    { id: 'notifications', label: 'Notifications', icon: Bell },
-    { id: 'appearance', label: 'Appearance', icon: Palette },
-    { id: 'data', label: 'Data & Privacy', icon: Database }
-  ];
+  useEffect(() => {
+    fetchApiKeyInfo();
+  }, []);
 
-  const handleSave = async () => {
-    setLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setLoading(false);
-  };
-
-  const handleDeleteAccountClick = () => {
-    setShowDeleteAccountModal(true);
-  };
-
-  const confirmDeleteAccount = async () => {
-    setIsDeletingAccount(true);
+  const fetchApiKeyInfo = async () => {
     try {
-      // TODO: Implement actual account deletion API call
-      console.log('🗑️ Deleting account for user:', user?.email);
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      // After successful deletion, redirect to sign-in page
-      // window.location.href = '/sign-in';
-    } catch (error) {
-      console.error('Failed to delete account:', error);
+      setLoading(true);
+      const info = await fileApi.getApiKey();
+      setApiKeyInfo(info);
+      setIpAddresses(info.allow_list || []);
+      setHasChanges(false);
+    } catch (error: any) {
+      console.error('Failed to fetch API key info:', error);
+      setError(error.message || 'Failed to load API key information');
     } finally {
-      setIsDeletingAccount(false);
-      setShowDeleteAccountModal(false);
+      setLoading(false);
     }
+  };
+
+  const handleGenerateApiKey = async () => {
+    try {
+      setActionLoading('generate');
+      setError('');
+      setSuccess('');
+      
+      const result = await fileApi.generateApiKey();
+      setGeneratedApiKey(result.api_key);
+      setShowApiKey(true);
+      setSuccess('API key generated successfully!');
+      
+      await fetchApiKeyInfo();
+    } catch (error: any) {
+      console.error('Failed to generate API key:', error);
+      setError(error.message || 'Failed to generate API key');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRegenerateApiKey = async () => {
+    if (!confirm('Are you sure you want to regenerate your API key? This will invalidate your current key and you will need to update all applications using it.')) {
+      return;
+    }
+
+    try {
+      setActionLoading('regenerate');
+      setError('');
+      setSuccess('');
+      
+      const result = await fileApi.regenerateApiKey();
+      setGeneratedApiKey(result.api_key);
+      setShowApiKey(true);
+      setSuccess('API key regenerated successfully!');
+      
+      await fetchApiKeyInfo();
+    } catch (error: any) {
+      console.error('Failed to regenerate API key:', error);
+      setError(error.message || 'Failed to regenerate API key');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleSuspendApiKey = async () => {
+    if (!confirm('Are you sure you want to suspend your API key? This will prevent all API access until you reactivate it.')) {
+      return;
+    }
+
+    try {
+      setActionLoading('suspend');
+      setError('');
+      setSuccess('');
+      
+      await fileApi.suspendApiKey();
+      setSuccess('API key suspended successfully!');
+      
+      await fetchApiKeyInfo();
+    } catch (error: any) {
+      console.error('Failed to suspend API key:', error);
+      setError(error.message || 'Failed to suspend API key');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleActivateApiKey = async () => {
+    try {
+      setActionLoading('activate');
+      setError('');
+      setSuccess('');
+      
+      await fileApi.activateApiKey();
+      setSuccess('API key activated successfully!');
+      
+      await fetchApiKeyInfo();
+    } catch (error: any) {
+      console.error('Failed to activate API key:', error);
+      setError(error.message || 'Failed to activate API key');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleSaveIpAddresses = async () => {
+    try {
+      setActionLoading('save');
+      setError('');
+      setSuccess('');
+      
+      await fileApi.updateApiKeyAllowList(ipAddresses);
+      setSuccess('IP allow list updated successfully!');
+      setHasChanges(false);
+      
+      await fetchApiKeyInfo();
+    } catch (error: any) {
+      console.error('Failed to update IP allow list:', error);
+      setError(error.message || 'Failed to update IP allow list');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const addIpAddress = () => {
+    if (newIpAddress.trim() && !ipAddresses.includes(newIpAddress.trim())) {
+      setIpAddresses([...ipAddresses, newIpAddress.trim()]);
+      setNewIpAddress('');
+      setHasChanges(true);
+    }
+  };
+
+  const removeIpAddress = (ip: string) => {
+    setIpAddresses(ipAddresses.filter(addr => addr !== ip));
+    setHasChanges(true);
+  };
+
+  const copyApiKey = () => {
+    if (generatedApiKey) {
+      navigator.clipboard.writeText(generatedApiKey);
+      setSuccess('API key copied to clipboard!');
+    }
+  };
+
+  const validateIpAddress = (ip: string) => {
+    const ipPattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    return ipPattern.test(ip);
   };
 
   return (
     <MainLayout 
       topSection={
-        <TopSection
-          title="Settings"
-          subtitle="Manage your account settings and preferences"
+        <TopSection 
+          title="Settings" 
+          subtitle="Manage your account settings and API access"
         />
       }
     >
-      <div className="px-4 py-8">
-        <div className="max-w-7xl mx-auto">
-
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          {/* Sidebar */}
-          <div className="lg:col-span-1">
-            <nav className="space-y-1">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={cn(
-                      "w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-left transition-colors",
-                      activeTab === tab.id
-                        ? "bg-blue-50 text-blue-700 border border-blue-200"
-                        : "text-gray-700 hover:bg-gray-50"
-                    )}
-                  >
-                    <Icon className="h-5 w-5" />
-                    <span className="font-medium">{tab.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
+      <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="space-y-6">
+          {/* Profile Settings */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <User className="h-6 w-6 text-blue-600 mr-3" />
+                <h3 className="text-lg leading-6 font-medium text-gray-900">Profile Information</h3>
+              </div>
+              <p className="mt-2 text-sm text-gray-600">
+                Manage your account profile and personal information.
+              </p>
+              
+              <div className="mt-6">
+                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="username" className="block text-sm font-medium text-gray-700">
+                      Username
+                    </label>
+                    <input
+                      type="text"
+                      name="username"
+                      id="username"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-50"
+                      value={user?.username || ''}
+                      disabled
+                    />
+                  </div>
+                  
+                  <div>
+                    <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      name="email"
+                      id="email"
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-gray-50"
+                      value={user?.email || ''}
+                      disabled
+                    />
+                  </div>
+                </div>
+                
+                <div className="mt-6">
+                  <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                    <div className="flex">
+                      <Shield className="h-5 w-5 text-blue-400" />
+                      <div className="ml-3">
+                        <h3 className="text-sm font-medium text-blue-800">Account Security</h3>
+                        <div className="mt-2 text-sm text-blue-700">
+                          <p>Your account is secured with industry-standard encryption and authentication.</p>
+                          <p className="mt-1">For password changes or account modifications, please contact support.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Main Content */}
-          <div className="lg:col-span-3">
-            <div className="bg-white rounded-lg shadow">
-              {/* Profile Tab */}
-              {activeTab === 'profile' && (
-                <div className="p-6">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-6">Profile Information</h2>
-                  <div className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Username
-                        </label>
-                        <input
-                          type="text"
-                          defaultValue={user?.username || ''}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Email
-                        </label>
-                        <input
-                          type="email"
-                          defaultValue={user?.email || ''}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Full Name
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Enter your full name"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Bio
-                      </label>
-                      <textarea
-                        rows={3}
-                        placeholder="Tell us about yourself"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+          {/* Notification Preferences */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <Settings className="h-6 w-6 text-blue-600 mr-3" />
+                <h3 className="text-lg leading-6 font-medium text-gray-900">Notification Preferences</h3>
+              </div>
+              <p className="mt-2 text-sm text-gray-600">
+                Configure how you receive notifications about your document processing.
+              </p>
+              
+              <div className="mt-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Email Notifications</h4>
+                    <p className="text-sm text-gray-500">Receive email updates about processing status</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" defaultChecked />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Processing Alerts</h4>
+                    <p className="text-sm text-gray-500">Get notified when documents finish processing</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" defaultChecked />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Error Notifications</h4>
+                    <p className="text-sm text-gray-500">Receive alerts when processing fails</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" defaultChecked />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Processing Preferences */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <Settings className="h-6 w-6 text-blue-600 mr-3" />
+                <h3 className="text-lg leading-6 font-medium text-gray-900">Processing Preferences</h3>
+              </div>
+              <p className="mt-2 text-sm text-gray-600">
+                Configure default settings for document processing.
+              </p>
+              
+              <div className="mt-6 space-y-6">
+                <div>
+                  <label htmlFor="default-validation" className="block text-sm font-medium text-gray-700">
+                    Default Validation Mode
+                  </label>
+                  <select
+                    id="default-validation"
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  >
+                    <option>Standard Validation</option>
+                    <option>Strict Validation</option>
+                    <option>Relaxed Validation</option>
+                  </select>
+                  <p className="mt-1 text-sm text-gray-500">Choose the default validation level for new documents</p>
+                </div>
+                
+                <div>
+                  <label htmlFor="auto-delete" className="block text-sm font-medium text-gray-700">
+                    Auto-delete Processed Files
+                  </label>
+                  <select
+                    id="auto-delete"
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  >
+                    <option>Never</option>
+                    <option>After 30 days</option>
+                    <option>After 90 days</option>
+                    <option>After 1 year</option>
+                  </select>
+                  <p className="mt-1 text-sm text-gray-500">Automatically remove processed files after a specified period</p>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Auto-retry Failed Processing</h4>
+                    <p className="text-sm text-gray-500">Automatically retry failed document processing</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* API Key Management */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <Key className="h-6 w-6 text-blue-600 mr-3" />
+                <h3 className="text-lg leading-6 font-medium text-gray-900">API Key Management</h3>
+              </div>
+              <p className="mt-2 text-sm text-gray-600">
+                Manage your API key for programmatic access to invoice processing services.
+              </p>
+
+              {/* Error/Success Messages */}
+              {error && (
+                <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
+                  <div className="flex">
+                    <AlertCircle className="h-5 w-5 text-red-400" />
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-red-800">Error</h3>
+                      <div className="mt-2 text-sm text-red-700">{error}</div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Notifications Tab */}
-              {activeTab === 'notifications' && (
-                <div className="p-6">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-6">Notification Preferences</h2>
-                  <div className="space-y-6">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-900">Email Notifications</h3>
-                        <p className="text-sm text-gray-500">Receive notifications via email</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" defaultChecked />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                      </label>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-900">Processing Updates</h3>
-                        <p className="text-sm text-gray-500">Get notified when invoice processing completes</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" defaultChecked />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                      </label>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-900">Error Alerts</h3>
-                        <p className="text-sm text-gray-500">Receive alerts when invoice processing fails</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" defaultChecked />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                      </label>
+              {success && (
+                <div className="mt-4 bg-green-50 border border-green-200 rounded-md p-4">
+                  <div className="flex">
+                    <CheckCircle className="h-5 w-5 text-green-400" />
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-green-800">Success</h3>
+                      <div className="mt-2 text-sm text-green-700">{success}</div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Appearance Tab */}
-              {activeTab === 'appearance' && (
-                <div className="p-6">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-6">Appearance Settings</h2>
-                  <div className="space-y-6">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-3">
-                        Theme
-                      </label>
-                      <div className="grid grid-cols-3 gap-4">
-                        <button className="p-4 border-2 border-blue-500 rounded-lg bg-white">
-                          <div className="w-full h-8 bg-gray-100 rounded mb-2"></div>
-                          <div className="text-sm font-medium">Light</div>
-                        </button>
-                        <button className="p-4 border-2 border-gray-300 rounded-lg bg-gray-900">
-                          <div className="w-full h-8 bg-gray-700 rounded mb-2"></div>
-                          <div className="text-sm font-medium text-white">Dark</div>
-                        </button>
-                        <button className="p-4 border-2 border-gray-300 rounded-lg bg-white">
-                          <div className="w-full h-8 bg-gradient-to-r from-gray-100 to-gray-900 rounded mb-2"></div>
-                          <div className="text-sm font-medium">Auto</div>
-                        </button>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Language
-                      </label>
-                      <select className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <option>English</option>
-                        <option>Spanish</option>
-                        <option>French</option>
-                        <option>German</option>
-                      </select>
-                    </div>
+              {loading ? (
+                <div className="mt-6 animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+                  <div className="space-y-3">
+                    <div className="h-4 bg-gray-200 rounded"></div>
+                    <div className="h-4 bg-gray-200 rounded w-5/6"></div>
                   </div>
                 </div>
-              )}
+              ) : (
+                <div className="mt-6">
+                  {apiKeyInfo?.has_key ? (
+                    <div className="space-y-6">
+                      {/* API Key Status */}
+                      <div>
+                        <h4 className="text-md font-medium text-gray-900 mb-4">Current Status</h4>
+                        
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center">
+                              <Shield className="h-5 w-5 text-green-500 mr-2" />
+                              <span className="text-sm font-medium text-gray-900">API Key Status</span>
+                            </div>
+                            <span className={cn(
+                              "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium",
+                              apiKeyInfo.is_active 
+                                ? "bg-green-100 text-green-800" 
+                                : "bg-red-100 text-red-800"
+                            )}>
+                              {apiKeyInfo.is_active ? 'Active' : 'Suspended'}
+                            </span>
+                          </div>
 
-              {/* Data & Privacy Tab */}
-              {activeTab === 'data' && (
-                <div className="p-6">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-6">Data & Privacy</h2>
-                  <div className="space-y-6">
-                    <div className="border rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-sm font-medium text-gray-900">Export Data</h3>
-                          <p className="text-sm text-gray-500">Download all your data in JSON format</p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <span className="font-medium text-gray-700">User Identifier:</span>
+                              <p className="text-gray-900 font-mono">{apiKeyInfo.api_user_identifier}</p>
+                            </div>
+                            <div>
+                              <span className="font-medium text-gray-700">Created:</span>
+                              <p className="text-gray-900">
+                                {apiKeyInfo.created_at ? new Date(apiKeyInfo.created_at).toLocaleString() : 'N/A'}
+                              </p>
+                            </div>
+                            <div>
+                              <span className="font-medium text-gray-700">Last Updated:</span>
+                              <p className="text-gray-900">
+                                {apiKeyInfo.updated_at ? new Date(apiKeyInfo.updated_at).toLocaleString() : 'N/A'}
+                              </p>
+                            </div>
+                            <div>
+                              <span className="font-medium text-gray-700">IP Restrictions:</span>
+                              <p className="text-gray-900">
+                                {apiKeyInfo.allow_list && apiKeyInfo.allow_list.length > 0 
+                                  ? `${apiKeyInfo.allow_list.length} IP(s) configured`
+                                  : 'No restrictions (all IPs allowed)'
+                                }
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex flex-wrap gap-2 pt-4 border-t">
+                            {apiKeyInfo.is_active ? (
+                              <button
+                                onClick={handleSuspendApiKey}
+                                disabled={actionLoading === 'suspend'}
+                                className="inline-flex items-center px-3 py-2 border border-red-300 shadow-sm text-sm leading-4 font-medium rounded-md text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                              >
+                                {actionLoading === 'suspend' ? 'Suspending...' : 'Suspend Key'}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={handleActivateApiKey}
+                                disabled={actionLoading === 'activate'}
+                                className="inline-flex items-center px-3 py-2 border border-green-300 shadow-sm text-sm leading-4 font-medium rounded-md text-green-700 bg-white hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
+                              >
+                                {actionLoading === 'activate' ? 'Activating...' : 'Activate Key'}
+                              </button>
+                            )}
+                            
+                            <button
+                              onClick={handleRegenerateApiKey}
+                              disabled={actionLoading === 'regenerate'}
+                              className="inline-flex items-center px-3 py-2 border border-yellow-300 shadow-sm text-sm leading-4 font-medium rounded-md text-yellow-700 bg-white hover:bg-yellow-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 disabled:opacity-50"
+                            >
+                              {actionLoading === 'regenerate' ? 'Regenerating...' : 'Regenerate Key'}
+                            </button>
+                          </div>
                         </div>
-                        <button className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
-                          <Download className="h-4 w-4" />
-                          <span>Export</span>
-                        </button>
                       </div>
-                    </div>
-                    <div className="border rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-sm font-medium text-gray-900">Delete Account</h3>
-                          <p className="text-sm text-gray-500">Permanently delete your account and all data</p>
-                        </div>
-                        <button 
-                          onClick={handleDeleteAccountClick}
-                          disabled={true}
-                          className="flex items-center space-x-2 px-4 py-2 bg-gray-400 text-white rounded-md cursor-not-allowed opacity-50"
-                        >
-                          <span>Delete</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
 
-              {/* Save Button - Hidden for Data & Privacy tab */}
-              {activeTab !== 'data' && (
-                <div className="px-6 py-4 border-t border-gray-200">
-                  <div className="flex items-center justify-end space-x-3">
-                    <button className="px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors cursor-pointer">
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSave}
-                      disabled={loading}
-                      className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
-                    >
-                      {loading && <LoadingSpinner size="sm" />}
-                      <span>Save Changes</span>
-                    </button>
-                  </div>
+                      {/* Generated API Key Display */}
+                      {generatedApiKey && showApiKey && (
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <h4 className="text-md font-medium text-gray-900">Your API Key</h4>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={() => setShowApiKey(!showApiKey)}
+                                className="text-gray-400 hover:text-gray-600"
+                              >
+                                {showApiKey ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                              </button>
+                              <button
+                                onClick={copyApiKey}
+                                className="text-gray-400 hover:text-gray-600"
+                              >
+                                <Copy className="h-5 w-5" />
+                              </button>
+                            </div>
+                          </div>
+                          
+                          <div className="bg-gray-50 border border-gray-200 rounded-md p-3">
+                            <code className="text-sm font-mono text-gray-900 break-all">
+                              {showApiKey ? generatedApiKey : '••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••'}
+                            </code>
+                          </div>
+                          
+                          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                            <div className="flex">
+                              <AlertCircle className="h-5 w-5 text-yellow-400" />
+                              <div className="ml-3">
+                                <h3 className="text-sm font-medium text-yellow-800">Important Security Notice</h3>
+                                <div className="mt-2 text-sm text-yellow-700">
+                                  <ul className="list-disc list-inside space-y-1">
+                                    <li>Store this API key securely and never share it publicly</li>
+                                    <li>This key will only be shown once - make sure to copy it now</li>
+                                    <li>Use HTTPS when making API requests</li>
+                                    <li>Consider setting up IP restrictions for additional security</li>
+                                  </ul>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* IP Address Management */}
+                      <div>
+                        <div className="flex items-center mb-4">
+                          <Globe className="h-5 w-5 text-blue-600 mr-2" />
+                          <h4 className="text-md font-medium text-gray-900">IP Address Restrictions</h4>
+                        </div>
+                        
+                        <p className="text-sm text-gray-600 mb-4">
+                          Restrict API access to specific IP addresses. Leave empty to allow access from any IP address.
+                        </p>
+
+                        {/* Add IP Address */}
+                        <div className="flex gap-2 mb-4">
+                          <input
+                            type="text"
+                            value={newIpAddress}
+                            onChange={(e) => setNewIpAddress(e.target.value)}
+                            placeholder="Enter IP address (e.g., 192.168.1.1)"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            onKeyPress={(e) => e.key === 'Enter' && addIpAddress()}
+                          />
+                          <button
+                            onClick={addIpAddress}
+                            disabled={!newIpAddress.trim() || !validateIpAddress(newIpAddress.trim()) || ipAddresses.includes(newIpAddress.trim())}
+                            className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Plus className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        {/* IP Address List */}
+                        {ipAddresses.length > 0 && (
+                          <div className="space-y-2 mb-4">
+                            {ipAddresses.map((ip, index) => (
+                              <div key={index} className="flex items-center justify-between bg-gray-50 px-3 py-2 rounded-md">
+                                <span className="text-sm font-mono text-gray-900">{ip}</span>
+                                <button
+                                  onClick={() => removeIpAddress(ip)}
+                                  className="text-red-400 hover:text-red-600"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Save Button */}
+                        {hasChanges && (
+                          <div className="flex justify-end">
+                            <button
+                              onClick={handleSaveIpAddresses}
+                              disabled={actionLoading === 'save'}
+                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
+                            >
+                              {actionLoading === 'save' ? 'Saving...' : 'Save Changes'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-6 text-center py-8">
+                      <Key className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">No API Key Generated</h3>
+                      <p className="text-sm text-gray-500 mb-4">
+                        Generate an API key to start using programmatic access to invoice processing.
+                      </p>
+                      <button
+                        onClick={handleGenerateApiKey}
+                        disabled={actionLoading === 'generate'}
+                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                      >
+                        {actionLoading === 'generate' ? 'Generating...' : 'Generate API Key'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
-        </div>
+
+          {/* Account Statistics */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Account Statistics</h3>
+              
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+                <div className="bg-gray-50 overflow-hidden shadow rounded-lg">
+                  <div className="p-5">
+                    <div className="flex items-center">
+                      <div className="flex-shrink-0">
+                        <User className="h-6 w-6 text-gray-400" />
+                      </div>
+                      <div className="ml-5 w-0 flex-1">
+                        <dl>
+                          <dt className="text-sm font-medium text-gray-500 truncate">Member Since</dt>
+                          <dd className="text-lg font-medium text-gray-900">
+                            {user?.created_at ? new Date(user.created_at).toLocaleDateString('en-US', { 
+                              year: 'numeric', 
+                              month: 'long' 
+                            }) : 'N/A'}
+                          </dd>
+                        </dl>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 overflow-hidden shadow rounded-lg">
+                  <div className="p-5">
+                    <div className="flex items-center">
+                      <div className="flex-shrink-0">
+                        <Key className="h-6 w-6 text-gray-400" />
+                      </div>
+                      <div className="ml-5 w-0 flex-1">
+                        <dl>
+                          <dt className="text-sm font-medium text-gray-500 truncate">API Access</dt>
+                          <dd className="text-lg font-medium text-gray-900">
+                            {apiKeyInfo?.has_key ? 'Enabled' : 'Not Configured'}
+                          </dd>
+                        </dl>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 overflow-hidden shadow rounded-lg">
+                  <div className="p-5">
+                    <div className="flex items-center">
+                      <div className="flex-shrink-0">
+                        <Shield className="h-6 w-6 text-gray-400" />
+                      </div>
+                      <div className="ml-5 w-0 flex-1">
+                        <dl>
+                          <dt className="text-sm font-medium text-gray-500 truncate">Account Status</dt>
+                          <dd className="text-lg font-medium text-gray-900">
+                            {user?.is_active ? 'Active' : 'Inactive'}
+                          </dd>
+                        </dl>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      {/* Delete Account Confirmation Modal */}
-      {showDeleteAccountModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <div className="flex items-center mb-4">
-              <div className="flex-shrink-0">
-                <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
-                  <span className="text-red-600 text-xl">⚠️</span>
-                </div>
-              </div>
-              <div className="ml-3">
-                <h3 className="text-lg font-medium text-gray-900">Delete Account</h3>
-                <p className="text-sm text-gray-500">This action cannot be undone</p>
-              </div>
-            </div>
-            <div className="mb-6">
-              <p className="text-sm text-gray-600">
-                Are you sure you want to permanently delete your account? This will remove all your data, invoices, and settings. This action cannot be undone.
-              </p>
-            </div>
-            <div className="flex items-center justify-end space-x-3">
-              <button
-                onClick={() => setShowDeleteAccountModal(false)}
-                disabled={isDeletingAccount}
-                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDeleteAccount}
-                disabled={isDeletingAccount}
-                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {isDeletingAccount ? 'Deleting...' : 'Delete Account'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </MainLayout>
   );
 }
