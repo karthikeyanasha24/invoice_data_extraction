@@ -42,22 +42,67 @@ DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None and VERCEL_BLOB_AVAILABLE
 
-logger.info(f"🌍 Deploy environment: {DEPLOY_ENV}")
-logger.info(f"📦 Using blob storage: {USE_BLOB_STORAGE}")
+# Detailed logging for file storage selection
+logger.info("=" * 60)
+logger.info("🗂️ FILE STORAGE CONFIGURATION")
+logger.info("=" * 60)
+logger.info(f"🌍 DEPLOY_ENV: {DEPLOY_ENV}")
+logger.info(f"🔑 BLOB_READ_WRITE_TOKEN: {'✅ Set' if BLOB_READ_WRITE_TOKEN else '❌ Not set'}")
+logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
+logger.info(f"🎯 DEPLOY_ENV == 'PROD': {DEPLOY_ENV == 'PROD'}")
+logger.info(f"🔑 BLOB_READ_WRITE_TOKEN is not None: {BLOB_READ_WRITE_TOKEN is not None}")
+logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
+logger.info(f"✅ FINAL DECISION - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+
 if USE_BLOB_STORAGE:
-    logger.info("✅ Vercel Blob storage configured")
+    logger.info("🚀 STORAGE MODE: VERCEL BLOB STORAGE")
+    logger.info("📦 All files will be stored in Vercel Blob storage")
+    logger.info("🌐 Files will be accessible via blob URLs")
 else:
-    logger.info("📁 Using local file storage")
+    logger.info("📁 STORAGE MODE: LOCAL FILE STORAGE")
+    logger.info("💾 All files will be stored locally in uploads/ and converted/ directories")
+    if DEPLOY_ENV == "PROD":
+        logger.warning("⚠️ WARNING: Running in PROD mode but using local storage!")
+        if not BLOB_READ_WRITE_TOKEN:
+            logger.warning("⚠️ REASON: BLOB_READ_WRITE_TOKEN not provided")
+        if not VERCEL_BLOB_AVAILABLE:
+            logger.warning("⚠️ REASON: Vercel Blob package not available")
+    else:
+        logger.info("ℹ️ Development mode - local storage is appropriate")
+logger.info("=" * 60)
 
 # Initialize Vercel Blob API if needed
 blob_api = None
 if USE_BLOB_STORAGE:
     try:
+        logger.info("🔧 Initializing Vercel Blob API...")
         blob_api = BlobApi(token=BLOB_READ_WRITE_TOKEN)
         logger.info("✅ Vercel Blob API initialized successfully")
+        logger.info(f"🔑 Token length: {len(BLOB_READ_WRITE_TOKEN)} characters")
+        logger.info("🚀 Ready to use Vercel Blob storage for file operations")
     except Exception as e:
         logger.error(f"❌ Failed to initialize Vercel Blob API: {e}")
+        logger.error("🔄 Falling back to local file storage")
         USE_BLOB_STORAGE = False
+        blob_api = None
+else:
+    logger.info("📁 Skipping Vercel Blob API initialization (not needed)")
+
+# Final startup confirmation
+logger.info("=" * 60)
+logger.info("🚀 FILE STORAGE SYSTEM READY")
+logger.info("=" * 60)
+if USE_BLOB_STORAGE:
+    logger.info("✅ VERCEL BLOB STORAGE ACTIVE")
+    logger.info("🌐 All file operations will use Vercel Blob storage")
+    logger.info("📦 Files will be accessible via blob URLs")
+    logger.info("🔧 BlobApi instance ready for use")
+else:
+    logger.info("✅ LOCAL FILE STORAGE ACTIVE")
+    logger.info("📁 All file operations will use local file system")
+    logger.info("💾 Files will be stored in uploads/ and converted/ directories")
+    logger.info("📂 Local directories created and ready")
+logger.info("=" * 60)
 
 # Create upload directories (only for local storage)
 UPLOAD_DIR = Path("uploads")
@@ -69,17 +114,30 @@ if not USE_BLOB_STORAGE:
 # File storage helper functions
 async def save_file_to_storage(file_content: bytes, filename: str, subdirectory: str = "uploads") -> str:
     """Save file content to appropriate storage (local or Vercel Blob)"""
+    logger.info("=" * 50)
+    logger.info("💾 FILE SAVE OPERATION")
+    logger.info("=" * 50)
+    logger.info(f"📁 Filename: {filename}")
+    logger.info(f"📂 Subdirectory: {subdirectory}")
+    logger.info(f"📊 File size: {len(file_content)} bytes")
+    logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
+    
     if USE_BLOB_STORAGE:
         try:
             # Use Vercel Blob storage
             blob_path = f"{subdirectory}/{filename}"
             logger.info(f"📦 Saving to Vercel Blob: {blob_path}")
+            logger.info(f"🔧 Using BlobApi instance: {blob_api is not None}")
             
             blob_url = await blob_api.put(blob_path, file_content)
-            logger.info(f"✅ File saved to Vercel Blob: {blob_url}")
+            logger.info(f"✅ File saved to Vercel Blob successfully!")
+            logger.info(f"🌐 Blob URL: {blob_url}")
+            logger.info(f"📊 Uploaded {len(file_content)} bytes")
             return blob_url
         except Exception as e:
             logger.error(f"❌ Failed to save to Vercel Blob: {e}")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"📝 Error details: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to save file to blob storage: {str(e)}"
@@ -90,14 +148,20 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             target_dir = UPLOAD_DIR if subdirectory == "uploads" else EDI_DIR
             file_path = target_dir / filename
             logger.info(f"📁 Saving to local storage: {file_path}")
+            logger.info(f"📂 Target directory: {target_dir}")
+            logger.info(f"📄 Full path: {file_path}")
             
             with open(file_path, "wb") as buffer:
                 buffer.write(file_content)
             
-            logger.info(f"✅ File saved locally: {file_path}")
+            logger.info(f"✅ File saved locally successfully!")
+            logger.info(f"📊 Written {len(file_content)} bytes")
+            logger.info(f"📍 Local path: {file_path}")
             return str(file_path)
         except Exception as e:
             logger.error(f"❌ Failed to save locally: {e}")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"📝 Error details: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to save file locally: {str(e)}"
@@ -105,15 +169,26 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
 
 async def read_file_from_storage(file_path: str) -> bytes:
     """Read file content from appropriate storage (local or Vercel Blob)"""
+    logger.info("=" * 50)
+    logger.info("📖 FILE READ OPERATION")
+    logger.info("=" * 50)
+    logger.info(f"📁 File path: {file_path}")
+    logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
+    
     if USE_BLOB_STORAGE:
         try:
             # Read from Vercel Blob storage
             logger.info(f"📦 Reading from Vercel Blob: {file_path}")
+            logger.info(f"🔧 Using BlobApi instance: {blob_api is not None}")
+            
             file_content = await blob_api.get(file_path)
-            logger.info(f"✅ File read from Vercel Blob: {len(file_content)} bytes")
+            logger.info(f"✅ File read from Vercel Blob successfully!")
+            logger.info(f"📊 Retrieved {len(file_content)} bytes")
             return file_content
         except Exception as e:
             logger.error(f"❌ Failed to read from Vercel Blob: {e}")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"📝 Error details: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to read file from blob storage: {str(e)}"
@@ -122,12 +197,18 @@ async def read_file_from_storage(file_path: str) -> bytes:
         # Read from local file storage
         try:
             logger.info(f"📁 Reading from local storage: {file_path}")
+            logger.info(f"🔍 File exists: {os.path.exists(file_path)}")
+            
             with open(file_path, "rb") as buffer:
                 file_content = buffer.read()
-            logger.info(f"✅ File read locally: {len(file_content)} bytes")
+            
+            logger.info(f"✅ File read locally successfully!")
+            logger.info(f"📊 Retrieved {len(file_content)} bytes")
             return file_content
         except Exception as e:
             logger.error(f"❌ Failed to read locally: {e}")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"📝 Error details: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to read file locally: {str(e)}"
