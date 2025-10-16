@@ -168,18 +168,34 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
             
             # Use vercel_blob.put to upload file
-            blob_url = vercel_blob.put(blob_path, file_content)
+            blob_response = vercel_blob.put(blob_path, file_content)
             logger.info(f"✅ File saved to Vercel Blob successfully!")
-            logger.info(f"🌐 Blob URL: {blob_url}")
+            logger.info(f"🌐 Blob Response: {blob_response}")
             logger.info(f"📊 Uploaded {len(file_content)} bytes")
-            return blob_url
+            
+            # Return the pathname for consistent storage
+            if isinstance(blob_response, dict):
+                return blob_response.get('pathname', blob_response.get('url', str(blob_response)))
+            else:
+                return str(blob_response)
         except Exception as e:
             logger.error(f"❌ Failed to save to Vercel Blob: {e}")
             logger.error(f"🔍 Error type: {type(e).__name__}")
             logger.error(f"📝 Error details: {str(e)}")
+            
+            # Provide more specific error messages
+            if "token" in str(e).lower():
+                error_detail = "Blob storage authentication failed: Invalid or missing token"
+            elif "network" in str(e).lower() or "connection" in str(e).lower():
+                error_detail = "Blob storage network error: Unable to connect to cloud storage"
+            elif "permission" in str(e).lower() or "access" in str(e).lower():
+                error_detail = "Blob storage permission error: Insufficient access rights"
+            else:
+                error_detail = f"Failed to save file to blob storage: {str(e)}"
+            
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file to blob storage: {str(e)}"
+                detail=error_detail
             )
     else:
         # Use local file storage
@@ -230,8 +246,26 @@ async def read_file_from_storage(file_path: str) -> bytes:
             logger.info(f"📦 Reading from Vercel Blob: {file_path}")
             logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
             
-            # Use vercel_blob.get to download file
-            file_content = vercel_blob.get(file_path)
+            # Extract the pathname from the blob response if it's a dict
+            if isinstance(file_path, dict):
+                blob_path = file_path.get('pathname', file_path.get('url', str(file_path)))
+                logger.info(f"🔍 Extracted blob path: {blob_path}")
+            else:
+                blob_path = file_path
+            
+            # Use requests to download the file from the blob URL
+            import requests
+            if isinstance(file_path, dict) and 'url' in file_path:
+                download_url = file_path['url']
+            else:
+                # Construct URL if we only have pathname
+                download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{blob_path}"
+            
+            logger.info(f"🌐 Downloading from URL: {download_url}")
+            response = requests.get(download_url)
+            response.raise_for_status()
+            
+            file_content = response.content
             logger.info(f"✅ File read from Vercel Blob successfully!")
             logger.info(f"📊 Retrieved {len(file_content)} bytes")
             return file_content
@@ -239,9 +273,20 @@ async def read_file_from_storage(file_path: str) -> bytes:
             logger.error(f"❌ Failed to read from Vercel Blob: {e}")
             logger.error(f"🔍 Error type: {type(e).__name__}")
             logger.error(f"📝 Error details: {str(e)}")
+            
+            # Provide more specific error messages
+            if "404" in str(e) or "not found" in str(e).lower():
+                error_detail = "File not found in blob storage: File may have been deleted or moved"
+            elif "network" in str(e).lower() or "connection" in str(e).lower():
+                error_detail = "Blob storage network error: Unable to connect to cloud storage"
+            elif "permission" in str(e).lower() or "access" in str(e).lower():
+                error_detail = "Blob storage permission error: Insufficient access rights to read file"
+            else:
+                error_detail = f"Failed to read file from blob storage: {str(e)}"
+            
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to read file from blob storage: {str(e)}"
+                detail=error_detail
             )
     else:
         # Read from local file storage
@@ -281,25 +326,53 @@ def validate_xml(file_path: str, strict_validation: bool = False) -> tuple[bool,
     try:
         logger.info(f"📄 validate_xml: Reading and parsing XML file...")
         
-        # First, check if file exists and is readable
-        import os
-        if not os.path.exists(file_path):
-            error_msg = f"XML file not found: {file_path}"
-            logger.error(f"❌ validate_xml: {error_msg}")
-            return False, error_msg, warnings
-        
-        file_size = os.path.getsize(file_path)
-        logger.info(f"📊 validate_xml: File size: {file_size} bytes")
-        
-        if file_size == 0:
-            error_msg = "XML file is empty"
-            logger.error(f"❌ validate_xml: {error_msg}")
-            return False, error_msg, warnings
-        
-        # CORE VALIDATION: Check if XML is well-formed (matches old API behavior)
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-        logger.info(f"✅ validate_xml: Core XML parsing successful - file is well-formed")
+        # Handle blob storage vs local storage
+        if isinstance(file_path, dict):
+            # This is a blob response, we need to read the content differently
+            logger.info(f"🔍 validate_xml: Detected blob storage response")
+            try:
+                # Use requests to download the file content
+                import requests
+                download_url = file_path.get('url', str(file_path))
+                logger.info(f"🌐 validate_xml: Downloading from blob URL: {download_url}")
+                response = requests.get(download_url)
+                response.raise_for_status()
+                file_content = response.content
+                logger.info(f"✅ validate_xml: Downloaded {len(file_content)} bytes from blob")
+                
+                if len(file_content) == 0:
+                    error_msg = "XML file is empty"
+                    logger.error(f"❌ validate_xml: {error_msg}")
+                    return False, error_msg, warnings
+                
+                # Parse XML from content
+                root = ET.fromstring(file_content)
+                logger.info(f"✅ validate_xml: Core XML parsing successful - file is well-formed")
+                
+            except Exception as e:
+                logger.error(f"❌ validate_xml: Failed to download/parse from blob: {e}")
+                return False, f"Failed to download/parse XML from blob storage: {str(e)}", warnings
+        else:
+            # This is a local file path
+            logger.info(f"🔍 validate_xml: Detected local file path")
+            import os
+            if not os.path.exists(file_path):
+                error_msg = f"XML file not found: {file_path}"
+                logger.error(f"❌ validate_xml: {error_msg}")
+                return False, error_msg, warnings
+            
+            file_size = os.path.getsize(file_path)
+            logger.info(f"📊 validate_xml: File size: {file_size} bytes")
+            
+            if file_size == 0:
+                error_msg = "XML file is empty"
+                logger.error(f"❌ validate_xml: {error_msg}")
+                return False, error_msg, warnings
+            
+            # CORE VALIDATION: Check if XML is well-formed (matches old API behavior)
+            tree = ET.parse(file_path)
+            root = tree.getroot()
+            logger.info(f"✅ validate_xml: Core XML parsing successful - file is well-formed")
         
         # ENHANCED VALIDATION: Always run optional checks (warnings only, non-blocking)
         logger.info(f"🔍 validate_xml: Running optional enhanced validation checks...")
@@ -1238,7 +1311,7 @@ async def process_invoice(
         logger.info(f"📄 Validating XML file: {xml_path}")
         logger.info(f"🔍 Calling validate_xml function...")
         
-        xml_valid, xml_message, xml_warnings = await validate_xml(str(xml_path), strict_validation)
+        xml_valid, xml_message, xml_warnings = validate_xml(str(xml_path), strict_validation)
         response.xml_validation_pass = xml_valid
         response.xml_convert_message = xml_message
         response.warnings.extend(xml_warnings)  # Add warnings to response
@@ -1706,10 +1779,35 @@ async def process_invoice(
         logger.error(f"💥 Unexpected error during invoice processing for tracking ID {tracking_id}: {str(e)}")
         logger.error(f"🔍 Error type: {type(e).__name__}")
         logger.error(f"📝 Error details: {str(e)}")
-        response.file_upload_message = f"Unexpected error: {str(e)}"
+        
+        # Provide more informative error message for client
+        error_message = f"Processing failed: {str(e)}"
+        if "blob storage" in str(e).lower():
+            error_message = "File storage error: Unable to save or retrieve file from cloud storage"
+        elif "xml" in str(e).lower():
+            error_message = "XML processing error: Unable to parse or validate XML file"
+        elif "edi" in str(e).lower():
+            error_message = "EDI conversion error: Unable to convert XML to EDI format"
+        elif "database" in str(e).lower():
+            error_message = "Database error: Unable to save processing results"
+        
+        response.file_upload_message = error_message
+        response.invoice_operation_success = False
+        
+        # Add error to processing steps
+        processing_steps.append({
+            "step": "Error Handling",
+            "status": "failed",
+            "message": error_message,
+            "timestamp": time.time(),
+            "duration": total_duration
+        })
+        
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
+        response_dict['processing_steps'] = processing_steps
+        
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response_dict)
 
 @router.get("/test")
