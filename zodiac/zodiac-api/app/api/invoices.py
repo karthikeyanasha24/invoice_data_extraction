@@ -228,7 +228,7 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
                 detail=f"Failed to save file locally: {str(e)}"
             )
 
-async def read_file_from_storage(file_path: str, blob_xml_path: str = None, blob_edi_path: str = None) -> bytes:
+async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str = None, blob_edi_path: str = None) -> bytes:
     """Read file content from appropriate storage (local or Vercel Blob)
     
     Args:
@@ -316,10 +316,20 @@ async def read_file_from_storage(file_path: str, blob_xml_path: str = None, blob
     else:
         # Read from local file storage
         try:
-            logger.info(f"📁 Reading from local storage: {file_path}")
-            logger.info(f"🔍 File exists: {os.path.exists(file_path)}")
+            # Handle blob response in local storage mode
+            if isinstance(file_path, dict):
+                logger.warning(f"⚠️ Received blob response in local storage mode - this shouldn't happen")
+                logger.warning(f"⚠️ Blob response: {file_path}")
+                # Extract the pathname for local file access
+                local_path = file_path.get('pathname', str(file_path))
+                logger.info(f"📁 Using extracted pathname: {local_path}")
+            else:
+                local_path = file_path
             
-            with open(file_path, "rb") as buffer:
+            logger.info(f"📁 Reading from local storage: {local_path}")
+            logger.info(f"🔍 File exists: {os.path.exists(local_path)}")
+            
+            with open(local_path, "rb") as buffer:
                 file_content = buffer.read()
             
             logger.info(f"✅ File read locally successfully!")
