@@ -179,6 +179,43 @@ class DatabaseInitializer:
             logger.error(f"Unexpected error during processing steps migration: {e}")
             raise
     
+    def add_blob_store_base_url_columns(self):
+        """Add blob_store_base_url columns for blob storage URL tracking"""
+        logger.info("Checking for blob_store_base_url columns...")
+        
+        migrations = [
+            {
+                "table": "zodiac_invoice_success_edi",
+                "column": "blob_store_base_url",
+                "sql": "ALTER TABLE zodiac_invoice_success_edi ADD COLUMN IF NOT EXISTS blob_store_base_url TEXT NULL;"
+            },
+            {
+                "table": "zodiac_invoice_failed_edi",
+                "column": "blob_store_base_url", 
+                "sql": "ALTER TABLE zodiac_invoice_failed_edi ADD COLUMN IF NOT EXISTS blob_store_base_url TEXT NULL;"
+            }
+        ]
+        
+        try:
+            with self.engine.connect() as conn:
+                # Add columns
+                for migration in migrations:
+                    if not self.check_column_exists(migration["table"], migration["column"]):
+                        logger.info(f"Adding {migration['column']} column to {migration['table']}...")
+                        conn.execute(text(migration["sql"]))
+                    else:
+                        logger.info(f"Column {migration['column']} already exists in {migration['table']}")
+                
+                conn.commit()
+                logger.info("✅ Blob store base URL columns migration completed")
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error during blob store base URL migration: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during blob store base URL migration: {e}")
+            raise
+    
     def verify_tables_exist(self):
         """Verify that required tables exist"""
         required_tables = [
@@ -221,6 +258,7 @@ class DatabaseInitializer:
             # Run migrations
             self.add_deleted_at_columns()
             self.add_processing_steps_columns()
+            self.add_blob_store_base_url_columns()
             
             logger.info("✅ All database migrations completed successfully!")
             return True
@@ -239,6 +277,10 @@ class DatabaseInitializer:
             "processing_steps_columns": {
                 "zodiac_invoice_success_edi": self.check_column_exists("zodiac_invoice_success_edi", "processing_steps_error"),
                 "zodiac_invoice_failed_edi": self.check_column_exists("zodiac_invoice_failed_edi", "processing_steps_error")
+            },
+            "blob_store_base_url_columns": {
+                "zodiac_invoice_success_edi": self.check_column_exists("zodiac_invoice_success_edi", "blob_store_base_url"),
+                "zodiac_invoice_failed_edi": self.check_column_exists("zodiac_invoice_failed_edi", "blob_store_base_url")
             },
             "indexes": {
                 "deleted_at_indexes": [
@@ -309,4 +351,5 @@ if __name__ == "__main__":
         print("Running database initialization...")
         success = initialize_database()
         sys.exit(0 if success else 1)
+
 

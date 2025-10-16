@@ -75,6 +75,7 @@ class ZodiacInvoiceSuccessEdi(BaseModel):
     edi_path: Optional[str] = None
     edi_convert_pass: bool
     edi_convert_message: Optional[str] = None
+    blob_store_base_url: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -90,6 +91,7 @@ class ZodiacInvoiceFailedEdi(BaseModel):
     edi_path: Optional[str] = None
     edi_convert_pass: bool
     edi_convert_message: Optional[str] = None
+    blob_store_base_url: Optional[str] = None
     
     class Config:
         from_attributes = True

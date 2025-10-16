@@ -22,6 +22,8 @@ class ZodiacInvoiceSuccessEdi(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     # Store detailed error information
     processing_steps_error = Column(JSON, nullable=True)
+    # Store full blob URL for blob-stored files
+    blob_store_base_url = Column(Text, nullable=True)
     
     # Relationships
     user = relationship("ZodiacUser", back_populates="successful_invoices")
@@ -42,6 +44,8 @@ class ZodiacInvoiceFailedEdi(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     # Store detailed error information
     processing_steps_error = Column(JSON, nullable=True)
+    # Store full blob URL for blob-stored files
+    blob_store_base_url = Column(Text, nullable=True)
     
     # Relationships
     user = relationship("ZodiacUser", back_populates="failed_invoices")
