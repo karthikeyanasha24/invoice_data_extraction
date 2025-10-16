@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Optional
+from typing import Optional, Union
 import uuid
 import os
 import logging
@@ -334,7 +334,7 @@ async def read_file_from_storage(file_path: str, blob_xml_path: str = None, blob
                 detail=f"Failed to read file locally: {str(e)}"
             )
 
-def validate_xml(file_path: str, strict_validation: bool = False) -> tuple[bool, Optional[str], list[str]]:
+def validate_xml(file_path: Union[str, dict], strict_validation: bool = False) -> tuple[bool, Optional[str], list[str]]:
     """Validate XML file structure - core well-formed check + optional enhanced validation with warnings
     
     Args:
@@ -583,7 +583,7 @@ def _perform_strict_content_validation(root, namespaces) -> list[str]:
     
     return warnings
 
-async def validate_edi_format(edi_path: str) -> tuple[bool, Optional[str], Optional[dict]]:
+async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optional[str], Optional[dict]]:
     """Validate EDI format fields for correct values, format, and length"""
     logger.info(f"🔍 validate_edi_format: Starting EDI format validation for {edi_path}")
     
@@ -960,7 +960,7 @@ def _create_ISA_segment(supplier, customer, control_numbers, current_time):
     ]
     return "*".join(isa_elements) + "~"
 
-async def convert_xml_to_x12(xml_path: str, x12_filename: str) -> tuple[bool, Optional[str], Optional[str]]:
+async def convert_xml_to_x12(xml_path: Union[str, dict], x12_filename: str) -> tuple[bool, Optional[str], Optional[str]]:
     """Convert XML to X12 format using exact same logic as old API's convert_xml_to_x12"""
     logger.info(f"🔄 convert_xml_to_x12: Starting X12 conversion (matching old API logic)")
     logger.info(f"📁 Source XML: {xml_path}")
@@ -1336,7 +1336,7 @@ async def process_invoice(
         logger.info(f"📄 Validating XML file: {xml_path}")
         logger.info(f"🔍 Calling validate_xml function...")
         
-        xml_valid, xml_message, xml_warnings = validate_xml(str(xml_path), strict_validation)
+        xml_valid, xml_message, xml_warnings = validate_xml(xml_path, strict_validation)
         response.xml_validation_pass = xml_valid
         response.xml_convert_message = xml_message
         response.warnings.extend(xml_warnings)  # Add warnings to response
@@ -1645,7 +1645,7 @@ async def process_invoice(
         logger.info(f"📄 Validating EDI format fields for correct values, format, and length")
         logger.info(f"🔍 Calling validate_edi_format function...")
         
-        edi_format_valid, edi_format_message, edi_format_details = await validate_edi_format(str(x12_path))
+        edi_format_valid, edi_format_message, edi_format_details = await validate_edi_format(x12_path)
         
         step4_duration = time.time() - step4_start
         logger.info(f"🔍 EDI format validation completed in {step4_duration:.3f}s")
