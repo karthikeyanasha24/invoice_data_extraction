@@ -11,6 +11,17 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from lxml import etree
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Import Vercel Blob for production file storage
+try:
+    from vercel_blob import BlobApi
+    VERCEL_BLOB_AVAILABLE = True
+except ImportError:
+    VERCEL_BLOB_AVAILABLE = False
 
 from ..database import get_db
 from ..models.user import ZodiacUser
@@ -23,11 +34,104 @@ router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
 # Set up logger
 logger = logging.getLogger("zodiac-api.invoices")
 
-# Create upload directories
+if not VERCEL_BLOB_AVAILABLE:
+    logger.warning("⚠️ Vercel Blob not available - will use local storage only")
+
+# Environment configuration
+DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
+BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
+USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None and VERCEL_BLOB_AVAILABLE
+
+logger.info(f"🌍 Deploy environment: {DEPLOY_ENV}")
+logger.info(f"📦 Using blob storage: {USE_BLOB_STORAGE}")
+if USE_BLOB_STORAGE:
+    logger.info("✅ Vercel Blob storage configured")
+else:
+    logger.info("📁 Using local file storage")
+
+# Initialize Vercel Blob API if needed
+blob_api = None
+if USE_BLOB_STORAGE:
+    try:
+        blob_api = BlobApi(token=BLOB_READ_WRITE_TOKEN)
+        logger.info("✅ Vercel Blob API initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Vercel Blob API: {e}")
+        USE_BLOB_STORAGE = False
+
+# Create upload directories (only for local storage)
 UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 EDI_DIR = Path("converted")
-EDI_DIR.mkdir(parents=True, exist_ok=True)
+if not USE_BLOB_STORAGE:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    EDI_DIR.mkdir(parents=True, exist_ok=True)
+
+# File storage helper functions
+async def save_file_to_storage(file_content: bytes, filename: str, subdirectory: str = "uploads") -> str:
+    """Save file content to appropriate storage (local or Vercel Blob)"""
+    if USE_BLOB_STORAGE:
+        try:
+            # Use Vercel Blob storage
+            blob_path = f"{subdirectory}/{filename}"
+            logger.info(f"📦 Saving to Vercel Blob: {blob_path}")
+            
+            blob_url = await blob_api.put(blob_path, file_content)
+            logger.info(f"✅ File saved to Vercel Blob: {blob_url}")
+            return blob_url
+        except Exception as e:
+            logger.error(f"❌ Failed to save to Vercel Blob: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save file to blob storage: {str(e)}"
+            )
+    else:
+        # Use local file storage
+        try:
+            target_dir = UPLOAD_DIR if subdirectory == "uploads" else EDI_DIR
+            file_path = target_dir / filename
+            logger.info(f"📁 Saving to local storage: {file_path}")
+            
+            with open(file_path, "wb") as buffer:
+                buffer.write(file_content)
+            
+            logger.info(f"✅ File saved locally: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            logger.error(f"❌ Failed to save locally: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save file locally: {str(e)}"
+            )
+
+async def read_file_from_storage(file_path: str) -> bytes:
+    """Read file content from appropriate storage (local or Vercel Blob)"""
+    if USE_BLOB_STORAGE:
+        try:
+            # Read from Vercel Blob storage
+            logger.info(f"📦 Reading from Vercel Blob: {file_path}")
+            file_content = await blob_api.get(file_path)
+            logger.info(f"✅ File read from Vercel Blob: {len(file_content)} bytes")
+            return file_content
+        except Exception as e:
+            logger.error(f"❌ Failed to read from Vercel Blob: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to read file from blob storage: {str(e)}"
+            )
+    else:
+        # Read from local file storage
+        try:
+            logger.info(f"📁 Reading from local storage: {file_path}")
+            with open(file_path, "rb") as buffer:
+                file_content = buffer.read()
+            logger.info(f"✅ File read locally: {len(file_content)} bytes")
+            return file_content
+        except Exception as e:
+            logger.error(f"❌ Failed to read locally: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to read file locally: {str(e)}"
+            )
 
 def validate_xml(file_path: str, strict_validation: bool = False) -> tuple[bool, Optional[str], list[str]]:
     """Validate XML file structure - core well-formed check + optional enhanced validation with warnings
@@ -250,14 +354,14 @@ def _perform_strict_content_validation(root, namespaces) -> list[str]:
     
     return warnings
 
-def validate_edi_format(edi_path: str) -> tuple[bool, Optional[str], Optional[dict]]:
+async def validate_edi_format(edi_path: str) -> tuple[bool, Optional[str], Optional[dict]]:
     """Validate EDI format fields for correct values, format, and length"""
     logger.info(f"🔍 validate_edi_format: Starting EDI format validation for {edi_path}")
     
     try:
         logger.info(f"📄 validate_edi_format: Reading EDI file...")
-        with open(edi_path, 'r') as f:
-            edi_content = f.read()
+        edi_content_bytes = await read_file_from_storage(edi_path)
+        edi_content = edi_content_bytes.decode('utf-8')
         
         logger.info(f"✅ validate_edi_format: EDI file read successfully ({len(edi_content)} characters)")
         
@@ -627,18 +731,17 @@ def _create_ISA_segment(supplier, customer, control_numbers, current_time):
     ]
     return "*".join(isa_elements) + "~"
 
-def convert_xml_to_x12(xml_path: str, x12_path: str) -> tuple[bool, Optional[str]]:
+async def convert_xml_to_x12(xml_path: str, x12_filename: str) -> tuple[bool, Optional[str], Optional[str]]:
     """Convert XML to X12 format using exact same logic as old API's convert_xml_to_x12"""
     logger.info(f"🔄 convert_xml_to_x12: Starting X12 conversion (matching old API logic)")
     logger.info(f"📁 Source XML: {xml_path}")
-    logger.info(f"📁 Target X12: {x12_path}")
+    logger.info(f"📁 Target X12 filename: {x12_filename}")
     
     try:
         logger.info(f"📄 convert_xml_to_x12: Reading XML content...")
         
-        # Read XML content (matching old API approach)
-        with open(xml_path, 'rb') as f:
-            xml_content = f.read()
+        # Read XML content from storage
+        xml_content = await read_file_from_storage(xml_path)
         
         logger.info(f"✅ convert_xml_to_x12: XML content read ({len(xml_content)} bytes)")
         
@@ -647,23 +750,22 @@ def convert_xml_to_x12(xml_path: str, x12_path: str) -> tuple[bool, Optional[str
         
         if not x12_content:
             logger.error(f"❌ convert_xml_to_x12: No X12 content generated")
-            return False, "No X12 content generated"
+            return False, "No X12 content generated", None
         
         logger.info(f"📝 convert_xml_to_x12: X12 content generated ({len(x12_content)} characters)")
         
-        # Save X12 content to file
-        with open(x12_path, 'w', encoding='utf-8') as f:
-            f.write(x12_content)
+        # Save X12 content to storage
+        x12_path = await save_file_to_storage(x12_content.encode('utf-8'), x12_filename, "converted")
         
         logger.info(f"✅ convert_xml_to_x12: X12 file saved successfully")
         logger.info(f"📊 convert_xml_to_x12: Conversion completed successfully")
         
-        return True, "X12 conversion completed successfully"
+        return True, "X12 conversion completed successfully", x12_path
         
     except Exception as e:
         error_msg = f"X12 conversion error: {str(e)}"
         logger.error(f"❌ convert_xml_to_x12: {error_msg}")
-        return False, error_msg
+        return False, error_msg, None
 
 def _convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
     """Convert XML content to X12 format using exact same logic as old API"""
@@ -963,16 +1065,18 @@ async def process_invoice(
         
         # Save uploaded file
         xml_filename = f"{tracking_id}_{file.filename}"
-        xml_path = UPLOAD_DIR / xml_filename
-        logger.info(f"💾 Saving file to: {xml_path}")
+        logger.info(f"💾 Saving file: {xml_filename}")
         logger.info(f"📁 Target filename: {xml_filename}")
         
-        with open(xml_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-            logger.info(f"✅ File saved successfully!")
-            logger.info(f"📊 File size: {len(content)} bytes")
-            logger.info(f"📁 Saved as: {xml_filename}")
+        # Read file content
+        content = await file.read()
+        logger.info(f"📊 File size: {len(content)} bytes")
+        
+        # Save to appropriate storage (local or Vercel Blob)
+        xml_path = await save_file_to_storage(content, xml_filename, "uploads")
+        logger.info(f"✅ File saved successfully!")
+        logger.info(f"📁 Saved as: {xml_filename}")
+        logger.info(f"📍 Storage path: {xml_path}")
         
         step1_duration = time.time() - step1_start
         response.file_upload_pass = True
@@ -990,9 +1094,9 @@ async def process_invoice(
         
         # Add file content preview for error context
         try:
-            with open(xml_path, 'r', encoding='utf-8') as f:
-                file_content = f.read()
-                response.file_content_preview = file_content[:500] + "..." if len(file_content) > 500 else file_content
+            file_content_bytes = await read_file_from_storage(xml_path)
+            file_content = file_content_bytes.decode('utf-8')
+            response.file_content_preview = file_content[:500] + "..." if len(file_content) > 500 else file_content
         except Exception as e:
             logger.warning(f"⚠️ Could not read file content for preview: {e}")
             response.file_content_preview = "Unable to read file content"
@@ -1003,7 +1107,7 @@ async def process_invoice(
         logger.info(f"📄 Validating XML file: {xml_path}")
         logger.info(f"🔍 Calling validate_xml function...")
         
-        xml_valid, xml_message, xml_warnings = validate_xml(str(xml_path), strict_validation)
+        xml_valid, xml_message, xml_warnings = await validate_xml(str(xml_path), strict_validation)
         response.xml_validation_pass = xml_valid
         response.xml_convert_message = xml_message
         response.warnings.extend(xml_warnings)  # Add warnings to response
@@ -1156,13 +1260,12 @@ async def process_invoice(
         step3_start = time.time()
         logger.info(f"🔄 ===== STEP 3: EDI CONVERSION =====")
         x12_filename = f"{tracking_id}_converted.x12"
-        x12_path = EDI_DIR / x12_filename
         logger.info(f"📄 Converting XML to X12 format")
         logger.info(f"📁 Source XML: {xml_path}")
-        logger.info(f"📁 Target X12: {x12_path}")
+        logger.info(f"📁 Target X12 filename: {x12_filename}")
         logger.info(f"🔍 Calling convert_xml_to_x12 function...")
         
-        edi_success, edi_message = convert_xml_to_x12(str(xml_path), str(x12_path))
+        edi_success, edi_message, x12_path = await convert_xml_to_x12(xml_path, x12_filename)
         response.edi_convert_pass = edi_success
         response.edi_convert_message = edi_message
         
@@ -1287,7 +1390,7 @@ async def process_invoice(
         logger.info(f"📄 Validating EDI format fields for correct values, format, and length")
         logger.info(f"🔍 Calling validate_edi_format function...")
         
-        edi_format_valid, edi_format_message, edi_format_details = validate_edi_format(str(x12_path))
+        edi_format_valid, edi_format_message, edi_format_details = await validate_edi_format(str(x12_path))
         
         step4_duration = time.time() - step4_start
         logger.info(f"🔍 EDI format validation completed in {step4_duration:.3f}s")
@@ -1567,7 +1670,7 @@ def get_successful_invoices(
         raise HTTPException(status_code=500, detail=f"Error getting successful invoices: {str(e)}")
 
 @router.get("/failed", response_model=list[ZodiacInvoiceFailedEdi])
-def get_failed_invoices(
+async def get_failed_invoices(
     skip: int = 0,
     limit: int = 100,
     current_user: ZodiacUser = Depends(get_current_user),
@@ -1618,9 +1721,9 @@ def get_failed_invoices(
                     logger.info(f"🔍 Reading XML file: {xml_file_path}")
                     logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
                     
-                    if os.path.exists(xml_file_path):
-                        with open(xml_file_path, 'r', encoding='utf-8') as f:
-                            xml_content = f.read()
+                    if os.path.exists(xml_file_path) or USE_BLOB_STORAGE:
+                        xml_content_bytes = await read_file_from_storage(xml_file_path)
+                        xml_content = xml_content_bytes.decode('utf-8')
                         logger.info(f"✅ XML content read successfully, length: {len(xml_content)}")
                     else:
                         logger.warning(f"⚠️ XML file not found: {xml_file_path}")
@@ -1630,9 +1733,9 @@ def get_failed_invoices(
                 logger.error(f"❌ Could not read XML file {row.xml_path}: {e}")
             
             try:
-                if row.edi_path and os.path.exists(row.edi_path):
-                    with open(row.edi_path, 'r', encoding='utf-8') as f:
-                        edi_content = f.read()
+                if row.edi_path and (os.path.exists(row.edi_path) or USE_BLOB_STORAGE):
+                    edi_content_bytes = await read_file_from_storage(row.edi_path)
+                    edi_content = edi_content_bytes.decode('utf-8')
             except Exception as e:
                 logger.warning(f"⚠️ Could not read EDI file {row.edi_path}: {e}")
             
@@ -1662,7 +1765,7 @@ def get_failed_invoices(
         raise HTTPException(status_code=500, detail=f"Error getting failed invoices: {str(e)}")
 
 @router.get("/failed/{tracking_id}", response_model=ZodiacInvoiceFailedEdi)
-def get_failed_invoice_by_tracking_id(
+async def get_failed_invoice_by_tracking_id(
     tracking_id: str,
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -1749,9 +1852,9 @@ def get_failed_invoice_by_tracking_id(
             logger.error(f"❌ Could not read XML file {invoice.xml_path}: {e}")
         
         try:
-            if invoice.edi_path and os.path.exists(invoice.edi_path):
-                with open(invoice.edi_path, 'r', encoding='utf-8') as f:
-                    edi_content = f.read()
+            if invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
+                edi_content_bytes = await read_file_from_storage(invoice.edi_path)
+                edi_content = edi_content_bytes.decode('utf-8')
         except Exception as e:
             logger.warning(f"⚠️ Could not read EDI file {invoice.edi_path}: {e}")
         

@@ -15,4 +15,5 @@ dependencies = [
     "python-multipart>=0.0.20",
     "sqlalchemy>=2.0.44",
     "uvicorn>=0.37.0",
+    "vercel-blob>=0.4.2",
 ]
