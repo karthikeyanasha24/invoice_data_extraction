@@ -1994,15 +1994,17 @@ def get_successful_invoices(
                 tracking_id=row.tracking_id,
                 user_id=row.user_id,
                 uploaded_at=row.uploaded_at,
-                xml_path=row.xml_path,
+                xml_path=row.blob_xml_path if row.blob_xml_path else row.xml_path,
                 xml_validation_pass=row.xml_validation_pass,
                 xml_convert_message=row.xml_convert_message,
-                edi_path=row.edi_path,
+                edi_path=row.blob_edi_path if row.blob_edi_path else row.edi_path,
                 edi_convert_pass=row.edi_convert_pass,
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=row.processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path
+                blob_edi_path=row.blob_edi_path,
+                xml_content="",  # Successful invoices don't need content in list view
+                edi_content=""  # Successful invoices don't need content in list view
             )
             invoices.append(invoice)
         
@@ -2102,20 +2104,18 @@ async def get_failed_invoices(
                 tracking_id=row.tracking_id,
                 user_id=row.user_id,
                 uploaded_at=row.uploaded_at,
-                xml_path=row.xml_path,
+                xml_path=row.blob_xml_path if row.blob_xml_path else row.xml_path,
                 xml_validation_pass=row.xml_validation_pass,
                 xml_convert_message=row.xml_convert_message,
-                edi_path=row.edi_path,
+                edi_path=row.blob_edi_path if row.blob_edi_path else row.edi_path,
                 edi_convert_pass=row.edi_convert_pass,
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path
+                blob_edi_path=row.blob_edi_path,
+                xml_content=xml_content,
+                edi_content=edi_content
             )
-            
-            # Add file content as additional attributes (not part of the model)
-            invoice.xml_content = xml_content
-            invoice.edi_content = edi_content
             
             invoices.append(invoice)
         
@@ -2261,17 +2261,20 @@ async def get_failed_invoice_by_tracking_id(
             "tracking_id": str(invoice.tracking_id),
             "user_id": invoice.user_id,
             "uploaded_at": invoice.uploaded_at.isoformat(),
-            "xml_path": invoice.blob_xml_path if (invoice.blob_xml_path and USE_BLOB_STORAGE) else invoice.xml_path,
+            "xml_path": invoice.blob_xml_path if invoice.blob_xml_path else invoice.xml_path,
             "xml_validation_pass": invoice.xml_validation_pass,
             "xml_convert_message": invoice.xml_convert_message,
             "xml_content": xml_content,
-            "edi_path": invoice.blob_edi_path if (invoice.blob_edi_path and USE_BLOB_STORAGE) else invoice.edi_path,
+            "edi_path": invoice.blob_edi_path if invoice.blob_edi_path else invoice.edi_path,
             "edi_convert_pass": invoice.edi_convert_pass,
             "edi_convert_message": invoice.edi_convert_message,
             "edi_content": edi_content,
             "processing_steps_error": processing_steps_error,
             "blob_xml_path": invoice.blob_xml_path,
-            "blob_edi_path": invoice.blob_edi_path
+            "blob_edi_path": invoice.blob_edi_path,
+            "local_xml_path": invoice.xml_path,
+            "local_edi_path": invoice.edi_path,
+            "use_blob_storage": USE_BLOB_STORAGE
         }
         
         logger.info(f"🔍 Final response - xml_path: {response_data['xml_path']}")
