@@ -93,7 +93,7 @@ if USE_BLOB_STORAGE:
     try:
         logger.info("🔧 Initializing Vercel Blob API...")
         # Set the token for vercel_blob
-        vercel_blob.set_token(BLOB_READ_WRITE_TOKEN)
+        # vercel_blob.set_token(BLOB_READ_WRITE_TOKEN)
         logger.info("✅ Vercel Blob API initialized successfully")
         logger.info(f"🔑 Token length: {len(BLOB_READ_WRITE_TOKEN)} characters")
         logger.info("🚀 Ready to use Vercel Blob storage for file operations")
