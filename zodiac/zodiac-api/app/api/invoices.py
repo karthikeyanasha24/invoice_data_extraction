@@ -2192,6 +2192,10 @@ async def get_failed_invoice_by_tracking_id(
         xml_content = ""
         edi_content = ""
         
+        logger.info(f"🔍 File content reading - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+        logger.info(f"🔍 File content reading - blob_xml_path: {invoice.blob_xml_path}")
+        logger.info(f"🔍 File content reading - blob_edi_path: {invoice.blob_edi_path}")
+        
         try:
             # Use blob path if available, otherwise fall back to local path
             if invoice.blob_xml_path and USE_BLOB_STORAGE:
@@ -2200,6 +2204,7 @@ async def get_failed_invoice_by_tracking_id(
                 xml_content = xml_content_bytes.decode('utf-8')
                 logger.info(f"✅ XML content read from blob successfully, length: {len(xml_content)}")
             else:
+                logger.info(f"🔍 Using local XML path fallback")
                 # Try to resolve the local path - it might be relative or have issues
                 xml_file_path = invoice.xml_path
                 if xml_file_path:
@@ -2228,19 +2233,29 @@ async def get_failed_invoice_by_tracking_id(
                 edi_content_bytes = await read_file_from_storage(None, None, invoice.blob_edi_path)
                 edi_content = edi_content_bytes.decode('utf-8')
                 logger.info(f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
-            elif invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
-                logger.info(f"🔍 Reading EDI file from local storage: {invoice.edi_path}")
-                edi_content_bytes = await read_file_from_storage(invoice.edi_path, None, None)
-                edi_content = edi_content_bytes.decode('utf-8')
-                logger.info(f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
+            else:
+                logger.info(f"🔍 Using local EDI path fallback")
+                if invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
+                    logger.info(f"🔍 Reading EDI file from local storage: {invoice.edi_path}")
+                    edi_content_bytes = await read_file_from_storage(invoice.edi_path, None, None)
+                    edi_content = edi_content_bytes.decode('utf-8')
+                    logger.info(f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
         except Exception as e:
             logger.warning(f"⚠️ Could not read EDI file: {e}")
+        
+        logger.info(f"🔍 Final content lengths - XML: {len(xml_content)}, EDI: {len(edi_content)}")
         
         # Add file content as additional attributes (not part of the model)
         invoice.xml_content = xml_content
         invoice.edi_content = edi_content
         
         # Create a response object that includes stored error details and file contents
+        logger.info(f"🔍 Response construction - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+        logger.info(f"🔍 Response construction - blob_xml_path: {invoice.blob_xml_path}")
+        logger.info(f"🔍 Response construction - blob_edi_path: {invoice.blob_edi_path}")
+        logger.info(f"🔍 Response construction - xml_path: {invoice.xml_path}")
+        logger.info(f"🔍 Response construction - edi_path: {invoice.edi_path}")
+        
         response_data = {
             "id": invoice.id,
             "tracking_id": str(invoice.tracking_id),
@@ -2258,6 +2273,9 @@ async def get_failed_invoice_by_tracking_id(
             "blob_xml_path": invoice.blob_xml_path,
             "blob_edi_path": invoice.blob_edi_path
         }
+        
+        logger.info(f"🔍 Final response - xml_path: {response_data['xml_path']}")
+        logger.info(f"🔍 Final response - edi_path: {response_data['edi_path']}")
         
         # Ensure processing_steps_error is JSON serializable
         try:
