@@ -222,18 +222,20 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
                 detail=f"Failed to save file locally: {str(e)}"
             )
 
-async def read_file_from_storage(file_path: str, blob_store_base_url: str = None) -> bytes:
+async def read_file_from_storage(file_path: str, blob_xml_path: str = None, blob_edi_path: str = None) -> bytes:
     """Read file content from appropriate storage (local or Vercel Blob)
     
     Args:
         file_path: Path to the file (local path or blob pathname)
-        blob_store_base_url: Full blob URL from database (if available)
+        blob_xml_path: Blob URL for XML file from database (if available)
+        blob_edi_path: Blob URL for EDI file from database (if available)
     """
     logger.info("=" * 50)
     logger.info("📖 FILE READ OPERATION")
     logger.info("=" * 50)
     logger.info(f"📁 File path: {file_path}")
-    logger.info(f"🌐 Blob store base URL: {blob_store_base_url}")
+    logger.info(f"🌐 Blob XML path: {blob_xml_path}")
+    logger.info(f"🌐 Blob EDI path: {blob_edi_path}")
     logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
     logger.info(f"🚨 Mandatory blob storage: {MUST_USE_BLOB_STORAGE}")
     
@@ -252,10 +254,14 @@ async def read_file_from_storage(file_path: str, blob_store_base_url: str = None
             logger.info(f"📦 Reading from Vercel Blob")
             logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
             
-            # If we have a blob_store_base_url from database, use it directly
-            if blob_store_base_url:
-                download_url = blob_store_base_url
-                logger.info(f"🌐 Using blob URL from database: {download_url}")
+            # Determine which blob path to use based on file type
+            download_url = None
+            if blob_xml_path and ("xml" in str(file_path).lower() or "uploads" in str(file_path)):
+                download_url = blob_xml_path
+                logger.info(f"🌐 Using blob XML path from database: {download_url}")
+            elif blob_edi_path and ("edi" in str(file_path).lower() or "x12" in str(file_path).lower() or "converted" in str(file_path)):
+                download_url = blob_edi_path
+                logger.info(f"🌐 Using blob EDI path from database: {download_url}")
             else:
                 # Fallback to constructing URL from file path
                 if isinstance(file_path, dict):
@@ -577,7 +583,7 @@ async def validate_edi_format(edi_path: str) -> tuple[bool, Optional[str], Optio
     
     try:
         logger.info(f"📄 validate_edi_format: Reading EDI file...")
-        edi_content_bytes = await read_file_from_storage(edi_path, None)
+        edi_content_bytes = await read_file_from_storage(edi_path, None, None)
         edi_content = edi_content_bytes.decode('utf-8')
         
         logger.info(f"✅ validate_edi_format: EDI file read successfully ({len(edi_content)} characters)")
@@ -958,7 +964,7 @@ async def convert_xml_to_x12(xml_path: str, x12_filename: str) -> tuple[bool, Op
         logger.info(f"📄 convert_xml_to_x12: Reading XML content...")
         
         # Read XML content from storage
-        xml_content = await read_file_from_storage(xml_path, None)
+        xml_content = await read_file_from_storage(xml_path, None, None)
         
         logger.info(f"✅ convert_xml_to_x12: XML content read ({len(xml_content)} bytes)")
         
@@ -1311,7 +1317,7 @@ async def process_invoice(
         
         # Add file content preview for error context
         try:
-            file_content_bytes = await read_file_from_storage(xml_path, None)
+            file_content_bytes = await read_file_from_storage(xml_path, None, None)
             file_content = file_content_bytes.decode('utf-8')
             response.file_content_preview = file_content[:500] + "..." if len(file_content) > 500 else file_content
         except Exception as e:
@@ -1401,10 +1407,10 @@ async def process_invoice(
             
             logger.info(f"💾 Saving failed invoice to database...")
             
-            # Determine blob store base URL for XML file
-            xml_blob_url = None
+            # Determine blob paths for XML file
+            blob_xml_path = None
             if USE_BLOB_STORAGE and isinstance(xml_path, dict):
-                xml_blob_url = xml_path.get('url')
+                blob_xml_path = xml_path.get('url')
             
             # Save to failed table
             failed_invoice = FailedModel(
@@ -1416,7 +1422,8 @@ async def process_invoice(
                 edi_convert_pass=False,
                 edi_convert_message="Skipped due to XML validation failure",
                 processing_steps_error=[error.dict() for error in all_errors],
-                blob_store_base_url=xml_blob_url
+                blob_xml_path=blob_xml_path,
+                blob_edi_path=None
             )
             db.add(failed_invoice)
             db.commit()
@@ -1551,10 +1558,15 @@ async def process_invoice(
             
             logger.info(f"💾 Saving failed invoice to database...")
             
-            # Determine blob store base URL for XML file
-            xml_blob_url = None
-            if USE_BLOB_STORAGE and isinstance(xml_path, dict):
-                xml_blob_url = xml_path.get('url')
+            # Determine blob paths for XML and EDI files
+            blob_xml_path = None
+            blob_edi_path = None
+            
+            if USE_BLOB_STORAGE:
+                if isinstance(xml_path, dict):
+                    blob_xml_path = xml_path.get('url')
+                if isinstance(x12_path, dict):
+                    blob_edi_path = x12_path.get('url')
             
             # Save to failed table
             failed_invoice = FailedModel(
@@ -1567,7 +1579,8 @@ async def process_invoice(
                 edi_convert_pass=False,
                 edi_convert_message=edi_message,
                 processing_steps_error=[error.dict() for error in all_errors],
-                blob_store_base_url=xml_blob_url
+                blob_xml_path=blob_xml_path,
+                blob_edi_path=blob_edi_path
             )
             db.add(failed_invoice)
             db.commit()
@@ -1680,10 +1693,15 @@ async def process_invoice(
             
             logger.info(f"💾 Saving failed invoice to database...")
             
-            # Determine blob store base URL for XML file
-            xml_blob_url = None
-            if USE_BLOB_STORAGE and isinstance(xml_path, dict):
-                xml_blob_url = xml_path.get('url')
+            # Determine blob paths for XML and EDI files
+            blob_xml_path = None
+            blob_edi_path = None
+            
+            if USE_BLOB_STORAGE:
+                if isinstance(xml_path, dict):
+                    blob_xml_path = xml_path.get('url')
+                if isinstance(x12_path, dict):
+                    blob_edi_path = x12_path.get('url')
             
             # Save to failed table
             failed_invoice = FailedModel(
@@ -1696,7 +1714,8 @@ async def process_invoice(
                 edi_convert_pass=False,  # EDI format validation failed
                 edi_convert_message=f"EDI conversion completed but format validation failed: {edi_format_message}",
                 processing_steps_error=[error.dict() for error in all_errors],
-                blob_store_base_url=xml_blob_url
+                blob_xml_path=blob_xml_path,
+                blob_edi_path=blob_edi_path
             )
             db.add(failed_invoice)
             db.commit()
@@ -1748,18 +1767,15 @@ async def process_invoice(
         logger.info(f"💾 Saving successful invoice to database...")
         logger.info(f"📊 Creating success record with tracking ID: {tracking_id}")
         
-        # Determine blob store base URL for XML file
-        xml_blob_url = None
-        if USE_BLOB_STORAGE and isinstance(xml_path, dict):
-            xml_blob_url = xml_path.get('url')
+        # Determine blob paths for XML and EDI files
+        blob_xml_path = None
+        blob_edi_path = None
         
-        # Determine blob store base URL for EDI file  
-        edi_blob_url = None
-        if USE_BLOB_STORAGE and isinstance(x12_path, dict):
-            edi_blob_url = x12_path.get('url')
-        
-        # Use XML blob URL as the primary blob store base URL
-        blob_store_base_url = xml_blob_url
+        if USE_BLOB_STORAGE:
+            if isinstance(xml_path, dict):
+                blob_xml_path = xml_path.get('url')
+            if isinstance(x12_path, dict):
+                blob_edi_path = x12_path.get('url')
         
         success_invoice = SuccessModel(
             tracking_id=tracking_id,
@@ -1770,7 +1786,8 @@ async def process_invoice(
             edi_path=str(x12_path),
             edi_convert_pass=True,
             edi_convert_message="EDI conversion and format validation completed successfully",
-            blob_store_base_url=blob_store_base_url
+            blob_xml_path=blob_xml_path,
+            blob_edi_path=blob_edi_path
         )
         db.add(success_invoice)
         db.commit()
@@ -1996,7 +2013,7 @@ async def get_failed_invoices(
                     logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
                     
                     if os.path.exists(xml_file_path) or USE_BLOB_STORAGE:
-                        xml_content_bytes = await read_file_from_storage(xml_file_path, row.blob_store_base_url)
+                        xml_content_bytes = await read_file_from_storage(xml_file_path, row.blob_xml_path, row.blob_edi_path)
                         xml_content = xml_content_bytes.decode('utf-8')
                         logger.info(f"✅ XML content read successfully, length: {len(xml_content)}")
                     else:
@@ -2008,7 +2025,7 @@ async def get_failed_invoices(
             
             try:
                 if row.edi_path and (os.path.exists(row.edi_path) or USE_BLOB_STORAGE):
-                    edi_content_bytes = await read_file_from_storage(row.edi_path, row.blob_store_base_url)
+                    edi_content_bytes = await read_file_from_storage(row.edi_path, row.blob_xml_path, row.blob_edi_path)
                     edi_content = edi_content_bytes.decode('utf-8')
             except Exception as e:
                 logger.warning(f"⚠️ Could not read EDI file {row.edi_path}: {e}")
@@ -2127,7 +2144,7 @@ async def get_failed_invoice_by_tracking_id(
         
         try:
             if invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
-                edi_content_bytes = await read_file_from_storage(invoice.edi_path, invoice.blob_store_base_url)
+                edi_content_bytes = await read_file_from_storage(invoice.edi_path, invoice.blob_xml_path, invoice.blob_edi_path)
                 edi_content = edi_content_bytes.decode('utf-8')
         except Exception as e:
             logger.warning(f"⚠️ Could not read EDI file {invoice.edi_path}: {e}")
