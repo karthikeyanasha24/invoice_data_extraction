@@ -173,10 +173,16 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             logger.info(f"🌐 Blob Response: {blob_response}")
             logger.info(f"📊 Uploaded {len(file_content)} bytes")
             
-            # Return the pathname for consistent storage
+            # Return the full blob response for URL extraction
             if isinstance(blob_response, dict):
-                return blob_response.get('pathname', blob_response.get('url', str(blob_response)))
+                logger.info(f"✅ File saved successfully!")
+                logger.info(f"📁 Saved as: {filename}")
+                logger.info(f"📍 Storage path: {blob_response}")
+                return blob_response
             else:
+                logger.info(f"✅ File saved successfully!")
+                logger.info(f"📁 Saved as: {filename}")
+                logger.info(f"📍 Storage path: {str(blob_response)}")
                 return str(blob_response)
         except Exception as e:
             logger.error(f"❌ Failed to save to Vercel Blob: {e}")
@@ -1411,12 +1417,15 @@ async def process_invoice(
             blob_xml_path = None
             if USE_BLOB_STORAGE and isinstance(xml_path, dict):
                 blob_xml_path = xml_path.get('url')
+                logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
+            else:
+                logger.info(f"📁 Using local XML path: {xml_path}")
             
             # Save to failed table
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path),
+                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=False,
                 xml_convert_message=xml_message,
                 edi_convert_pass=False,
@@ -1565,17 +1574,21 @@ async def process_invoice(
             if USE_BLOB_STORAGE:
                 if isinstance(xml_path, dict):
                     blob_xml_path = xml_path.get('url')
+                    logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
                 if isinstance(x12_path, dict):
                     blob_edi_path = x12_path.get('url')
+                    logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+            else:
+                logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
             
             # Save to failed table
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path),
+                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=True,
                 xml_convert_message="XML validation passed",
-                edi_path=str(x12_path),
+                edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
                 edi_convert_pass=False,
                 edi_convert_message=edi_message,
                 processing_steps_error=[error.dict() for error in all_errors],
@@ -1700,17 +1713,21 @@ async def process_invoice(
             if USE_BLOB_STORAGE:
                 if isinstance(xml_path, dict):
                     blob_xml_path = xml_path.get('url')
+                    logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
                 if isinstance(x12_path, dict):
                     blob_edi_path = x12_path.get('url')
+                    logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+            else:
+                logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
             
             # Save to failed table
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path),
+                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=True,
                 xml_convert_message="XML validation passed",
-                edi_path=str(x12_path),
+                edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
                 edi_convert_pass=False,  # EDI format validation failed
                 edi_convert_message=f"EDI conversion completed but format validation failed: {edi_format_message}",
                 processing_steps_error=[error.dict() for error in all_errors],
@@ -1774,16 +1791,20 @@ async def process_invoice(
         if USE_BLOB_STORAGE:
             if isinstance(xml_path, dict):
                 blob_xml_path = xml_path.get('url')
+                logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
             if isinstance(x12_path, dict):
                 blob_edi_path = x12_path.get('url')
+                logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+        else:
+            logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
         
         success_invoice = SuccessModel(
             tracking_id=tracking_id,
             user_id=current_user.id,
-            xml_path=str(xml_path),
+            xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
             xml_validation_pass=True,
             xml_convert_message=response.xml_convert_message,  # Use the updated message with warning info
-            edi_path=str(x12_path),
+            edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
             edi_convert_pass=True,
             edi_convert_message="EDI conversion and format validation completed successfully",
             blob_xml_path=blob_xml_path,
