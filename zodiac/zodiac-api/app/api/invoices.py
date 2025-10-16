@@ -1925,7 +1925,8 @@ def get_successful_invoices(
         query = """
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
                xml_validation_pass, xml_convert_message, edi_path, 
-               edi_convert_pass, edi_convert_message, processing_steps_error
+               edi_convert_pass, edi_convert_message, processing_steps_error,
+               blob_xml_path, blob_edi_path
         FROM zodiac_invoice_success_edi 
         WHERE user_id = :user_id AND deleted_at IS NULL
         ORDER BY uploaded_at DESC 
@@ -1951,7 +1952,9 @@ def get_successful_invoices(
                 edi_path=row.edi_path,
                 edi_convert_pass=row.edi_convert_pass,
                 edi_convert_message=row.edi_convert_message,
-                processing_steps_error=row.processing_steps_error
+                processing_steps_error=row.processing_steps_error,
+                blob_xml_path=row.blob_xml_path,
+                blob_edi_path=row.blob_edi_path
             )
             invoices.append(invoice)
         
@@ -1973,7 +1976,8 @@ async def get_failed_invoices(
         query = """
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
                xml_validation_pass, xml_convert_message, edi_path, 
-               edi_convert_pass, edi_convert_message, processing_steps_error
+               edi_convert_pass, edi_convert_message, processing_steps_error,
+               blob_xml_path, blob_edi_path
         FROM zodiac_invoice_failed_edi 
         WHERE user_id = :user_id AND deleted_at IS NULL
         ORDER BY uploaded_at DESC 
@@ -2002,33 +2006,48 @@ async def get_failed_invoices(
             edi_content = ""
             
             try:
-                # Try to resolve the path - it might be relative or have issues
-                xml_file_path = row.xml_path
-                if xml_file_path:
-                    # Convert to absolute path if it's relative
-                    if not os.path.isabs(xml_file_path):
-                        xml_file_path = os.path.abspath(xml_file_path)
-                    
-                    logger.info(f"🔍 Reading XML file: {xml_file_path}")
-                    logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
-                    
-                    if os.path.exists(xml_file_path) or USE_BLOB_STORAGE:
-                        xml_content_bytes = await read_file_from_storage(xml_file_path, row.blob_xml_path, row.blob_edi_path)
-                        xml_content = xml_content_bytes.decode('utf-8')
-                        logger.info(f"✅ XML content read successfully, length: {len(xml_content)}")
-                    else:
-                        logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+                # Use blob path if available, otherwise fall back to local path
+                if row.blob_xml_path and USE_BLOB_STORAGE:
+                    logger.info(f"🔍 Reading XML file from blob: {row.blob_xml_path}")
+                    xml_content_bytes = await read_file_from_storage(None, row.blob_xml_path, None)
+                    xml_content = xml_content_bytes.decode('utf-8')
+                    logger.info(f"✅ XML content read from blob successfully, length: {len(xml_content)}")
                 else:
-                    logger.warning(f"⚠️ XML path is None")
+                    # Try to resolve the local path - it might be relative or have issues
+                    xml_file_path = row.xml_path
+                    if xml_file_path:
+                        # Convert to absolute path if it's relative
+                        if not os.path.isabs(xml_file_path):
+                            xml_file_path = os.path.abspath(xml_file_path)
+                        
+                        logger.info(f"🔍 Reading XML file from local storage: {xml_file_path}")
+                        logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
+                        
+                        if os.path.exists(xml_file_path):
+                            xml_content_bytes = await read_file_from_storage(xml_file_path, None, None)
+                            xml_content = xml_content_bytes.decode('utf-8')
+                            logger.info(f"✅ XML content read from local storage successfully, length: {len(xml_content)}")
+                        else:
+                            logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+                    else:
+                        logger.warning(f"⚠️ XML path is None")
             except Exception as e:
-                logger.error(f"❌ Could not read XML file {row.xml_path}: {e}")
+                logger.error(f"❌ Could not read XML file: {e}")
             
             try:
-                if row.edi_path and (os.path.exists(row.edi_path) or USE_BLOB_STORAGE):
-                    edi_content_bytes = await read_file_from_storage(row.edi_path, row.blob_xml_path, row.blob_edi_path)
+                # Use blob path if available, otherwise fall back to local path
+                if row.blob_edi_path and USE_BLOB_STORAGE:
+                    logger.info(f"🔍 Reading EDI file from blob: {row.blob_edi_path}")
+                    edi_content_bytes = await read_file_from_storage(None, None, row.blob_edi_path)
                     edi_content = edi_content_bytes.decode('utf-8')
+                    logger.info(f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
+                elif row.edi_path and (os.path.exists(row.edi_path) or USE_BLOB_STORAGE):
+                    logger.info(f"🔍 Reading EDI file from local storage: {row.edi_path}")
+                    edi_content_bytes = await read_file_from_storage(row.edi_path, None, None)
+                    edi_content = edi_content_bytes.decode('utf-8')
+                    logger.info(f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
             except Exception as e:
-                logger.warning(f"⚠️ Could not read EDI file {row.edi_path}: {e}")
+                logger.warning(f"⚠️ Could not read EDI file: {e}")
             
             invoice = FailedModel(
                 id=row.id,
@@ -2041,7 +2060,9 @@ async def get_failed_invoices(
                 edi_path=row.edi_path,
                 edi_convert_pass=row.edi_convert_pass,
                 edi_convert_message=row.edi_convert_message,
-                processing_steps_error=processing_steps_error
+                processing_steps_error=processing_steps_error,
+                blob_xml_path=row.blob_xml_path,
+                blob_edi_path=row.blob_edi_path
             )
             
             # Add file content as additional attributes (not part of the model)
@@ -2069,7 +2090,8 @@ async def get_failed_invoice_by_tracking_id(
         query = """
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
                xml_validation_pass, xml_convert_message, edi_path, 
-               edi_convert_pass, edi_convert_message, processing_steps_error
+               edi_convert_pass, edi_convert_message, processing_steps_error,
+               blob_xml_path, blob_edi_path
         FROM zodiac_invoice_failed_edi 
         WHERE tracking_id = :tracking_id AND user_id = :user_id
         """
@@ -2097,7 +2119,9 @@ async def get_failed_invoice_by_tracking_id(
             edi_path=result.edi_path,
             edi_convert_pass=result.edi_convert_pass,
             edi_convert_message=result.edi_convert_message,
-            processing_steps_error=result.processing_steps_error
+            processing_steps_error=result.processing_steps_error,
+            blob_xml_path=result.blob_xml_path,
+            blob_edi_path=result.blob_edi_path
         )
         
         logger.info(f"✅ Found failed invoice for tracking ID: {tracking_id}")
@@ -2121,33 +2145,48 @@ async def get_failed_invoice_by_tracking_id(
         edi_content = ""
         
         try:
-            # Try to resolve the path - it might be relative or have issues
-            xml_file_path = invoice.xml_path
-            if xml_file_path:
-                # Convert to absolute path if it's relative
-                if not os.path.isabs(xml_file_path):
-                    xml_file_path = os.path.abspath(xml_file_path)
-                
-                logger.info(f"🔍 Reading XML file: {xml_file_path}")
-                logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
-                
-                if os.path.exists(xml_file_path):
-                    with open(xml_file_path, 'r', encoding='utf-8') as f:
-                        xml_content = f.read()
-                    logger.info(f"✅ XML content read successfully, length: {len(xml_content)}")
-                else:
-                    logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+            # Use blob path if available, otherwise fall back to local path
+            if invoice.blob_xml_path and USE_BLOB_STORAGE:
+                logger.info(f"🔍 Reading XML file from blob: {invoice.blob_xml_path}")
+                xml_content_bytes = await read_file_from_storage(None, invoice.blob_xml_path, None)
+                xml_content = xml_content_bytes.decode('utf-8')
+                logger.info(f"✅ XML content read from blob successfully, length: {len(xml_content)}")
             else:
-                logger.warning(f"⚠️ XML path is None")
+                # Try to resolve the local path - it might be relative or have issues
+                xml_file_path = invoice.xml_path
+                if xml_file_path:
+                    # Convert to absolute path if it's relative
+                    if not os.path.isabs(xml_file_path):
+                        xml_file_path = os.path.abspath(xml_file_path)
+                    
+                    logger.info(f"🔍 Reading XML file from local storage: {xml_file_path}")
+                    logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
+                    
+                    if os.path.exists(xml_file_path):
+                        with open(xml_file_path, 'r', encoding='utf-8') as f:
+                            xml_content = f.read()
+                        logger.info(f"✅ XML content read from local storage successfully, length: {len(xml_content)}")
+                    else:
+                        logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+                else:
+                    logger.warning(f"⚠️ XML path is None")
         except Exception as e:
-            logger.error(f"❌ Could not read XML file {invoice.xml_path}: {e}")
+            logger.error(f"❌ Could not read XML file: {e}")
         
         try:
-            if invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
-                edi_content_bytes = await read_file_from_storage(invoice.edi_path, invoice.blob_xml_path, invoice.blob_edi_path)
+            # Use blob path if available, otherwise fall back to local path
+            if invoice.blob_edi_path and USE_BLOB_STORAGE:
+                logger.info(f"🔍 Reading EDI file from blob: {invoice.blob_edi_path}")
+                edi_content_bytes = await read_file_from_storage(None, None, invoice.blob_edi_path)
                 edi_content = edi_content_bytes.decode('utf-8')
+                logger.info(f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
+            elif invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
+                logger.info(f"🔍 Reading EDI file from local storage: {invoice.edi_path}")
+                edi_content_bytes = await read_file_from_storage(invoice.edi_path, None, None)
+                edi_content = edi_content_bytes.decode('utf-8')
+                logger.info(f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
         except Exception as e:
-            logger.warning(f"⚠️ Could not read EDI file {invoice.edi_path}: {e}")
+            logger.warning(f"⚠️ Could not read EDI file: {e}")
         
         # Add file content as additional attributes (not part of the model)
         invoice.xml_content = xml_content
@@ -2159,15 +2198,17 @@ async def get_failed_invoice_by_tracking_id(
             "tracking_id": str(invoice.tracking_id),
             "user_id": invoice.user_id,
             "uploaded_at": invoice.uploaded_at.isoformat(),
-            "xml_path": invoice.xml_path,
+            "xml_path": invoice.blob_xml_path if (invoice.blob_xml_path and USE_BLOB_STORAGE) else invoice.xml_path,
             "xml_validation_pass": invoice.xml_validation_pass,
             "xml_convert_message": invoice.xml_convert_message,
             "xml_content": xml_content,
-            "edi_path": invoice.edi_path,
+            "edi_path": invoice.blob_edi_path if (invoice.blob_edi_path and USE_BLOB_STORAGE) else invoice.edi_path,
             "edi_convert_pass": invoice.edi_convert_pass,
             "edi_convert_message": invoice.edi_convert_message,
             "edi_content": edi_content,
-            "processing_steps_error": processing_steps_error
+            "processing_steps_error": processing_steps_error,
+            "blob_xml_path": invoice.blob_xml_path,
+            "blob_edi_path": invoice.blob_edi_path
         }
         
         # Ensure processing_steps_error is JSON serializable
