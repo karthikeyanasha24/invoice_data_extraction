@@ -1,3 +1,4 @@
+import vercel_blob
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -16,13 +17,6 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Import Vercel Blob for production file storage
-try:
-    from vercel_blob import BlobApi
-    VERCEL_BLOB_AVAILABLE = True
-except ImportError:
-    VERCEL_BLOB_AVAILABLE = False
-
 from ..database import get_db
 from ..models.user import ZodiacUser
 from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
@@ -33,6 +27,14 @@ router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
 
 # Set up logger
 logger = logging.getLogger("zodiac-api.invoices")
+
+# Import Vercel Blob for production file storage
+try:
+    import vercel_blob
+    VERCEL_BLOB_AVAILABLE = True
+    logger.info("✅ Vercel Blob package imported successfully")
+except ImportError:
+    VERCEL_BLOB_AVAILABLE = False
 
 if not VERCEL_BLOB_AVAILABLE:
     logger.warning("⚠️ Vercel Blob not available - will use local storage only")
@@ -87,11 +89,11 @@ else:
 logger.info("=" * 60)
 
 # Initialize Vercel Blob API if needed
-blob_api = None
 if USE_BLOB_STORAGE:
     try:
         logger.info("🔧 Initializing Vercel Blob API...")
-        blob_api = BlobApi(token=BLOB_READ_WRITE_TOKEN)
+        # Set the token for vercel_blob
+        vercel_blob.set_token(BLOB_READ_WRITE_TOKEN)
         logger.info("✅ Vercel Blob API initialized successfully")
         logger.info(f"🔑 Token length: {len(BLOB_READ_WRITE_TOKEN)} characters")
         logger.info("🚀 Ready to use Vercel Blob storage for file operations")
@@ -107,7 +109,6 @@ if USE_BLOB_STORAGE:
         else:
             logger.error("🔄 Falling back to local file storage")
             USE_BLOB_STORAGE = False
-            blob_api = None
 else:
     logger.info("📁 Skipping Vercel Blob API initialization (not needed)")
 
@@ -119,7 +120,7 @@ if USE_BLOB_STORAGE:
     logger.info("✅ VERCEL BLOB STORAGE ACTIVE")
     logger.info("🌐 All file operations will use Vercel Blob storage")
     logger.info("📦 Files will be accessible via blob URLs")
-    logger.info("🔧 BlobApi instance ready for use")
+    logger.info("🔧 Vercel Blob module ready for use")
     if MUST_USE_BLOB_STORAGE:
         logger.info("🚨 MANDATORY MODE: Blob storage is required for this deployment")
 else:
@@ -164,9 +165,10 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             # Use Vercel Blob storage
             blob_path = f"{subdirectory}/{filename}"
             logger.info(f"📦 Saving to Vercel Blob: {blob_path}")
-            logger.info(f"🔧 Using BlobApi instance: {blob_api is not None}")
+            logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
             
-            blob_url = await blob_api.put(blob_path, file_content)
+            # Use vercel_blob.put to upload file
+            blob_url = vercel_blob.put(blob_path, file_content)
             logger.info(f"✅ File saved to Vercel Blob successfully!")
             logger.info(f"🌐 Blob URL: {blob_url}")
             logger.info(f"📊 Uploaded {len(file_content)} bytes")
@@ -226,9 +228,10 @@ async def read_file_from_storage(file_path: str) -> bytes:
         try:
             # Read from Vercel Blob storage
             logger.info(f"📦 Reading from Vercel Blob: {file_path}")
-            logger.info(f"🔧 Using BlobApi instance: {blob_api is not None}")
+            logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
             
-            file_content = await blob_api.get(file_path)
+            # Use vercel_blob.get to download file
+            file_content = vercel_blob.get(file_path)
             logger.info(f"✅ File read from Vercel Blob successfully!")
             logger.info(f"📊 Retrieved {len(file_content)} bytes")
             return file_content
