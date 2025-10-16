@@ -262,12 +262,18 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
             
             # Determine which blob path to use based on file type
             download_url = None
-            if blob_xml_path and ("xml" in str(file_path).lower() or "uploads" in str(file_path)):
+            if blob_xml_path and blob_xml_path.strip():
                 download_url = blob_xml_path
                 logger.info(f"🌐 Using blob XML path from database: {download_url}")
-            elif blob_edi_path and ("edi" in str(file_path).lower() or "x12" in str(file_path).lower() or "converted" in str(file_path)):
+            elif blob_edi_path and blob_edi_path.strip():
                 download_url = blob_edi_path
                 logger.info(f"🌐 Using blob EDI path from database: {download_url}")
+            elif file_path and ("xml" in str(file_path).lower() or "uploads" in str(file_path)):
+                download_url = blob_xml_path
+                logger.info(f"🌐 Using blob XML path based on file path: {download_url}")
+            elif file_path and ("edi" in str(file_path).lower() or "x12" in str(file_path).lower() or "converted" in str(file_path)):
+                download_url = blob_edi_path
+                logger.info(f"🌐 Using blob EDI path based on file path: {download_url}")
             else:
                 # Fallback to constructing URL from file path
                 if isinstance(file_path, dict):
@@ -283,6 +289,17 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
                     download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{blob_path}"
                 
                 logger.info(f"🌐 Constructed blob URL: {download_url}")
+            
+            # Ensure we have a valid download URL
+            if not download_url:
+                logger.error(f"❌ No valid blob URL found for file access")
+                logger.error(f"🔍 file_path: {file_path}")
+                logger.error(f"🔍 blob_xml_path: {blob_xml_path}")
+                logger.error(f"🔍 blob_edi_path: {blob_edi_path}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="No valid blob URL found for file access"
+                )
             
             # Use requests to download the file from the blob URL
             import requests
