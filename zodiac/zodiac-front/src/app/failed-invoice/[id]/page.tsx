@@ -105,16 +105,30 @@ export default function FailedInvoicePage() {
         }
         
         // Convert API response to FailedInvoiceDetails format
+        // Prioritize blob URLs when available, fall back to local paths
+        const xmlPath = invoiceData.blob_xml_path || invoiceData.xml_path;
+        const ediPath = invoiceData.blob_edi_path || invoiceData.edi_path;
+        
+        console.log('🔍 Failed Invoice Page - Path resolution:', {
+          blob_xml_path: invoiceData.blob_xml_path,
+          xml_path: invoiceData.xml_path,
+          final_xml_path: xmlPath,
+          blob_edi_path: invoiceData.blob_edi_path,
+          edi_path: invoiceData.edi_path,
+          final_edi_path: ediPath,
+          use_blob_storage: invoiceData.use_blob_storage
+        });
+        
         const failedDetails: FailedInvoiceDetails = {
           id: invoiceData.id,
           tracking_id: invoiceData.tracking_id,
           user_id: invoiceData.user_id,
           uploaded_at: invoiceData.uploaded_at,
-          xml_path: invoiceData.xml_path,
+          xml_path: xmlPath,
           xml_validation_pass: invoiceData.xml_validation_pass,
           xml_convert_message: invoiceData.xml_convert_message,
           xml_content: invoiceData.xml_content,
-          edi_path: invoiceData.edi_path,
+          edi_path: ediPath,
           edi_convert_pass: invoiceData.edi_convert_pass,
           edi_convert_message: invoiceData.edi_convert_message,
           edi_content: invoiceData.edi_content,
@@ -743,6 +757,16 @@ export default function FailedInvoicePage() {
                                     <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                                       <div className="text-sm text-gray-600 mb-2">
                                         File: {invoice.xml_path}
+                                        {invoice.xml_path?.startsWith('http') && (
+                                          <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                            🌐 Blob Storage
+                                          </span>
+                                        )}
+                                        {invoice.xml_path?.startsWith('uploads') && (
+                                          <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                            📁 Local Storage
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="bg-white border border-gray-200 rounded p-3 max-h-96 overflow-auto">
                                         <pre className="text-xs text-gray-800 whitespace-pre-wrap">
@@ -766,6 +790,16 @@ export default function FailedInvoicePage() {
                                     <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                                       <div className="text-sm text-gray-600 mb-2">
                                         File: {invoice.edi_path}
+                                        {invoice.edi_path?.startsWith('http') && (
+                                          <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                            🌐 Blob Storage
+                                          </span>
+                                        )}
+                                        {invoice.edi_path?.startsWith('converted') && (
+                                          <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                            📁 Local Storage
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="bg-white border border-gray-200 rounded p-3 max-h-96 overflow-auto">
                                         <pre className="text-xs text-gray-800 whitespace-pre-wrap">
@@ -886,6 +920,16 @@ export default function FailedInvoicePage() {
                                     <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                                       <div className="text-sm text-gray-600 mb-2">
                                         File: {invoice.xml_path}
+                                        {invoice.xml_path?.startsWith('http') && (
+                                          <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                            🌐 Blob Storage
+                                          </span>
+                                        )}
+                                        {invoice.xml_path?.startsWith('uploads') && (
+                                          <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                            📁 Local Storage
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="bg-white border border-gray-200 rounded p-3 max-h-96 overflow-auto">
                                         <pre className="text-xs text-gray-800 whitespace-pre-wrap">

@@ -423,39 +423,79 @@ export const fileApi = {
       });
       
       // Combine and format the invoices to match Invoice interface
+      // Use blob URLs when available, fall back to local paths
       const allInvoices = [
-        ...successfulInvoices.map((invoice: any) => ({
-          id: invoice.id,
-          filename: invoice.xml_path ? invoice.xml_path.split('/').pop() : `${invoice.tracking_id}_invoice.xml`,
-          status: 'successful',
-          accepted: 1,
-          rejected: 0,
-          customerName: 'N/A',
-          formate: 'XML',
-          export: false,
-          uploaded_at: invoice.uploaded_at,
-          tracking_id: invoice.tracking_id,
-          xml_validation_pass: invoice.xml_validation_pass,
-          xml_convert_message: invoice.xml_convert_message,
-          edi_convert_pass: invoice.edi_convert_pass,
-          edi_convert_message: invoice.edi_convert_message
-        })),
-        ...failedInvoices.map((invoice: any) => ({
-          id: invoice.id,
-          filename: invoice.xml_path ? invoice.xml_path.split('/').pop() : `${invoice.tracking_id}_invoice.xml`,
-          status: 'failed',
-          accepted: 0,
-          rejected: 1,
-          customerName: 'N/A',
-          formate: 'XML',
-          export: false,
-          uploaded_at: invoice.uploaded_at,
-          tracking_id: invoice.tracking_id,
-          xml_validation_pass: invoice.xml_validation_pass,
-          xml_convert_message: invoice.xml_convert_message,
-          edi_convert_pass: invoice.edi_convert_pass,
-          edi_convert_message: invoice.edi_convert_message
-        }))
+        ...successfulInvoices.map((invoice: any) => {
+          const xmlPath = invoice.blob_xml_path || invoice.xml_path;
+          const ediPath = invoice.blob_edi_path || invoice.edi_path;
+          
+          console.log('📁 File API - Success invoice path resolution:', {
+            id: invoice.id,
+            blob_xml_path: invoice.blob_xml_path,
+            xml_path: invoice.xml_path,
+            final_xml_path: xmlPath,
+            use_blob_storage: invoice.use_blob_storage
+          });
+          
+          return {
+            id: invoice.id,
+            filename: xmlPath ? xmlPath.split('/').pop() : `${invoice.tracking_id}_invoice.xml`,
+            status: 'successful',
+            accepted: 1,
+            rejected: 0,
+            customerName: 'N/A',
+            formate: 'XML',
+            export: false,
+            uploaded_at: invoice.uploaded_at,
+            tracking_id: invoice.tracking_id,
+            xml_validation_pass: invoice.xml_validation_pass,
+            xml_convert_message: invoice.xml_convert_message,
+            edi_convert_pass: invoice.edi_convert_pass,
+            edi_convert_message: invoice.edi_convert_message,
+            xml_path: xmlPath,
+            edi_path: ediPath,
+            blob_xml_path: invoice.blob_xml_path,
+            blob_edi_path: invoice.blob_edi_path,
+            use_blob_storage: invoice.use_blob_storage
+          };
+        }),
+        ...failedInvoices.map((invoice: any) => {
+          const xmlPath = invoice.blob_xml_path || invoice.xml_path;
+          const ediPath = invoice.blob_edi_path || invoice.edi_path;
+          
+          console.log('📁 File API - Failed invoice path resolution:', {
+            id: invoice.id,
+            blob_xml_path: invoice.blob_xml_path,
+            xml_path: invoice.xml_path,
+            final_xml_path: xmlPath,
+            use_blob_storage: invoice.use_blob_storage
+          });
+          
+          return {
+            id: invoice.id,
+            filename: xmlPath ? xmlPath.split('/').pop() : `${invoice.tracking_id}_invoice.xml`,
+            status: 'failed',
+            accepted: 0,
+            rejected: 1,
+            customerName: 'N/A',
+            formate: 'XML',
+            export: false,
+            uploaded_at: invoice.uploaded_at,
+            tracking_id: invoice.tracking_id,
+            xml_validation_pass: invoice.xml_validation_pass,
+            xml_convert_message: invoice.xml_convert_message,
+            edi_convert_pass: invoice.edi_convert_pass,
+            edi_convert_message: invoice.edi_convert_message,
+            xml_path: xmlPath,
+            edi_path: ediPath,
+            blob_xml_path: invoice.blob_xml_path,
+            blob_edi_path: invoice.blob_edi_path,
+            use_blob_storage: invoice.use_blob_storage,
+            xml_content: invoice.xml_content,
+            edi_content: invoice.edi_content,
+            processing_steps_error: invoice.processing_steps_error
+          };
+        })
       ];
       
       console.log('📁 File API - Get files success:', { 
