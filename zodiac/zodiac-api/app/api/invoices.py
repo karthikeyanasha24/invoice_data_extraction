@@ -262,33 +262,37 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
             
             # Determine which blob path to use based on file type
             download_url = None
+            
+            # First priority: Use provided blob paths from database
             if blob_xml_path and blob_xml_path.strip():
                 download_url = blob_xml_path
                 logger.info(f"🌐 Using blob XML path from database: {download_url}")
             elif blob_edi_path and blob_edi_path.strip():
                 download_url = blob_edi_path
                 logger.info(f"🌐 Using blob EDI path from database: {download_url}")
-            elif file_path and ("xml" in str(file_path).lower() or "uploads" in str(file_path)):
-                download_url = blob_xml_path
-                logger.info(f"🌐 Using blob XML path based on file path: {download_url}")
-            elif file_path and ("edi" in str(file_path).lower() or "x12" in str(file_path).lower() or "converted" in str(file_path)):
-                download_url = blob_edi_path
-                logger.info(f"🌐 Using blob EDI path based on file path: {download_url}")
+            # Second priority: Extract URL from file_path if it's a blob response
+            elif isinstance(file_path, dict) and 'url' in file_path:
+                download_url = file_path['url']
+                logger.info(f"🌐 Using blob URL from file_path: {download_url}")
+            # Third priority: Construct URL from pathname
+            elif isinstance(file_path, dict) and 'pathname' in file_path:
+                blob_path = file_path['pathname']
+                download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{blob_path}"
+                logger.info(f"🌐 Constructed blob URL from pathname: {download_url}")
+            # Fourth priority: Try to determine from string patterns (for backward compatibility)
+            elif file_path and isinstance(file_path, str):
+                if "xml" in file_path.lower() or "uploads" in file_path:
+                    download_url = blob_xml_path
+                    logger.info(f"🌐 Using blob XML path based on file path: {download_url}")
+                elif "edi" in file_path.lower() or "x12" in file_path.lower() or "converted" in file_path:
+                    download_url = blob_edi_path
+                    logger.info(f"🌐 Using blob EDI path based on file path: {download_url}")
+                else:
+                    # Try to construct URL from string path
+                    download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{file_path}"
+                    logger.info(f"🌐 Constructed blob URL from string path: {download_url}")
             else:
-                # Fallback to constructing URL from file path
-                if isinstance(file_path, dict):
-                    blob_path = file_path.get('pathname', file_path.get('url', str(file_path)))
-                    logger.info(f"🔍 Extracted blob path: {blob_path}")
-                else:
-                    blob_path = file_path
-                
-                if isinstance(file_path, dict) and 'url' in file_path:
-                    download_url = file_path['url']
-                else:
-                    # Construct URL if we only have pathname
-                    download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{blob_path}"
-                
-                logger.info(f"🌐 Constructed blob URL: {download_url}")
+                logger.warning(f"⚠️ Could not determine blob URL from file_path: {file_path}")
             
             # Ensure we have a valid download URL
             if not download_url:
@@ -1442,7 +1446,7 @@ async def process_invoice(
             
             # Determine blob paths for XML file
             blob_xml_path = None
-            if USE_BLOB_STORAGE and isinstance(xml_path, dict):
+            if USE_BLOB_STORAGE and xml_path and isinstance(xml_path, dict):
                 blob_xml_path = xml_path.get('url')
                 logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
             else:
@@ -1452,7 +1456,7 @@ async def process_invoice(
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                xml_path=str(xml_path) if isinstance(xml_path, str) else (xml_path.get('pathname', str(xml_path)) if xml_path and isinstance(xml_path, dict) else str(xml_path)),
                 xml_validation_pass=False,
                 xml_convert_message=xml_message,
                 edi_convert_pass=False,
@@ -1599,10 +1603,10 @@ async def process_invoice(
             blob_edi_path = None
             
             if USE_BLOB_STORAGE:
-                if isinstance(xml_path, dict):
+                if xml_path and isinstance(xml_path, dict):
                     blob_xml_path = xml_path.get('url')
                     logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
-                if isinstance(x12_path, dict):
+                if x12_path and isinstance(x12_path, dict):
                     blob_edi_path = x12_path.get('url')
                     logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
             else:
@@ -1738,10 +1742,10 @@ async def process_invoice(
             blob_edi_path = None
             
             if USE_BLOB_STORAGE:
-                if isinstance(xml_path, dict):
+                if xml_path and isinstance(xml_path, dict):
                     blob_xml_path = xml_path.get('url')
                     logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
-                if isinstance(x12_path, dict):
+                if x12_path and isinstance(x12_path, dict):
                     blob_edi_path = x12_path.get('url')
                     logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
             else:
@@ -1816,10 +1820,10 @@ async def process_invoice(
         blob_edi_path = None
         
         if USE_BLOB_STORAGE:
-            if isinstance(xml_path, dict):
+            if xml_path and isinstance(xml_path, dict):
                 blob_xml_path = xml_path.get('url')
                 logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
-            if isinstance(x12_path, dict):
+            if x12_path and isinstance(x12_path, dict):
                 blob_edi_path = x12_path.get('url')
                 logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
         else:
