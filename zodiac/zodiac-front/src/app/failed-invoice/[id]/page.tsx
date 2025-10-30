@@ -11,6 +11,7 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import MainLayout from '@/components/MainLayout';
 import TopSection from '@/components/TopSection';
 import AIAssistantPanel from '@/components/AIAssistantPanel';
+import vkbeautify from "vkbeautify";
 
 export default function FailedInvoicePage() {
   const router = useRouter();
@@ -26,10 +27,76 @@ export default function FailedInvoicePage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('errors');
-
+  console.log(invoice);
+  console.log("INVOCIE SHOULD BE PRINTED");
+  // try
+  // {
+  //   alert(invoice.xml_content);
+  // }
+  // catch
+  // {
+  //   alert("JAPANIU");
+  // }
+  const [xmlContent, setXmlContent] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
   const invoiceId = params.id as string;
   const shouldShowAI = searchParams.get('ai') === 'true';
+  const handleEditToggle = () => {
+    setIsEditing((prev) => !prev);
+  };
+  useEffect(() => {
+    if (invoice?.xml_content) {
+      setXmlContent(invoice.xml_content);
+    }
+  }, [invoice]);
+  // Toggle edit/view mode
 
+
+  // Beautify / pretty print XML
+  const handleBeautify = () => {
+    try {
+      const formatted = new DOMParser()
+        .parseFromString(xmlContent, "application/xml");
+      const serializer = new XMLSerializer();
+      const pretty = vkbeautify.xml(serializer.serializeToString(formatted));
+      setXmlContent(pretty);
+    } catch (e) {
+      alert("⚠️ Invalid XML, cannot beautify.");
+    }
+  };
+
+  const highlightXml = (xml: any) => {
+    if (!xml) return "";
+    return xml
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(
+        /(&lt;\/?)([\w:-]+)(.*?)(\/?&gt;)/g,
+        (_: any, open: any, tag: any, attrs: any, close: any) =>
+          `${open}<span class='text-blue-600 font-semibold'>${tag}</span>${attrs}${close}`
+      )
+      .replace(
+        /([\w:-]+)="(.*?)"/g,
+        `<span class='text-purple-600'>$1</span>=<span class='text-green-600'>"${"$2"}</span>"`
+      );
+  };
+
+  // Optional: Minify XML
+  const handleMinify = () => {
+    const minified = xmlContent
+      .replace(/>\s+</g, "><")
+      .replace(/\n/g, "")
+      .trim();
+    setXmlContent(minified);
+  };
+
+  // Save XML locally (no backend)
+  const handleSave = () => {
+    console.log("Saving XML:", xmlContent);
+    setIsEditing(false);
+    // You can also call API to save here
+  };
   useEffect(() => {
     if (invoiceId) {
       fetchInvoiceDetails();
@@ -52,12 +119,12 @@ export default function FailedInvoicePage() {
       } else if (!invoice.edi_convert_pass) {
         setSelectedErrorStep('edi');
         setShowDetailedError('edi');
-        
+
         // Set default tab based on error type
         const hasProcessingStepsError = invoice.processing_steps_error && invoice.processing_steps_error.length > 0;
-        const isEdiFormatValidationError = hasProcessingStepsError && 
+        const isEdiFormatValidationError = hasProcessingStepsError &&
           invoice.processing_steps_error?.some(error => error.step === 'EDI_FORMAT_VALIDATION');
-        
+
         if (isEdiFormatValidationError) {
           setActiveTab('errors'); // Default to Error Details for format validation errors
         } else {
@@ -75,7 +142,7 @@ export default function FailedInvoicePage() {
     try {
       // Check if invoiceId looks like a UUID (tracking ID) or a numeric ID
       const isTrackingId = invoiceId.includes('-') && invoiceId.length > 20; // UUIDs have dashes and are longer
-      
+
       if (isTrackingId) {
         console.log('🔍 Failed Invoice Page - Detected tracking ID, fetching by tracking ID');
         // Fetch by tracking ID using the new API endpoint
@@ -85,7 +152,7 @@ export default function FailedInvoicePage() {
         console.log('🔍 Failed Invoice Page - Raw response keys:', Object.keys(invoiceData));
         console.log('🔍 Failed Invoice Page - XML content length:', invoiceData.xml_content?.length || 0);
         console.log('🔍 Failed Invoice Page - EDI content length:', invoiceData.edi_content?.length || 0);
-        
+
         // Test: Try to manually add the processing_steps_error if it's missing
         let processingStepsError = invoiceData.processing_steps_error;
         if (!processingStepsError) {
@@ -103,12 +170,12 @@ export default function FailedInvoicePage() {
             }
           ];
         }
-        
+
         // Convert API response to FailedInvoiceDetails format
         // Prioritize blob URLs when available, fall back to local paths
         const xmlPath = invoiceData.blob_xml_path || invoiceData.xml_path;
         const ediPath = invoiceData.blob_edi_path || invoiceData.edi_path;
-        
+
         console.log('🔍 Failed Invoice Page - Path resolution:', {
           blob_xml_path: invoiceData.blob_xml_path,
           xml_path: invoiceData.xml_path,
@@ -118,7 +185,7 @@ export default function FailedInvoicePage() {
           final_edi_path: ediPath,
           use_blob_storage: invoiceData.use_blob_storage
         });
-        
+
         const failedDetails: FailedInvoiceDetails = {
           id: invoiceData.id,
           tracking_id: invoiceData.tracking_id,
@@ -134,19 +201,19 @@ export default function FailedInvoicePage() {
           edi_content: invoiceData.edi_content,
           processing_steps_error: processingStepsError,
         };
-        
+
         console.log('🔍 Failed Invoice Page - Final invoice details:', failedDetails);
         console.log('🔍 Failed Invoice Page - Processing steps error:', failedDetails.processing_steps_error);
         console.log('🔍 Failed Invoice Page - Final XML content length:', failedDetails.xml_content?.length || 0);
         console.log('🔍 Failed Invoice Page - Final EDI content length:', failedDetails.edi_content?.length || 0);
-        
+
         setInvoice(failedDetails);
       } else {
         console.log('🔍 Failed Invoice Page - Detected numeric ID, fetching by ID');
         // Get all invoices first, then find the specific failed one
         const allInvoices = await fileApi.getFiles();
-        const invoiceData = allInvoices.find((inv: Invoice) => 
-          inv.id.toString() === invoiceId && 
+        const invoiceData = allInvoices.find((inv: Invoice) =>
+          inv.id.toString() === invoiceId &&
           (inv.status?.toLowerCase() === 'failed' || inv.status?.toLowerCase() === 'error')
         );
 
@@ -169,21 +236,23 @@ export default function FailedInvoicePage() {
           edi_convert_pass: invoiceData.edi_convert_pass || false,
           edi_convert_message: invoiceData.edi_convert_message,
           processing_steps_error: invoiceData.processing_steps_error,
+          xml_content: invoiceData.xml_content,
+          edi_content: invoiceData.edi_content,
         };
-        
+
         console.log('🔍 Failed Invoice Page - Final invoice details (numeric ID):', failedDetails);
         console.log('🔍 Failed Invoice Page - Processing steps error (numeric ID):', failedDetails.processing_steps_error);
-        
+
         setInvoice(failedDetails);
       }
     } catch (error: any) {
       console.error('🔍 Failed Invoice Page - Failed to fetch invoice:', error);
-      
+
       if (error.message?.includes('Session expired') || error.message?.includes('log in again')) {
         handleAuthError();
         return;
       }
-      
+
       setError(error.message || 'Failed to load invoice details');
     } finally {
       setLoading(false);
@@ -209,7 +278,7 @@ export default function FailedInvoicePage() {
 
     try {
       const result = await fileApi.deleteFile(invoice.id);
-      
+
       if (result.success) {
         console.log('🗑️ Failed Invoice Page - Delete successful, redirecting to invoices');
         router.push('/invoices');
@@ -281,7 +350,7 @@ export default function FailedInvoicePage() {
 
   if (loading) {
     return (
-      <MainLayout 
+      <MainLayout
         topSection={
           <TopSection
             title="Loading..."
@@ -298,7 +367,7 @@ export default function FailedInvoicePage() {
 
   if (error || !invoice) {
     return (
-      <MainLayout 
+      <MainLayout
         topSection={
           <TopSection
             title="Invoice Not Found"
@@ -328,7 +397,7 @@ export default function FailedInvoicePage() {
   }
 
   return (
-    <MainLayout 
+    <MainLayout
       topSection={
         <TopSection
           title="Failed Invoice Details"
@@ -367,7 +436,7 @@ export default function FailedInvoicePage() {
               {/* Processing Steps */}
               <div className="bg-white shadow">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4 px-4 pt-4">Processing Steps</h2>
-                
+
                 {/* Horizontal Progress Flow - All 4 Processing Steps */}
                 <div className="relative px-4 pb-4">
                   <div className="flex items-center justify-between">
@@ -389,24 +458,24 @@ export default function FailedInvoicePage() {
 
                     {/* Step 2: XML Validation */}
                     <div className="flex flex-col items-center relative z-10">
-                  <button
-                    onClick={() => {
-                      if (!invoice.xml_validation_pass) {
-                        setSelectedErrorStep(selectedErrorStep === 'xml' ? null : 'xml');
-                        setShowDetailedError(selectedErrorStep === 'xml' ? null : 'xml');
-                      }
-                    }}
-                    className={cn(
-                      "w-10 h-10 rounded-full flex items-center justify-center border-4 transition-all",
-                      invoice.xml_validation_pass 
-                        ? invoice.xml_convert_message?.includes('warnings') 
-                          ? "bg-yellow-500 border-yellow-500 text-white cursor-default"
-                          : "bg-green-500 border-green-500 text-white cursor-default"
-                        : selectedErrorStep === 'xml'
-                          ? "bg-red-600 border-red-600 text-white cursor-pointer shadow-lg ring-4 ring-red-200"
-                          : "bg-red-500 border-red-500 text-white cursor-pointer hover:bg-red-600"
-                    )}
-                  >
+                      <button
+                        onClick={() => {
+                          if (!invoice.xml_validation_pass) {
+                            setSelectedErrorStep(selectedErrorStep === 'xml' ? null : 'xml');
+                            setShowDetailedError(selectedErrorStep === 'xml' ? null : 'xml');
+                          }
+                        }}
+                        className={cn(
+                          "w-10 h-10 rounded-full flex items-center justify-center border-4 transition-all",
+                          invoice.xml_validation_pass
+                            ? invoice.xml_convert_message?.includes('warnings')
+                              ? "bg-yellow-500 border-yellow-500 text-white cursor-default"
+                              : "bg-green-500 border-green-500 text-white cursor-default"
+                            : selectedErrorStep === 'xml'
+                              ? "bg-red-600 border-red-600 text-white cursor-pointer shadow-lg ring-4 ring-red-200"
+                              : "bg-red-500 border-red-500 text-white cursor-pointer hover:bg-red-600"
+                        )}
+                      >
                         {invoice.xml_validation_pass ? (
                           invoice.xml_convert_message?.includes('warnings') ? (
                             <AlertTriangle className="h-5 w-5" />
@@ -424,7 +493,7 @@ export default function FailedInvoicePage() {
                         )}>XML Validation</h3>
                         <span className={cn(
                           "inline-block px-2 py-1 rounded-full text-xs font-medium mt-1",
-                          invoice.xml_validation_pass 
+                          invoice.xml_validation_pass
                             ? invoice.xml_convert_message?.includes('warnings')
                               ? "bg-yellow-100 text-yellow-800"
                               : "bg-green-100 text-green-800"
@@ -432,7 +501,7 @@ export default function FailedInvoicePage() {
                               ? "bg-red-200 text-red-900 font-semibold"
                               : "bg-red-100 text-red-800"
                         )}>
-                          {invoice.xml_validation_pass 
+                          {invoice.xml_validation_pass
                             ? invoice.xml_convert_message?.includes('warnings') ? 'Passed with Warnings' : 'Passed'
                             : 'Failed'
                           }
@@ -444,34 +513,34 @@ export default function FailedInvoicePage() {
                     <div className="flex-1 h-0.5 bg-gray-300 mx-4 relative">
                       <div className={cn(
                         "absolute top-0 left-0 h-full transition-all duration-500",
-                        invoice.xml_validation_pass 
-                          ? "bg-green-500 w-full" 
+                        invoice.xml_validation_pass
+                          ? "bg-green-500 w-full"
                           : "bg-gray-300 w-0"
                       )}></div>
                     </div>
 
                     {/* Step 3: EDI Conversion */}
                     <div className="flex flex-col items-center relative z-10">
-                  <button
-                    onClick={() => {
-                      // Only allow clicking if XML validation passed and EDI conversion failed
-                      if (invoice.xml_validation_pass && !invoice.edi_convert_pass) {
-                        setSelectedErrorStep(selectedErrorStep === 'edi' ? null : 'edi');
-                        setShowDetailedError(selectedErrorStep === 'edi' ? null : 'edi');
-                      }
-                    }}
-                    className={cn(
-                      "w-10 h-10 rounded-full flex items-center justify-center border-4 transition-all",
-                      // If XML validation failed, gray out EDI step
-                      !invoice.xml_validation_pass
-                        ? "bg-gray-300 border-gray-300 text-gray-500 cursor-not-allowed"
-                        : invoice.edi_convert_pass 
-                          ? "bg-green-500 border-green-500 text-white cursor-default" 
-                          : selectedErrorStep === 'edi'
-                            ? "bg-red-600 border-red-600 text-white cursor-pointer shadow-lg ring-4 ring-red-200"
-                            : "bg-red-500 border-red-500 text-white cursor-pointer hover:bg-red-600"
-                    )}
-                  >
+                      <button
+                        onClick={() => {
+                          // Only allow clicking if XML validation passed and EDI conversion failed
+                          if (invoice.xml_validation_pass && !invoice.edi_convert_pass) {
+                            setSelectedErrorStep(selectedErrorStep === 'edi' ? null : 'edi');
+                            setShowDetailedError(selectedErrorStep === 'edi' ? null : 'edi');
+                          }
+                        }}
+                        className={cn(
+                          "w-10 h-10 rounded-full flex items-center justify-center border-4 transition-all",
+                          // If XML validation failed, gray out EDI step
+                          !invoice.xml_validation_pass
+                            ? "bg-gray-300 border-gray-300 text-gray-500 cursor-not-allowed"
+                            : invoice.edi_convert_pass
+                              ? "bg-green-500 border-green-500 text-white cursor-default"
+                              : selectedErrorStep === 'edi'
+                                ? "bg-red-600 border-red-600 text-white cursor-pointer shadow-lg ring-4 ring-red-200"
+                                : "bg-red-500 border-red-500 text-white cursor-pointer hover:bg-red-600"
+                        )}
+                      >
                         {!invoice.xml_validation_pass ? (
                           <XCircle className="h-5 w-5" />
                         ) : invoice.edi_convert_pass ? (
@@ -483,16 +552,16 @@ export default function FailedInvoicePage() {
                       <div className="mt-2 text-center">
                         <h3 className={cn(
                           "text-xs font-medium",
-                          !invoice.xml_validation_pass 
-                            ? "text-gray-500" 
+                          !invoice.xml_validation_pass
+                            ? "text-gray-500"
                             : selectedErrorStep === 'edi' ? "text-red-700 font-semibold" : "text-gray-900"
                         )}>EDI Conversion</h3>
                         <span className={cn(
                           "inline-block px-2 py-1 rounded-full text-xs font-medium mt-1",
                           !invoice.xml_validation_pass
                             ? "bg-gray-100 text-gray-500"
-                            : invoice.edi_convert_pass 
-                              ? "bg-green-100 text-green-800" 
+                            : invoice.edi_convert_pass
+                              ? "bg-green-100 text-green-800"
                               : selectedErrorStep === 'edi'
                                 ? "bg-red-200 text-red-900 font-semibold"
                                 : "bg-red-100 text-red-800"
@@ -507,7 +576,7 @@ export default function FailedInvoicePage() {
                       <div className={cn(
                         "absolute top-0 left-0 h-full transition-all duration-500",
                         invoice.xml_validation_pass && invoice.edi_convert_pass
-                          ? "bg-green-500 w-full" 
+                          ? "bg-green-500 w-full"
                           : "bg-gray-300 w-0"
                       )}></div>
                     </div>
@@ -626,19 +695,19 @@ export default function FailedInvoicePage() {
                                       {error.field_name && ` - ${error.field_name}`}
                                     </h6>
                                     <p className="text-sm text-red-700 mt-1">{error.error_message}</p>
-                                    
+
                                     {error.expected_format && (
                                       <p className="text-xs text-red-600 mt-1">
                                         Expected format: {error.expected_format}
                                       </p>
                                     )}
-                                    
+
                                     {error.actual_value && (
                                       <p className="text-xs text-red-600 mt-1">
                                         Actual value: {error.actual_value}
                                       </p>
                                     )}
-                                    
+
                                     {error.suggestions && error.suggestions.length > 0 && (
                                       <div className="mt-2">
                                         <p className="text-xs font-medium text-red-800">Suggestions:</p>
@@ -706,9 +775,9 @@ export default function FailedInvoicePage() {
                       {/* Determine error stage and show appropriate tabs */}
                       {(() => {
                         const hasProcessingStepsError = invoice.processing_steps_error && invoice.processing_steps_error.length > 0;
-                        const isEdiFormatValidationError = hasProcessingStepsError && 
+                        const isEdiFormatValidationError = hasProcessingStepsError &&
                           invoice.processing_steps_error?.some(error => error.step === 'EDI_FORMAT_VALIDATION');
-                        
+
                         if (isEdiFormatValidationError) {
                           // EDI Format Validation Error - 3 tabs: Original XML, Generated EDI, Error Details
                           return (
@@ -718,31 +787,28 @@ export default function FailedInvoicePage() {
                                 <nav className="-mb-px flex space-x-8">
                                   <button
                                     onClick={() => setActiveTab('xml')}
-                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                                      activeTab === 'xml'
+                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'xml'
                                         ? 'border-blue-500 text-blue-600'
                                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
+                                      }`}
                                   >
                                     Original XML
                                   </button>
                                   <button
                                     onClick={() => setActiveTab('edi')}
-                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                                      activeTab === 'edi'
+                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'edi'
                                         ? 'border-blue-500 text-blue-600'
                                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
+                                      }`}
                                   >
                                     Generated EDI
                                   </button>
                                   <button
                                     onClick={() => setActiveTab('errors')}
-                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                                      activeTab === 'errors'
+                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'errors'
                                         ? 'border-blue-500 text-blue-600'
                                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
+                                      }`}
                                   >
                                     Error Details
                                   </button>
@@ -768,17 +834,77 @@ export default function FailedInvoicePage() {
                                           </span>
                                         )}
                                       </div>
-                                      <div className="bg-white border border-gray-200 rounded p-3 max-h-96 overflow-auto">
-                                        <pre className="text-xs text-gray-800 whitespace-pre-wrap">
-                                          {invoice.xml_content ? (
-                                            <>
-                                              <div className="text-green-600 mb-2">✅ XML content loaded ({invoice.xml_content.length} characters)</div>
-                                              {invoice.xml_content}
-                                            </>
+                                      <div className="bg-white border border-gray-200 rounded-lg p-3 max-h-96 overflow-auto transition-all duration-300 shadow-sm">
+                                        <div className="flex justify-between items-center mb-2">
+                                          <span className="font-semibold text-blue-700">XML Content</span>
+                                          <div className="flex space-x-2">
+                                            <button
+                                              onClick={() => setIsEditing(!isEditing)}
+                                              className="text-blue-600 hover:underline text-xs"
+                                            >
+                                              {isEditing ? "🔒 View" : "✏️ Edit"}
+                                            </button>
+                                            <button
+                                              onClick={handleBeautify}
+                                              disabled={!xmlContent}
+                                              className="text-purple-600 hover:underline text-xs"
+                                            >
+                                              🪄 Pretty Print
+                                            </button>
+                                            <button
+                                              onClick={handleMinify}
+                                              disabled={!xmlContent}
+                                              className="text-orange-600 hover:underline text-xs"
+                                            >
+                                              🗜 Minify
+                                            </button>
+                                            {isEditing && (
+                                              <>
+                                                <button
+                                                  onClick={handleSave}
+                                                  className="text-green-600 hover:underline text-xs"
+                                                >
+                                                  💾 Save
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    setXmlContent(invoice?.xml_content || "");
+                                                    setIsEditing(false);
+                                                  }}
+                                                  className="text-gray-600 hover:underline text-xs"
+                                                >
+                                                  ❌ Cancel
+                                                </button>
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* ✅ View Mode */}
+                                        {!isEditing ? (
+                                          <pre
+                                            className="whitespace-pre-wrap text-xs font-mono bg-gray-50 p-2 rounded overflow-x-auto border border-gray-100"
+                                            dangerouslySetInnerHTML={{
+                                              __html: highlightXml(xmlContent || ""),
+                                            }}
+                                          />
+                                        ) : (
+                                          <textarea
+                                            value={xmlContent}
+                                            onChange={(e) => setXmlContent(e.target.value)}
+                                            className="w-full h-72 border rounded p-2 bg-white text-sm resize-vertical focus:ring-2 focus:ring-blue-400 font-mono"
+                                          />
+                                        )}
+
+                                        <div className="mt-2 text-xs">
+                                          {xmlContent ? (
+                                            <span className="text-green-600">
+                                              ✅ XML loaded ({xmlContent.length} characters)
+                                            </span>
                                           ) : (
-                                            <div className="text-red-600">❌ XML content not available</div>
+                                            <span className="text-red-600">❌ XML not available</span>
                                           )}
-                                        </pre>
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
@@ -830,19 +956,19 @@ export default function FailedInvoicePage() {
                                               {error.field_name && ` - ${error.field_name}`}
                                             </h6>
                                             <p className="text-sm text-red-700 mt-1">{error.error_message}</p>
-                                            
+
                                             {error.expected_format && (
                                               <p className="text-xs text-red-600 mt-1">
                                                 Expected format: {error.expected_format}
                                               </p>
                                             )}
-                                            
+
                                             {error.actual_value && (
                                               <p className="text-xs text-red-600 mt-1">
                                                 Actual value: {error.actual_value}
                                               </p>
                                             )}
-                                            
+
                                             {error.suggestions && error.suggestions.length > 0 && (
                                               <div className="mt-2">
                                                 <p className="text-xs font-medium text-red-600 mb-1">Suggestions:</p>
@@ -874,21 +1000,19 @@ export default function FailedInvoicePage() {
                                 <nav className="-mb-px flex space-x-8">
                                   <button
                                     onClick={() => setActiveTab('errors')}
-                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                                      activeTab === 'errors'
+                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'errors'
                                         ? 'border-blue-500 text-blue-600'
                                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
+                                      }`}
                                   >
                                     Error Details
                                   </button>
                                   <button
                                     onClick={() => setActiveTab('xml')}
-                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                                      activeTab === 'xml'
+                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'xml'
                                         ? 'border-blue-500 text-blue-600'
                                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    }`}
+                                      }`}
                                   >
                                     Original XML
                                   </button>

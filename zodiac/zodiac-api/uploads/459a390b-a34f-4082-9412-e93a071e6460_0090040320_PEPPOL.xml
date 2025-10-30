@@ -1,0 +1,508 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:udt="urn:un:unece:uncefact:data:specification:UnqualifiedDataTypesSchemaModule:2" xmlns:ccts="urn:un:unece:uncefact:documentation:2" xmlns:qdt="urn:oasis:names:specification:ubl:schema:xsd:QualifiedDatatypes-2">
+    <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0</cbc:CustomizationID>
+    <cbc:ProfileID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</cbc:ProfileID>
+    <cbc:ID>0090040320</cbc:ID>
+    <cbc:IssueDate>2016-01-15</cbc:IssueDate>
+    <cbc:DueDate>2016-01-29</cbc:DueDate>
+    <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
+    <cbc:Note>.</cbc:Note>
+    <cbc:DocumentCurrencyCode>USD</cbc:DocumentCurrencyCode>
+    <cbc:AccountingCost/>
+    <cbc:BuyerReference/>
+    <cac:InvoicePeriod>
+        <cbc:StartDate>2016-01-15</cbc:StartDate>
+        <cbc:EndDate>2016-01-29</cbc:EndDate>
+        <cbc:DescriptionCode/>
+    </cac:InvoicePeriod>
+    <cac:OrderReference>
+        <cbc:ID>0000018167</cbc:ID>
+    </cac:OrderReference>
+    <cac:AdditionalDocumentReference>
+        <cbc:ID>0090040320</cbc:ID>
+        <cbc:DocumentDescription/>
+        <cac:Attachment>
+            <cbc:EmbeddedDocumentBinaryObject filename="" mimeCode=""/>
+        </cac:Attachment>
+    </cac:AdditionalDocumentReference>
+    <cac:BillingReference>
+        <cac:InvoiceDocumentReference>
+            <cbc:ID>0090040320</cbc:ID>
+            <cbc:IssueDate>2016-01-15</cbc:IssueDate>
+        </cac:InvoiceDocumentReference>
+    </cac:BillingReference>
+    <cac:DespatchDocumentReference>
+        <cbc:ID>0080018700</cbc:ID>
+    </cac:DespatchDocumentReference>
+    <cac:ReceiptDocumentReference>
+        <cbc:ID/>
+    </cac:ReceiptDocumentReference>
+    <cac:OriginatorDocumentReference>
+        <cbc:ID/>
+    </cac:OriginatorDocumentReference>
+    <cac:ContractDocumentReference>
+        <cbc:ID/>
+    </cac:ContractDocumentReference>
+    <cac:ProjectReference>
+        <cbc:ID/>
+    </cac:ProjectReference>
+    <cac:AccountingSupplierParty>
+        <cac:Party>
+            <cbc:EndpointID schemeID="0088"/>
+            <cac:PartyName>
+                <cbc:Name>IDES US INC</cbc:Name>
+            </cac:PartyName>
+            <cac:PostalAddress>
+                <cbc:StreetName>1230 Lincoln Avenue</cbc:StreetName>
+                <cbc:CityName>NEW YORK</cbc:CityName>
+                <cbc:PostalZone>10019</cbc:PostalZone>
+                <cac:Country>
+                    <cbc:IdentificationCode>US</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:PostalAddress>
+            <cac:PartyTaxScheme>
+                <cbc:CompanyID/>
+                <cac:TaxScheme>
+                    <cbc:ID>VAT</cbc:ID>
+                </cac:TaxScheme>
+            </cac:PartyTaxScheme>
+            <cac:PartyLegalEntity>
+                <cbc:RegistrationName>IDES US INC</cbc:RegistrationName>
+                <cbc:CompanyID/>
+            </cac:PartyLegalEntity>
+            <cac:Contact>
+                <cbc:Name>IDES US INC</cbc:Name>
+                <cbc:Telephone>212-345-0983</cbc:Telephone>
+                <cbc:ElectronicMail>a@b.c</cbc:ElectronicMail>
+            </cac:Contact>
+        </cac:Party>
+    </cac:AccountingSupplierParty>
+    <cac:AccountingCustomerParty>
+        <cac:Party>
+            <cbc:EndpointID schemeID="0088"/>
+            <cac:PartyName>
+                <cbc:Name>New Zealand Trading LIMITED</cbc:Name>
+            </cac:PartyName>
+            <cac:PostalAddress>
+                <cbc:StreetName/>
+                <cbc:CityName>Auckland</cbc:CityName>
+                <cbc:PostalZone>1234</cbc:PostalZone>
+                <cac:Country>
+                    <cbc:IdentificationCode>NZ</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:PostalAddress>
+            <cac:PartyLegalEntity>
+                <cbc:RegistrationName>New Zealand Trading LIMITED</cbc:RegistrationName>
+            </cac:PartyLegalEntity>
+            <cac:Contact>
+                <cbc:Name>New Zealand Trading LIMITED</cbc:Name>
+            </cac:Contact>
+        </cac:Party>
+    </cac:AccountingCustomerParty>
+    <cac:PayeeParty>
+        <cac:PartyIdentification>
+            <cbc:ID/>
+        </cac:PartyIdentification>
+        <cac:PartyName>
+            <cbc:Name>New Zealand Trading LIMITED</cbc:Name>
+        </cac:PartyName>
+        <cac:PartyLegalEntity>
+            <cbc:CompanyID schemeID="0088"/>
+        </cac:PartyLegalEntity>
+    </cac:PayeeParty>
+    <cac:TaxRepresentativeParty>
+        <cac:PartyName>
+            <cbc:Name/>
+        </cac:PartyName>
+        <cac:PostalAddress>
+            <cbc:StreetName/>
+            <cbc:AdditionalStreetName/>
+            <cbc:CityName>Auckland</cbc:CityName>
+            <cbc:PostalZone>1234</cbc:PostalZone>
+            <cbc:CountrySubentity/>
+            <cac:AddressLine>
+                <cbc:Line/>
+            </cac:AddressLine>
+            <cac:Country>
+                <cbc:IdentificationCode>NZ</cbc:IdentificationCode>
+            </cac:Country>
+        </cac:PostalAddress>
+        <cac:PartyTaxScheme>
+            <cbc:CompanyID/>
+            <cac:TaxScheme>
+                <cbc:ID>VAT</cbc:ID>
+            </cac:TaxScheme>
+        </cac:PartyTaxScheme>
+    </cac:TaxRepresentativeParty>
+    <cac:Delivery>
+        <cbc:ActualDeliveryDate>2016-01-15</cbc:ActualDeliveryDate>
+        <cac:DeliveryLocation>
+            <cbc:ID schemeID="0088"/>
+            <cac:Address>
+                <cbc:StreetName/>
+                <cbc:CityName>Auckland</cbc:CityName>
+                <cbc:PostalZone>1234</cbc:PostalZone>
+                <cac:Country>
+                    <cbc:IdentificationCode>NZ</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:Address>
+        </cac:DeliveryLocation>
+        <cac:DeliveryParty>
+            <cac:PartyName>
+                <cbc:Name/>
+            </cac:PartyName>
+        </cac:DeliveryParty>
+    </cac:Delivery>
+    <cac:PaymentMeans>
+        <cac:PaymentTerms>
+            <cbc:Note>14 days 3%, 30/1%, 60 w/o</cbc:Note>
+        </cac:PaymentTerms>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:MultiplierFactorNumeric/>
+            <cbc:Amount currencyID="USD"/>
+            <cbc:BaseAmount currencyID="USD"/>
+            <cac:TaxCategory>
+                <cbc:ID/>
+                <cbc:Percent/>
+                <cac:TaxScheme>
+                    <cbc:ID/>
+                </cac:TaxScheme>
+            </cac:TaxCategory>
+        </cac:AllowanceCharge>
+        <cbc:PaymentMeansCode name=""/>
+        <cbc:PaymentID/>
+        <cac:PayeeFinancialAccount>
+            <cbc:ID/>
+            <cbc:Name/>
+        </cac:PayeeFinancialAccount>
+        <cac:PaymentMandate>
+            <cbc:ID/>
+            <cac:PayerFinancialAccount>
+                <cbc:ID/>
+            </cac:PayerFinancialAccount>
+        </cac:PaymentMandate>
+    </cac:PaymentMeans>
+    <cac:TaxTotal>
+        <cbc:TaxAmount currencyID="USD">0.0</cbc:TaxAmount>
+        <cac:TaxSubtotal>
+            <cbc:TaxableAmount currencyID="USD">95200.0</cbc:TaxableAmount>
+            <cbc:TaxAmount currencyID="USD">0.0</cbc:TaxAmount>
+            <cac:TaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:TaxCategory>
+        </cac:TaxSubtotal>
+    </cac:TaxTotal>
+    <cac:LegalMonetaryTotal>
+        <cbc:LineExtensionAmount currencyID="USD">95200.0</cbc:LineExtensionAmount>
+        <cbc:TaxExclusiveAmount currencyID="USD">95200.0</cbc:TaxExclusiveAmount>
+        <cbc:TaxInclusiveAmount currencyID="USD">95200.0</cbc:TaxInclusiveAmount>
+        <cbc:PayableAmount currencyID="USD">95200.0</cbc:PayableAmount>
+    </cac:LegalMonetaryTotal>
+    <cac:InvoiceLine>
+        <cbc:ID>000010</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="C62">10.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">1000.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2016-01-15</cbc:StartDate>
+            <cbc:EndDate>2016-01-29</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000010</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="USD"/>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>Ball bearing</cbc:Description>
+            <cbc:Name>GTS-30001</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID value-ref="KDMAT"/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>GTS-30001</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode>US</cbc:IdentificationCode>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">100.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+    <cac:InvoiceLine>
+        <cbc:ID>000020</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="C62">10.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">30000.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2016-01-15</cbc:StartDate>
+            <cbc:EndDate>2016-01-29</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000020</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="USD"/>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>Tires</cbc:Description>
+            <cbc:Name>GTS-30002</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID value-ref="KDMAT"/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>GTS-30002</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode>US</cbc:IdentificationCode>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">3000.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+    <cac:InvoiceLine>
+        <cbc:ID>000040</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="C62">10.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">200.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2016-01-15</cbc:StartDate>
+            <cbc:EndDate>2016-01-29</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000030</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="USD"/>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>Textile Blanket</cbc:Description>
+            <cbc:Name>GTS-30004</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID value-ref="KDMAT"/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>GTS-30004</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode>US</cbc:IdentificationCode>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">20.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+    <cac:InvoiceLine>
+        <cbc:ID>000050</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="C62">10.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">9000.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2016-01-15</cbc:StartDate>
+            <cbc:EndDate>2016-01-29</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000040</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="USD"/>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>Soap dish - chrom</cbc:Description>
+            <cbc:Name>GTS-30005</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID value-ref="KDMAT"/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>GTS-30005</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode>US</cbc:IdentificationCode>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">900.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+    <cac:InvoiceLine>
+        <cbc:ID>000060</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="C62">10.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">35000.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2016-01-15</cbc:StartDate>
+            <cbc:EndDate>2016-01-29</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000050</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="USD"/>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>Plastic rosette</cbc:Description>
+            <cbc:Name>GTS-30006</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID value-ref="KDMAT"/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>GTS-30006</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode>US</cbc:IdentificationCode>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">3500.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+    <cac:InvoiceLine>
+        <cbc:ID>000070</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="C62">10.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">20000.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2016-01-15</cbc:StartDate>
+            <cbc:EndDate>2016-01-29</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000060</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ChargeIndicator/>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="USD"/>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>Exhaust pipe</cbc:Description>
+            <cbc:Name>GTS-30007</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID value-ref="KDMAT"/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>GTS-30007</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode>US</cbc:IdentificationCode>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID>123456789</cbc:ID>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">2000.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+</Invoice>

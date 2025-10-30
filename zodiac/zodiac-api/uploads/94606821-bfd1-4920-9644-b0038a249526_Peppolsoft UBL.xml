@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:udt="urn:un:unece:uncefact:data:specification:UnqualifiedDataTypesSchemaModule:2" xmlns:ccts="urn:un:unece:uncefact:documentation:2" xmlns:qdt="urn:oasis:names:specification:ubl:schema:xsd:QualifiedDatatypes-2">
+    <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0</cbc:CustomizationID>
+    <cbc:ProfileID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</cbc:ProfileID>
+    <cbc:ID>0090040451</cbc:ID>
+    <cbc:IssueDate>2003-08-27</cbc:IssueDate>
+    <cbc:DueDate>2003-08-27</cbc:DueDate>
+    <cbc:InvoiceTypeCode>S1</cbc:InvoiceTypeCode>
+    <cbc:Note>.</cbc:Note>
+    <cbc:DocumentCurrencyCode>MXN</cbc:DocumentCurrencyCode>
+    <cbc:AccountingCost>PO Number 30</cbc:AccountingCost>
+    <cbc:BuyerReference/>
+    <cac:InvoicePeriod>
+        <cbc:StartDate>2003-08-27</cbc:StartDate>
+        <cbc:EndDate>2003-08-27</cbc:EndDate>
+        <cbc:DescriptionCode/>
+    </cac:InvoicePeriod>
+    <cac:OrderReference>
+        <cbc:ID>0000009301</cbc:ID>
+    </cac:OrderReference>
+    <cac:AdditionalDocumentReference>
+        <cbc:ID>0090040451</cbc:ID>
+        <cbc:DocumentDescription/>
+        <cac:Attachment>
+            <cbc:EmbeddedDocumentBinaryObject filename="" mimeCode=""/>
+        </cac:Attachment>
+    </cac:AdditionalDocumentReference>
+    <cac:ProjectReference>
+        <cbc:ID/>
+    </cac:ProjectReference>
+    <cac:AccountingSupplierParty>
+        <cac:Party>
+            <cbc:EndpointID schemeID="0088">IIA040805DZ4</cbc:EndpointID>
+            <cac:PartyName>
+                <cbc:Name>INDISTRIA ILUMINADORA DE ALMACENES</cbc:Name>
+            </cac:PartyName>
+            <cac:PostalAddress>
+                <cbc:StreetName>Av. Prol. Reforma</cbc:StreetName>
+                <cbc:CityName>México, D.F.</cbc:CityName>
+                <cbc:PostalZone>01210</cbc:PostalZone>
+                <cac:Country>
+                    <cbc:IdentificationCode>MX</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:PostalAddress>
+            <cac:PartyTaxScheme>
+                <cbc:CompanyID/>
+                <cac:TaxScheme>
+                    <cbc:ID>VAT</cbc:ID>
+                </cac:TaxScheme>
+            </cac:PartyTaxScheme>
+            <cac:PartyLegalEntity>
+                <cbc:RegistrationName>INDISTRIA ILUMINADORA DE ALMACENES</cbc:RegistrationName>
+                <cbc:CompanyID/>
+            </cac:PartyLegalEntity>
+            <cac:Contact>
+                <cbc:Name>INDISTRIA ILUMINADORA DE ALMACENES</cbc:Name>
+                <cbc:Telephone>(525) 257-7500</cbc:Telephone>
+                <cbc:ElectronicMail>a@b.c</cbc:ElectronicMail>
+            </cac:Contact>
+        </cac:Party>
+    </cac:AccountingSupplierParty>
+    <cac:AccountingCustomerParty>
+        <cac:Party>
+            <cbc:EndpointID schemeID="0088">DUT830629UQ3</cbc:EndpointID>
+            <cac:PartyName>
+                <cbc:Name>DESARROLLOS URBANOS TERRANOVA</cbc:Name>
+            </cac:PartyName>
+            <cac:PostalAddress>
+                <cbc:StreetName>Presidente Mazaryck</cbc:StreetName>
+                <cbc:CityName>Colonia Chapultepec</cbc:CityName>
+                <cbc:PostalZone>21000</cbc:PostalZone>
+                <cac:Country>
+                    <cbc:IdentificationCode>MX</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:PostalAddress>
+            <cac:PartyLegalEntity>
+                <cbc:RegistrationName>DESARROLLOS URBANOS TERRANOVA</cbc:RegistrationName>
+            </cac:PartyLegalEntity>
+            <cac:Contact>
+                <cbc:Name>DESARROLLOS URBANOS TERRANOVA</cbc:Name>
+            </cac:Contact>
+        </cac:Party>
+    </cac:AccountingCustomerParty>
+    <cac:PayeeParty>
+        <cac:PartyIdentification>
+            <cbc:ID>DUT830629UQ3</cbc:ID>
+        </cac:PartyIdentification>
+        <cac:PartyName>
+            <cbc:Name>DESARROLLOS URBANOS TERRANOVA</cbc:Name>
+        </cac:PartyName>
+        <cac:PartyLegalEntity>
+            <cbc:CompanyID schemeID="0088">DUT830629UQ3</cbc:CompanyID>
+        </cac:PartyLegalEntity>
+    </cac:PayeeParty>
+    <cac:TaxRepresentativeParty>
+        <cac:PartyName>
+            <cbc:Name/>
+        </cac:PartyName>
+        <cac:PostalAddress>
+            <cbc:StreetName>Presidente Mazaryck</cbc:StreetName>
+            <cbc:AdditionalStreetName/>
+            <cbc:CityName>Colonia Chapultepec</cbc:CityName>
+            <cbc:PostalZone>21000</cbc:PostalZone>
+            <cbc:CountrySubentity/>
+            <cac:AddressLine>
+                <cbc:Line/>
+            </cac:AddressLine>
+            <cac:Country>
+                <cbc:IdentificationCode>MX</cbc:IdentificationCode>
+            </cac:Country>
+        </cac:PostalAddress>
+        <cac:PartyTaxScheme>
+            <cbc:CompanyID>DUT830629UQ3</cbc:CompanyID>
+            <cac:TaxScheme>
+                <cbc:ID>VAT</cbc:ID>
+            </cac:TaxScheme>
+        </cac:PartyTaxScheme>
+    </cac:TaxRepresentativeParty>
+    <cac:Delivery>
+        <cbc:ActualDeliveryDate>2003-09-03</cbc:ActualDeliveryDate>
+        <cac:DeliveryLocation>
+            <cbc:ID schemeID="0088"/>
+            <cac:Address>
+                <cbc:StreetName>Presidente Mazaryck</cbc:StreetName>
+                <cbc:CityName>Colonia Chapultepec</cbc:CityName>
+                <cbc:PostalZone>21000</cbc:PostalZone>
+                <cac:Country>
+                    <cbc:IdentificationCode>MX</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:Address>
+        </cac:DeliveryLocation>
+        <cac:DeliveryParty>
+            <cac:PartyName>
+                <cbc:Name/>
+            </cac:PartyName>
+        </cac:DeliveryParty>
+    </cac:Delivery>
+    <cac:PaymentMeans>
+        <cbc:PaymentMeansCode name="">A</cbc:PaymentMeansCode>
+        <cbc:PaymentID/>
+        <cac:PayeeFinancialAccount>
+            <cbc:ID/>
+            <cbc:Name/>
+        </cac:PayeeFinancialAccount>
+        <cac:PaymentMandate>
+            <cbc:ID/>
+            <cac:PayerFinancialAccount>
+                <cbc:ID/>
+            </cac:PayerFinancialAccount>
+        </cac:PaymentMandate>
+        <cac:TradeFinancing>
+            <cbc:ID/>
+            <cbc:FinancingInstrumentCode/>
+            <cac:ContractDocumentReference>
+                <cbc:ID/>
+            </cac:ContractDocumentReference>
+            <cac:DocumentReference>
+                <cbc:ID/>
+            </cac:DocumentReference>
+            <cac:FinancingParty/>
+        </cac:TradeFinancing>  
+    </cac:PaymentMeans>
+    <cac:TaxTotal>
+        <cbc:TaxAmount currencyID="MXN">0.0</cbc:TaxAmount>
+        <cac:TaxSubtotal>
+            <cbc:TaxableAmount currencyID="MXN">18000.0</cbc:TaxableAmount>
+            <cbc:TaxAmount currencyID="MXN">0.0</cbc:TaxAmount>
+            <cac:TaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID/>
+                </cac:TaxScheme>
+            </cac:TaxCategory>
+        </cac:TaxSubtotal>
+    </cac:TaxTotal>
+    <cac:LegalMonetaryTotal>
+        <cbc:LineExtensionAmount currencyID="MXN">18000.0</cbc:LineExtensionAmount>
+        <cbc:TaxExclusiveAmount currencyID="MXN">18000.0</cbc:TaxExclusiveAmount>
+        <cbc:TaxInclusiveAmount currencyID="MXN">18000.0</cbc:TaxInclusiveAmount>
+        <cbc:PayableAmount currencyID="MXN">18000.0</cbc:PayableAmount>
+    </cac:LegalMonetaryTotal>
+    <cac:InvoiceLine>
+        <cbc:ID>000010</cbc:ID>
+        <cbc:Note/>
+        <cbc:InvoicedQuantity unitCode="XYZ">600.0</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="MXN">18000.0</cbc:LineExtensionAmount>
+        <cbc:AccountingCost/>
+        <cac:InvoicePeriod>
+            <cbc:StartDate>2003-08-27</cbc:StartDate>
+            <cbc:EndDate>2003-08-27</cbc:EndDate>
+        </cac:InvoicePeriod>
+        <cac:OrderLineReference>
+            <cbc:LineID>000010</cbc:LineID>
+        </cac:OrderLineReference>
+        <cac:DocumentReference>
+            <cbc:ID schemeID=""/>
+            <cbc:DocumentTypeCode/>
+        </cac:DocumentReference>
+        <cac:AllowanceCharge>
+            <cbc:ID/>
+            <cbc:ChargeIndicator>true
+            </cbc:ChargeIndicator>
+            <cbc:AllowanceChargeReasonCode/>
+            <cbc:AllowanceChargeReason/>
+            <cbc:Amount currencyID="">0
+            </cbc:Amount>
+        </cac:AllowanceCharge>
+        <cac:Item>
+            <cbc:Description>DEMO CD</cbc:Description>
+            <cbc:Name>ACT-DCD-30</cbc:Name>
+            <cac:BuyersItemIdentification>
+                <cbc:ID/>
+            </cac:BuyersItemIdentification>
+            <cac:SellersItemIdentification>
+                <cbc:ID>ACT-DCD-30</cbc:ID>
+            </cac:SellersItemIdentification>
+            <cac:OriginCountry>
+                <cbc:IdentificationCode/>
+            </cac:OriginCountry>
+            <cac:CommodityClassification>
+                <cbc:ItemClassificationCode listID="SRV"/>
+            </cac:CommodityClassification>
+            <cac:ClassifiedTaxCategory>
+                <cbc:ID>S</cbc:ID>
+                <cbc:Percent>0.0</cbc:Percent>
+                <cac:TaxScheme>
+                    <cbc:ID/>
+                </cac:TaxScheme>
+            </cac:ClassifiedTaxCategory>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="MXN">30.0</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+</Invoice>

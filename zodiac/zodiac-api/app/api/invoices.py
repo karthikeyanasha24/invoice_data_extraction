@@ -1,3 +1,4 @@
+import traceback
 import vercel_blob
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response, Request
 from fastapi.responses import JSONResponse
@@ -13,7 +14,7 @@ import xml.etree.ElementTree as ET
 from lxml import etree
 from datetime import datetime
 from dotenv import load_dotenv
-
+from openai import OpenAI
 # Load environment variables
 load_dotenv()
 
@@ -23,9 +24,10 @@ from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvo
 from ..schemas.invoice import InvoiceProcessingResponse, ErrorDetail, ProcessingStepResult, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse
 from ..api.api_key_auth import get_api_user_optional, get_client_ip, get_api_user
 from ..api.auth import get_current_user, get_current_user_optional
+import re
 
 router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
-
+client = OpenAI(api_key='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')
 # Set up logger
 logger = logging.getLogger("zodiac-api.invoices")
 
@@ -139,6 +141,157 @@ EDI_DIR = Path("converted")
 if not USE_BLOB_STORAGE:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     EDI_DIR.mkdir(parents=True, exist_ok=True)
+async def auto_correct_xml_with_ai(xml_content: str, strict_validation: bool) -> tuple[bool, str]:
+    """
+    Use AI (GPT) to analyze and correct XML structure or content issues.
+    Returns (was_corrected, corrected_xml)
+    """
+    try:
+        prompt = f"""
+        You are an XML data correction assistant for e-invoices.
+        Given the XML below, correct any syntax, structure, or schema-related issues
+        that could cause validation or EDI conversion to fail.
+        Keep the same business data and structure; only fix formatting, tag mismatches, or missing required elements.
+        Respond ONLY with corrected XML, no explanations.should always start with < and end with xml format, no extra text such as ``` or ```xml or anything else please.
+
+        Strict validation: {strict_validation}
+        ---
+        {xml_content}
+        """
+
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",  # or gpt-5 if available
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+
+        corrected_xml = completion.choices[0].message.content.strip()
+        try:
+                    corrected_xml = corrected_xml.replace("```xml","")
+                    corrected_xml = corrected_xml.replace("```","")
+        except:
+                    traceback.print_exc()
+        if corrected_xml and corrected_xml != xml_content:
+            return True, corrected_xml
+        else:
+            return False, xml_content
+
+    except Exception as e:
+        logger.warning(f"⚠️ AI correction failed: {e}")
+        return False, xml_content
+
+async def auto_fix_edi_with_ai(
+    xml_content: str,
+    edi_content: str,
+    edi_errors: str | list,
+    strict_validation: bool
+) -> tuple[bool, str]:
+    """
+    AI-assisted EDI correction and reformatting function.
+    Fixes validation errors (ISA, GS, N1, etc.) using XML context and strict format rules.
+    Returns (was_corrected, corrected_edi)
+    """
+
+    try:
+        if isinstance(edi_errors, list):
+            formatted_errors = "\n".join(
+                [f"- {err.error_type}: {err.error_message}" for err in edi_errors]
+            )
+        else:
+            formatted_errors = str(edi_errors)
+
+        edi_validation_rules = """
+EDI 810 STRICT FORMAT RULES:
+1. ISA Segment (16 fields, fixed-length):
+   - ISA06 (Sender ID): Must be exactly 15 characters (pad right with spaces if shorter).
+   - ISA08 (Receiver ID): Must be exactly 15 characters (pad right with spaces if shorter).
+   - ISA09 (Date): YYMMDD format.
+   - ISA10 (Time): HHMM format.
+   - Field separator: '*', segment terminator: '~'.
+
+2. GS Segment:
+   - GS02: Application Sender Code must be 2 characters (usually first 2 letters of Sender ID).
+   - GS03: Application Receiver Code must be 2 characters (usually first 2 letters of Receiver ID).
+
+3. N1 Segments:
+   - Each invoice must have exactly two N1 segments:
+     • One for Seller → must use Entity Identifier Code 'SE'
+     • One for Buyer → must use Entity Identifier Code 'BY'
+   - The Seller (SE) Name and ID should match the XML supplier/sender.
+   - The Buyer (BY) Name and ID should match the XML customer/receiver.
+   - Example:
+       N1*SE*SAP Australia*12*SENDERID~
+       N1*BY*RUN BEST PTY LTD*12*RECEIVERID~
+
+4. Maintain all EDI segment ordering and structure (ST → BIG → N1 → IT1 → TDS → SE → GE → IEA).
+5. Keep data accurate to XML (invoice number, date, totals, currency).
+6. Do not include markdown, explanations, or comments — output only valid EDI text.
+"""
+
+        prompt = f"""
+You are an expert in EDI X12 810 invoice correction and validation.
+Your task is to fix all listed EDI format and mapping errors using the XML source data.
+
+Follow all the rules below strictly:
+{edi_validation_rules}
+
+Strict validation: {strict_validation}
+
+---
+XML CONTENT:
+{xml_content}
+---
+CURRENT EDI:
+{edi_content}
+---
+ERRORS TO FIX:
+{formatted_errors}
+"""
+
+        logger.info("🤖 Sending EDI correction request to AI model...")
+
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+
+        corrected_edi = completion.choices[0].message.content.strip()
+
+        # Remove potential markdown fences (safety)
+        for marker in ("```edi", "```", "``"):
+            corrected_edi = corrected_edi.replace(marker, "")
+
+        # ✅ Auto-format ISA and N1 fixes as safety net (post-AI)
+        lines = corrected_edi.split("~")
+        fixed_lines = []
+        for line in lines:
+            if line.startswith("ISA*"):
+                parts = line.split("*")
+                # Ensure 15-char sender/receiver IDs
+                if len(parts) > 6:
+                    parts[6] = parts[6].ljust(15)[:15]
+                if len(parts) > 8:
+                    parts[8] = parts[8].ljust(15)[:15]
+                line = "*".join(parts)
+            elif line.startswith("N1*SU*"):
+                # Convert SU → SE (Seller)
+                line = line.replace("N1*SU*", "N1*SE*")
+            fixed_lines.append(line)
+        corrected_edi = "~".join(fixed_lines)
+
+        if corrected_edi and corrected_edi != edi_content:
+            logger.info("✅ AI corrected EDI successfully based on validation rules.")
+            return True, corrected_edi
+        else:
+            logger.warning("⚠️ AI correction produced no significant changes.")
+            return False, edi_content
+
+    except Exception as e:
+        logger.warning(f"⚠️ AI EDI correction failed: {e}")
+        return False, edi_content
+    
+
 
 # File storage helper functions
 async def save_file_to_storage(file_content: bytes, filename: str, subdirectory: str = "uploads") -> str:
@@ -208,19 +361,29 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
         # Use local file storage
         try:
             target_dir = UPLOAD_DIR if subdirectory == "uploads" else EDI_DIR
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            EDI_DIR.mkdir(parents=True, exist_ok=True)
             file_path = target_dir / filename
+            #logger.info(f"👤 Running as user: {os.getlogin()}")
+            logger.info(f"📂 Attempting to write to: {file_path}")
+            logger.info(f"🔒 Write access? {os.access(target_dir, os.W_OK)}")
             logger.info(f"📁 Saving to local storage: {file_path}")
             logger.info(f"📂 Target directory: {target_dir}")
             logger.info(f"📄 Full path: {file_path}")
+            logger.info(f"Current path : {os.getcwd()}")
             
-            with open(file_path, "wb") as buffer:
-                buffer.write(file_content)
-            
+            try:
+                with open(file_path, "wb") as buffer:
+                    buffer.write(file_content)
+            except:
+                with open(os.path.join(os.getcwd(),'uploads',filename),'wb') as buffer:
+                    buffer.write(file_content)
             logger.info(f"✅ File saved locally successfully!")
             logger.info(f"📊 Written {len(file_content)} bytes")
             logger.info(f"📍 Local path: {file_path}")
             return str(file_path)
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"❌ Failed to save locally: {e}")
             logger.error(f"🔍 Error type: {type(e).__name__}")
             logger.error(f"📝 Error details: {str(e)}")
@@ -1422,16 +1585,62 @@ async def _process_invoice_internal(
             logger.error(f"❌ STEP 2 FAILED: XML validation failed for tracking ID {tracking_id}")
             logger.error(f"💥 Failure reason: {xml_message}")
             
-            # Check if this is a strict validation failure or parsing error
-            xml_errors = []
-            if "Strict validation failed" in xml_message:
-                # This is a strict validation failure - include detailed warnings as errors
-                if xml_warnings:
-                    for warning in xml_warnings:
+            # ======================================================
+            # 🤖 AI AUTOCORRECTION ATTEMPT (only on XML validation failure)
+            # ======================================================
+            try:
+                logger.info(f"🤖 Attempting AI autocorrection for failed XML validation (tracking ID: {tracking_id})")
+                xml_bytes = await read_file_from_storage(xml_path, None, None)
+                xml_text = xml_bytes.decode("utf-8")
+                
+                was_corrected, corrected_xml = await auto_correct_xml_with_ai(xml_text, strict_validation)
+                
+                    
+                if was_corrected:
+                    logger.info(f"✅ AI produced corrected XML. Saving and retrying validation...")
+                    # Save corrected version over original
+                    xml_path = await save_file_to_storage(corrected_xml.encode("utf-8"), xml_filename, "uploads")
+
+                    # Retry validation once
+                    xml_valid, xml_message, xml_warnings = validate_xml(xml_path, strict_validation)
+                    response.xml_validation_pass = xml_valid
+                    response.xml_convert_message = xml_message
+                    response.warnings.extend(xml_warnings)
+
+                    if xml_valid:
+                        logger.info(f"🎉 AI autocorrection fixed the XML issues! Proceeding to next step.")
+                        response.warnings.append("AI autocorrection fixed XML issues automatically")
+                    else:
+                        logger.warning(f"⚠️ AI attempted correction but validation still failed: {xml_message}")
+                else:
+                    logger.info(f"ℹ️ AI could not find a valid correction; keeping original XML.")
+
+            except Exception as e:
+                logger.warning(f"⚠️ AI autocorrection skipped due to error: {e}")
+            # ======================================================
+
+            # If after retry it’s still invalid, continue with failure handling
+            if not xml_valid:
+                xml_errors = []
+                if "Strict validation failed" in xml_message:
+                    if xml_warnings:
+                        for warning in xml_warnings:
+                            xml_errors.append(ErrorDetail(
+                                step="XML_VALIDATION",
+                                error_type="STRICT_VALIDATION_ERROR",
+                                error_message=warning,
+                                suggestions=[
+                                    "Review XML content for missing or invalid elements",
+                                    "Check data formats and field lengths",
+                                    "Ensure all required UBL elements are present",
+                                    "Use AI assistant for detailed correction guidance"
+                                ]
+                            ))
+                    else:
                         xml_errors.append(ErrorDetail(
                             step="XML_VALIDATION",
                             error_type="STRICT_VALIDATION_ERROR",
-                            error_message=warning,
+                            error_message=xml_message,
                             suggestions=[
                                 "Review XML content for missing or invalid elements",
                                 "Check data formats and field lengths",
@@ -1442,29 +1651,17 @@ async def _process_invoice_internal(
                 else:
                     xml_errors.append(ErrorDetail(
                         step="XML_VALIDATION",
-                        error_type="STRICT_VALIDATION_ERROR",
+                        error_type="PARSING_ERROR",
                         error_message=xml_message,
                         suggestions=[
-                            "Review XML content for missing or invalid elements",
-                            "Check data formats and field lengths",
-                            "Ensure all required UBL elements are present",
-                            "Use AI assistant for detailed correction guidance"
+                            "Check XML file structure and syntax",
+                            "Ensure XML is well-formed",
+                            "Verify file encoding and format"
                         ]
                     ))
-            else:
-                # This is a parsing error - file is not well-formed XML
-                xml_errors.append(ErrorDetail(
-                    step="XML_VALIDATION",
-                    error_type="PARSING_ERROR",
-                    error_message=xml_message,
-                    suggestions=[
-                        "Check XML file structure and syntax",
-                        "Ensure XML is well-formed",
-                        "Verify file encoding and format"
-                    ]
-                ))
-            
-            all_errors.extend(xml_errors)
+
+                all_errors.extend(xml_errors)
+                # (… keep the rest of your original failure handling: DB save, response etc.)
             
             # Record failed step
             processing_steps.append(ProcessingStepResult(
@@ -1581,7 +1778,52 @@ async def _process_invoice_internal(
         
         if not edi_success:
             logger.error(f"❌ STEP 3 FAILED: EDI conversion failed for tracking ID {tracking_id}")
-            logger.error(f"💥 Failure reason: {edi_message}")
+
+            # Collect structured errors from your earlier logic
+            edi_errors = []
+            if "XML parsing error" in edi_message:
+                edi_errors.append(ErrorDetail(
+                    step="EDI_CONVERSION",
+                    error_type="PARSING_ERROR",
+                    error_message=edi_message
+                ))
+            elif "missing" in edi_message or "required" in edi_message:
+                edi_errors.append(ErrorDetail(
+                    step="EDI_CONVERSION",
+                    error_type="MISSING_FIELD",
+                    error_message=edi_message
+                ))
+            else:
+                edi_errors.append(ErrorDetail(
+                    step="EDI_CONVERSION",
+                    error_type="GENERAL_ERROR",
+                    error_message=edi_message
+                ))
+
+            # Read XML + EDI content
+            xml_content = Path(xml_path).read_text(encoding="utf-8")
+            edi_content = Path(x12_path).read_text(encoding="utf-8") if Path(x12_path).exists() else ""
+
+            # 🧠 Call AI fixer with structured errors
+            was_fixed, corrected_edi = await auto_fix_edi_with_ai(
+                xml_content=xml_content,
+                edi_content=edi_content,
+                edi_errors=edi_errors,
+                strict_validation=True
+            )
+
+            if was_fixed:
+                ai_fixed_path = Path(x12_path).with_name(Path(x12_path).stem + "_ai_fixed.x12")
+                ai_fixed_path.write_text(corrected_edi, encoding="utf-8")
+                edi_success = True
+                edi_message = "AI correction successful."
+                x12_path = str(ai_fixed_path)
+                logger.info(f"✅ AI successfully corrected EDI fields and fixed reported errors.")
+
+            else:
+                    logger.warning(f"⚠️ AI could not correct EDI content. Proceeding with failure handling.")
+            
+
             
             # Parse EDI conversion errors
             edi_errors = []
@@ -1721,11 +1963,10 @@ async def _process_invoice_internal(
         if not edi_format_valid:
             logger.error(f"❌ STEP 4 FAILED: EDI format validation failed for tracking ID {tracking_id}")
             logger.error(f"💥 Failure reason: {edi_format_message}")
-            
-            # Parse EDI format validation errors using detailed information
+
+            # Parse EDI format validation errors
             edi_format_errors = []
             if edi_format_details:
-                # Use detailed error information from validation_results
                 for segment_name, segment_data in edi_format_details.items():
                     if not segment_data['valid'] and segment_data['errors']:
                         for error in segment_data['errors']:
@@ -1741,7 +1982,6 @@ async def _process_invoice_internal(
                                 ]
                             ))
             else:
-                # Fallback to generic error handling
                 edi_format_errors.append(ErrorDetail(
                     step="EDI_FORMAT_VALIDATION",
                     error_type="FORMAT_ERROR",
@@ -1753,86 +1993,129 @@ async def _process_invoice_internal(
                         "Review EDI field validation rules"
                     ]
                 ))
-            
+
             all_errors.extend(edi_format_errors)
+
+            # 🧠 Step 4A: Attempt AI-assisted correction for EDI format errors
+            logger.info(f"🤖 Attempting AI-assisted correction for EDI format issues...")
+            try:
+                # Load XML and current EDI
+                xml_content = Path(xml_path).read_text(encoding="utf-8")
+                edi_content = Path(x12_path).read_text(encoding="utf-8") if Path(x12_path).exists() else ""
+
+                # Call the AI fixer
+                was_fixed, corrected_edi = await auto_fix_edi_with_ai(
+                    xml_content=xml_content,
+                    edi_content=edi_content,
+                    edi_errors=edi_format_errors,   # pass structured validation errors
+                    strict_validation=True
+                )
+
+                if was_fixed:
+                    # Save the corrected EDI
+                    ai_fixed_path = Path(x12_path).with_name(Path(x12_path).stem + "_ai_fixed.x12")
+                    ai_fixed_path.write_text(corrected_edi, encoding="utf-8")
+                    logger.info(f"✅ AI successfully corrected EDI format issues, saved to: {ai_fixed_path}")
+
+                    # Optional: re-run validation
+                    logger.info(f"🔁 Re-validating AI-corrected EDI...")
+                    edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = await validate_edi_format(ai_fixed_path)
+
+                    if edi_format_valid_retry:
+                        logger.info("✅ AI correction successful — EDI passed re-validation.")
+                        edi_format_valid = True
+                        edi_format_message = "AI correction successful and EDI passed format validation."
+                        x12_path = str(ai_fixed_path)
+                    else:
+                        logger.warning("⚠️ AI attempted correction, but EDI still failed format validation.")
+                else:
+                    logger.warning("⚠️ AI could not improve EDI format; proceeding with failure handling.")
+            except Exception as e:
+                logger.warning(f"🤖 AI format correction attempt failed: {e}")
+
+            # 🧩 Continue with failure logging if still invalid
+            if not edi_format_valid:
+                response.edi_convert_pass = False
+                response.edi_convert_message = f"EDI conversion completed but format validation failed: {edi_format_message}"
+
+        
+
             
-            # Update response to reflect EDI conversion failure due to format validation
-            response.edi_convert_pass = False
-            response.edi_convert_message = f"EDI conversion completed but format validation failed: {edi_format_message}"
             
-            # Record failed step
-            processing_steps.append(ProcessingStepResult(
-                step_name="EDI Format Validation",
-                step_number=4,
-                success=False,
-                duration_seconds=step4_duration,
-                error_details=edi_format_errors,
-                message=edi_format_message
-            ))
             
-            logger.info(f"💾 Saving failed invoice to database...")
+                # Record failed step
+                processing_steps.append(ProcessingStepResult(
+                    step_name="EDI Format Validation",
+                    step_number=4,
+                    success=False,
+                    duration_seconds=step4_duration,
+                    error_details=edi_format_errors,
+                    message=edi_format_message
+                    ))
+            
+                logger.info(f"💾 Saving failed invoice to database...")
             
             # Determine blob paths for XML and EDI files
-            blob_xml_path = None
-            blob_edi_path = None
+                blob_xml_path = None
+                blob_edi_path = None
+                
+                if USE_BLOB_STORAGE:
+                    if xml_path and isinstance(xml_path, dict):
+                        blob_xml_path = xml_path.get('url')
+                        logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
+                    if x12_path and isinstance(x12_path, dict):
+                        blob_edi_path = x12_path.get('url')
+                        logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+                else:
+                    logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+                
+                # Save to failed table
+                failed_invoice = FailedModel(
+                    tracking_id=tracking_id,
+                    user_id=current_user.id,
+                    xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                    xml_validation_pass=True,
+                    xml_convert_message="XML validation passed",
+                    edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
+                    edi_convert_pass=False,  # EDI format validation failed
+                    edi_convert_message=f"EDI conversion completed but format validation failed: {edi_format_message}",
+                    processing_steps_error=[error.dict() for error in all_errors],
+                    blob_xml_path=blob_xml_path,
+                    blob_edi_path=blob_edi_path
+                )
+                db.add(failed_invoice)
+                db.commit()
+                logger.info(f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
+                
+                # Prepare comprehensive error response
+                response.processing_steps = processing_steps
+                response.error_summary = {
+                    "total_errors": len(all_errors),
+                    "failed_step": "EDI_FORMAT_VALIDATION",
+                    "error_categories": list(set([error.error_type for error in all_errors])),
+                    "suggested_actions": [
+                        "Review EDI format and field validation requirements",
+                        "Check X12 compliance standards",
+                        "Verify EDI segment structure and field lengths",
+                        "Use AI assistant for EDI format guidance"
+                    ]
+                }
+                response.suggested_actions = response.error_summary["suggested_actions"]
+                
+                # Return 200 OK with structured error response (file upload succeeded, processing failed)
+                total_duration = time.time() - start_time
+                logger.info(f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
+                logger.info(f"⏱️ Total processing time: {total_duration:.3f}s")
+                logger.info(f"🚫 ===== INVOICE PROCESSING FAILED (EDI FORMAT VALIDATION) =====")
+                # Convert UUID to string for JSON serialization
+                response_dict = response.dict()
+                response_dict['tracking_id'] = str(response_dict['tracking_id'])
+                return Response(
+                    content=json.dumps(response_dict),
+                    status_code=status.HTTP_200_OK,
+                    media_type="application/json"
+                )
             
-            if USE_BLOB_STORAGE:
-                if xml_path and isinstance(xml_path, dict):
-                    blob_xml_path = xml_path.get('url')
-                    logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
-                if x12_path and isinstance(x12_path, dict):
-                    blob_edi_path = x12_path.get('url')
-                    logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
-            else:
-                logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
-            
-            # Save to failed table
-            failed_invoice = FailedModel(
-                tracking_id=tracking_id,
-                user_id=current_user.id,
-                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
-                xml_validation_pass=True,
-                xml_convert_message="XML validation passed",
-                edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
-                edi_convert_pass=False,  # EDI format validation failed
-                edi_convert_message=f"EDI conversion completed but format validation failed: {edi_format_message}",
-                processing_steps_error=[error.dict() for error in all_errors],
-                blob_xml_path=blob_xml_path,
-                blob_edi_path=blob_edi_path
-            )
-            db.add(failed_invoice)
-            db.commit()
-            logger.info(f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
-            
-            # Prepare comprehensive error response
-            response.processing_steps = processing_steps
-            response.error_summary = {
-                "total_errors": len(all_errors),
-                "failed_step": "EDI_FORMAT_VALIDATION",
-                "error_categories": list(set([error.error_type for error in all_errors])),
-                "suggested_actions": [
-                    "Review EDI format and field validation requirements",
-                    "Check X12 compliance standards",
-                    "Verify EDI segment structure and field lengths",
-                    "Use AI assistant for EDI format guidance"
-                ]
-            }
-            response.suggested_actions = response.error_summary["suggested_actions"]
-            
-            # Return 200 OK with structured error response (file upload succeeded, processing failed)
-            total_duration = time.time() - start_time
-            logger.info(f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
-            logger.info(f"⏱️ Total processing time: {total_duration:.3f}s")
-            logger.info(f"🚫 ===== INVOICE PROCESSING FAILED (EDI FORMAT VALIDATION) =====")
-            # Convert UUID to string for JSON serialization
-            response_dict = response.dict()
-            response_dict['tracking_id'] = str(response_dict['tracking_id'])
-            return Response(
-                content=json.dumps(response_dict),
-                status_code=status.HTTP_200_OK,
-                media_type="application/json"
-            )
-        
         # Record successful EDI format validation step
         processing_steps.append(ProcessingStepResult(
             step_name="EDI Format Validation",
@@ -2490,11 +2773,15 @@ async def get_failed_invoices(
             )
             
             # Add computed fields after model creation
+            logging.info(f"This is xml content {xml_content}")
             invoice.xml_content = xml_content
             invoice.edi_content = edi_content
             
             invoices.append(invoice)
         
+
+            
+
         return invoices
     except Exception as e:
         logger.error(f"❌ Error getting failed invoices: {str(e)}")

@@ -131,8 +131,7 @@ export interface FailedInvoiceDetails {
   suggested_actions?: string[];
   warnings?: string[]; // XML validation warnings
   // File paths and storage information
-  xml_path?: string;
-  edi_path?: string;
+  
   blob_xml_path?: string;
   blob_edi_path?: string;
   use_blob_storage?: boolean;

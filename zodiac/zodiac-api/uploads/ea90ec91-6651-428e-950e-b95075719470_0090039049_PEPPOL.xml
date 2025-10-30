@@ -1,0 +1,129 @@
+```xml
+<Invoice>
+    <ISA>
+        <AuthorizationInfoQualifier>00</AuthorizationInfoQualifier>
+        <AuthorizationInfo></AuthorizationInfo>
+        <SecurityInfoQualifier>00</SecurityInfoQualifier>
+        <SecurityInfo></SecurityInfo>
+        <InterchangeSenderID>12</InterchangeSenderID>
+        <InterchangeReceiverID>12</InterchangeReceiverID>
+        <InterchangeDate>250223</InterchangeDate>
+        <InterchangeTime>0557</InterchangeTime>
+        <InterchangeControlStandardsIdentifier>U</InterchangeControlStandardsIdentifier>
+        <InterchangeVersion>00401</InterchangeVersion>
+        <InterchangeControlNumber>000000000</InterchangeControlNumber>
+        <AcknowledgmentRequested>0</AcknowledgmentRequested>
+        <UsageIndicator>P</UsageIndicator>
+    </ISA>
+    <GS>
+        <FunctionalIdentifierCode>IN</FunctionalIdentifierCode>
+        <ApplicationSenderCode>58671830621</ApplicationSenderCode>
+        <ApplicationReceiverCode>58671830621</ApplicationReceiverCode>
+        <Date>20250223</Date>
+        <Time>0557</Time>
+        <GroupControlNumber>000000</GroupControlNumber>
+        <ResponsibleAgencyCode>X</ResponsibleAgencyCode>
+        <Version>004010</Version>
+    </GS>
+    <ST>
+        <TransactionSetIdentifierCode>810</TransactionSetIdentifierCode>
+        <TransactionSetControlNumber>0000</TransactionSetControlNumber>
+    </ST>
+    <BIG>
+        <InvoiceDate>20120723</InvoiceDate>
+        <InvoiceNumber>0090039049</InvoiceNumber>
+    </BIG>
+    <CUR>
+        <CurrencyIdentifier>BY</CurrencyIdentifier>
+        <CurrencyCode>AUD</CurrencyCode>
+    </CUR>
+    <REF>
+        <ReferenceIdentificationQualifier>CT</ReferenceIdentificationQualifier>
+        <ReferenceIdentification>0000000171</ReferenceIdentification>
+    </REF>
+    <PER>
+        <ContactFunctionCode>IC</ContactFunctionCode>
+        <Name>SAP Australia</Name>
+        <CommunicationNumber>TE</CommunicationNumber>
+        <CommunicationNumberValue>(02) 9935 4</CommunicationNumberValue>
+    </PER>
+    <N1>
+        <EntityIdentifierCode>SU</EntityIdentifierCode>
+        <Name>SAP Australia</Name>
+        <IdentificationCodeQualifier>12</IdentificationCodeQualifier>
+        <IdentificationCode>58671830621</IdentificationCode>
+    </N1>
+    <N3>
+        <AddressInformation>Walker Street</AddressInformation>
+    </N3>
+    <N4>
+        <CityName>North Sydney</CityName>
+        <StateOrProvinceCode>NS</StateOrProvinceCode>
+        <PostalCode>2060</PostalCode>
+        <CountryCode>AUS</CountryCode>
+    </N4>
+    <N1>
+        <EntityIdentifierCode>BY</EntityIdentifierCode>
+        <Name>RUN BEST PTY LTD</Name>
+        <IdentificationCodeQualifier>12</IdentificationCodeQualifier>
+        <IdentificationCode>58671830621</IdentificationCode>
+    </N1>
+    <N3>
+        <AddressInformation>Green Patch</AddressInformation>
+    </N3>
+    <N4>
+        <CityName>Port Lincoln</CityName>
+        <StateOrProvinceCode>SA</StateOrProvinceCode>
+        <PostalCode>5606</PostalCode>
+        <CountryCode>AUS</CountryCode>
+    </N4>
+    <ITD>
+        <TermsTypeCode>01</TermsTypeCode>
+        <TermsBasisDateCode>1</TermsBasisDateCode>
+    </ITD>
+    <DTM>
+        <DateTimeQualifier>011</DateTimeQualifier>
+        <Date>20120723</Date>
+    </DTM>
+    <FOB>
+        <FOBPointCode>CC</FOBPointCode>
+    </FOB>
+    <IT1>
+        <AssignedIdentification>1</AssignedIdentification>
+        <Quantity>1.0</Quantity>
+        <UnitOfMeasureCode>EA</UnitOfMeasureCode>
+        <UnitPrice>4900</UnitPrice>
+        <BasisOfUnitPriceCode>CP</BasisOfUnitPriceCode>
+        <ProductServiceID>VP</ProductServiceID>
+        <ProductServiceIDQualifier>SRV1_4_ERP</ProductServiceIDQualifier>
+    </IT1>
+    <IT1>
+        <AssignedIdentification>2</AssignedIdentification>
+        <Quantity>1.0</Quantity>
+        <UnitOfMeasureCode>EA</UnitOfMeasureCode>
+        <UnitPrice>19400</UnitPrice>
+        <BasisOfUnitPriceCode>CP</BasisOfUnitPriceCode>
+        <ProductServiceID>VP</ProductServiceID>
+        <ProductServiceIDQualifier>R-1160</ProductServiceIDQualifier>
+    </IT1>
+    <TDS>
+        <TotalAmount>26730</TotalAmount>
+    </TDS>
+    <CTT>
+        <NumberOfLineItems>2</NumberOfLineItems>
+        <HashTotal>30</HashTotal>
+    </CTT>
+    <SE>
+        <TransactionSetTrailer>19</TransactionSetTrailer>
+        <TransactionSetControlNumber>0000</TransactionSetControlNumber>
+    </SE>
+    <GE>
+        <NumberOfTransactionSetsIncluded>1</NumberOfTransactionSetsIncluded>
+        <GroupControlNumber>000000</GroupControlNumber>
+    </GE>
+    <IEA>
+        <NumberOfIncludedFunctionalGroups>1</NumberOfIncludedFunctionalGroups>
+        <InterchangeControlNumber>000000000</InterchangeControlNumber>
+    </IEA>
+</Invoice>
+```
