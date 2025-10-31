@@ -5,9 +5,10 @@
     "routes":[
         {
         "src":"/(.*)",
-        "dest":"app/server.py"
+        "dest":"/"
         }
     ],
     "buildCommand":"pip install -r requirements.txt"
 
 }
+
