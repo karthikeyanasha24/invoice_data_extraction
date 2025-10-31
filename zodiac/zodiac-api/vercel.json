@@ -5,9 +5,11 @@
     "routes":[
         {
         "src":"/(.*)",
-        "dest":"/app/server.py"
+        "dest":"/app/server.py",
+         "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]   
         }
     ]
 }
+
 
 
