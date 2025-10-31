@@ -21,7 +21,8 @@ typing-extensions==4.15.0
 typing-inspection==0.4.2
 uvicorn==0.37.0
 vercel-blob==0.4.2
-openai
-python-jose
-fastapi
-regex
+openai>=1.50.0
+python-jose==3.5.0
+fastapi==0.118.3
+regex==2025.10.23
+
