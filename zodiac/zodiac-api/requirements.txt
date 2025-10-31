@@ -23,3 +23,5 @@ uvicorn==0.37.0
 vercel-blob==0.4.2
 openai
 python-jose
+fastapi
+regex
