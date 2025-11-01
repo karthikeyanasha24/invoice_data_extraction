@@ -2050,6 +2050,7 @@ async def _process_invoice_internal(
                     
                     try:
                         # Try saving to Vercel Blob storage first
+                        blob_path = str(x12_path)
                         if USE_BLOB_STORAGE:
                               # define your blob path accordingly
                             logger.info(f"⏳ Trying to save AI fixed EDI to blob: {blob_path}")
