@@ -2014,7 +2014,7 @@ async def _process_invoice_internal(
                 if blob_xml_path and USE_BLOB_STORAGE and blob_edi_path:
                     xml_content_1 = await read_file_from_storage(None,blob_xml_path,None)
                     xml_content = xml_content_1.decode('utf-8')
-                    edi_content_1 = await read_file_from_storage(None,None,edi_xml_path)
+                    edi_content_1 = await read_file_from_storage(None,None,blob_edi_path)
                     edi_content = edi_content_1.decode('utf-8')
                 else:
                     xml_content = Path(xml_path).read_text(encoding="utf-8")
