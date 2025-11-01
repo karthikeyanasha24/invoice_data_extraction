@@ -1999,6 +1999,18 @@ async def _process_invoice_internal(
             # 🧠 Step 4A: Attempt AI-assisted correction for EDI format errors
             logger.info(f"🤖 Attempting AI-assisted correction for EDI format issues...")
             try:
+                blob_xml_path = None
+                blob_edi_path = None
+                
+                if USE_BLOB_STORAGE:
+                    if xml_path and isinstance(xml_path, dict):
+                        blob_xml_path = xml_path.get('url')
+                        logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
+                    if x12_path and isinstance(x12_path, dict):
+                        blob_edi_path = x12_path.get('url')
+                        logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+                else:
+                    logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
                 if blob_xml_path and USE_BLOB_STORAGE and blob_edi_path:
                     xml_content_1 = await read_file_from_storage(None,blob_xml_path,None)
                     xml_content = xml_content_1.decode('utf-8')
