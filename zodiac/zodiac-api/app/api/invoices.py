@@ -1999,9 +1999,19 @@ async def _process_invoice_internal(
             # 🧠 Step 4A: Attempt AI-assisted correction for EDI format errors
             logger.info(f"🤖 Attempting AI-assisted correction for EDI format issues...")
             try:
-                # Load XML and current EDI
-                xml_content = Path(xml_path).read_text(encoding="utf-8")
-                edi_content = Path(x12_path).read_text(encoding="utf-8") if Path(x12_path).exists() else ""
+                if blob_xml_path and USE_BLOB_STORAGE and blob_edi_path:
+                    xml_content_1 = await read_file_from_storage(None,blob_xml_path,None)
+                    xml_content = xml_content_1.decode('utf-8')
+                    edi_content_1 = await read_file_from_storage(None,None,edi_xml_path)
+                    edi_content = edi_content_1.decode('utf-8')
+                else:
+                    xml_content = Path(xml_path).read_text(encoding="utf-8")
+                    edi_content = Path(x12_path).read_text(encoding="utf-8") if Path(x12_path).exists() else ""
+
+                
+                
+           
+                
 
                 # Call the AI fixer
                 was_fixed, corrected_edi = await auto_fix_edi_with_ai(
@@ -2011,10 +2021,40 @@ async def _process_invoice_internal(
                     strict_validation=True
                 )
 
+                
+                
+                
+                
+                
+                # Call the AI fixer
+                was_fixed, corrected_edi = await auto_fix_edi_with_ai(
+                    xml_content=xml_content,
+                    edi_content=edi_content,
+                    edi_errors=edi_format_errors,   # pass structured validation errors
+                    strict_validation=True
+                )
+
                 if was_fixed:
-                    # Save the corrected EDI
-                    ai_fixed_path = Path(x12_path).with_name(Path(x12_path).stem + "_ai_fixed.x12")
-                    ai_fixed_path.write_text(corrected_edi, encoding="utf-8")
+                    ai_fixed_filename = Path(x12_path).stem + "_ai_fixed.x12"
+                    try:
+                        # Try saving to Vercel Blob storage first
+                        if USE_BLOB_STORAGE:
+                            blob_path = f"some_blob_directory/{ai_fixed_filename}"  # define your blob path accordingly
+                            logger.info(f"⏳ Trying to save AI fixed EDI to blob: {blob_path}")
+                            vercel_blob.put(blob_path, corrected_edi.encode('utf-8'))
+                            logger.info(f"✅ AI successfully corrected EDI saved to blob: {blob_path}")
+                        else:
+                            raise Exception("Blob storage disabled, skipping blob save")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to save AI corrected EDI to blob storage: {e}")
+                        # Fallback to saving locally
+                        try:
+                            ai_fixed_path = Path(x12_path).with_name(ai_fixed_filename)
+                            ai_fixed_path.write_text(corrected_edi, encoding="utf-8")
+                            logger.info(f"✅ AI successfully corrected EDI format issues, saved locally to: {ai_fixed_path}")
+                        except Exception as e_local:
+                            logger.error(f"❌ Failed to save AI corrected EDI locally as fallback. Error: {e_local}")
+                            
                     logger.info(f"✅ AI successfully corrected EDI format issues, saved to: {ai_fixed_path}")
 
                     # Optional: re-run validation
