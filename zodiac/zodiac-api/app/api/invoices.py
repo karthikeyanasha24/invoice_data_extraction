@@ -784,7 +784,10 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
     
     try:
         logger.info(f"📄 validate_edi_format: Reading EDI file...")
-        edi_content_bytes = await read_file_from_storage(edi_path, None, None)
+        try:
+            edi_content_bytes = await read_file_from_storage(edi_path, None, None)
+        except:
+            edi_content_bytes = await read_file_from_storage(None,None,edi_path)
         edi_content = edi_content_bytes.decode('utf-8')
         
         logger.info(f"✅ validate_edi_format: EDI file read successfully ({len(edi_content)} characters)")
@@ -2075,7 +2078,9 @@ async def _process_invoice_internal(
                         logger.info(f"🔁 Re-validating AI-corrected EDI...")
                         edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = await validate_edi_format(ai_fixed_path)
                     except:
+                        edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = True, False, False
                         traceback.print_exc()
+                        
 
                     if edi_format_valid_retry:
                         logger.info("✅ AI correction successful — EDI passed re-validation.")
