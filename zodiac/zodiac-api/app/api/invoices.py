@@ -2070,8 +2070,11 @@ async def _process_invoice_internal(
                     #logger.info(f"✅ AI successfully corrected EDI format issues, saved to: {ai_fixed_path}")
 
                     # Optional: re-run validation
-                    logger.info(f"🔁 Re-validating AI-corrected EDI...")
-                    edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = await validate_edi_format(ai_fixed_path)
+                    try:
+                        logger.info(f"🔁 Re-validating AI-corrected EDI...")
+                        edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = await validate_edi_format(ai_fixed_path)
+                    except:
+                        traceback.print_exc()
 
                     if edi_format_valid_retry:
                         logger.info("✅ AI correction successful — EDI passed re-validation.")
