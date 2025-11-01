@@ -2047,11 +2047,11 @@ async def _process_invoice_internal(
                 )
 
                 if was_fixed:
-                    ai_fixed_filename = Path(x12_path).stem + "_ai_fixed.x12"
+                    
                     try:
                         # Try saving to Vercel Blob storage first
                         if USE_BLOB_STORAGE:
-                            blob_path = f"some_blob_directory/{ai_fixed_filename}"  # define your blob path accordingly
+                              # define your blob path accordingly
                             logger.info(f"⏳ Trying to save AI fixed EDI to blob: {blob_path}")
                             vercel_blob.put(blob_path, corrected_edi.encode('utf-8'))
                             logger.info(f"✅ AI successfully corrected EDI saved to blob: {blob_path}")
