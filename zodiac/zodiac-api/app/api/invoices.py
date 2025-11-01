@@ -27,7 +27,7 @@ from ..api.auth import get_current_user, get_current_user_optional
 import re
 
 router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
-client = OpenAI(api_key='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')
+client = OpenAI(api_key=os.getenv("OPEN_AI_KEY"))
 # Set up logger
 logger = logging.getLogger("zodiac-api.invoices")
 
@@ -2031,6 +2031,7 @@ async def _process_invoice_internal(
                 else:
                     logger.warning("⚠️ AI could not improve EDI format; proceeding with failure handling.")
             except Exception as e:
+                traceback.print_exc()
                 logger.warning(f"🤖 AI format correction attempt failed: {e}")
 
             # 🧩 Continue with failure logging if still invalid
