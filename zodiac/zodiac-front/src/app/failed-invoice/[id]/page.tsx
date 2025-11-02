@@ -95,7 +95,7 @@ export default function FailedInvoicePage() {
   // Save XML locally (no backend)
  const handleSave = async () => {
     try {
-        const filenname = filename;
+        const filename_here = filename;
         const contentType = "text/xml";
 
         console.log("Saving XML:", xmlContent);
@@ -106,7 +106,7 @@ export default function FailedInvoicePage() {
         
         // Create FormData and append the file with filename and contentType
         const formData = new FormData();
-        formData.append("file", xmlBlob, filename);
+        formData.append("file", xmlBlob, filename_here);
 
         console.log('📁 File API - About to make axios request...');
         setLoading(true);
