@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { fileApi } from '@/lib/api';
+import api, { fileApi } from '@/lib/api';
 import { FailedInvoiceDetails, Invoice } from '@/types';
 import { ArrowLeft, CheckCircle, XCircle, Edit3, MessageCircle, Upload, AlertTriangle, FileText, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -27,6 +27,7 @@ export default function FailedInvoicePage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('errors');
+  var filename = '';
   console.log(invoice);
   console.log("INVOCIE SHOULD BE PRINTED");
   // try
@@ -92,11 +93,32 @@ export default function FailedInvoicePage() {
   };
 
   // Save XML locally (no backend)
-  const handleSave = () => {
-    console.log("Saving XML:", xmlContent);
-    setIsEditing(false);
-    // You can also call API to save here
-  };
+ const handleSave = async () => {
+    try {
+        const filenname = filename;
+        const contentType = "text/xml";
+
+        console.log("Saving XML:", xmlContent);
+        setIsEditing(false);
+
+        // Create a Blob with XML content and proper type
+        const xmlBlob = new Blob([xmlContent], { type: contentType });
+        
+        // Create FormData and append the file with filename and contentType
+        const formData = new FormData();
+        formData.append("file", xmlBlob, filename);
+
+        console.log('📁 File API - About to make axios request...');
+        const response = await api.post('/api/v1/invoices/process', formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+            },
+        });
+        console.log("Save response:", response.data);
+    } catch (error) {
+        console.error("Error saving XML:", error);
+    }
+};
   useEffect(() => {
     if (invoiceId) {
       fetchInvoiceDetails();
@@ -206,6 +228,7 @@ export default function FailedInvoicePage() {
         console.log('🔍 Failed Invoice Page - Processing steps error:', failedDetails.processing_steps_error);
         console.log('🔍 Failed Invoice Page - Final XML content length:', failedDetails.xml_content?.length || 0);
         console.log('🔍 Failed Invoice Page - Final EDI content length:', failedDetails.edi_content?.length || 0);
+        filename = invoiceData.filename;
 
         setInvoice(failedDetails);
       } else {
