@@ -95,7 +95,7 @@ export default function FailedInvoicePage() {
   // Save XML locally (no backend)
  const handleSave = async () => {
     try {
-        const filename_here = filename;
+        const filename_here = 'SAVED_AGAIN.xml';
         const contentType = "text/xml";
 
         console.log("Saving XML:", xmlContent);
