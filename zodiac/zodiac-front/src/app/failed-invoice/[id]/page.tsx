@@ -109,15 +109,19 @@ export default function FailedInvoicePage() {
         formData.append("file", xmlBlob, filename);
 
         console.log('📁 File API - About to make axios request...');
+        setLoading(true);
         const response = await api.post('/api/v1/invoices/process', formData, {
             headers: {
                 'Content-Type': 'multipart/form-data',
             },
         });
         console.log("Save response:", response.data);
+        alert("New case created for the save");
     } catch (error) {
         console.error("Error saving XML:", error);
+        alert(error);
     }
+    setLoading(false);
 };
   useEffect(() => {
     if (invoiceId) {
