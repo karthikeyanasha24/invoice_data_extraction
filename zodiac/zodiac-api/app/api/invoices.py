@@ -2351,8 +2351,8 @@ async def _process_invoice_internal(
             step5_duration = time.time() - step5_start
             logger.info(f"💾 Successfully saved invoice to database (took {step5_duration:.3f}s)")
             logger.info(f"✅ STEP 5 COMPLETED: Database save successful")
-        except:
-            traceback.print_exc()
+        except Exception as e:
+            logger.info(f"Exception {e}")
             
         response.invoice_operation_success = True
         response.processing_steps = processing_steps
