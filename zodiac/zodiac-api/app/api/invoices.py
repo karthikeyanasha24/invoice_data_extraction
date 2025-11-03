@@ -2325,7 +2325,26 @@ async def _process_invoice_internal(
                     logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
             else:
                 logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+            logger.info("NOW TRYING EXTERNAL SAVE")
+        
+            try:
+                logging.info(f"printing the xml_path {xml_content}")
+                file_content = xml_content
+                
+                format_type = 'xml'
+                invoice_id = str(tracking_id)
+                results_external = await send_file_to_external(file_content,invoice_id,format_type)
+                logger.info(str(results_external))
+                logger.info("THE EXTERNAL UPLOAD was successful")
+                
+            except:
+                
+                
+                logger.error("ERROR IN EXTERNAL")
             
+            
+            
+        
             success_invoice = SuccessModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
@@ -2337,7 +2356,8 @@ async def _process_invoice_internal(
                 edi_convert_message="EDI conversion and format validation completed successfully",
                 blob_xml_path=blob_xml_path,
                 blob_edi_path=blob_edi_path,
-                request_type=request_type
+                request_type=request_type,
+                external_api_call =results_external
             )
             db.add(success_invoice)
             db.commit()
@@ -2372,26 +2392,7 @@ async def _process_invoice_internal(
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
         results_external = ""
-        logger.info("NOW TRYING EXTERNAL SAVE")
-        
-        try:
-            #file_content = await read_file_from_storage(None,xml_path,None)
-            with open('uploads/0b0ff450-fd6e-4e1f-b4ad-e2a07f3f1c74_0090040320_PEPPOL.xml','r') as xaml:
-                file_content = xaml.read()
-            format_type = 'xml'
-            invoice_id = str(tracking_id)
-            results_external = await send_file_to_external(file_content,invoice_id,format_type)
-            logger.info(str(results_external))
-            logger.info("THE EXTERNAL UPLOAD was successful")
             
-        except:
-            
-            
-            logger.error("ERROR IN EXTERNAL")
-            
-            
-            
-        response_dict['results_external'] = results_external    
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
         return Response(
             content=json.dumps(response_dict),
@@ -2831,7 +2832,7 @@ def get_successful_invoices(
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
                xml_validation_pass, xml_convert_message, edi_path, 
                edi_convert_pass, edi_convert_message, processing_steps_error,
-               blob_xml_path, blob_edi_path
+               blob_xml_path, blob_edi_path,external_api_call
         FROM zodiac_invoice_success_edi 
         WHERE user_id = :user_id AND deleted_at IS NULL
         ORDER BY uploaded_at DESC 
@@ -2859,7 +2860,8 @@ def get_successful_invoices(
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=row.processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path
+                blob_edi_path=row.blob_edi_path,
+                external_api_call= row.external_api_call
             )
             
             # Add computed fields after model creation
