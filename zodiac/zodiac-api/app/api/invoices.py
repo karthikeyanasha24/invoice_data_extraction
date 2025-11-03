@@ -1417,7 +1417,7 @@ async def process_invoice(
     db: Session = Depends(get_db),
     request: Request = None,
     #current_user: ZodiacUser = Depends(get_current_user),
-    current_user: "DEMO"
+    current_user:str="DEMO"
 ):
     """Process uploaded invoice file with XML validation and EDI conversion (Web UI)"""
     return await _process_invoice_internal(file, strict_validation, db, request, current_user, "web")
@@ -1428,8 +1428,8 @@ async def process_invoice_api(
     strict_validation: bool = False,
     db: Session = Depends(get_db),
     request: Request = None,
-    api_user: ZodiacUser = Depends(get_api_user),
-    api_user: "DEMO"
+    #api_user: ZodiacUser = Depends(get_api_user),
+    api_user:str = "DEMO"
 ):
     """Process uploaded invoice file with XML validation and EDI conversion (API Key)"""
     return await _process_invoice_internal(file, strict_validation, db, request, api_user, "api")
