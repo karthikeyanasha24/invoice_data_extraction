@@ -1457,12 +1457,13 @@ async def _process_invoice_internal(
     # Authentication method determined by caller
     if request_type == "api":
         client_ip = get_client_ip(request) if request else "unknown"
-        logger.info(f"🔑 API request from IP: {client_ip}, User: {current_user.id}")
+        #logger.info(f"🔑 API request from IP: {client_ip}, User: {current_user.id}")
     else:
-        logger.info(f"🌐 Web request, User: {current_user.id}")
+        #logger.info(f"🌐 Web request, User: {current_user.id}")
+        pass
     
     logger.info(f"🚀 ===== INVOICE PROCESSING STARTED =====")
-    logger.info(f"👤 User ID: {current_user.id}")
+    #logger.info(f"👤 User ID: {current_user.id}")
     logger.info(f"📋 Request Type: {request_type}")
     logger.info(f"📁 File details: filename={file.filename}, content_type={file.content_type}, size={file.size}")
     logger.info(f"🔍 Strict validation mode: {strict_validation}")
