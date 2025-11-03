@@ -169,12 +169,12 @@ async def send_file_to_external(
             "error": Optional[str]
         }
     """
-    AUTH_URL = "https://dbnasender.cfdise.com/PeppolSoftDBNA/auth/login"
+    AUTH_URL = "http://dbnasender.cfdise.com/PeppolSoftDBNA/auth/login"
     EXTERNAL_ENDPOINTS = {
-        "xml": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
-        "x12": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
-        "x12embed": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
-        "edifact": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "xml": "http://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "x12": "http://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "x12embed": "http://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "edifact": "http://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
     }
     USERNAME = "peppolsoft"
     PASSWORD = "t3st2025"
