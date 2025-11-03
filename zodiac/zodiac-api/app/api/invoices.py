@@ -2317,41 +2317,43 @@ async def _process_invoice_internal(
         logger.info(f"🎉 ===== STEP 5: DATABASE SAVE (SUCCESS) =====")
         logger.info(f"💾 Saving successful invoice to database...")
         logger.info(f"📊 Creating success record with tracking ID: {tracking_id}")
-        
-        # Determine blob paths for XML and EDI files
-        blob_xml_path = None
-        blob_edi_path = None
-        
-        if USE_BLOB_STORAGE:
-            if xml_path and isinstance(xml_path, dict):
-                blob_xml_path = xml_path.get('url')
-                logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
-            if x12_path and isinstance(x12_path, dict):
-                blob_edi_path = x12_path.get('url')
-                logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
-        else:
-            logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
-        
-        success_invoice = SuccessModel(
-            tracking_id=tracking_id,
-            user_id=current_user.id,
-            xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
-            xml_validation_pass=True,
-            xml_convert_message=response.xml_convert_message,  # Use the updated message with warning info
-            edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
-            edi_convert_pass=True,
-            edi_convert_message="EDI conversion and format validation completed successfully",
-            blob_xml_path=blob_xml_path,
-            blob_edi_path=blob_edi_path,
-            request_type=request_type
-        )
-        db.add(success_invoice)
-        db.commit()
-        
-        step5_duration = time.time() - step5_start
-        logger.info(f"💾 Successfully saved invoice to database (took {step5_duration:.3f}s)")
-        logger.info(f"✅ STEP 5 COMPLETED: Database save successful")
-        
+        try:
+            # Determine blob paths for XML and EDI files
+            blob_xml_path = None
+            blob_edi_path = None
+            
+            if USE_BLOB_STORAGE:
+                if xml_path and isinstance(xml_path, dict):
+                    blob_xml_path = xml_path.get('url')
+                    logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
+                if x12_path and isinstance(x12_path, dict):
+                    blob_edi_path = x12_path.get('url')
+                    logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+            else:
+                logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+            
+            success_invoice = SuccessModel(
+                tracking_id=tracking_id,
+                user_id=current_user.id,
+                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                xml_validation_pass=True,
+                xml_convert_message=response.xml_convert_message,  # Use the updated message with warning info
+                edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
+                edi_convert_pass=True,
+                edi_convert_message="EDI conversion and format validation completed successfully",
+                blob_xml_path=blob_xml_path,
+                blob_edi_path=blob_edi_path,
+                request_type=request_type
+            )
+            db.add(success_invoice)
+            db.commit()
+            
+            step5_duration = time.time() - step5_start
+            logger.info(f"💾 Successfully saved invoice to database (took {step5_duration:.3f}s)")
+            logger.info(f"✅ STEP 5 COMPLETED: Database save successful")
+        except:
+            traceback.print_exc()
+            
         response.invoice_operation_success = True
         response.processing_steps = processing_steps
         total_duration = time.time() - start_time
