@@ -2375,7 +2375,9 @@ async def _process_invoice_internal(
         logger.info(f"📤 Returning 201 Created for tracking ID {tracking_id}")
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
+        results_external = None
         logger.info("NOW TRYING EXTERNAL SAVE")
+        
         try:
             file_content = await read_file_from_storage(None,blob_xml_path,None)
             format_type = 'xml'
@@ -2384,11 +2386,12 @@ async def _process_invoice_internal(
             logger.info(str(results_external))
             logger.info("THE EXTERNAL UPLOAD was successful")
         except:
+            
             traceback.print_exc()
             logger.error("ERROR IN EXTERNAL")
             
             
-            
+        response_dict['results_external'] = results_external    
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
         return Response(
             content=json.dumps(response_dict),
