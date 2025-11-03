@@ -1,4 +1,6 @@
+from enum import Enum
 import traceback
+import httpx
 import vercel_blob
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response, Request
 from fastapi.responses import JSONResponse
@@ -49,7 +51,11 @@ BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 # Determine if we MUST use blob storage (PROD + token provided)
 MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None
 USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
-
+class FormatEnum(str, Enum):
+    xml = "xml"
+    x12 = "x12"
+    x12embed = "x12_embed"
+    edifact = "edifact"
 # Detailed logging for file storage selection
 logger.info("=" * 60)
 logger.info("🗂️ FILE STORAGE CONFIGURATION")
@@ -141,6 +147,119 @@ EDI_DIR = Path("converted")
 if not USE_BLOB_STORAGE:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     EDI_DIR.mkdir(parents=True, exist_ok=True)
+
+async def send_file_to_external(
+    file_content: str,
+    invoice_id: str,
+    format_type: str = "xml"
+) -> dict:
+    """
+    Send a single file (XML, X12, etc.) to an external API.
+
+    Args:
+        file_content: The file content as a string.
+        invoice_id: The invoice identifier for tracking/logging.
+        format_type: One of ['xml', 'x12', 'x12embed', 'edifact'].
+
+    Returns:
+        dict: {
+            "invoice_id": str,
+            "status": "success" | "error",
+            "akt_id": Optional[str],
+            "error": Optional[str]
+        }
+    """
+    AUTH_URL = "https://dbnasender.cfdise.com/PeppolSoftDBNA/auth/login"
+    EXTERNAL_ENDPOINTS = {
+        "xml": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "x12": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "x12embed": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+        "edifact": "https://dbnasender.cfdise.com/PeppolSoftDBNA/generateDocument",
+    }
+    USERNAME = "peppolsoft"
+    PASSWORD = "t3st2025"
+
+    # 🧾 Supported formats and MIME types
+    FORMAT_MIME = {
+        "xml": "application/xml",
+        "x12": "application/edi-x12",
+        "x12embed": "application/edi-x12",
+        "edifact": "application/edifact"
+    }
+    try:
+        format_type = format_type.lower()
+        if format_type not in FORMAT_MIME:
+            raise ValueError(f"Unsupported format: {format_type}")
+
+        mime_type = FORMAT_MIME[format_type]
+        endpoint = EXTERNAL_ENDPOINTS.get(format_type)
+
+        if not endpoint:
+            raise ValueError(f"No endpoint configured for format '{format_type}'")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 1️⃣ Authenticate
+            auth_resp = await client.post(AUTH_URL, json={"user": USERNAME, "password": PASSWORD})
+            if auth_resp.status_code != 200:
+                return {
+                    "invoice_id": invoice_id,
+                    "status": "error",
+                    "akt_id": None,
+                    "error": "Authentication with external service failed"
+                }
+
+            token = auth_resp.json().get("accessToken")
+            if not token:
+                return {
+                    "invoice_id": invoice_id,
+                    "status": "error",
+                    "akt_id": None,
+                    "error": "No access token received from external service"
+                }
+
+            # 2️⃣ Send file
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": mime_type
+            }
+
+            send_resp = await client.post(endpoint, content=file_content.encode("utf-8"), headers=headers)
+            response_text = send_resp.text
+
+            # 3️⃣ Parse response (simple XML parsing using regex)
+            code_match = re.search(r"<code>(\d+)</code>", response_text)
+            akt_id = code_match.group(1) if code_match else "unknown"
+
+            message_match = re.search(r"<message>(.*?)</message>", response_text, re.DOTALL)
+            error_list_match = re.search(r"<errorList>(.*?)</errorList>", response_text, re.DOTALL)
+
+            message = message_match.group(1).strip() if message_match else ""
+            error_list = error_list_match.group(1).strip() if error_list_match else ""
+
+            # 4️⃣ Handle response status
+            if send_resp.status_code >= 400:
+                return {
+                    "invoice_id": invoice_id,
+                    "status": "error",
+                    "akt_id": akt_id,
+                    "error": f"Upload failed: {message or error_list or response_text}"
+                }
+
+            return {
+                "invoice_id": invoice_id,
+                "status": "success",
+                "akt_id": akt_id,
+                "error": None
+            }
+
+    except Exception as e:
+        logger.error(f"❌ Error sending invoice {invoice_id}: {e}")
+        return {
+            "invoice_id": invoice_id,
+            "status": "error",
+            "akt_id": None,
+            "error": str(e)
+        }
 async def auto_correct_xml_with_ai(xml_content: str, strict_validation: bool) -> tuple[bool, str]:
     """
     Use AI (GPT) to analyze and correct XML structure or content issues.
@@ -2255,6 +2374,20 @@ async def _process_invoice_internal(
         logger.info(f"📤 Returning 201 Created for tracking ID {tracking_id}")
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
+        logger.info("NOW TRYING EXTERNAL SAVE")
+        try:
+            file_content = await read_file_from_storage(None,blob_xml_path,None)
+            format_type = 'xml'
+            invoice_id = tracking_id
+            results_external = send_file_to_external(file_content,format_type,invoice_id)
+            logger.info(str(results_external))
+            logger.info("THE EXTERNAL UPLOAD was successful")
+        except:
+            traceback.print_exc()
+            logger.error("ERROR IN EXTERNAL")
+            
+            
+            
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
         return Response(
             content=json.dumps(response_dict),
