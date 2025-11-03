@@ -2163,13 +2163,7 @@ async def _process_invoice_internal(
                 
                 
                 
-                # Call the AI fixer
-                was_fixed, corrected_edi = await auto_fix_edi_with_ai(
-                    xml_content=xml_content,
-                    edi_content=edi_content,
-                    edi_errors=edi_format_errors,   # pass structured validation errors
-                    strict_validation=True
-                )
+                
 
                 if was_fixed:
                     
@@ -2240,7 +2234,7 @@ async def _process_invoice_internal(
             
                 logger.info(f"💾 Saving failed invoice to database...")
             
-            # Determine blob paths for XML and EDI files
+                # Determine blob paths for XML and EDI files
                 blob_xml_path = None
                 blob_edi_path = None
                 
@@ -2377,20 +2371,24 @@ async def _process_invoice_internal(
         logger.info(f"📤 Returning 201 Created for tracking ID {tracking_id}")
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
-        results_external = None
+        results_external = ""
         logger.info("NOW TRYING EXTERNAL SAVE")
         
         try:
-            file_content = await read_file_from_storage(None,blob_xml_path,None)
+            #file_content = await read_file_from_storage(None,xml_path,None)
+            with open('uploads/0b0ff450-fd6e-4e1f-b4ad-e2a07f3f1c74_0090040320_PEPPOL.xml','r') as xaml:
+                file_content = xaml.read()
             format_type = 'xml'
-            invoice_id = tracking_id
-            results_external = send_file_to_external(file_content,format_type,invoice_id)
+            invoice_id = str(tracking_id)
+            results_external = await send_file_to_external(file_content,invoice_id,format_type)
             logger.info(str(results_external))
             logger.info("THE EXTERNAL UPLOAD was successful")
+            
         except:
             
             
             logger.error("ERROR IN EXTERNAL")
+            
             
             
         response_dict['results_external'] = results_external    
@@ -2977,7 +2975,7 @@ async def get_failed_invoices(
             )
             
             # Add computed fields after model creation
-            logging.info(f"This is xml content {xml_content}")
+            #logging.info(f"This is xml content {xml_content}")
             invoice.xml_content = xml_content
             invoice.edi_content = edi_content
             
