@@ -2357,7 +2357,7 @@ async def _process_invoice_internal(
                 blob_xml_path=blob_xml_path,
                 blob_edi_path=blob_edi_path,
                 request_type=request_type,
-                external_api_call =results_external
+                
             )
             db.add(success_invoice)
             db.commit()
@@ -2832,7 +2832,7 @@ def get_successful_invoices(
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
                xml_validation_pass, xml_convert_message, edi_path, 
                edi_convert_pass, edi_convert_message, processing_steps_error,
-               blob_xml_path, blob_edi_path,external_api_call
+               blob_xml_path, blob_edi_path
         FROM zodiac_invoice_success_edi 
         WHERE user_id = :user_id AND deleted_at IS NULL
         ORDER BY uploaded_at DESC 
@@ -2860,8 +2860,8 @@ def get_successful_invoices(
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=row.processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path,
-                external_api_call= row.external_api_call
+                blob_edi_path=row.blob_edi_path
+               
             )
             
             # Add computed fields after model creation
