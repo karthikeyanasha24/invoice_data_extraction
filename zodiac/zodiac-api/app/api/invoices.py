@@ -2209,7 +2209,7 @@ async def _process_invoice_internal(
                         logger.info("✅ AI correction successful — EDI passed re-validation.")
                         edi_format_valid = True
                         edi_format_message = "AI correction successful and EDI passed format validation."
-                        x12_path = str(ai_fixed_path)
+                        #x12_path = str(ai_fixed_path)
                     else:
                         logger.warning("⚠️ AI attempted correction, but EDI still failed format validation.")
                 else:
