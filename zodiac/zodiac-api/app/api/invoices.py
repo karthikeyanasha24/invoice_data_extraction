@@ -2387,7 +2387,7 @@ async def _process_invoice_internal(
             logger.info("THE EXTERNAL UPLOAD was successful")
         except:
             
-            traceback.print_exc()
+            
             logger.error("ERROR IN EXTERNAL")
             
             
