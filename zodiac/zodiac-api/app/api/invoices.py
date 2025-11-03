@@ -2201,7 +2201,8 @@ async def _process_invoice_internal(
                         edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = await validate_edi_format(ai_fixed_path)
                     except:
                         edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = True, False, False
-                        traceback.print_exc()
+                        #traceback.print_exc()
+                        
                         
 
                     if edi_format_valid_retry:
