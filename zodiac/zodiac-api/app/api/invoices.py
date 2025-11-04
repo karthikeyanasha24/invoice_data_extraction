@@ -148,6 +148,111 @@ if not USE_BLOB_STORAGE:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     EDI_DIR.mkdir(parents=True, exist_ok=True)
 
+def check_customer_table(cust_id,cust_name):
+    table =[
+        {
+            "id": 23,
+            "customer_id": "DUT830629UQ3",
+            "format": "EDIFACT",
+            "api_address": "nan"
+        },
+        {
+            "id": 25,
+            "customer_id": "DE875243162",
+            "format": "x12",
+            "api_address": "http://api1.com"
+        },
+        {
+            "id": 26,
+            "customer_id": "30204008000007",
+            "format": "x12",
+            "api_address": "nan"
+        },
+        {
+            "id": 28,
+            "customer_id": "50019912190742123",
+            "format": "x12",
+            "api_address": "NULL"
+        },
+        {
+            "id": 29,
+            "customer_id": "865463",
+            "format": "x12",
+            "api_address": "nan"
+        },
+        {
+            "id": 31,
+            "customer_id": "abcd",
+            "format": "edifact",
+            "api_address": "nan"
+        },
+        {
+            "id": 32,
+            "customer_id": "efgh",
+            "format": "X12_embed",
+            "api_address": "nan"
+        },
+        {
+            "id": 34,
+            "customer_id": "ed123fgh",
+            "format": "xml",
+            "api_address": "http://api1.com"
+        },
+        {
+            "id": 35,
+            "customer_id": "50019912190742096",
+            "format": "x12",
+            "api_address": "nan"
+        },
+        {
+            "id": 36,
+            "customer_id": "7508006147017",
+            "format": "x12",
+            "api_address": "http://api2.com"
+        }
+        ]
+    for x in table:
+        try:
+            if x['customer_id'] == cust_id:
+                return format
+            elif x['customer_id'] == cust_name:
+                return format
+        except:
+            return 'edifact'
+def extract_supplier_info_from_string(xml_content: str) -> tuple[str | None, str | None]:
+    """
+    Extract supplier (customer) ID and name from a UBL XML string.
+    """
+    namespaces = {
+        'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+        'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+    }
+
+    try:
+        # Parse directly from XML string
+        root = etree.fromstring(xml_content.encode('utf-8'))
+
+        # Navigate to the supplier (customer) party element
+        supplier_party = root.find('.//cac:AccountingCustomerParty/cac:Party', namespaces)
+
+        if supplier_party is not None:
+            # Extract ID
+            customer_id_elem = supplier_party.find('cac:PartyIdentification/cbc:ID', namespaces)
+            customer_id = customer_id_elem.text if customer_id_elem is not None else None
+
+            # Extract Name
+            customer_name_elem = supplier_party.find('cac:PartyName/cbc:Name', namespaces)
+            customer_name = customer_name_elem.text if customer_name_elem is not None else None
+
+            return customer_id,customer_name
+
+        return None,None
+
+    except Exception as e:
+        print(f"Error parsing XML: {e}")
+        return None, None
+
+
 async def send_file_to_external(
     file_content: str,
     invoice_id: str,
@@ -2326,12 +2431,18 @@ async def _process_invoice_internal(
             else:
                 logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
             logger.info("NOW TRYING EXTERNAL SAVE")
-        
+            try:
+                customer_id,customer_name = extract_supplier_info_from_string(xml_content)
+                format_type = (check_customer_table(customer_id,customer_name)).lower()
+            except:
+                logging.info("ERROR IN GETTING FORMAT")
+                format_type = 'edifact'
+            logging.info(f"The format will be {format_type}")
             try:
                 logging.info(f"printing the xml_path {xml_content}")
                 file_content = xml_content
                 
-                format_type = 'xml'
+                
                 invoice_id = str(tracking_id)
                 results_external = await send_file_to_external(file_content,invoice_id,format_type)
                 logger.info(str(results_external))
