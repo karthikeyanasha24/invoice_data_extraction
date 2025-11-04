@@ -5,7 +5,7 @@ import vercel_blob
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from typing import Optional, Union
 import uuid
 import os
@@ -2357,6 +2357,9 @@ async def _process_invoice_internal(
                 blob_xml_path=blob_xml_path,
                 blob_edi_path=blob_edi_path,
                 request_type=request_type,
+                external_status = results_external.get('status'),
+                external_message = results_external.get('error',"No error")
+                
                 
             )
             db.add(success_invoice)
@@ -2394,6 +2397,7 @@ async def _process_invoice_internal(
         results_external = ""
             
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
+        response_dict['external_upload_status'] = results_external
         return Response(
             content=json.dumps(response_dict),
             status_code=status.HTTP_201_CREATED,
@@ -2828,22 +2832,46 @@ def get_successful_invoices(
     """Get successfully processed invoices for current user"""
     try:
         # Use raw SQL to avoid schema issues
-        query = """
-        SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
-               xml_validation_pass, xml_convert_message, edi_path, 
-               edi_convert_pass, edi_convert_message, processing_steps_error,
-               blob_xml_path, blob_edi_path
-        FROM zodiac_invoice_success_edi 
-        WHERE user_id = :user_id AND deleted_at IS NULL
-        ORDER BY uploaded_at DESC 
-        LIMIT :limit OFFSET :offset
+        inspector = inspect(db.bind)
+        columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_success_edi")]
+
+        # Determine if columns exist
+        has_external_status = "external_status" in columns
+        has_external_message = "external_message" in columns
+
+        # Build query dynamically
+        query = f"""
+            SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
+                xml_validation_pass, xml_convert_message, edi_path, 
+                edi_convert_pass, edi_convert_message, processing_steps_error,
+                blob_xml_path, blob_edi_path,
+                {"external_status" if has_external_status else "'False' AS external_status"},
+                {"external_message" if has_external_message else "'No msg' AS external_message"}
+            FROM zodiac_invoice_success_edi 
+            WHERE user_id = :user_id AND deleted_at IS NULL
+            ORDER BY uploaded_at DESC 
+            LIMIT :limit OFFSET :offset
         """
+        # query = """
+        # SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
+        #        xml_validation_pass, xml_convert_message, edi_path, 
+        #        edi_convert_pass, edi_convert_message, processing_steps_error,
+        #        blob_xml_path, blob_edi_path
+        # FROM zodiac_invoice_success_edi 
+        # WHERE user_id = :user_id AND deleted_at IS NULL
+        # ORDER BY uploaded_at DESC 
+        # LIMIT :limit OFFSET :offset
+        # """
         result = db.execute(text(query), {
             "user_id": current_user.id,
             "limit": limit,
             "offset": skip
         }).fetchall()
-        
+        for row in result:
+            print("🧾 external_status:", getattr(row, "external_status", None))
+            print("🧾 external_message:", getattr(row, "external_message", None))
+            
+            
         # Convert to model instances
         invoices = []
         for row in result:
@@ -2860,7 +2888,9 @@ def get_successful_invoices(
                 edi_convert_message=row.edi_convert_message,
                 processing_steps_error=row.processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
-                blob_edi_path=row.blob_edi_path
+                blob_edi_path=row.blob_edi_path,
+                external_status = row.external_status,
+                external_message = row.external_message
                
             )
             
@@ -2868,7 +2898,7 @@ def get_successful_invoices(
             invoice.xml_content = ""  # Successful invoices don't need content in list view
             invoice.edi_content = ""  # Successful invoices don't need content in list view
             invoices.append(invoice)
-        
+        logger.info(f"INVOICES {invoices}")
         return invoices
     except Exception as e:
         logger.error(f"❌ Error getting successful invoices: {str(e)}")

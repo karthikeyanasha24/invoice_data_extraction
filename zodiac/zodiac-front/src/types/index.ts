@@ -102,6 +102,8 @@ export interface Invoice {
   use_blob_storage?: boolean;
   xml_content?: string;
   edi_content?: string;
+  external_status?: string;
+  external_message?: string;
 }
 
 export interface FailedInvoiceDetails {

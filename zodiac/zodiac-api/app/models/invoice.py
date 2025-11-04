@@ -27,7 +27,8 @@ class ZodiacInvoiceSuccessEdi(Base):
     blob_edi_path = Column(Text, nullable=True)
     # Request type: 'web' or 'api'
     request_type = Column(String, default='web', nullable=False)
-    
+    external_status= Column(String,default = 'False',nullable=True)
+    external_message = Column(String,default='No msg',nullable=True)
     
     # Relationships
     user = relationship("ZodiacUser", back_populates="successful_invoices")

@@ -79,6 +79,8 @@ class ZodiacInvoiceSuccessEdi(BaseModel):
     blob_edi_path: Optional[str] = None
     xml_content: Optional[str] = None
     edi_content: Optional[str] = None
+    external_status: Optional[str] = None
+    external_message: Optional[str] = None
     
     class Config:
         from_attributes = True

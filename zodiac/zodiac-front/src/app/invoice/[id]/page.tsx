@@ -226,6 +226,18 @@ export default function InvoiceDetailsPage() {
                   <span className="text-sm font-medium text-gray-500">Export Format:</span>
                   <p className="text-sm text-gray-900">{invoice.export ? 'EDI' : 'N/A'}</p>
                 </div>
+
+                <div>
+                  <span className="text-sm font-medium text-gray-500">Export Status:</span>
+                  <p className="text-sm text-gray-900">{invoice.external_status ? invoice.external_status : 'N/A'}</p>
+                </div>
+
+                <div>
+                  <span className="text-sm font-medium text-gray-500">Export Message:</span>
+                  <p className="text-sm text-gray-900">{invoice.external_message? invoice.external_message : 'N/A'}</p>
+                </div>
+
+
               </div>
             </div>
           </div>

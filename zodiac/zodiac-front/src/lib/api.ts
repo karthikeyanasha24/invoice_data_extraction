@@ -462,7 +462,9 @@ export const fileApi = {
             edi_path: ediPath,
             blob_xml_path: invoice.blob_xml_path,
             blob_edi_path: invoice.blob_edi_path,
-            use_blob_storage: invoice.use_blob_storage
+            use_blob_storage: invoice.use_blob_storage,
+            external_status: invoice?.external_status,
+            external_message: invoice?.external_message,
           };
         }),
         ...failedInvoices.map((invoice: any) => {
