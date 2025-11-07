@@ -27,6 +27,7 @@ from ..schemas.invoice import InvoiceProcessingResponse, ErrorDetail, Processing
 from ..api.api_key_auth import get_api_user_optional, get_client_ip, get_api_user
 from ..api.auth import get_current_user, get_current_user_optional
 import re
+from.utils import extract_invoice_info
 
 router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
 client = OpenAI(api_key=os.getenv("OPEN_AI_KEY"))
@@ -3008,7 +3009,24 @@ def get_successful_invoices(
             # Add computed fields after model creation
             invoice.xml_content = ""  # Successful invoices don't need content in list view
             invoice.edi_content = ""  # Successful invoices don't need content in list view
-            invoices.append(invoice)
+            invoice.info = {}
+            data = vars(invoice).copy()
+            data.pop("_sa_instance_state", None)
+
+            # Safely extract and merge invoice info
+            try:
+                info = extract_invoice_info(row.blob_edi_path)
+                invoice.info = info
+
+                invoice.edi_content = info or {}
+                if isinstance(info, dict):
+                    data.update(info)
+
+            except Exception as info_err:
+                logger.warning(
+                    f"⚠️ Failed to extract invoice info for {row.tracking_id}: {info_err}"
+                )
+            invoices.append(data)
         logger.info(f"INVOICES {invoices}")
         return invoices
     except Exception as e:
