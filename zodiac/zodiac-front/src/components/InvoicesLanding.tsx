@@ -5,11 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { fileApi } from '@/lib/api';
 import { Invoice } from '@/types';
-import { 
-  FileText, 
-  Search, 
-  Download, 
-  Trash2, 
+import {
+  FileText,
+  Search,
+  Download,
+  Trash2,
   Eye,
   MessageCircle,
   Share2,
@@ -34,7 +34,7 @@ export default function InvoicesLanding() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
-  
+
   // Delete confirmation modal state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedInvoiceToDelete, setSelectedInvoiceToDelete] = useState<Invoice | null>(null);
@@ -52,6 +52,7 @@ export default function InvoicesLanding() {
   const fetchInvoices = async () => {
     try {
       const data = await fileApi.getFiles();
+      console.log(data, "data invoices")
       setInvoices(data);
     } catch (error: any) {
       console.error('Failed to fetch invoices:', error);
@@ -74,19 +75,20 @@ export default function InvoicesLanding() {
       }
     }
   };
+  console.log(invoices, "invoices initial")
 
   // Filter and search invoices based on current view
-  const filteredInvoices = showRecycleBin 
+  const filteredInvoices = showRecycleBin
     ? deletedInvoices.filter(invoice => {
-        const matchesSearch = invoice.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                             invoice.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
-        return matchesSearch;
-      })
+      const matchesSearch = invoice.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        invoice.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
+      return matchesSearch;
+    })
     : invoices.filter(invoice => {
-        const matchesSearch = invoice.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                             invoice.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
-        return matchesSearch && invoice.status !== 'deleted';
-      });
+      const matchesSearch = invoice.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        invoice.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
+      return matchesSearch && invoice.status !== 'deleted';
+    });
 
   const handleDeleteInvoice = async (invoice: Invoice) => {
     console.log('🗑️ InvoicesLanding - Requesting to delete invoice:', invoice.id);
@@ -149,10 +151,19 @@ export default function InvoicesLanding() {
     router.push('/export');
   };
 
-  const handleDownloadClick = (invoice: Invoice) => {
-    // TODO: Implement actual download functionality
-    console.log('📥 Downloading invoice:', invoice.id);
-    // For now, just show a message or implement actual download
+  const handleDownloadClick = async(invoice: Invoice) => {
+    const fileUrl = invoice.blob_edi_path
+      const response = await fetch(fileUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const uniqueNumber = Date.now()
+      a.download = `edi_file_${uniqueNumber}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
   };
 
   const handlePermanentDeleteClick = (invoice: Invoice) => {
@@ -167,10 +178,11 @@ export default function InvoicesLanding() {
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
   const paginatedInvoices = filteredInvoices.slice(startIndex, endIndex);
+  console.log(paginatedInvoices, "these are paginat")
 
   const getStatusColor = (status?: string) => {
     if (!status) return 'bg-gray-100 text-gray-800';
-    
+
     switch (status.toLowerCase()) {
       case 'successful':
       case 'completed':
@@ -224,7 +236,7 @@ export default function InvoicesLanding() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div 
+        <div
           className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
           onClick={() => {
             console.log('📊 Total invoices card clicked');
@@ -242,7 +254,7 @@ export default function InvoicesLanding() {
         </div>
         {!showRecycleBin && (
           <>
-            <div 
+            <div
               className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => {
                 console.log('📊 Completed invoices card clicked');
@@ -259,7 +271,7 @@ export default function InvoicesLanding() {
                 </div>
               </div>
             </div>
-            <div 
+            <div
               className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => {
                 console.log('📊 Failed invoices card clicked');
@@ -276,7 +288,7 @@ export default function InvoicesLanding() {
                 </div>
               </div>
             </div>
-            <div 
+            <div
               className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => {
                 console.log('📊 Deleted invoices card clicked - showing recycle bin');
@@ -296,7 +308,7 @@ export default function InvoicesLanding() {
         )}
         {showRecycleBin && (
           <>
-            <div 
+            <div
               className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => {
                 console.log('📊 Can Restore card clicked');
@@ -311,7 +323,7 @@ export default function InvoicesLanding() {
                 </div>
               </div>
             </div>
-            <div 
+            <div
               className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => {
                 console.log('📊 Can Delete Permanently card clicked');
@@ -326,7 +338,7 @@ export default function InvoicesLanding() {
                 </div>
               </div>
             </div>
-            <div 
+            <div
               className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => {
                 console.log('📊 Active Invoices card clicked - going back to main view');
@@ -378,8 +390,8 @@ export default function InvoicesLanding() {
               onClick={() => setShowRecycleBin(!showRecycleBin)}
               className={cn(
                 "flex items-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer",
-                showRecycleBin 
-                  ? "bg-red-100 text-red-700 hover:bg-red-200" 
+                showRecycleBin
+                  ? "bg-red-100 text-red-700 hover:bg-red-200"
                   : "bg-gray-100 text-gray-700 hover:bg-gray-200"
               )}
             >
@@ -399,9 +411,9 @@ export default function InvoicesLanding() {
               {showRecycleBin ? 'No deleted invoices found' : 'No invoices found'}
             </h3>
             <p className="text-gray-500">
-              {searchTerm 
+              {searchTerm
                 ? 'Try adjusting your search criteria'
-                : showRecycleBin 
+                : showRecycleBin
                   ? 'No invoices have been deleted yet'
                   : 'Upload your first invoice to get started'
               }
@@ -412,6 +424,7 @@ export default function InvoicesLanding() {
             <table className="w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice ID</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Format</th>
@@ -421,99 +434,102 @@ export default function InvoicesLanding() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {paginatedInvoices.map((invoice, index) => (
-                    <tr key={invoice.id || `invoice-${index}`} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {invoice.customerName || 'N/A'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={cn("inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", getStatusColor(invoice.status))}>
-                          {getStatusIcon(invoice.status)}
-                          <span className="ml-1">{invoice.status || 'Unknown'}</span>
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {invoice.formate || 'N/A'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {showRecycleBin 
-                          ? (invoice.deleted_at ? new Date(invoice.deleted_at).toLocaleDateString() : 'N/A')
-                          : (invoice.uploaded_at ? new Date(invoice.uploaded_at).toLocaleDateString() : 'N/A')
-                        }
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        <div className="flex items-center space-x-2">
-                          {showRecycleBin ? (
-                            <>
-                              <button 
-                                onClick={() => handleRestoreInvoice(invoice)}
-                                className="p-1 text-gray-400 hover:text-green-600 transition-colors cursor-pointer" 
-                                title="Restore Document"
+              <tbody className="bg-white divide-y divide-gray-200">
+                {paginatedInvoices.map((invoice, index) => (
+                  <tr key={invoice.id || `invoice-${index}`} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {invoice.invoice_id || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {invoice.customerName || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={cn("inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", getStatusColor(invoice.status))}>
+                        {getStatusIcon(invoice.status)}
+                        <span className="ml-1">{invoice.status || 'Unknown'}</span>
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {invoice.formate || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {showRecycleBin
+                        ? (invoice.deleted_at ? new Date(invoice.deleted_at).toLocaleDateString() : 'N/A')
+                        : (invoice.uploaded_at ? new Date(invoice.uploaded_at).toLocaleDateString() : 'N/A')
+                      }
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <div className="flex items-center space-x-2">
+                        {showRecycleBin ? (
+                          <>
+                            <button
+                              onClick={() => handleRestoreInvoice(invoice)}
+                              className="p-1 text-gray-400 hover:text-green-600 transition-colors cursor-pointer"
+                              title="Restore Document"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handlePermanentDeleteClick(invoice)}
+                              className="p-1 text-gray-400 hover:text-red-600 transition-colors cursor-pointer"
+                              title="Permanently Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => {
+                                const status = invoice.status?.toLowerCase();
+                                if (status === 'failed' || status === 'error') {
+                                  router.push(`/failed-invoice/${invoice.id}?ai=true`);
+                                } else if (status === 'successful' || status === 'completed') {
+                                  router.push(`/invoice/${invoice.id}`);
+                                }
+                              }}
+                              className="p-1 text-gray-400 hover:text-blue-600 transition-colors cursor-pointer"
+                              title="View Details"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            {(invoice.status === 'successful' || invoice.status === 'completed') && (
+                              <button
+                                onClick={() => handleDownloadClick(invoice)}
+                                className="p-1 text-gray-400 hover:text-green-600 transition-colors cursor-pointer"
+                                title="Download"
                               >
-                                <RotateCcw className="h-4 w-4" />
+                                <Download className="h-4 w-4" />
                               </button>
-                              <button 
-                                onClick={() => handlePermanentDeleteClick(invoice)}
-                                className="p-1 text-gray-400 hover:text-red-600 transition-colors cursor-pointer" 
-                                title="Permanently Delete"
+                            )}
+                            {(invoice.status === 'failed' || invoice.status === 'error') && (
+                              <button
+                                onClick={() => router.push(`/failed-invoice/${invoice.id}?ai=true`)}
+                                className="p-1 text-gray-400 hover:text-purple-600 transition-colors cursor-pointer"
+                                title="Get AI Help"
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <MessageCircle className="h-4 w-4" />
                               </button>
-                            </>
-                          ) : (
-                            <>
-                              <button 
-                                onClick={() => {
-                                  const status = invoice.status?.toLowerCase();
-                                  if (status === 'failed' || status === 'error') {
-                                    router.push(`/failed-invoice/${invoice.id}?ai=true`);
-                                  } else if (status === 'successful' || status === 'completed') {
-                                    router.push(`/invoice/${invoice.id}`);
-                                  }
-                                }}
-                                className="p-1 text-gray-400 hover:text-blue-600 transition-colors cursor-pointer" 
-                                title="View Details"
-                              >
-                                <Eye className="h-4 w-4" />
-                              </button>
-                              {(invoice.status === 'successful' || invoice.status === 'completed') && (
-                                <button 
-                                  onClick={() => handleDownloadClick(invoice)}
-                                  className="p-1 text-gray-400 hover:text-green-600 transition-colors cursor-pointer" 
-                                  title="Download"
-                                >
-                                  <Download className="h-4 w-4" />
-                                </button>
-                              )}
-                              {(invoice.status === 'failed' || invoice.status === 'error') && (
-                                <button 
-                                  onClick={() => router.push(`/failed-invoice/${invoice.id}?ai=true`)}
-                                  className="p-1 text-gray-400 hover:text-purple-600 transition-colors cursor-pointer" 
-                                  title="Get AI Help"
-                                >
-                                  <MessageCircle className="h-4 w-4" />
-                                </button>
-                              )}
-                              <button 
-                                onClick={() => {
-                                  console.log('🗑️ Delete button clicked for invoice:', invoice.id, invoice.filename);
-                                  handleDeleteInvoice(invoice);
-                                }}
-                                className="p-1 text-gray-400 hover:text-red-600 transition-colors cursor-pointer" 
-                                title="Delete Invoice"
-                                disabled={isDeleting}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                            )}
+                            <button
+                              onClick={() => {
+                                console.log('🗑️ Delete button clicked for invoice:', invoice.id, invoice.filename);
+                                handleDeleteInvoice(invoice);
+                              }}
+                              className="p-1 text-gray-400 hover:text-red-600 transition-colors cursor-pointer"
+                              title="Delete Invoice"
+                              disabled={isDeleting}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
             {/* Pagination */}
             <Pagination

@@ -56,16 +56,23 @@ export default function InvoiceDetailsPage() {
       setLoading(false);
     }
   };
-
   const handleDownload = async () => {
     if (!invoice) return;
+    const fileUrl = invoice.blob_edi_path
     
     setDownloading(true);
     try {
-      // In a real implementation, this would download the actual EDI file
-      console.log('Downloading invoice:', invoice.filename);
-      // For now, just simulate download
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const response = await fetch(fileUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const uniqueNumber = Date.now()
+      a.download = `edi_file_${uniqueNumber}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Download failed:', error);
     } finally {
