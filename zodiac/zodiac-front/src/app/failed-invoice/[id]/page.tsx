@@ -766,8 +766,102 @@ export default function FailedInvoicePage() {
                         </div>
                       )}
 
-                      {/* File Content Preview - Only show if content is available */}
-                      {invoice.file_content_preview && (
+                      {/* XML Content with Edit Functionality - Only show if XML validation failed */}
+                      {!invoice.xml_validation_pass && invoice.xml_content && (
+                        <div className="space-y-4">
+                          <h5 className="text-sm font-medium text-gray-900">Original XML File</h5>
+                          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                            <div className="text-sm text-gray-600 mb-2">
+                              File: {invoice.xml_path}
+                              {invoice.xml_path?.startsWith('http') && (
+                                <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                  🌐 Blob Storage
+                                </span>
+                              )}
+                              {invoice.xml_path?.startsWith('uploads') && (
+                                <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                  📁 Local Storage
+                                </span>
+                              )}
+                            </div>
+                            <div className="bg-white border border-gray-200 rounded-lg p-3 max-h-96 overflow-auto transition-all duration-300 shadow-sm">
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="font-semibold text-blue-700">XML Content</span>
+                                <div className="flex space-x-2">
+                                  <button
+                                    onClick={() => setIsEditing(!isEditing)}
+                                    className="text-blue-600 hover:underline text-xs"
+                                  >
+                                    {isEditing ? "🔒 View" : "✏️ Edit"}
+                                  </button>
+                                  <button
+                                    onClick={handleBeautify}
+                                    disabled={!xmlContent}
+                                    className="text-purple-600 hover:underline text-xs"
+                                  >
+                                    🪄 Pretty Print
+                                  </button>
+                                  <button
+                                    onClick={handleMinify}
+                                    disabled={!xmlContent}
+                                    className="text-orange-600 hover:underline text-xs"
+                                  >
+                                    🗜 Minify
+                                  </button>
+                                  {isEditing && (
+                                    <>
+                                      <button
+                                        onClick={handleSave}
+                                        className="text-green-600 hover:underline text-xs"
+                                      >
+                                        💾 Save
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setXmlContent(invoice?.xml_content || "");
+                                          setIsEditing(false);
+                                        }}
+                                        className="text-gray-600 hover:underline text-xs"
+                                      >
+                                        ❌ Cancel
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* ✅ View Mode */}
+                              {!isEditing ? (
+                                <pre
+                                  className="whitespace-pre-wrap text-xs font-mono bg-gray-50 p-2 rounded overflow-x-auto border border-gray-100"
+                                  dangerouslySetInnerHTML={{
+                                    __html: highlightXml(xmlContent || ""),
+                                  }}
+                                />
+                              ) : (
+                                <textarea
+                                  value={xmlContent}
+                                  onChange={(e) => setXmlContent(e.target.value)}
+                                  className="w-full h-72 border rounded p-2 bg-white text-sm resize-vertical focus:ring-2 focus:ring-blue-400 font-mono"
+                                />
+                              )}
+
+                              <div className="mt-2 text-xs">
+                                {xmlContent ? (
+                                  <span className="text-green-600">
+                                    ✅ XML loaded ({xmlContent.length} characters)
+                                  </span>
+                                ) : (
+                                  <span className="text-red-600">❌ XML not available</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* File Content Preview - Fallback if xml_content is not available */}
+                      {!invoice.xml_validation_pass && !invoice.xml_content && invoice.file_content_preview && (
                         <div className="border rounded-lg">
                           <div className="bg-gray-50 px-4 py-2 border-b">
                             <h4 className="text-sm font-medium text-gray-900">XML File Content</h4>
@@ -865,12 +959,15 @@ export default function FailedInvoicePage() {
                                         <div className="flex justify-between items-center mb-2">
                                           <span className="font-semibold text-blue-700">XML Content</span>
                                           <div className="flex space-x-2">
-                                            <button
-                                              onClick={() => setIsEditing(!isEditing)}
-                                              className="text-blue-600 hover:underline text-xs"
-                                            >
-                                              {isEditing ? "🔒 View" : "✏️ Edit"}
-                                            </button>
+                                            {/* Only show Edit button if XML validation failed */}
+                                            {!invoice.xml_validation_pass && (
+                                              <button
+                                                onClick={() => setIsEditing(!isEditing)}
+                                                className="text-blue-600 hover:underline text-xs"
+                                              >
+                                                {isEditing ? "🔒 View" : "✏️ Edit"}
+                                              </button>
+                                            )}
                                             <button
                                               onClick={handleBeautify}
                                               disabled={!xmlContent}
@@ -885,7 +982,7 @@ export default function FailedInvoicePage() {
                                             >
                                               🗜 Minify
                                             </button>
-                                            {isEditing && (
+                                            {isEditing && !invoice.xml_validation_pass && (
                                               <>
                                                 <button
                                                   onClick={handleSave}
@@ -908,7 +1005,7 @@ export default function FailedInvoicePage() {
                                         </div>
 
                                         {/* ✅ View Mode */}
-                                        {!isEditing ? (
+                                        {!isEditing || invoice.xml_validation_pass ? (
                                           <pre
                                             className="whitespace-pre-wrap text-xs font-mono bg-gray-50 p-2 rounded overflow-x-auto border border-gray-100"
                                             dangerouslySetInnerHTML={{

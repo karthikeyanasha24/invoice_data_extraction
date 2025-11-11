@@ -1,3 +1,11 @@
+from .utils import extract_invoice_info
+import re
+from ..api.auth import get_current_user, get_current_user_optional
+from ..api.api_key_auth import get_api_user_optional, get_client_ip, get_api_user
+from ..schemas.invoice import InvoiceProcessingResponse, ErrorDetail, ProcessingStepResult, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse
+from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
+from ..models.user import ZodiacUser, generate_api_key, hash_api_key, verify_api_key, encode_api_key_for_transport, decode_api_key_from_transport
+from ..database import get_db
 from enum import Enum
 import traceback
 import httpx
@@ -20,14 +28,6 @@ from openai import OpenAI
 # Load environment variables
 load_dotenv()
 
-from ..database import get_db
-from ..models.user import ZodiacUser, generate_api_key, hash_api_key, verify_api_key, encode_api_key_for_transport, decode_api_key_from_transport
-from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
-from ..schemas.invoice import InvoiceProcessingResponse, ErrorDetail, ProcessingStepResult, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse
-from ..api.api_key_auth import get_api_user_optional, get_client_ip, get_api_user
-from ..api.auth import get_current_user, get_current_user_optional
-import re
-from.utils import extract_invoice_info
 
 router = APIRouter(prefix="/invoices", tags=["invoice-processing"])
 client = OpenAI(api_key=os.getenv("OPEN_AI_KEY"))
@@ -43,7 +43,8 @@ except ImportError:
     VERCEL_BLOB_AVAILABLE = False
 
 if not VERCEL_BLOB_AVAILABLE:
-    logger.warning("⚠️ Vercel Blob not available - will use local storage only")
+    logger.warning(
+        "⚠️ Vercel Blob not available - will use local storage only")
 
 # Environment configuration
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
@@ -52,20 +53,26 @@ BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 # Determine if we MUST use blob storage (PROD + token provided)
 MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None
 USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
+
+
 class FormatEnum(str, Enum):
     xml = "xml"
     x12 = "x12"
     x12embed = "x12_embed"
     edifact = "edifact"
+
+
 # Detailed logging for file storage selection
 logger.info("=" * 60)
 logger.info("🗂️ FILE STORAGE CONFIGURATION")
 logger.info("=" * 60)
 logger.info(f"🌍 DEPLOY_ENV: {DEPLOY_ENV}")
-logger.info(f"🔑 BLOB_READ_WRITE_TOKEN: {'✅ Set' if BLOB_READ_WRITE_TOKEN else '❌ Not set'}")
+logger.info(
+    f"🔑 BLOB_READ_WRITE_TOKEN: {'✅ Set' if BLOB_READ_WRITE_TOKEN else '❌ Not set'}")
 logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
 logger.info(f"🎯 DEPLOY_ENV == 'PROD': {DEPLOY_ENV == 'PROD'}")
-logger.info(f"🔑 BLOB_READ_WRITE_TOKEN is not None: {BLOB_READ_WRITE_TOKEN is not None}")
+logger.info(
+    f"🔑 BLOB_READ_WRITE_TOKEN is not None: {BLOB_READ_WRITE_TOKEN is not None}")
 logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
 logger.info(f"🚨 MUST_USE_BLOB_STORAGE: {MUST_USE_BLOB_STORAGE}")
 logger.info(f"✅ FINAL DECISION - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
@@ -75,8 +82,10 @@ if MUST_USE_BLOB_STORAGE:
     logger.info("📋 Reason: DEPLOY_ENV=PROD and BLOB_READ_WRITE_TOKEN provided")
     if not VERCEL_BLOB_AVAILABLE:
         logger.error("❌ CRITICAL ERROR: Vercel Blob package not available!")
-        logger.error("💥 Cannot proceed - blob storage is mandatory in PROD mode")
-        raise RuntimeError("Vercel Blob package not available but required for PROD deployment")
+        logger.error(
+            "💥 Cannot proceed - blob storage is mandatory in PROD mode")
+        raise RuntimeError(
+            "Vercel Blob package not available but required for PROD deployment")
 else:
     logger.info("📁 OPTIONAL BLOB STORAGE")
     logger.info("ℹ️ Local storage is acceptable for this environment")
@@ -87,9 +96,11 @@ if USE_BLOB_STORAGE:
     logger.info("🌐 Files will be accessible via blob URLs")
 else:
     logger.info("📁 STORAGE MODE: LOCAL FILE STORAGE")
-    logger.info("💾 All files will be stored locally in uploads/ and converted/ directories")
+    logger.info(
+        "💾 All files will be stored locally in uploads/ and converted/ directories")
     if DEPLOY_ENV == "PROD":
-        logger.warning("⚠️ WARNING: Running in PROD mode but using local storage!")
+        logger.warning(
+            "⚠️ WARNING: Running in PROD mode but using local storage!")
         if not BLOB_READ_WRITE_TOKEN:
             logger.warning("⚠️ REASON: BLOB_READ_WRITE_TOKEN not provided")
         if not VERCEL_BLOB_AVAILABLE:
@@ -111,11 +122,14 @@ if USE_BLOB_STORAGE:
         logger.error(f"❌ Failed to initialize Vercel Blob API: {e}")
         logger.error(f"🔍 Error type: {type(e).__name__}")
         logger.error(f"📝 Error details: {str(e)}")
-        
+
         if MUST_USE_BLOB_STORAGE:
-            logger.error("💥 CRITICAL ERROR: Blob storage is mandatory but initialization failed!")
-            logger.error("🚨 Cannot proceed - blob storage is required for PROD deployment")
-            raise RuntimeError(f"Failed to initialize mandatory Vercel Blob API: {str(e)}")
+            logger.error(
+                "💥 CRITICAL ERROR: Blob storage is mandatory but initialization failed!")
+            logger.error(
+                "🚨 Cannot proceed - blob storage is required for PROD deployment")
+            raise RuntimeError(
+                f"Failed to initialize mandatory Vercel Blob API: {str(e)}")
         else:
             logger.error("🔄 Falling back to local file storage")
             USE_BLOB_STORAGE = False
@@ -132,14 +146,16 @@ if USE_BLOB_STORAGE:
     logger.info("📦 Files will be accessible via blob URLs")
     logger.info("🔧 Vercel Blob module ready for use")
     if MUST_USE_BLOB_STORAGE:
-        logger.info("🚨 MANDATORY MODE: Blob storage is required for this deployment")
+        logger.info(
+            "🚨 MANDATORY MODE: Blob storage is required for this deployment")
 else:
     logger.info("✅ LOCAL FILE STORAGE ACTIVE")
     logger.info("📁 All file operations will use local file system")
     logger.info("💾 Files will be stored in uploads/ and converted/ directories")
     logger.info("📂 Local directories created and ready")
     if MUST_USE_BLOB_STORAGE:
-        logger.error("💥 CRITICAL ERROR: Should be using blob storage but it's not available!")
+        logger.error(
+            "💥 CRITICAL ERROR: Should be using blob storage but it's not available!")
 logger.info("=" * 60)
 
 # Create upload directories (only for local storage)
@@ -149,8 +165,9 @@ if not USE_BLOB_STORAGE:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     EDI_DIR.mkdir(parents=True, exist_ok=True)
 
-def check_customer_table(cust_id,cust_name):
-    table =[
+
+def check_customer_table(cust_id, cust_name):
+    table = [
         {
             "id": 23,
             "customer_id": "DUT830629UQ3",
@@ -211,7 +228,7 @@ def check_customer_table(cust_id,cust_name):
             "format": "x12",
             "api_address": "http://api2.com"
         }
-        ]
+    ]
     for x in table:
         try:
             if x['customer_id'] == cust_id:
@@ -220,6 +237,8 @@ def check_customer_table(cust_id,cust_name):
                 return format
         except:
             return 'edifact'
+
+
 def extract_supplier_info_from_string(xml_content: str) -> tuple[str | None, str | None]:
     """
     Extract supplier (customer) ID and name from a UBL XML string.
@@ -234,20 +253,23 @@ def extract_supplier_info_from_string(xml_content: str) -> tuple[str | None, str
         root = etree.fromstring(xml_content.encode('utf-8'))
 
         # Navigate to the supplier (customer) party element
-        supplier_party = root.find('.//cac:AccountingCustomerParty/cac:Party', namespaces)
+        supplier_party = root.find(
+            './/cac:AccountingCustomerParty/cac:Party', namespaces)
 
         if supplier_party is not None:
             # Extract ID
-            customer_id_elem = supplier_party.find('cac:PartyIdentification/cbc:ID', namespaces)
+            customer_id_elem = supplier_party.find(
+                'cac:PartyIdentification/cbc:ID', namespaces)
             customer_id = customer_id_elem.text if customer_id_elem is not None else None
 
             # Extract Name
-            customer_name_elem = supplier_party.find('cac:PartyName/cbc:Name', namespaces)
+            customer_name_elem = supplier_party.find(
+                'cac:PartyName/cbc:Name', namespaces)
             customer_name = customer_name_elem.text if customer_name_elem is not None else None
 
-            return customer_id,customer_name
+            return customer_id, customer_name
 
-        return None,None
+        return None, None
 
     except Exception as e:
         print(f"Error parsing XML: {e}")
@@ -301,7 +323,8 @@ async def send_file_to_external(
         endpoint = EXTERNAL_ENDPOINTS.get(format_type)
 
         if not endpoint:
-            raise ValueError(f"No endpoint configured for format '{format_type}'")
+            raise ValueError(
+                f"No endpoint configured for format '{format_type}'")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             # 1️⃣ Authenticate
@@ -336,11 +359,14 @@ async def send_file_to_external(
             code_match = re.search(r"<code>(\d+)</code>", response_text)
             akt_id = code_match.group(1) if code_match else "unknown"
 
-            message_match = re.search(r"<message>(.*?)</message>", response_text, re.DOTALL)
-            error_list_match = re.search(r"<errorList>(.*?)</errorList>", response_text, re.DOTALL)
+            message_match = re.search(
+                r"<message>(.*?)</message>", response_text, re.DOTALL)
+            error_list_match = re.search(
+                r"<errorList>(.*?)</errorList>", response_text, re.DOTALL)
 
             message = message_match.group(1).strip() if message_match else ""
-            error_list = error_list_match.group(1).strip() if error_list_match else ""
+            error_list = error_list_match.group(
+                1).strip() if error_list_match else ""
 
             # 4️⃣ Handle response status
             if send_resp.status_code >= 400:
@@ -366,6 +392,8 @@ async def send_file_to_external(
             "akt_id": None,
             "error": str(e)
         }
+
+
 async def auto_correct_xml_with_ai(xml_content: str, strict_validation: bool) -> tuple[bool, str]:
     """
     Use AI (GPT) to analyze and correct XML structure or content issues.
@@ -392,10 +420,10 @@ async def auto_correct_xml_with_ai(xml_content: str, strict_validation: bool) ->
 
         corrected_xml = completion.choices[0].message.content.strip()
         try:
-                    corrected_xml = corrected_xml.replace("```xml","")
-                    corrected_xml = corrected_xml.replace("```","")
+            corrected_xml = corrected_xml.replace("```xml", "")
+            corrected_xml = corrected_xml.replace("```", "")
         except:
-                    traceback.print_exc()
+            traceback.print_exc()
         if corrected_xml and corrected_xml != xml_content:
             return True, corrected_xml
         else:
@@ -404,6 +432,7 @@ async def auto_correct_xml_with_ai(xml_content: str, strict_validation: bool) ->
     except Exception as e:
         logger.warning(f"⚠️ AI correction failed: {e}")
         return False, xml_content
+
 
 async def auto_fix_edi_with_ai(
     xml_content: str,
@@ -506,7 +535,8 @@ ERRORS TO FIX:
         corrected_edi = "~".join(fixed_lines)
 
         if corrected_edi and corrected_edi != edi_content:
-            logger.info("✅ AI corrected EDI successfully based on validation rules.")
+            logger.info(
+                "✅ AI corrected EDI successfully based on validation rules.")
             return True, corrected_edi
         else:
             logger.warning("⚠️ AI correction produced no significant changes.")
@@ -515,7 +545,6 @@ ERRORS TO FIX:
     except Exception as e:
         logger.warning(f"⚠️ AI EDI correction failed: {e}")
         return False, edi_content
-    
 
 
 # File storage helper functions
@@ -527,31 +556,35 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
     logger.info(f"📁 Filename: {filename}")
     logger.info(f"📂 Subdirectory: {subdirectory}")
     logger.info(f"📊 File size: {len(file_content)} bytes")
-    logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
+    logger.info(
+        f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
     logger.info(f"🚨 Mandatory blob storage: {MUST_USE_BLOB_STORAGE}")
-    
+
     # Validate mandatory blob storage requirement
     if MUST_USE_BLOB_STORAGE and not USE_BLOB_STORAGE:
-        logger.error("💥 CRITICAL ERROR: Blob storage is mandatory but not available!")
-        logger.error("🚨 Cannot save file - blob storage is required for PROD deployment")
+        logger.error(
+            "💥 CRITICAL ERROR: Blob storage is mandatory but not available!")
+        logger.error(
+            "🚨 Cannot save file - blob storage is required for PROD deployment")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Blob storage is mandatory but not available"
         )
-    
+
     if USE_BLOB_STORAGE:
         try:
             # Use Vercel Blob storage
             blob_path = f"{subdirectory}/{filename}"
             logger.info(f"📦 Saving to Vercel Blob: {blob_path}")
-            logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
-            
+            logger.info(
+                f"🔧 Using vercel_blob module: {vercel_blob is not None}")
+
             # Use vercel_blob.put to upload file
             blob_response = vercel_blob.put(blob_path, file_content)
             logger.info(f"✅ File saved to Vercel Blob successfully!")
             logger.info(f"🌐 Blob Response: {blob_response}")
             logger.info(f"📊 Uploaded {len(file_content)} bytes")
-            
+
             # Return the full blob response for URL extraction
             if isinstance(blob_response, dict):
                 logger.info(f"✅ File saved successfully!")
@@ -567,7 +600,7 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             logger.error(f"❌ Failed to save to Vercel Blob: {e}")
             logger.error(f"🔍 Error type: {type(e).__name__}")
             logger.error(f"📝 Error details: {str(e)}")
-            
+
             # Provide more specific error messages
             if "token" in str(e).lower():
                 error_detail = "Blob storage authentication failed: Invalid or missing token"
@@ -577,7 +610,7 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
                 error_detail = "Blob storage permission error: Insufficient access rights"
             else:
                 error_detail = f"Failed to save file to blob storage: {str(e)}"
-            
+
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=error_detail
@@ -589,19 +622,19 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
             EDI_DIR.mkdir(parents=True, exist_ok=True)
             file_path = target_dir / filename
-            #logger.info(f"👤 Running as user: {os.getlogin()}")
+            # logger.info(f"👤 Running as user: {os.getlogin()}")
             logger.info(f"📂 Attempting to write to: {file_path}")
             logger.info(f"🔒 Write access? {os.access(target_dir, os.W_OK)}")
             logger.info(f"📁 Saving to local storage: {file_path}")
             logger.info(f"📂 Target directory: {target_dir}")
             logger.info(f"📄 Full path: {file_path}")
             logger.info(f"Current path : {os.getcwd()}")
-            
+
             try:
                 with open(file_path, "wb") as buffer:
                     buffer.write(file_content)
             except:
-                with open(os.path.join(os.getcwd(),'uploads',filename),'wb') as buffer:
+                with open(os.path.join(os.getcwd(), 'uploads', filename), 'wb') as buffer:
                     buffer.write(file_content)
             logger.info(f"✅ File saved locally successfully!")
             logger.info(f"📊 Written {len(file_content)} bytes")
@@ -617,9 +650,10 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
                 detail=f"Failed to save file locally: {str(e)}"
             )
 
+
 async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str = None, blob_edi_path: str = None) -> bytes:
     """Read file content from appropriate storage (local or Vercel Blob)
-    
+
     Args:
         file_path: Path to the file (local path or blob pathname)
         blob_xml_path: Blob URL for XML file from database (if available)
@@ -631,34 +665,40 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
     logger.info(f"📁 File path: {file_path}")
     logger.info(f"🌐 Blob XML path: {blob_xml_path}")
     logger.info(f"🌐 Blob EDI path: {blob_edi_path}")
-    logger.info(f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
+    logger.info(
+        f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
     logger.info(f"🚨 Mandatory blob storage: {MUST_USE_BLOB_STORAGE}")
-    
+
     # Validate mandatory blob storage requirement
     if MUST_USE_BLOB_STORAGE and not USE_BLOB_STORAGE:
-        logger.error("💥 CRITICAL ERROR: Blob storage is mandatory but not available!")
-        logger.error("🚨 Cannot read file - blob storage is required for PROD deployment")
+        logger.error(
+            "💥 CRITICAL ERROR: Blob storage is mandatory but not available!")
+        logger.error(
+            "🚨 Cannot read file - blob storage is required for PROD deployment")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Blob storage is mandatory but not available"
         )
-    
+
     if USE_BLOB_STORAGE:
         try:
             # Read from Vercel Blob storage
             logger.info(f"📦 Reading from Vercel Blob")
-            logger.info(f"🔧 Using vercel_blob module: {vercel_blob is not None}")
-            
+            logger.info(
+                f"🔧 Using vercel_blob module: {vercel_blob is not None}")
+
             # Determine which blob path to use based on file type
             download_url = None
-            
+
             # First priority: Use provided blob paths from database
             if blob_xml_path and blob_xml_path.strip():
                 download_url = blob_xml_path
-                logger.info(f"🌐 Using blob XML path from database: {download_url}")
+                logger.info(
+                    f"🌐 Using blob XML path from database: {download_url}")
             elif blob_edi_path and blob_edi_path.strip():
                 download_url = blob_edi_path
-                logger.info(f"🌐 Using blob EDI path from database: {download_url}")
+                logger.info(
+                    f"🌐 Using blob EDI path from database: {download_url}")
             # Second priority: Extract URL from file_path if it's a blob response
             elif isinstance(file_path, dict) and 'url' in file_path:
                 download_url = file_path['url']
@@ -667,22 +707,27 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
             elif isinstance(file_path, dict) and 'pathname' in file_path:
                 blob_path = file_path['pathname']
                 download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{blob_path}"
-                logger.info(f"🌐 Constructed blob URL from pathname: {download_url}")
+                logger.info(
+                    f"🌐 Constructed blob URL from pathname: {download_url}")
             # Fourth priority: Try to determine from string patterns (for backward compatibility)
             elif file_path and isinstance(file_path, str):
                 if "xml" in file_path.lower() or "uploads" in file_path:
                     download_url = blob_xml_path
-                    logger.info(f"🌐 Using blob XML path based on file path: {download_url}")
+                    logger.info(
+                        f"🌐 Using blob XML path based on file path: {download_url}")
                 elif "edi" in file_path.lower() or "x12" in file_path.lower() or "converted" in file_path:
                     download_url = blob_edi_path
-                    logger.info(f"🌐 Using blob EDI path based on file path: {download_url}")
+                    logger.info(
+                        f"🌐 Using blob EDI path based on file path: {download_url}")
                 else:
                     # Try to construct URL from string path
                     download_url = f"https://jdwai1wj6716hbub.public.blob.vercel-storage.com/{file_path}"
-                    logger.info(f"🌐 Constructed blob URL from string path: {download_url}")
+                    logger.info(
+                        f"🌐 Constructed blob URL from string path: {download_url}")
             else:
-                logger.warning(f"⚠️ Could not determine blob URL from file_path: {file_path}")
-            
+                logger.warning(
+                    f"⚠️ Could not determine blob URL from file_path: {file_path}")
+
             # Ensure we have a valid download URL
             if not download_url:
                 logger.error(f"❌ No valid blob URL found for file access")
@@ -693,13 +738,13 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="No valid blob URL found for file access"
                 )
-            
+
             # Use requests to download the file from the blob URL
             import requests
             logger.info(f"🌐 Downloading from URL: {download_url}")
             response = requests.get(download_url)
             response.raise_for_status()
-            
+
             file_content = response.content
             logger.info(f"✅ File read from Vercel Blob successfully!")
             logger.info(f"📊 Retrieved {len(file_content)} bytes")
@@ -708,7 +753,7 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
             logger.error(f"❌ Failed to read from Vercel Blob: {e}")
             logger.error(f"🔍 Error type: {type(e).__name__}")
             logger.error(f"📝 Error details: {str(e)}")
-            
+
             # Provide more specific error messages
             if "404" in str(e) or "not found" in str(e).lower():
                 error_detail = "File not found in blob storage: File may have been deleted or moved"
@@ -718,7 +763,7 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
                 error_detail = "Blob storage permission error: Insufficient access rights to read file"
             else:
                 error_detail = f"Failed to read file from blob storage: {str(e)}"
-            
+
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=error_detail
@@ -728,20 +773,21 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
         try:
             # Handle blob response in local storage mode
             if isinstance(file_path, dict):
-                logger.warning(f"⚠️ Received blob response in local storage mode - this shouldn't happen")
+                logger.warning(
+                    f"⚠️ Received blob response in local storage mode - this shouldn't happen")
                 logger.warning(f"⚠️ Blob response: {file_path}")
                 # Extract the pathname for local file access
                 local_path = file_path.get('pathname', str(file_path))
                 logger.info(f"📁 Using extracted pathname: {local_path}")
             else:
                 local_path = file_path
-            
+
             logger.info(f"📁 Reading from local storage: {local_path}")
             logger.info(f"🔍 File exists: {os.path.exists(local_path)}")
-            
+
             with open(local_path, "rb") as buffer:
                 file_content = buffer.read()
-            
+
             logger.info(f"✅ File read locally successfully!")
             logger.info(f"📊 Retrieved {len(file_content)} bytes")
             return file_content
@@ -754,23 +800,24 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
                 detail=f"Failed to read file locally: {str(e)}"
             )
 
+
 def validate_xml(file_path: Union[str, dict], strict_validation: bool = False) -> tuple[bool, Optional[str], list[str]]:
     """Validate XML file structure - core well-formed check + optional enhanced validation with warnings
-    
+
     Args:
         file_path: Path to the XML file to validate
         strict_validation: If True, treats validation issues as errors (default: False, issues are warnings only)
-    
+
     Returns:
         Tuple of (is_valid, message, warnings)
     """
     logger.info(f"🔍 validate_xml: Starting XML validation for {file_path}")
     logger.info(f"📊 validate_xml: Strict validation mode: {strict_validation}")
     warnings = []
-    
+
     try:
         logger.info(f"📄 validate_xml: Reading and parsing XML file...")
-        
+
         # Handle blob storage vs local storage
         if isinstance(file_path, dict):
             # This is a blob response, we need to read the content differently
@@ -779,23 +826,36 @@ def validate_xml(file_path: Union[str, dict], strict_validation: bool = False) -
                 # Use requests to download the file content
                 import requests
                 download_url = file_path.get('url', str(file_path))
-                logger.info(f"🌐 validate_xml: Downloading from blob URL: {download_url}")
+                logger.info(
+                    f"🌐 validate_xml: Downloading from blob URL: {download_url}")
                 response = requests.get(download_url)
                 response.raise_for_status()
                 file_content = response.content
-                logger.info(f"✅ validate_xml: Downloaded {len(file_content)} bytes from blob")
-                
+                logger.info(
+                    f"✅ validate_xml: Downloaded {len(file_content)} bytes from blob")
+
                 if len(file_content) == 0:
                     error_msg = "XML file is empty"
                     logger.error(f"❌ validate_xml: {error_msg}")
                     return False, error_msg, warnings
-                
+
                 # Parse XML from content
                 root = ET.fromstring(file_content)
-                logger.info(f"✅ validate_xml: Core XML parsing successful - file is well-formed")
-                
+                logger.info(
+                    f"✅ validate_xml: Core XML parsing successful - file is well-formed")
+
+                # CRITICAL VALIDATION: Check for sender and receiver IDs (required, fails if missing)
+                logger.info(
+                    f"🔍 validate_xml: Running critical sender/receiver ID validation...")
+                ids_valid, ids_error = _validate_sender_receiver_ids(root)
+                if not ids_valid:
+                    error_msg = f"Sender/Receiver ID validation failed: {ids_error}"
+                    logger.error(f"❌ validate_xml: {error_msg}")
+                    return False, error_msg, warnings
+
             except Exception as e:
-                logger.error(f"❌ validate_xml: Failed to download/parse from blob: {e}")
+                logger.error(
+                    f"❌ validate_xml: Failed to download/parse from blob: {e}")
                 return False, f"Failed to download/parse XML from blob storage: {str(e)}", warnings
         else:
             # This is a local file path
@@ -805,34 +865,47 @@ def validate_xml(file_path: Union[str, dict], strict_validation: bool = False) -
                 error_msg = f"XML file not found: {file_path}"
                 logger.error(f"❌ validate_xml: {error_msg}")
                 return False, error_msg, warnings
-            
+
             file_size = os.path.getsize(file_path)
             logger.info(f"📊 validate_xml: File size: {file_size} bytes")
-            
+
             if file_size == 0:
                 error_msg = "XML file is empty"
                 logger.error(f"❌ validate_xml: {error_msg}")
                 return False, error_msg, warnings
-            
+
             # CORE VALIDATION: Check if XML is well-formed (matches old API behavior)
             tree = ET.parse(file_path)
             root = tree.getroot()
-            logger.info(f"✅ validate_xml: Core XML parsing successful - file is well-formed")
-        
+            logger.info(
+                f"✅ validate_xml: Core XML parsing successful - file is well-formed")
+
+        # CRITICAL VALIDATION: Check for sender and receiver IDs (required, fails if missing)
+        logger.info(
+            f"🔍 validate_xml: Running critical sender/receiver ID validation...")
+        ids_valid, ids_error = _validate_sender_receiver_ids(root)
+        if not ids_valid:
+            error_msg = f"Sender/Receiver ID validation failed: {ids_error}"
+            logger.error(f"❌ validate_xml: {error_msg}")
+            return False, error_msg, warnings
+
         # ENHANCED VALIDATION: Always run optional checks (warnings only, non-blocking)
-        logger.info(f"🔍 validate_xml: Running optional enhanced validation checks...")
-        validation_warnings = _perform_enhanced_xml_validation(root, strict_validation)
+        logger.info(
+            f"🔍 validate_xml: Running optional enhanced validation checks...")
+        validation_warnings = _perform_enhanced_xml_validation(
+            root, strict_validation)
         warnings.extend(validation_warnings)
-        
+
         # If strict validation is enabled and there are validation warnings, treat them as errors
         if strict_validation and validation_warnings:
             error_msg = f"Strict validation failed: {'; '.join(validation_warnings)}"
             logger.error(f"❌ validate_xml: {error_msg}")
             return False, error_msg, warnings
-        
-        logger.info(f"✅ validate_xml: XML validation completed with {len(warnings)} warnings")
+
+        logger.info(
+            f"✅ validate_xml: XML validation completed with {len(warnings)} warnings")
         return True, "XML validation passed - file is well-formed", warnings
-        
+
     except ET.ParseError as e:
         error_msg = f"XML parsing error: {str(e)}"
         logger.error(f"❌ validate_xml: Parse error - {error_msg}")
@@ -842,80 +915,176 @@ def validate_xml(file_path: Union[str, dict], strict_validation: bool = False) -
         logger.error(f"❌ validate_xml: Unexpected error - {error_msg}")
         return False, error_msg, []
 
+
+def _validate_sender_receiver_ids(root) -> tuple[bool, Optional[str]]:
+    """Validate that sender (supplier) and receiver (customer) IDs are present in XML
+
+    Args:
+        root: XML root element
+
+    Returns:
+        Tuple of (is_valid, error_message)
+        - is_valid: True if both IDs are present and non-empty, False otherwise
+        - error_message: Error message if validation fails, None if valid
+    """
+    try:
+        namespaces = {
+            'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+            'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
+        }
+
+        # Check for sender (supplier) EndpointID
+        supplier_party = root.find(
+            './/cac:AccountingSupplierParty', namespaces)
+        if supplier_party is None:
+            return False, "Missing AccountingSupplierParty element"
+
+        sender_endpoint_id = supplier_party.find(
+            './/cbc:EndpointID', namespaces)
+        sender_id = None
+        if sender_endpoint_id is not None:
+            sender_id = sender_endpoint_id.text.strip() if sender_endpoint_id.text else None
+
+        # Also check CompanyID as fallback
+        if not sender_id:
+            sender_company_id = supplier_party.find(
+                './/cac:PartyLegalEntity/cbc:CompanyID', namespaces)
+            if sender_company_id is not None and sender_company_id.text:
+                sender_id = sender_company_id.text.strip()
+
+        # Check for receiver (customer) EndpointID
+        customer_party = root.find(
+            './/cac:AccountingCustomerParty', namespaces)
+        if customer_party is None:
+            return False, "Missing AccountingCustomerParty element"
+
+        receiver_endpoint_id = customer_party.find(
+            './/cbc:EndpointID', namespaces)
+        receiver_id = None
+        if receiver_endpoint_id is not None:
+            receiver_id = receiver_endpoint_id.text.strip(
+            ) if receiver_endpoint_id.text else None
+
+        # Also check CompanyID as fallback
+        if not receiver_id:
+            receiver_company_id = customer_party.find(
+                './/cac:PartyLegalEntity/cbc:CompanyID', namespaces)
+            if receiver_company_id is not None and receiver_company_id.text:
+                receiver_id = receiver_company_id.text.strip()
+
+        # Validate both IDs are present
+        errors = []
+        if not sender_id:
+            errors.append(
+                "Sender ID (Supplier EndpointID or CompanyID) is missing or empty")
+        if not receiver_id:
+            errors.append(
+                "Receiver ID (Customer EndpointID or CompanyID) is missing or empty")
+
+        if errors:
+            error_message = "Critical validation failed: " + "; ".join(errors)
+            logger.error(
+                f"❌ Sender/Receiver ID validation failed: {error_message}")
+            return False, error_message
+
+        logger.info(
+            f"✅ Sender/Receiver ID validation passed - Sender: {sender_id}, Receiver: {receiver_id}")
+        return True, None
+
+    except Exception as e:
+        error_message = f"Error validating sender/receiver IDs: {str(e)}"
+        logger.error(f"❌ {error_message}")
+        return False, error_message
+
+
 def _perform_enhanced_xml_validation(root, strict_validation: bool = False) -> list[str]:
     """Perform enhanced XML validation and return warnings (non-blocking)
-    
+
     Args:
         root: XML root element
         strict_validation: If True, performs additional strict content validation
-    
+
     Returns:
         List of validation warning messages
     """
     warnings = []
-    
+
     try:
         # Check for UBL namespace elements (optional warning)
         namespaces = {
             'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
             'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
         }
-        
+
         # Check for common UBL invoice elements
         invoice_id = root.find('.//cbc:ID', namespaces)
         if invoice_id is None:
-            warnings.append("⚠️ No UBL Invoice ID (cbc:ID) found - may affect conversion")
-        
+            warnings.append(
+                "⚠️ No UBL Invoice ID (cbc:ID) found - may affect conversion")
+
         issue_date = root.find('.//cbc:IssueDate', namespaces)
         if issue_date is None:
-            warnings.append("⚠️ No UBL Issue Date (cbc:IssueDate) found - may affect conversion")
-        
-        payable_amount = root.find('.//cac:LegalMonetaryTotal/cbc:PayableAmount', namespaces)
+            warnings.append(
+                "⚠️ No UBL Issue Date (cbc:IssueDate) found - may affect conversion")
+
+        payable_amount = root.find(
+            './/cac:LegalMonetaryTotal/cbc:PayableAmount', namespaces)
         if payable_amount is None:
-            warnings.append("⚠️ No UBL Payable Amount found - may affect conversion")
-        
-        supplier_party = root.find('.//cac:AccountingSupplierParty', namespaces)
+            warnings.append(
+                "⚠️ No UBL Payable Amount found - may affect conversion")
+
+        supplier_party = root.find(
+            './/cac:AccountingSupplierParty', namespaces)
         if supplier_party is None:
-            warnings.append("⚠️ No UBL Supplier Party found - may affect conversion")
-        
-        customer_party = root.find('.//cac:AccountingCustomerParty', namespaces)
+            warnings.append(
+                "⚠️ No UBL Supplier Party found - may affect conversion")
+
+        customer_party = root.find(
+            './/cac:AccountingCustomerParty', namespaces)
         if customer_party is None:
-            warnings.append("⚠️ No UBL Customer Party found - may affect conversion")
-        
+            warnings.append(
+                "⚠️ No UBL Customer Party found - may affect conversion")
+
         # Check for invoice lines
         invoice_lines = root.findall('.//cac:InvoiceLine', namespaces)
         if not invoice_lines:
-            warnings.append("⚠️ No UBL Invoice Lines found - may affect conversion")
-        
+            warnings.append(
+                "⚠️ No UBL Invoice Lines found - may affect conversion")
+
         # STRICT VALIDATION: Always run strict content validation, return as warnings
-        logger.info(f"🔍 Enhanced validation: Running strict content validation...")
+        logger.info(
+            f"🔍 Enhanced validation: Running strict content validation...")
         strict_warnings = _perform_strict_content_validation(root, namespaces)
         warnings.extend(strict_warnings)
-        logger.info(f"🔍 Enhanced validation: Strict validation completed with {len(strict_warnings)} warnings")
-        
-        logger.info(f"🔍 Enhanced validation completed with {len(warnings)} warnings")
-        
+        logger.info(
+            f"🔍 Enhanced validation: Strict validation completed with {len(strict_warnings)} warnings")
+
+        logger.info(
+            f"🔍 Enhanced validation completed with {len(warnings)} warnings")
+
     except Exception as e:
         logger.warning(f"⚠️ Enhanced validation error: {e}")
         warnings.append(f"⚠️ Enhanced validation error: {e}")
-    
+
     return warnings
+
 
 def _perform_strict_content_validation(root, namespaces) -> list[str]:
     """Perform strict content validation on XML elements (warnings only)
-    
+
     Args:
         root: XML root element
         namespaces: XML namespace mapping
-    
+
     Returns:
         List of strict validation warning messages
     """
     warnings = []
-    
+
     try:
-        logger.info(f"🔍 Strict validation: Checking element content and data types...")
-        
+        logger.info(
+            f"🔍 Strict validation: Checking element content and data types...")
+
         # Check Invoice ID content
         invoice_id = root.find('.//cbc:ID', namespaces)
         if invoice_id is not None and invoice_id.text:
@@ -924,7 +1093,7 @@ def _perform_strict_content_validation(root, namespaces) -> list[str]:
                 warnings.append("⚠️ Invoice ID is empty")
             elif len(id_value) > 100:
                 warnings.append("⚠️ Invoice ID is too long (>100 characters)")
-        
+
         # Check Issue Date content
         issue_date = root.find('.//cbc:IssueDate', namespaces)
         if issue_date is not None and issue_date.text:
@@ -937,10 +1106,12 @@ def _perform_strict_content_validation(root, namespaces) -> list[str]:
                     from datetime import datetime
                     datetime.strptime(date_value, "%Y-%m-%d")
                 except ValueError:
-                    warnings.append("⚠️ Issue Date format may be invalid (expected YYYY-MM-DD)")
-        
+                    warnings.append(
+                        "⚠️ Issue Date format may be invalid (expected YYYY-MM-DD)")
+
         # Check Payable Amount content
-        payable_amount = root.find('.//cac:LegalMonetaryTotal/cbc:PayableAmount', namespaces)
+        payable_amount = root.find(
+            './/cac:LegalMonetaryTotal/cbc:PayableAmount', namespaces)
         if payable_amount is not None and payable_amount.text:
             amount_value = payable_amount.text.strip()
             if len(amount_value) < 1:
@@ -950,26 +1121,31 @@ def _perform_strict_content_validation(root, namespaces) -> list[str]:
                 try:
                     float(amount_value)
                 except ValueError:
-                    warnings.append("⚠️ Payable Amount format may be invalid (expected decimal number)")
-        
+                    warnings.append(
+                        "⚠️ Payable Amount format may be invalid (expected decimal number)")
+
         # Check Supplier Name content
-        supplier_name = root.find('.//cac:AccountingSupplierParty//cbc:Name', namespaces)
+        supplier_name = root.find(
+            './/cac:AccountingSupplierParty//cbc:Name', namespaces)
         if supplier_name is not None and supplier_name.text:
             name_value = supplier_name.text.strip()
             if len(name_value) < 1:
                 warnings.append("⚠️ Supplier Name is empty")
             elif len(name_value) > 255:
-                warnings.append("⚠️ Supplier Name is too long (>255 characters)")
-        
+                warnings.append(
+                    "⚠️ Supplier Name is too long (>255 characters)")
+
         # Check Customer Name content
-        customer_name = root.find('.//cac:AccountingCustomerParty//cbc:Name', namespaces)
+        customer_name = root.find(
+            './/cac:AccountingCustomerParty//cbc:Name', namespaces)
         if customer_name is not None and customer_name.text:
             name_value = customer_name.text.strip()
             if len(name_value) < 1:
                 warnings.append("⚠️ Customer Name is empty")
             elif len(name_value) > 255:
-                warnings.append("⚠️ Customer Name is too long (>255 characters)")
-        
+                warnings.append(
+                    "⚠️ Customer Name is too long (>255 characters)")
+
         # Check Invoice Lines content
         invoice_lines = root.findall('.//cac:InvoiceLine', namespaces)
         for i, line in enumerate(invoice_lines, 1):
@@ -978,49 +1154,56 @@ def _perform_strict_content_validation(root, namespaces) -> list[str]:
                 line_id_value = line_id.text.strip()
                 if len(line_id_value) < 1:
                     warnings.append(f"⚠️ Invoice Line {i} ID is empty")
-            
+
             quantity = line.find('cbc:InvoicedQuantity', namespaces)
             if quantity is not None and quantity.text:
                 qty_value = quantity.text.strip()
                 try:
                     float(qty_value)
                 except ValueError:
-                    warnings.append(f"⚠️ Invoice Line {i} quantity format may be invalid")
-            
+                    warnings.append(
+                        f"⚠️ Invoice Line {i} quantity format may be invalid")
+
             price = line.find('.//cac:Price/cbc:PriceAmount', namespaces)
             if price is not None and price.text:
                 price_value = price.text.strip()
                 try:
                     float(price_value)
                 except ValueError:
-                    warnings.append(f"⚠️ Invoice Line {i} price format may be invalid")
-        
-        logger.info(f"🔍 Strict validation: Completed with {len(warnings)} warnings")
-        
+                    warnings.append(
+                        f"⚠️ Invoice Line {i} price format may be invalid")
+
+        logger.info(
+            f"🔍 Strict validation: Completed with {len(warnings)} warnings")
+
     except Exception as e:
         logger.warning(f"⚠️ Strict validation error: {e}")
         warnings.append(f"⚠️ Strict validation error: {e}")
-    
+
     return warnings
+
 
 async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optional[str], Optional[dict]]:
     """Validate EDI format fields for correct values, format, and length"""
-    logger.info(f"🔍 validate_edi_format: Starting EDI format validation for {edi_path}")
-    
+    logger.info(
+        f"🔍 validate_edi_format: Starting EDI format validation for {edi_path}")
+
     try:
         logger.info(f"📄 validate_edi_format: Reading EDI file...")
         try:
             edi_content_bytes = await read_file_from_storage(edi_path, None, None)
         except:
-            edi_content_bytes = await read_file_from_storage(None,None,edi_path)
+            edi_content_bytes = await read_file_from_storage(None, None, edi_path)
         edi_content = edi_content_bytes.decode('utf-8')
-        
-        logger.info(f"✅ validate_edi_format: EDI file read successfully ({len(edi_content)} characters)")
-        
+
+        logger.info(
+            f"✅ validate_edi_format: EDI file read successfully ({len(edi_content)} characters)")
+
         # Split into segments
-        segments = [seg.strip() for seg in edi_content.split('~') if seg.strip()]
+        segments = [seg.strip()
+                    for seg in edi_content.split('~') if seg.strip()]
         logger.info(f"📊 validate_edi_format: Found {len(segments)} segments")
-        
+
         validation_results = {
             'isa_segment': {'valid': False, 'errors': []},
             'gs_segment': {'valid': False, 'errors': []},
@@ -1031,94 +1214,125 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
             'tds_segment': {'valid': False, 'errors': []},
             'trailer_segments': {'valid': False, 'errors': []}
         }
-        
+
         logger.info(f"🔍 validate_edi_format: Validating each segment...")
-        
+
         # Validate ISA Segment (Interchange Control Header)
-        isa_segment = next((seg for seg in segments if seg.startswith('ISA')), None)
+        isa_segment = next(
+            (seg for seg in segments if seg.startswith('ISA')), None)
         if isa_segment:
             logger.info(f"   - ISA Segment: {isa_segment}")
             isa_fields = isa_segment.split('*')
             if len(isa_fields) >= 16:
                 # Check ISA field lengths and formats
                 if len(isa_fields[1]) != 2:  # Authorization Information Qualifier
-                    validation_results['isa_segment']['errors'].append("ISA02: Authorization Info Qualifier must be 2 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA02: Authorization Info Qualifier must be 2 characters")
                 if len(isa_fields[2]) != 10:  # Authorization Information
-                    validation_results['isa_segment']['errors'].append("ISA03: Authorization Info must be 10 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA03: Authorization Info must be 10 characters")
                 if len(isa_fields[3]) != 2:  # Security Information Qualifier
-                    validation_results['isa_segment']['errors'].append("ISA04: Security Info Qualifier must be 2 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA04: Security Info Qualifier must be 2 characters")
                 if len(isa_fields[4]) != 10:  # Security Information
-                    validation_results['isa_segment']['errors'].append("ISA05: Security Info must be 10 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA05: Security Info must be 10 characters")
                 if len(isa_fields[5]) != 2:  # Interchange ID Qualifier
-                    validation_results['isa_segment']['errors'].append("ISA06: Interchange ID Qualifier must be 2 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA06: Interchange ID Qualifier must be 2 characters")
                 if len(isa_fields[6]) != 15:  # Interchange Sender ID
-                    validation_results['isa_segment']['errors'].append("ISA07: Sender ID must be 15 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA07: Sender ID must be 15 characters")
                 if len(isa_fields[7]) != 2:  # Interchange ID Qualifier
-                    validation_results['isa_segment']['errors'].append("ISA08: Interchange ID Qualifier must be 2 characters")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA08: Interchange ID Qualifier must be 2 characters")
                 if len(isa_fields[8]) != 15:  # Interchange Receiver ID
-                    validation_results['isa_segment']['errors'].append("ISA09: Receiver ID must be 15 characters")
-                
-                validation_results['isa_segment']['valid'] = len(validation_results['isa_segment']['errors']) == 0
-                logger.info(f"     ISA Validation: {'✅ PASS' if validation_results['isa_segment']['valid'] else '❌ FAIL'}")
+                    validation_results['isa_segment']['errors'].append(
+                        "ISA09: Receiver ID must be 15 characters")
+
+                validation_results['isa_segment']['valid'] = len(
+                    validation_results['isa_segment']['errors']) == 0
+                logger.info(
+                    f"     ISA Validation: {'✅ PASS' if validation_results['isa_segment']['valid'] else '❌ FAIL'}")
                 if validation_results['isa_segment']['errors']:
                     for error in validation_results['isa_segment']['errors']:
                         logger.error(f"       {error}")
             else:
-                validation_results['isa_segment']['errors'].append("ISA segment must have at least 16 fields")
-                logger.error(f"     ISA Validation: ❌ FAIL - Insufficient fields")
+                validation_results['isa_segment']['errors'].append(
+                    "ISA segment must have at least 16 fields")
+                logger.error(
+                    f"     ISA Validation: ❌ FAIL - Insufficient fields")
         else:
-            validation_results['isa_segment']['errors'].append("ISA segment not found")
+            validation_results['isa_segment']['errors'].append(
+                "ISA segment not found")
             logger.error(f"     ISA Validation: ❌ FAIL - Segment not found")
-        
+
         # Validate GS Segment (Functional Group Header)
-        gs_segment = next((seg for seg in segments if seg.startswith('GS')), None)
+        gs_segment = next(
+            (seg for seg in segments if seg.startswith('GS')), None)
         if gs_segment:
             logger.info(f"   - GS Segment: {gs_segment}")
             gs_fields = gs_segment.split('*')
             if len(gs_fields) >= 8:
                 # Check GS field formats
                 if gs_fields[1] != 'IN':  # Functional Identifier Code
-                    validation_results['gs_segment']['errors'].append("GS02: Functional Identifier must be 'IN' for Invoice")
+                    validation_results['gs_segment']['errors'].append(
+                        "GS02: Functional Identifier must be 'IN' for Invoice")
                 if len(gs_fields[2]) != 2:  # Application Sender's Code
-                    validation_results['gs_segment']['errors'].append("GS03: Application Sender Code must be 2 characters")
+                    validation_results['gs_segment']['errors'].append(
+                        "GS03: Application Sender Code must be 2 characters")
                 if len(gs_fields[3]) != 2:  # Application Receiver's Code
-                    validation_results['gs_segment']['errors'].append("GS04: Application Receiver Code must be 2 characters")
-                
-                validation_results['gs_segment']['valid'] = len(validation_results['gs_segment']['errors']) == 0
-                logger.info(f"     GS Validation: {'✅ PASS' if validation_results['gs_segment']['valid'] else '❌ FAIL'}")
+                    validation_results['gs_segment']['errors'].append(
+                        "GS04: Application Receiver Code must be 2 characters")
+
+                validation_results['gs_segment']['valid'] = len(
+                    validation_results['gs_segment']['errors']) == 0
+                logger.info(
+                    f"     GS Validation: {'✅ PASS' if validation_results['gs_segment']['valid'] else '❌ FAIL'}")
                 if validation_results['gs_segment']['errors']:
                     for error in validation_results['gs_segment']['errors']:
                         logger.error(f"       {error}")
             else:
-                validation_results['gs_segment']['errors'].append("GS segment must have at least 8 fields")
-                logger.error(f"     GS Validation: ❌ FAIL - Insufficient fields")
+                validation_results['gs_segment']['errors'].append(
+                    "GS segment must have at least 8 fields")
+                logger.error(
+                    f"     GS Validation: ❌ FAIL - Insufficient fields")
         else:
-            validation_results['gs_segment']['errors'].append("GS segment not found")
+            validation_results['gs_segment']['errors'].append(
+                "GS segment not found")
             logger.error(f"     GS Validation: ❌ FAIL - Segment not found")
-        
+
         # Validate ST Segment (Transaction Set Header)
-        st_segment = next((seg for seg in segments if seg.startswith('ST')), None)
+        st_segment = next(
+            (seg for seg in segments if seg.startswith('ST')), None)
         if st_segment:
             logger.info(f"   - ST Segment: {st_segment}")
             st_fields = st_segment.split('*')
             if len(st_fields) >= 2:
                 if st_fields[1] != '810':  # Transaction Set Identifier Code
-                    validation_results['st_segment']['errors'].append("ST02: Transaction Set Identifier must be '810' for Invoice")
-                
-                validation_results['st_segment']['valid'] = len(validation_results['st_segment']['errors']) == 0
-                logger.info(f"     ST Validation: {'✅ PASS' if validation_results['st_segment']['valid'] else '❌ FAIL'}")
+                    validation_results['st_segment']['errors'].append(
+                        "ST02: Transaction Set Identifier must be '810' for Invoice")
+
+                validation_results['st_segment']['valid'] = len(
+                    validation_results['st_segment']['errors']) == 0
+                logger.info(
+                    f"     ST Validation: {'✅ PASS' if validation_results['st_segment']['valid'] else '❌ FAIL'}")
                 if validation_results['st_segment']['errors']:
                     for error in validation_results['st_segment']['errors']:
                         logger.error(f"       {error}")
             else:
-                validation_results['st_segment']['errors'].append("ST segment must have at least 2 fields")
-                logger.error(f"     ST Validation: ❌ FAIL - Insufficient fields")
+                validation_results['st_segment']['errors'].append(
+                    "ST segment must have at least 2 fields")
+                logger.error(
+                    f"     ST Validation: ❌ FAIL - Insufficient fields")
         else:
-            validation_results['st_segment']['errors'].append("ST segment not found")
+            validation_results['st_segment']['errors'].append(
+                "ST segment not found")
             logger.error(f"     ST Validation: ❌ FAIL - Segment not found")
-        
+
         # Validate BIG Segment (Beginning Segment for Invoice)
-        big_segment = next((seg for seg in segments if seg.startswith('BIG')), None)
+        big_segment = next(
+            (seg for seg in segments if seg.startswith('BIG')), None)
         if big_segment:
             logger.info(f"   - BIG Segment: {big_segment}")
             big_fields = big_segment.split('*')
@@ -1131,28 +1345,37 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
                         month = int(big_fields[1][4:6])
                         day = int(big_fields[1][6:8])
                         if not (1 <= month <= 12 and 1 <= day <= 31):
-                            validation_results['big_segment']['errors'].append("BIG02: Invalid date format")
+                            validation_results['big_segment']['errors'].append(
+                                "BIG02: Invalid date format")
                     except ValueError:
-                        validation_results['big_segment']['errors'].append("BIG02: Date must be numeric YYYYMMDD format")
+                        validation_results['big_segment']['errors'].append(
+                            "BIG02: Date must be numeric YYYYMMDD format")
                 else:
-                    validation_results['big_segment']['errors'].append("BIG02: Invoice date must be 8 characters (YYYYMMDD)")
-                
+                    validation_results['big_segment']['errors'].append(
+                        "BIG02: Invoice date must be 8 characters (YYYYMMDD)")
+
                 # Check invoice number
                 if not big_fields[2] or len(big_fields[2]) == 0:
-                    validation_results['big_segment']['errors'].append("BIG03: Invoice number cannot be empty")
-                
-                validation_results['big_segment']['valid'] = len(validation_results['big_segment']['errors']) == 0
-                logger.info(f"     BIG Validation: {'✅ PASS' if validation_results['big_segment']['valid'] else '❌ FAIL'}")
+                    validation_results['big_segment']['errors'].append(
+                        "BIG03: Invoice number cannot be empty")
+
+                validation_results['big_segment']['valid'] = len(
+                    validation_results['big_segment']['errors']) == 0
+                logger.info(
+                    f"     BIG Validation: {'✅ PASS' if validation_results['big_segment']['valid'] else '❌ FAIL'}")
                 if validation_results['big_segment']['errors']:
                     for error in validation_results['big_segment']['errors']:
                         logger.error(f"       {error}")
             else:
-                validation_results['big_segment']['errors'].append("BIG segment must have at least 3 fields")
-                logger.error(f"     BIG Validation: ❌ FAIL - Insufficient fields")
+                validation_results['big_segment']['errors'].append(
+                    "BIG segment must have at least 3 fields")
+                logger.error(
+                    f"     BIG Validation: ❌ FAIL - Insufficient fields")
         else:
-            validation_results['big_segment']['errors'].append("BIG segment not found")
+            validation_results['big_segment']['errors'].append(
+                "BIG segment not found")
             logger.error(f"     BIG Validation: ❌ FAIL - Segment not found")
-        
+
         # Validate N1 Segments (Name/Address Information)
         n1_segments = [seg for seg in segments if seg.startswith('N1')]
         if len(n1_segments) >= 2:
@@ -1162,21 +1385,28 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
                 n1_fields = n1_seg.split('*')
                 if len(n1_fields) >= 2:
                     if n1_fields[1] not in ['BY', 'SE']:  # Entity Identifier Code
-                        validation_results['n1_segments']['errors'].append(f"N1-{i+1}: Entity Identifier must be 'BY' or 'SE'")
+                        validation_results['n1_segments']['errors'].append(
+                            f"N1-{i+1}: Entity Identifier must be 'BY' or 'SE'")
                 else:
-                    validation_results['n1_segments']['errors'].append(f"N1-{i+1}: Segment must have at least 2 fields")
-            
-            validation_results['n1_segments']['valid'] = len(validation_results['n1_segments']['errors']) == 0
-            logger.info(f"     N1 Validation: {'✅ PASS' if validation_results['n1_segments']['valid'] else '❌ FAIL'}")
+                    validation_results['n1_segments']['errors'].append(
+                        f"N1-{i+1}: Segment must have at least 2 fields")
+
+            validation_results['n1_segments']['valid'] = len(
+                validation_results['n1_segments']['errors']) == 0
+            logger.info(
+                f"     N1 Validation: {'✅ PASS' if validation_results['n1_segments']['valid'] else '❌ FAIL'}")
             if validation_results['n1_segments']['errors']:
                 for error in validation_results['n1_segments']['errors']:
                     logger.error(f"       {error}")
         else:
-            validation_results['n1_segments']['errors'].append("Must have at least 2 N1 segments (Buyer and Seller)")
-            logger.error(f"     N1 Validation: ❌ FAIL - Insufficient N1 segments")
-        
+            validation_results['n1_segments']['errors'].append(
+                "Must have at least 2 N1 segments (Buyer and Seller)")
+            logger.error(
+                f"     N1 Validation: ❌ FAIL - Insufficient N1 segments")
+
         # Validate IT1 Segment (Baseline Item Data)
-        it1_segment = next((seg for seg in segments if seg.startswith('IT1')), None)
+        it1_segment = next(
+            (seg for seg in segments if seg.startswith('IT1')), None)
         if it1_segment:
             logger.info(f"   - IT1 Segment: {it1_segment}")
             it1_fields = it1_segment.split('*')
@@ -1185,24 +1415,32 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
                 try:
                     quantity = float(it1_fields[2]) if it1_fields[2] else 0
                     if quantity <= 0:
-                        validation_results['it1_segment']['errors'].append("IT103: Quantity must be greater than 0")
+                        validation_results['it1_segment']['errors'].append(
+                            "IT103: Quantity must be greater than 0")
                 except ValueError:
-                    validation_results['it1_segment']['errors'].append("IT103: Quantity must be numeric")
-                
-                validation_results['it1_segment']['valid'] = len(validation_results['it1_segment']['errors']) == 0
-                logger.info(f"     IT1 Validation: {'✅ PASS' if validation_results['it1_segment']['valid'] else '❌ FAIL'}")
+                    validation_results['it1_segment']['errors'].append(
+                        "IT103: Quantity must be numeric")
+
+                validation_results['it1_segment']['valid'] = len(
+                    validation_results['it1_segment']['errors']) == 0
+                logger.info(
+                    f"     IT1 Validation: {'✅ PASS' if validation_results['it1_segment']['valid'] else '❌ FAIL'}")
                 if validation_results['it1_segment']['errors']:
                     for error in validation_results['it1_segment']['errors']:
                         logger.error(f"       {error}")
             else:
-                validation_results['it1_segment']['errors'].append("IT1 segment must have at least 6 fields")
-                logger.error(f"     IT1 Validation: ❌ FAIL - Insufficient fields")
+                validation_results['it1_segment']['errors'].append(
+                    "IT1 segment must have at least 6 fields")
+                logger.error(
+                    f"     IT1 Validation: ❌ FAIL - Insufficient fields")
         else:
-            validation_results['it1_segment']['errors'].append("IT1 segment not found")
+            validation_results['it1_segment']['errors'].append(
+                "IT1 segment not found")
             logger.error(f"     IT1 Validation: ❌ FAIL - Segment not found")
-        
+
         # Validate TDS Segment (Total Monetary Value Summary)
-        tds_segment = next((seg for seg in segments if seg.startswith('TDS')), None)
+        tds_segment = next(
+            (seg for seg in segments if seg.startswith('TDS')), None)
         if tds_segment:
             logger.info(f"   - TDS Segment: {tds_segment}")
             tds_fields = tds_segment.split('*')
@@ -1210,58 +1448,85 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
                 try:
                     amount = float(tds_fields[1]) if tds_fields[1] else 0
                     if amount <= 0:
-                        validation_results['tds_segment']['errors'].append("TDS02: Total amount must be greater than 0")
+                        validation_results['tds_segment']['errors'].append(
+                            "TDS02: Total amount must be greater than 0")
                 except ValueError:
-                    validation_results['tds_segment']['errors'].append("TDS02: Total amount must be numeric")
-                
-                validation_results['tds_segment']['valid'] = len(validation_results['tds_segment']['errors']) == 0
-                logger.info(f"     TDS Validation: {'✅ PASS' if validation_results['tds_segment']['valid'] else '❌ FAIL'}")
+                    validation_results['tds_segment']['errors'].append(
+                        "TDS02: Total amount must be numeric")
+
+                validation_results['tds_segment']['valid'] = len(
+                    validation_results['tds_segment']['errors']) == 0
+                logger.info(
+                    f"     TDS Validation: {'✅ PASS' if validation_results['tds_segment']['valid'] else '❌ FAIL'}")
                 if validation_results['tds_segment']['errors']:
                     for error in validation_results['tds_segment']['errors']:
                         logger.error(f"       {error}")
             else:
-                validation_results['tds_segment']['errors'].append("TDS segment must have at least 2 fields")
-                logger.error(f"     TDS Validation: ❌ FAIL - Insufficient fields")
+                validation_results['tds_segment']['errors'].append(
+                    "TDS segment must have at least 2 fields")
+                logger.error(
+                    f"     TDS Validation: ❌ FAIL - Insufficient fields")
         else:
-            validation_results['tds_segment']['errors'].append("TDS segment not found")
+            validation_results['tds_segment']['errors'].append(
+                "TDS segment not found")
             logger.error(f"     TDS Validation: ❌ FAIL - Segment not found")
-        
+
         # Validate Trailer Segments (CTT, SE, GE, IEA)
-        ctt_segment = next((seg for seg in segments if seg.startswith('CTT')), None)
-        se_segment = next((seg for seg in segments if seg.startswith('SE')), None)
-        ge_segment = next((seg for seg in segments if seg.startswith('GE')), None)
-        iea_segment = next((seg for seg in segments if seg.startswith('IEA')), None)
-        
+        ctt_segment = next(
+            (seg for seg in segments if seg.startswith('CTT')), None)
+        se_segment = next(
+            (seg for seg in segments if seg.startswith('SE')), None)
+        ge_segment = next(
+            (seg for seg in segments if seg.startswith('GE')), None)
+        iea_segment = next(
+            (seg for seg in segments if seg.startswith('IEA')), None)
+
         trailer_segments = [ctt_segment, se_segment, ge_segment, iea_segment]
         trailer_names = ['CTT', 'SE', 'GE', 'IEA']
-        
+
         for i, (seg, name) in enumerate(zip(trailer_segments, trailer_names)):
             if seg:
                 logger.info(f"   - {name} Segment: {seg}")
             else:
-                validation_results['trailer_segments']['errors'].append(f"{name} segment not found")
-                logger.error(f"     {name} Validation: ❌ FAIL - Segment not found")
-        
-        validation_results['trailer_segments']['valid'] = len(validation_results['trailer_segments']['errors']) == 0
-        logger.info(f"     Trailer Validation: {'✅ PASS' if validation_results['trailer_segments']['valid'] else '❌ FAIL'}")
-        
+                validation_results['trailer_segments']['errors'].append(
+                    f"{name} segment not found")
+                logger.error(
+                    f"     {name} Validation: ❌ FAIL - Segment not found")
+
+        validation_results['trailer_segments']['valid'] = len(
+            validation_results['trailer_segments']['errors']) == 0
+        logger.info(
+            f"     Trailer Validation: {'✅ PASS' if validation_results['trailer_segments']['valid'] else '❌ FAIL'}")
+
         # Summary of validation results
-        all_valid = all(result['valid'] for result in validation_results.values())
-        total_errors = sum(len(result['errors']) for result in validation_results.values())
-        
-        logger.info(f"📊 validate_edi_format: EDI Format Validation Results Summary:")
+        all_valid = all(result['valid']
+                        for result in validation_results.values())
+        total_errors = sum(len(result['errors'])
+                           for result in validation_results.values())
+
+        logger.info(
+            f"📊 validate_edi_format: EDI Format Validation Results Summary:")
         logger.info(f"   - Total Segments Found: {len(segments)}")
-        logger.info(f"   - ISA Segment: {'✅ VALID' if validation_results['isa_segment']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - GS Segment: {'✅ VALID' if validation_results['gs_segment']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - ST Segment: {'✅ VALID' if validation_results['st_segment']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - BIG Segment: {'✅ VALID' if validation_results['big_segment']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - N1 Segments: {'✅ VALID' if validation_results['n1_segments']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - IT1 Segment: {'✅ VALID' if validation_results['it1_segment']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - TDS Segment: {'✅ VALID' if validation_results['tds_segment']['valid'] else '❌ INVALID'}")
-        logger.info(f"   - Trailer Segments: {'✅ VALID' if validation_results['trailer_segments']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - ISA Segment: {'✅ VALID' if validation_results['isa_segment']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - GS Segment: {'✅ VALID' if validation_results['gs_segment']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - ST Segment: {'✅ VALID' if validation_results['st_segment']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - BIG Segment: {'✅ VALID' if validation_results['big_segment']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - N1 Segments: {'✅ VALID' if validation_results['n1_segments']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - IT1 Segment: {'✅ VALID' if validation_results['it1_segment']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - TDS Segment: {'✅ VALID' if validation_results['tds_segment']['valid'] else '❌ INVALID'}")
+        logger.info(
+            f"   - Trailer Segments: {'✅ VALID' if validation_results['trailer_segments']['valid'] else '❌ INVALID'}")
         logger.info(f"   - Total Validation Errors: {total_errors}")
-        logger.info(f"   - Overall Validation: {'✅ PASS' if all_valid else '❌ FAIL'}")
-        
+        logger.info(
+            f"   - Overall Validation: {'✅ PASS' if all_valid else '❌ FAIL'}")
+
         if all_valid:
             logger.info(f"✅ validate_edi_format: EDI format validation passed")
             return True, "EDI format validation passed", None
@@ -1269,7 +1534,7 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
             error_msg = f"EDI format validation failed with {total_errors} errors"
             logger.error(f"❌ validate_edi_format: {error_msg}")
             return False, error_msg, validation_results
-        
+
     except FileNotFoundError:
         error_msg = f"EDI file not found: {edi_path}"
         logger.error(f"❌ validate_edi_format: {error_msg}")
@@ -1280,14 +1545,21 @@ async def validate_edi_format(edi_path: Union[str, dict]) -> tuple[bool, Optiona
         return False, error_msg, None
 
 # Helper classes and functions from old API (exact same implementation)
+
+
 class _X12ControlNumbers:
     def __init__(self, root, ns):
         invoice_id = root.find(".//cbc:ID", ns)
-        self.interchange_control = (invoice_id.text[:9] if invoice_id else "000000000").zfill(9)
+        self.interchange_control = (
+            invoice_id.text[:9] if invoice_id else "000000000").zfill(9)
         order_ref = root.find(".//cac:OrderReference/cbc:ID", ns)
-        self.group_control = (order_ref.text[:6] if order_ref else "000000").zfill(6)
-        originator_ref = root.find(".//cac:OriginatorDocumentReference/cbc:ID", ns)
-        self.transaction_control = (originator_ref.text[:4] if originator_ref else "0000").zfill(4)
+        self.group_control = (
+            order_ref.text[:6] if order_ref else "000000").zfill(6)
+        originator_ref = root.find(
+            ".//cac:OriginatorDocumentReference/cbc:ID", ns)
+        self.transaction_control = (
+            originator_ref.text[:4] if originator_ref else "0000").zfill(4)
+
 
 def _format_number(number_str, decimal_places=2):
     try:
@@ -1295,6 +1567,7 @@ def _format_number(number_str, decimal_places=2):
         return str(int(round(number * (10 ** decimal_places))))
     except (ValueError, TypeError):
         return "0"
+
 
 def _extract_party_info(root, party_path, ns):
     party = root.find(party_path, ns)
@@ -1327,6 +1600,7 @@ def _extract_party_info(root, party_path, ns):
         }
     return {'name': "UNKNOWN", 'id': "UNKNOWN".ljust(15), 'qualifier': "ZZ"}
 
+
 def _extract_postal_address(root, party_path, ns):
     address = root.find(f"{party_path}/cac:PostalAddress", ns)
     if address is not None:
@@ -1342,6 +1616,7 @@ def _extract_postal_address(root, party_path, ns):
         }
     return {"street": "", "city": "", "postal": "", "country": ""}
 
+
 def _map_address(address):
     city = address.get("city", "")
     postal = address.get("postal", "")
@@ -1354,6 +1629,7 @@ def _map_address(address):
     if country.upper() == "AU":
         country = "AUS"
     return state, postal, country
+
 
 def _create_ISA_segment(supplier, customer, control_numbers, current_time):
     # Build each data element with fixed width:
@@ -1383,83 +1659,93 @@ def _create_ISA_segment(supplier, customer, control_numbers, current_time):
     ]
     return "*".join(isa_elements) + "~"
 
+
 async def convert_xml_to_x12(xml_path: Union[str, dict], x12_filename: str) -> tuple[bool, Optional[str], Optional[str]]:
     """Convert XML to X12 format using exact same logic as old API's convert_xml_to_x12"""
-    logger.info(f"🔄 convert_xml_to_x12: Starting X12 conversion (matching old API logic)")
+    logger.info(
+        f"🔄 convert_xml_to_x12: Starting X12 conversion (matching old API logic)")
     logger.info(f"📁 Source XML: {xml_path}")
     logger.info(f"📁 Target X12 filename: {x12_filename}")
-    
+
     try:
         logger.info(f"📄 convert_xml_to_x12: Reading XML content...")
-        
+
         # Read XML content from storage
         xml_content = await read_file_from_storage(xml_path, None, None)
-        
-        logger.info(f"✅ convert_xml_to_x12: XML content read ({len(xml_content)} bytes)")
-        
+
+        logger.info(
+            f"✅ convert_xml_to_x12: XML content read ({len(xml_content)} bytes)")
+
         # Use exact same conversion logic as old API
         x12_content = _convert_xml_to_x12_content(xml_content)
-        
+
         if not x12_content:
             logger.error(f"❌ convert_xml_to_x12: No X12 content generated")
             return False, "No X12 content generated", None
-        
-        logger.info(f"📝 convert_xml_to_x12: X12 content generated ({len(x12_content)} characters)")
-        
+
+        logger.info(
+            f"📝 convert_xml_to_x12: X12 content generated ({len(x12_content)} characters)")
+
         # Save X12 content to storage
         x12_path = await save_file_to_storage(x12_content.encode('utf-8'), x12_filename, "converted")
-        
+
         logger.info(f"✅ convert_xml_to_x12: X12 file saved successfully")
         logger.info(f"📊 convert_xml_to_x12: Conversion completed successfully")
-        
+
         return True, "X12 conversion completed successfully", x12_path
-        
+
     except Exception as e:
         error_msg = f"X12 conversion error: {str(e)}"
         logger.error(f"❌ convert_xml_to_x12: {error_msg}")
         return False, error_msg, None
 
+
 def _convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
     """Convert XML content to X12 format using exact same logic as old API"""
     logger.info(f"🔧 _convert_xml_to_x12_content: Starting X12 conversion")
-    
+
     try:
         # Parse XML using same approach as old API
         root = ET.fromstring(xml_content)
-        
+
         # Define namespaces exactly as in old API
         ns = {
             'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
             'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
         }
-        
+
         logger.info(f"✅ _convert_xml_to_x12_content: XML parsing successful")
-        
+
         # Initialize control numbers (exact same logic as old API)
         control_numbers = _X12ControlNumbers(root, ns)
-        
+
         # Extract party information (exact same logic as old API)
-        supplier = _extract_party_info(root, ".//cac:AccountingSupplierParty/cac:Party", ns)
-        customer = _extract_party_info(root, ".//cac:AccountingCustomerParty/cac:Party", ns)
-        
+        supplier = _extract_party_info(
+            root, ".//cac:AccountingSupplierParty/cac:Party", ns)
+        customer = _extract_party_info(
+            root, ".//cac:AccountingCustomerParty/cac:Party", ns)
+
         # Set defaults if unknown (exact same logic as old API)
         if supplier["id"].strip() == "UNKNOWN":
             supplier["id"] = "SENDERID".ljust(15)
         if customer["id"].strip() == "UNKNOWN":
             customer["id"] = "RECEIVERID".ljust(15)
-        
-        logger.info(f"📊 _convert_xml_to_x12_content: Supplier: {supplier['name']} ({supplier['id'].strip()})")
-        logger.info(f"📊 _convert_xml_to_x12_content: Customer: {customer['name']} ({customer['id'].strip()})")
-        
+
+        logger.info(
+            f"📊 _convert_xml_to_x12_content: Supplier: {supplier['name']} ({supplier['id'].strip()})")
+        logger.info(
+            f"📊 _convert_xml_to_x12_content: Customer: {customer['name']} ({customer['id'].strip()})")
+
         # Build X12 segments (exact same logic as old API)
         x12_segments = []
         current_time = datetime.now()
-        
+
         # Create ISA segment (exact same logic as old API)
-        isa_segment = _create_ISA_segment(supplier, customer, control_numbers, current_time)
+        isa_segment = _create_ISA_segment(
+            supplier, customer, control_numbers, current_time)
         x12_segments.append(isa_segment)
         logger.info(f"✅ _convert_xml_to_x12_content: ISA segment created")
-        
+
         # Create GS segment (exact same logic as old API)
         gs = (
             f"GS*IN*{supplier['id'].strip()}*{customer['id'].strip()}*"
@@ -1468,32 +1754,35 @@ def _convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
         )
         x12_segments.append(gs)
         logger.info(f"✅ _convert_xml_to_x12_content: GS segment created")
-        
+
         # Create ST segment (exact same logic as old API)
         st = f"ST*810*{control_numbers.transaction_control}~"
         x12_segments.append(st)
         logger.info(f"✅ _convert_xml_to_x12_content: ST segment created")
-        
+
         # Extract invoice data (exact same logic as old API)
         invoice_date_elem = root.find(".//cbc:IssueDate", ns)
         invoice_number_elem = root.find(".//cbc:ID", ns)
         purchase_order_elem = root.find(".//cac:OrderReference/cbc:ID", ns)
-        
-        invoice_date = invoice_date_elem.text.strip() if invoice_date_elem is not None and invoice_date_elem.text else ""
-        logger.info(f"📊 _convert_xml_to_x12_content: Invoice date: {invoice_date}")
-        
+
+        invoice_date = invoice_date_elem.text.strip(
+        ) if invoice_date_elem is not None and invoice_date_elem.text else ""
+        logger.info(
+            f"📊 _convert_xml_to_x12_content: Invoice date: {invoice_date}")
+
         # Format date (exact same logic as old API)
         if invoice_date == "0000-00-00":
             formatted_date = ""
         else:
-            formatted_date = datetime.strptime(invoice_date, "%Y-%m-%d").strftime("%Y%m%d") if invoice_date else ""
-        
+            formatted_date = datetime.strptime(
+                invoice_date, "%Y-%m-%d").strftime("%Y%m%d") if invoice_date else ""
+
         # Format purchase order (exact same logic as old API)
         purchase_order = ""
         if purchase_order_elem is not None and purchase_order_elem.text:
             po = purchase_order_elem.text.strip()
             purchase_order = po[:8] if len(po) >= 8 else po.zfill(8)
-        
+
         # Create BIG segment (exact same logic as old API)
         big = (
             f"BIG*{formatted_date}*"
@@ -1501,62 +1790,72 @@ def _convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
         )
         x12_segments.append(big)
         logger.info(f"✅ _convert_xml_to_x12_content: BIG segment created")
-        
+
         # Add optional segments (exact same logic as old API)
-        
+
         # Note segment
         note_elem = root.find(".//cbc:Note", ns)
         if note_elem is not None and note_elem.text and note_elem.text.strip() not in [".", ""]:
             x12_segments.append(f"NTE*GEN*{note_elem.text.strip()}~")
             logger.info(f"✅ _convert_xml_to_x12_content: NTE segment added")
-        
+
         # Currency segment
         currency_elem = root.find(".//cbc:DocumentCurrencyCode", ns)
         if currency_elem is not None and currency_elem.text:
             x12_segments.append(f"CUR*BY*{currency_elem.text.strip()}~")
             logger.info(f"✅ _convert_xml_to_x12_content: CUR segment added")
-        
+
         # Contract reference segment
         contract_ref = root.find(".//cac:ContractDocumentReference/cbc:ID", ns)
         if contract_ref is not None and contract_ref.text:
             x12_segments.append(f"REF*CT*{contract_ref.text.strip()}~")
             logger.info(f"✅ _convert_xml_to_x12_content: REF segment added")
-        
+
         # Contact segment
         contact = root.find(".//cac:AccountingSupplierParty//cac:Contact", ns)
         if contact is not None:
             contact_name = contact.find("cbc:Name", ns)
             contact_phone = contact.find("cbc:Telephone", ns)
             if contact_name is not None and contact_phone is not None and contact_name.text and contact_phone.text:
-                x12_segments.append(f"PER*IC*{contact_name.text.strip()}*TE*{contact_phone.text.strip()}~")
-                logger.info(f"✅ _convert_xml_to_x12_content: PER segment added")
-        
+                x12_segments.append(
+                    f"PER*IC*{contact_name.text.strip()}*TE*{contact_phone.text.strip()}~")
+                logger.info(
+                    f"✅ _convert_xml_to_x12_content: PER segment added")
+
         # Supplier N1 segment (exact same logic as old API)
-        x12_segments.append(f"N1*SU*{supplier['name']}*{supplier['qualifier']}*{supplier['id'].strip()}~")
+        x12_segments.append(
+            f"N1*SU*{supplier['name']}*{supplier['qualifier']}*{supplier['id'].strip()}~")
         logger.info(f"✅ _convert_xml_to_x12_content: Supplier N1 segment added")
-        
+
         # Supplier address segments (exact same logic as old API)
-        supplier_address = _extract_postal_address(root, ".//cac:AccountingSupplierParty/cac:Party", ns)
+        supplier_address = _extract_postal_address(
+            root, ".//cac:AccountingSupplierParty/cac:Party", ns)
         if supplier_address["street"]:
             x12_segments.append(f"N3*{supplier_address['street']}~")
         state, postal, country = _map_address(supplier_address)
         if supplier_address["city"] or postal or country:
-            x12_segments.append(f"N4*{supplier_address['city']}*{state}*{postal}*{country}~")
-        logger.info(f"✅ _convert_xml_to_x12_content: Supplier address segments added")
-        
+            x12_segments.append(
+                f"N4*{supplier_address['city']}*{state}*{postal}*{country}~")
+        logger.info(
+            f"✅ _convert_xml_to_x12_content: Supplier address segments added")
+
         # Customer N1 segment (exact same logic as old API)
-        x12_segments.append(f"N1*BY*{customer['name']}*{customer['qualifier']}*{customer['id'].strip()}~")
+        x12_segments.append(
+            f"N1*BY*{customer['name']}*{customer['qualifier']}*{customer['id'].strip()}~")
         logger.info(f"✅ _convert_xml_to_x12_content: Customer N1 segment added")
-        
+
         # Customer address segments (exact same logic as old API)
-        customer_address = _extract_postal_address(root, ".//cac:AccountingCustomerParty/cac:Party", ns)
+        customer_address = _extract_postal_address(
+            root, ".//cac:AccountingCustomerParty/cac:Party", ns)
         if customer_address["street"]:
             x12_segments.append(f"N3*{customer_address['street']}~")
         state, postal, country = _map_address(customer_address)
         if customer_address["city"] or postal or country:
-            x12_segments.append(f"N4*{customer_address['city']}*{state}*{postal}*{country}~")
-        logger.info(f"✅ _convert_xml_to_x12_content: Customer address segments added")
-        
+            x12_segments.append(
+                f"N4*{customer_address['city']}*{state}*{postal}*{country}~")
+        logger.info(
+            f"✅ _convert_xml_to_x12_content: Customer address segments added")
+
         # Payment terms segment (exact same logic as old API)
         payment_terms_elem = root.find(".//cac:PaymentTerms/cbc:Note", ns)
         if payment_terms_elem is not None and payment_terms_elem.text:
@@ -1565,75 +1864,92 @@ def _convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
                 term = "1"
             x12_segments.append(f"ITD*01*{term}~")
             logger.info(f"✅ _convert_xml_to_x12_content: ITD segment added")
-        
+
         # Due date segment (exact same logic as old API)
         due_date_elem = root.find(".//cbc:DueDate", ns)
         if due_date_elem is not None and due_date_elem.text:
-            due_date = datetime.strptime(due_date_elem.text.strip(), "%Y-%m-%d").strftime("%Y%m%d")
+            due_date = datetime.strptime(
+                due_date_elem.text.strip(), "%Y-%m-%d").strftime("%Y%m%d")
             x12_segments.append(f"DTM*011*{due_date}~")
             logger.info(f"✅ _convert_xml_to_x12_content: DTM segment added")
-        
+
         # Delivery segment (exact same logic as old API)
         delivery = root.find(".//cac:Delivery", ns)
         if delivery is not None:
             x12_segments.append("FOB*CC~")
             logger.info(f"✅ _convert_xml_to_x12_content: FOB segment added")
-        
+
         # Invoice lines (exact same logic as old API)
         invoice_lines = root.findall(".//cac:InvoiceLine", ns)
-        logger.info(f"📊 _convert_xml_to_x12_content: Processing {len(invoice_lines)} invoice lines")
-        
+        logger.info(
+            f"📊 _convert_xml_to_x12_content: Processing {len(invoice_lines)} invoice lines")
+
         for idx, line in enumerate(invoice_lines, 1):
             quantity_elem = line.find("cbc:InvoicedQuantity", ns)
             price_elem = line.find(".//cac:Price/cbc:PriceAmount", ns)
-            product_elem = line.find(".//cac:Item/cac:SellersItemIdentification/cbc:ID", ns)
-            
-            quantity_val = quantity_elem.text.strip() if quantity_elem is not None and quantity_elem.text else "0"
-            price_val = _format_number(price_elem.text) if price_elem is not None and price_elem.text else "0"
-            product_code = product_elem.text.strip() if product_elem is not None and product_elem.text else ""
-            
-            x12_segments.append(f"IT1*{idx}*{quantity_val}*EA*{price_val}*CP*VP*{product_code}~")
-        
-        logger.info(f"✅ _convert_xml_to_x12_content: {len(invoice_lines)} IT1 segments added")
-        
+            product_elem = line.find(
+                ".//cac:Item/cac:SellersItemIdentification/cbc:ID", ns)
+
+            quantity_val = quantity_elem.text.strip(
+            ) if quantity_elem is not None and quantity_elem.text else "0"
+            price_val = _format_number(
+                price_elem.text) if price_elem is not None and price_elem.text else "0"
+            product_code = product_elem.text.strip(
+            ) if product_elem is not None and product_elem.text else ""
+
+            x12_segments.append(
+                f"IT1*{idx}*{quantity_val}*EA*{price_val}*CP*VP*{product_code}~")
+
+        logger.info(
+            f"✅ _convert_xml_to_x12_content: {len(invoice_lines)} IT1 segments added")
+
         # Total amount segment (exact same logic as old API)
-        total_amount_elem = root.find(".//cac:LegalMonetaryTotal/cbc:PayableAmount", ns)
+        total_amount_elem = root.find(
+            ".//cac:LegalMonetaryTotal/cbc:PayableAmount", ns)
         if total_amount_elem is not None and total_amount_elem.text:
             formatted_total = _format_number(total_amount_elem.text)
             x12_segments.append(f"TDS*{formatted_total}~")
             logger.info(f"✅ _convert_xml_to_x12_content: TDS segment added")
-        
+
         # Transaction totals segment (exact same logic as old API)
-        hash_total = sum(int(line.find("cbc:ID", ns).text.lstrip("0") or "0") for line in invoice_lines)
+        hash_total = sum(int(line.find("cbc:ID", ns).text.lstrip(
+            "0") or "0") for line in invoice_lines)
         x12_segments.append(f"CTT*{len(invoice_lines)}*{hash_total}~")
         logger.info(f"✅ _convert_xml_to_x12_content: CTT segment added")
-        
+
         # Transaction set trailer (exact same logic as old API)
-        st_index = next(i for i, seg in enumerate(x12_segments) if seg.startswith("ST"))
+        st_index = next(i for i, seg in enumerate(
+            x12_segments) if seg.startswith("ST"))
         transaction_segment_count = len(x12_segments) - st_index + 1
-        x12_segments.append(f"SE*{transaction_segment_count}*{control_numbers.transaction_control}~")
+        x12_segments.append(
+            f"SE*{transaction_segment_count}*{control_numbers.transaction_control}~")
         logger.info(f"✅ _convert_xml_to_x12_content: SE segment added")
-        
+
         # Functional group trailer (exact same logic as old API)
         x12_segments.append(f"GE*1*{control_numbers.group_control}~")
         logger.info(f"✅ _convert_xml_to_x12_content: GE segment added")
-        
+
         # Interchange control trailer (exact same logic as old API)
         x12_segments.append(f"IEA*1*{control_numbers.interchange_control}~")
         logger.info(f"✅ _convert_xml_to_x12_content: IEA segment added")
-        
+
         # Join segments with newlines (exact same logic as old API)
         result = "\n".join(x12_segments)
-        
-        logger.info(f"✅ _convert_xml_to_x12_content: X12 conversion completed successfully")
-        logger.info(f"📊 _convert_xml_to_x12_content: Generated {len(x12_segments)} segments")
-        logger.info(f"📊 _convert_xml_to_x12_content: Total content length: {len(result)} characters")
-        
+
+        logger.info(
+            f"✅ _convert_xml_to_x12_content: X12 conversion completed successfully")
+        logger.info(
+            f"📊 _convert_xml_to_x12_content: Generated {len(x12_segments)} segments")
+        logger.info(
+            f"📊 _convert_xml_to_x12_content: Total content length: {len(result)} characters")
+
         return result
-        
+
     except Exception as e:
-        logger.error(f"❌ _convert_xml_to_x12_content: Conversion error: {str(e)}")
+        logger.error(
+            f"❌ _convert_xml_to_x12_content: Conversion error: {str(e)}")
         return None
+
 
 @router.post("/process", response_model=InvoiceProcessingResponse)
 async def process_invoice(
@@ -1642,10 +1958,11 @@ async def process_invoice(
     db: Session = Depends(get_db),
     request: Request = None,
     current_user: ZodiacUser = Depends(get_current_user)
-    #current_user:str="DEMO"
+    # current_user:str="DEMO"
 ):
     """Process uploaded invoice file with XML validation and EDI conversion (Web UI)"""
     return await _process_invoice_internal(file, strict_validation, db, request, current_user, "web")
+
 
 @router.post("/api/process", response_model=InvoiceProcessingResponse)
 async def process_invoice_api(
@@ -1654,10 +1971,11 @@ async def process_invoice_api(
     db: Session = Depends(get_db),
     request: Request = None,
     api_user: ZodiacUser = Depends(get_api_user)
-    #api_user:str = "DEMO"
+    # api_user:str = "DEMO"
 ):
     """Process uploaded invoice file with XML validation and EDI conversion (API Key)"""
     return await _process_invoice_internal(file, strict_validation, db, request, api_user, "api")
+
 
 async def _process_invoice_internal(
     file: UploadFile,
@@ -1669,7 +1987,7 @@ async def _process_invoice_internal(
 ):
     """Process uploaded invoice file with XML validation and EDI conversion
     Supports both web authentication (JWT) and API key authentication
-    
+
     Args:
         file: Uploaded XML file
         strict_validation: If True, performs strict XML content validation (default: False for old API compatibility)
@@ -1677,30 +1995,32 @@ async def _process_invoice_internal(
         request: HTTP request object
         api_user: Optional API key authenticated user
     """
-    
+
     import time
     start_time = time.time()
-    
+
     # Authentication method determined by caller
     if request_type == "api":
         client_ip = get_client_ip(request) if request else "unknown"
-        #logger.info(f"🔑 API request from IP: {client_ip}, User: {current_user.id}")
+        # logger.info(f"🔑 API request from IP: {client_ip}, User: {current_user.id}")
     else:
-        #logger.info(f"🌐 Web request, User: {current_user.id}")
+        # logger.info(f"🌐 Web request, User: {current_user.id}")
         pass
-    
+
     logger.info(f"🚀 ===== INVOICE PROCESSING STARTED =====")
-    #logger.info(f"👤 User ID: {current_user.id}")
+    # logger.info(f"👤 User ID: {current_user.id}")
     logger.info(f"📋 Request Type: {request_type}")
-    logger.info(f"📁 File details: filename={file.filename}, content_type={file.content_type}, size={file.size}")
+    logger.info(
+        f"📁 File details: filename={file.filename}, content_type={file.content_type}, size={file.size}")
     logger.info(f"🔍 Strict validation mode: {strict_validation}")
-    logger.info(f"⏰ Start time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
-    
+    logger.info(
+        f"⏰ Start time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
+
     # Generate tracking ID
     tracking_id = uuid.uuid4()
     logger.info(f"🆔 Generated tracking ID: {tracking_id}")
     logger.info(f"📋 Processing steps: 1) File Upload → 2) XML Validation → 3) EDI Conversion → 4) EDI Format Validation → 5) Database Save")
-    
+
     # Initialize response with enhanced error tracking
     response = InvoiceProcessingResponse(
         invoice_operation_success=False,
@@ -1714,11 +2034,11 @@ async def _process_invoice_internal(
         suggested_actions=[],
         warnings=[]
     )
-    
+
     # Track processing steps
     processing_steps = []
     all_errors = []
-    
+
     try:
         # Step 1: File Upload
         step1_start = time.time()
@@ -1726,51 +2046,57 @@ async def _process_invoice_internal(
         logger.info(f"📁 Processing file: {file.filename}")
         logger.info(f"📊 File size: {file.size} bytes")
         logger.info(f"📋 Content type: {file.content_type}")
-        
+
         # Validate content type to match old API behavior
         if file.content_type != "text/xml":
             error_msg = f"Only XML files are accepted. Received: {file.content_type}"
             logger.error(f"❌ STEP 1 FAILED: {error_msg}")
             response.file_upload_message = error_msg
-            logger.info(f"📤 Returning 400 Bad Request for tracking ID {tracking_id}")
+            logger.info(
+                f"📤 Returning 400 Bad Request for tracking ID {tracking_id}")
             # Convert UUID to string for JSON serialization
             response_dict = response.dict()
             response_dict['tracking_id'] = str(response_dict['tracking_id'])
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=response_dict)
-        
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=response_dict)
+
         logger.info(f"🔍 Checking filename for tracking ID {tracking_id}")
-        
+
         if not file.filename:
-            logger.error(f"❌ STEP 1 FAILED: No filename provided for tracking ID {tracking_id}")
+            logger.error(
+                f"❌ STEP 1 FAILED: No filename provided for tracking ID {tracking_id}")
             response.file_upload_message = "No filename provided"
-            logger.info(f"📤 Returning 400 Bad Request for tracking ID {tracking_id}")
+            logger.info(
+                f"📤 Returning 400 Bad Request for tracking ID {tracking_id}")
             # Convert UUID to string for JSON serialization
             response_dict = response.dict()
             response_dict['tracking_id'] = str(response_dict['tracking_id'])
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=response_dict)
-        
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=response_dict)
+
         logger.info(f"✅ Filename validation passed: {file.filename}")
-        
+
         # Save uploaded file
         xml_filename = f"{tracking_id}_{file.filename}"
         logger.info(f"💾 Saving file: {xml_filename}")
         logger.info(f"📁 Target filename: {xml_filename}")
-        
+
         # Read file content
         content = await file.read()
         logger.info(f"📊 File size: {len(content)} bytes")
-        
+
         # Save to appropriate storage (local or Vercel Blob)
         xml_path = await save_file_to_storage(content, xml_filename, "uploads")
         logger.info(f"✅ File saved successfully!")
         logger.info(f"📁 Saved as: {xml_filename}")
         logger.info(f"📍 Storage path: {xml_path}")
-        
+
         step1_duration = time.time() - step1_start
         response.file_upload_pass = True
         response.file_upload_message = "File uploaded successfully"
-        logger.info(f"✅ STEP 1 COMPLETED: File upload successful (took {step1_duration:.3f}s)")
-        
+        logger.info(
+            f"✅ STEP 1 COMPLETED: File upload successful (took {step1_duration:.3f}s)")
+
         # Record successful step
         processing_steps.append(ProcessingStepResult(
             step_name="File Upload",
@@ -1779,81 +2105,105 @@ async def _process_invoice_internal(
             duration_seconds=step1_duration,
             message="File uploaded successfully"
         ))
-        
+
         # Add file content preview for error context
         try:
             file_content_bytes = await read_file_from_storage(xml_path, None, None)
             file_content = file_content_bytes.decode('utf-8')
-            response.file_content_preview = file_content[:500] + "..." if len(file_content) > 500 else file_content
+            response.file_content_preview = file_content[:500] + "..." if len(
+                file_content) > 500 else file_content
         except Exception as e:
             logger.warning(f"⚠️ Could not read file content for preview: {e}")
             response.file_content_preview = "Unable to read file content"
-        
+
         # Step 2: XML Validation
         step2_start = time.time()
         logger.info(f"🔍 ===== STEP 2: XML VALIDATION =====")
         logger.info(f"📄 Validating XML file: {xml_path}")
         logger.info(f"🔍 Calling validate_xml function...")
-        
-        xml_valid, xml_message, xml_warnings = validate_xml(xml_path, strict_validation)
+
+        xml_valid, xml_message, xml_warnings = validate_xml(
+            xml_path, strict_validation)
         response.xml_validation_pass = xml_valid
         response.xml_convert_message = xml_message
         response.warnings.extend(xml_warnings)  # Add warnings to response
-        
+
         step2_duration = time.time() - step2_start
         logger.info(f"🔍 XML validation completed in {step2_duration:.3f}s")
         logger.info(f"📊 XML validation result: {xml_valid}")
         logger.info(f"📝 XML validation message: {xml_message}")
-        
+
         # Log warnings if any (non-blocking)
         if xml_warnings:
             logger.info(f"⚠️ XML validation warnings ({len(xml_warnings)}):")
             for warning in xml_warnings:
                 logger.warning(f"   - {warning}")
-        
+
         # Only fail if XML is not well-formed (parsing error) or strict validation fails
         if not xml_valid:
-            logger.error(f"❌ STEP 2 FAILED: XML validation failed for tracking ID {tracking_id}")
+            logger.error(
+                f"❌ STEP 2 FAILED: XML validation failed for tracking ID {tracking_id}")
             logger.error(f"💥 Failure reason: {xml_message}")
-            
+
             # ======================================================
             # 🤖 AI AUTOCORRECTION ATTEMPT (only on XML validation failure)
             # ======================================================
             try:
-                logger.info(f"🤖 Attempting AI autocorrection for failed XML validation (tracking ID: {tracking_id})")
+                logger.info(
+                    f"🤖 Attempting AI autocorrection for failed XML validation (tracking ID: {tracking_id})")
                 xml_bytes = await read_file_from_storage(xml_path, None, None)
                 xml_text = xml_bytes.decode("utf-8")
-                
+
                 was_corrected, corrected_xml = await auto_correct_xml_with_ai(xml_text, strict_validation)
-                
-                    
+
                 if was_corrected:
-                    logger.info(f"✅ AI produced corrected XML. Saving and retrying validation...")
+                    logger.info(
+                        f"✅ AI produced corrected XML. Saving and retrying validation...")
                     # Save corrected version over original
                     xml_path = await save_file_to_storage(corrected_xml.encode("utf-8"), xml_filename, "uploads")
 
                     # Retry validation once
-                    xml_valid, xml_message, xml_warnings = validate_xml(xml_path, strict_validation)
+                    xml_valid, xml_message, xml_warnings = validate_xml(
+                        xml_path, strict_validation)
                     response.xml_validation_pass = xml_valid
                     response.xml_convert_message = xml_message
                     response.warnings.extend(xml_warnings)
 
                     if xml_valid:
-                        logger.info(f"🎉 AI autocorrection fixed the XML issues! Proceeding to next step.")
-                        response.warnings.append("AI autocorrection fixed XML issues automatically")
+                        logger.info(
+                            f"🎉 AI autocorrection fixed the XML issues! Proceeding to next step.")
+                        response.warnings.append(
+                            "AI autocorrection fixed XML issues automatically")
                     else:
-                        logger.warning(f"⚠️ AI attempted correction but validation still failed: {xml_message}")
+                        logger.warning(
+                            f"⚠️ AI attempted correction but validation still failed: {xml_message}")
                 else:
-                    logger.info(f"ℹ️ AI could not find a valid correction; keeping original XML.")
+                    logger.info(
+                        f"ℹ️ AI could not find a valid correction; keeping original XML.")
 
             except Exception as e:
-                logger.warning(f"⚠️ AI autocorrection skipped due to error: {e}")
+                logger.warning(
+                    f"⚠️ AI autocorrection skipped due to error: {e}")
             # ======================================================
 
-            # If after retry it’s still invalid, continue with failure handling
+            # If after retry it's still invalid, continue with failure handling
             if not xml_valid:
                 xml_errors = []
-                if "Strict validation failed" in xml_message:
+                # Check for sender/receiver ID validation errors
+                if "Sender/Receiver ID validation failed" in xml_message or "Sender ID" in xml_message or "Receiver ID" in xml_message:
+                    xml_errors.append(ErrorDetail(
+                        step="XML_VALIDATION",
+                        error_type="MISSING_SENDER_RECEIVER_ID",
+                        error_message=xml_message,
+                        suggestions=[
+                            "Add EndpointID element in AccountingSupplierParty/cac:Party/cbc:EndpointID",
+                            "Add EndpointID element in AccountingCustomerParty/cac:Party/cbc:EndpointID",
+                            "Alternatively, add CompanyID in PartyLegalEntity/cbc:CompanyID for supplier or customer",
+                            "Ensure the ID values are not empty",
+                            "Sender ID (Supplier) and Receiver ID (Customer) are required fields"
+                        ]
+                    ))
+                elif "Strict validation failed" in xml_message:
                     if xml_warnings:
                         for warning in xml_warnings:
                             xml_errors.append(ErrorDetail(
@@ -1893,7 +2243,7 @@ async def _process_invoice_internal(
 
                 all_errors.extend(xml_errors)
                 # (… keep the rest of your original failure handling: DB save, response etc.)
-            
+
             # Record failed step
             processing_steps.append(ProcessingStepResult(
                 step_name="XML Validation",
@@ -1903,9 +2253,9 @@ async def _process_invoice_internal(
                 error_details=xml_errors,
                 message=xml_message
             ))
-            
+
             logger.info(f"💾 Saving failed invoice to database...")
-            
+
             # Determine blob paths for XML file
             blob_xml_path = None
             if USE_BLOB_STORAGE and xml_path and isinstance(xml_path, dict):
@@ -1913,12 +2263,13 @@ async def _process_invoice_internal(
                 logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
             else:
                 logger.info(f"📁 Using local XML path: {xml_path}")
-            
+
             # Save to failed table
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path) if isinstance(xml_path, str) else (xml_path.get('pathname', str(xml_path)) if xml_path and isinstance(xml_path, dict) else str(xml_path)),
+                xml_path=str(xml_path) if isinstance(xml_path, str) else (xml_path.get('pathname', str(
+                    xml_path)) if xml_path and isinstance(xml_path, dict) else str(xml_path)),
                 xml_validation_pass=False,
                 xml_convert_message=xml_message,
                 edi_convert_pass=False,
@@ -1930,8 +2281,9 @@ async def _process_invoice_internal(
             )
             db.add(failed_invoice)
             db.commit()
-            logger.info(f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
-            
+            logger.info(
+                f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
+
             # Prepare comprehensive error response
             response.processing_steps = processing_steps
             response.error_summary = {
@@ -1946,12 +2298,14 @@ async def _process_invoice_internal(
                 ]
             }
             response.suggested_actions = response.error_summary["suggested_actions"]
-            
+
             # Return 200 OK with structured error response (file upload succeeded, processing failed)
             total_duration = time.time() - start_time
-            logger.info(f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
+            logger.info(
+                f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
             logger.info(f"⏱️ Total processing time: {total_duration:.3f}s")
-            logger.info(f"🚫 ===== INVOICE PROCESSING FAILED (XML VALIDATION) =====")
+            logger.info(
+                f"🚫 ===== INVOICE PROCESSING FAILED (XML VALIDATION) =====")
             # Convert UUID to string for JSON serialization
             response_dict = response.dict()
             response_dict['tracking_id'] = str(response_dict['tracking_id'])
@@ -1960,15 +2314,17 @@ async def _process_invoice_internal(
                 status_code=status.HTTP_200_OK,
                 media_type="application/json"
             )
-        
+
         # Record successful XML validation step with warning status
         if xml_warnings:
             message = f"XML validation passed with {len(xml_warnings)} warnings"
-            logger.info(f"⚠️ STEP 2 COMPLETED: XML validation passed with warnings (took {step2_duration:.3f}s)")
+            logger.info(
+                f"⚠️ STEP 2 COMPLETED: XML validation passed with warnings (took {step2_duration:.3f}s)")
         else:
             message = "XML validation passed"
-            logger.info(f"✅ STEP 2 COMPLETED: XML validation passed cleanly (took {step2_duration:.3f}s)")
-        
+            logger.info(
+                f"✅ STEP 2 COMPLETED: XML validation passed cleanly (took {step2_duration:.3f}s)")
+
         processing_steps.append(ProcessingStepResult(
             step_name="XML Validation",
             step_number=2,
@@ -1982,13 +2338,13 @@ async def _process_invoice_internal(
                 suggestions=["Review XML content for potential improvements"]
             ) for warning in xml_warnings] if xml_warnings else []
         ))
-        
+
         # Update response message to reflect warning status
         if xml_warnings:
             response.xml_convert_message = f"XML validation passed with {len(xml_warnings)} warnings"
         else:
             response.xml_convert_message = "XML validation passed"
-        
+
         # Step 3: EDI Conversion
         step3_start = time.time()
         logger.info(f"🔄 ===== STEP 3: EDI CONVERSION =====")
@@ -1997,18 +2353,19 @@ async def _process_invoice_internal(
         logger.info(f"📁 Source XML: {xml_path}")
         logger.info(f"📁 Target X12 filename: {x12_filename}")
         logger.info(f"🔍 Calling convert_xml_to_x12 function...")
-        
+
         edi_success, edi_message, x12_path = await convert_xml_to_x12(xml_path, x12_filename)
         response.edi_convert_pass = edi_success
         response.edi_convert_message = edi_message
-        
+
         step3_duration = time.time() - step3_start
         logger.info(f"🔄 EDI conversion completed in {step3_duration:.3f}s")
         logger.info(f"📊 EDI conversion result: {edi_success}")
         logger.info(f"📝 EDI conversion message: {edi_message}")
-        
+
         if not edi_success:
-            logger.error(f"❌ STEP 3 FAILED: EDI conversion failed for tracking ID {tracking_id}")
+            logger.error(
+                f"❌ STEP 3 FAILED: EDI conversion failed for tracking ID {tracking_id}")
 
             # Collect structured errors from your earlier logic
             edi_errors = []
@@ -2033,7 +2390,8 @@ async def _process_invoice_internal(
 
             # Read XML + EDI content
             xml_content = Path(xml_path).read_text(encoding="utf-8")
-            edi_content = Path(x12_path).read_text(encoding="utf-8") if Path(x12_path).exists() else ""
+            edi_content = Path(x12_path).read_text(
+                encoding="utf-8") if Path(x12_path).exists() else ""
 
             # 🧠 Call AI fixer with structured errors
             was_fixed, corrected_edi = await auto_fix_edi_with_ai(
@@ -2044,18 +2402,19 @@ async def _process_invoice_internal(
             )
 
             if was_fixed:
-                ai_fixed_path = Path(x12_path).with_name(Path(x12_path).stem + "_ai_fixed.x12")
+                ai_fixed_path = Path(x12_path).with_name(
+                    Path(x12_path).stem + "_ai_fixed.x12")
                 ai_fixed_path.write_text(corrected_edi, encoding="utf-8")
                 edi_success = True
                 edi_message = "AI correction successful."
                 x12_path = str(ai_fixed_path)
-                logger.info(f"✅ AI successfully corrected EDI fields and fixed reported errors.")
+                logger.info(
+                    f"✅ AI successfully corrected EDI fields and fixed reported errors.")
 
             else:
-                    logger.warning(f"⚠️ AI could not correct EDI content. Proceeding with failure handling.")
-            
+                logger.warning(
+                    f"⚠️ AI could not correct EDI content. Proceeding with failure handling.")
 
-            
             # Parse EDI conversion errors
             edi_errors = []
             if "XML parsing error" in edi_message:
@@ -2091,9 +2450,9 @@ async def _process_invoice_internal(
                         "Verify data integrity"
                     ]
                 ))
-            
+
             all_errors.extend(edi_errors)
-            
+
             # Record failed step
             processing_steps.append(ProcessingStepResult(
                 step_name="EDI Conversion",
@@ -2103,13 +2462,13 @@ async def _process_invoice_internal(
                 error_details=edi_errors,
                 message=edi_message
             ))
-            
+
             logger.info(f"💾 Saving failed invoice to database...")
-            
+
             # Determine blob paths for XML and EDI files
             blob_xml_path = None
             blob_edi_path = None
-            
+
             if USE_BLOB_STORAGE:
                 if xml_path and isinstance(xml_path, dict):
                     blob_xml_path = xml_path.get('url')
@@ -2118,16 +2477,19 @@ async def _process_invoice_internal(
                     blob_edi_path = x12_path.get('url')
                     logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
             else:
-                logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
-            
+                logger.info(
+                    f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+
             # Save to failed table
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                xml_path=str(xml_path) if isinstance(
+                    xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=True,
                 xml_convert_message="XML validation passed",
-                edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
+                edi_path=str(x12_path) if isinstance(
+                    x12_path, str) else x12_path.get('pathname', str(x12_path)),
                 edi_convert_pass=False,
                 edi_convert_message=edi_message,
                 processing_steps_error=[error.dict() for error in all_errors],
@@ -2136,8 +2498,9 @@ async def _process_invoice_internal(
             )
             db.add(failed_invoice)
             db.commit()
-            logger.info(f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
-            
+            logger.info(
+                f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
+
             # Prepare comprehensive error response
             response.processing_steps = processing_steps
             response.error_summary = {
@@ -2152,12 +2515,14 @@ async def _process_invoice_internal(
                 ]
             }
             response.suggested_actions = response.error_summary["suggested_actions"]
-            
+
             # Return 200 OK with structured error response (file upload succeeded, processing failed)
             total_duration = time.time() - start_time
-            logger.info(f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
+            logger.info(
+                f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
             logger.info(f"⏱️ Total processing time: {total_duration:.3f}s")
-            logger.info(f"🚫 ===== INVOICE PROCESSING FAILED (EDI CONVERSION) =====")
+            logger.info(
+                f"🚫 ===== INVOICE PROCESSING FAILED (EDI CONVERSION) =====")
             # Convert UUID to string for JSON serialization
             response_dict = response.dict()
             response_dict['tracking_id'] = str(response_dict['tracking_id'])
@@ -2166,7 +2531,7 @@ async def _process_invoice_internal(
                 status_code=status.HTTP_200_OK,
                 media_type="application/json"
             )
-        
+
         # Record successful EDI conversion step
         processing_steps.append(ProcessingStepResult(
             step_name="EDI Conversion",
@@ -2175,24 +2540,28 @@ async def _process_invoice_internal(
             duration_seconds=step3_duration,
             message="EDI conversion completed successfully"
         ))
-        
-        logger.info(f"✅ STEP 3 COMPLETED: EDI conversion successful (took {step3_duration:.3f}s)")
-        
+
+        logger.info(
+            f"✅ STEP 3 COMPLETED: EDI conversion successful (took {step3_duration:.3f}s)")
+
         # Step 4: EDI Format Validation
         step4_start = time.time()
         logger.info(f"🔍 ===== STEP 4: EDI FORMAT VALIDATION =====")
-        logger.info(f"📄 Validating EDI format fields for correct values, format, and length")
+        logger.info(
+            f"📄 Validating EDI format fields for correct values, format, and length")
         logger.info(f"🔍 Calling validate_edi_format function...")
-        
+
         edi_format_valid, edi_format_message, edi_format_details = await validate_edi_format(x12_path)
-        
+
         step4_duration = time.time() - step4_start
-        logger.info(f"🔍 EDI format validation completed in {step4_duration:.3f}s")
+        logger.info(
+            f"🔍 EDI format validation completed in {step4_duration:.3f}s")
         logger.info(f"📊 EDI format validation result: {edi_format_valid}")
         logger.info(f"📝 EDI format validation message: {edi_format_message}")
-        
+
         if not edi_format_valid:
-            logger.error(f"❌ STEP 4 FAILED: EDI format validation failed for tracking ID {tracking_id}")
+            logger.error(
+                f"❌ STEP 4 FAILED: EDI format validation failed for tracking ID {tracking_id}")
             logger.error(f"💥 Failure reason: {edi_format_message}")
 
             # Parse EDI format validation errors
@@ -2228,33 +2597,33 @@ async def _process_invoice_internal(
             all_errors.extend(edi_format_errors)
 
             # 🧠 Step 4A: Attempt AI-assisted correction for EDI format errors
-            logger.info(f"🤖 Attempting AI-assisted correction for EDI format issues...")
+            logger.info(
+                f"🤖 Attempting AI-assisted correction for EDI format issues...")
             try:
                 blob_xml_path = None
                 blob_edi_path = None
-                
+
                 if USE_BLOB_STORAGE:
                     if xml_path and isinstance(xml_path, dict):
                         blob_xml_path = xml_path.get('url')
-                        logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
+                        logger.info(
+                            f"🔗 Extracted blob XML URL: {blob_xml_path}")
                     if x12_path and isinstance(x12_path, dict):
                         blob_edi_path = x12_path.get('url')
-                        logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+                        logger.info(
+                            f"🔗 Extracted blob EDI URL: {blob_edi_path}")
                 else:
-                    logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+                    logger.info(
+                        f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
                 if blob_xml_path and USE_BLOB_STORAGE and blob_edi_path:
-                    xml_content_1 = await read_file_from_storage(None,blob_xml_path,None)
+                    xml_content_1 = await read_file_from_storage(None, blob_xml_path, None)
                     xml_content = xml_content_1.decode('utf-8')
-                    edi_content_1 = await read_file_from_storage(None,None,blob_edi_path)
+                    edi_content_1 = await read_file_from_storage(None, None, blob_edi_path)
                     edi_content = edi_content_1.decode('utf-8')
                 else:
                     xml_content = Path(xml_path).read_text(encoding="utf-8")
-                    edi_content = Path(x12_path).read_text(encoding="utf-8") if Path(x12_path).exists() else ""
-
-                
-                
-           
-                
+                    edi_content = Path(x12_path).read_text(
+                        encoding="utf-8") if Path(x12_path).exists() else ""
 
                 # Call the AI fixer
                 was_fixed, corrected_edi = await auto_fix_edi_with_ai(
@@ -2264,36 +2633,38 @@ async def _process_invoice_internal(
                     strict_validation=True
                 )
 
-                
-                
-                
-                
-                
-                
-
                 if was_fixed:
-                    
+
                     try:
                         # Try saving to Vercel Blob storage first
                         blob_path = str(x12_path)
                         if USE_BLOB_STORAGE:
-                              # define your blob path accordingly
-                            logger.info(f"⏳ Trying to save AI fixed EDI to blob: {blob_path}")
-                            vercel_blob.put(blob_path, corrected_edi.encode('utf-8'))
-                            logger.info(f"✅ AI successfully corrected EDI saved to blob: {blob_path}")
+                            # define your blob path accordingly
+                            logger.info(
+                                f"⏳ Trying to save AI fixed EDI to blob: {blob_path}")
+                            vercel_blob.put(
+                                blob_path, corrected_edi.encode('utf-8'))
+                            logger.info(
+                                f"✅ AI successfully corrected EDI saved to blob: {blob_path}")
                         else:
-                            raise Exception("Blob storage disabled, skipping blob save")
+                            raise Exception(
+                                "Blob storage disabled, skipping blob save")
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to save AI corrected EDI to blob storage: {e}")
+                        logger.warning(
+                            f"⚠️ Failed to save AI corrected EDI to blob storage: {e}")
                         # Fallback to saving locally
                         try:
-                            ai_fixed_path = Path(x12_path).with_name(ai_fixed_filename)
-                            ai_fixed_path.write_text(corrected_edi, encoding="utf-8")
-                            logger.info(f"✅ AI successfully corrected EDI format issues, saved locally to: {ai_fixed_path}")
+                            ai_fixed_path = Path(x12_path).with_name(
+                                ai_fixed_filename)
+                            ai_fixed_path.write_text(
+                                corrected_edi, encoding="utf-8")
+                            logger.info(
+                                f"✅ AI successfully corrected EDI format issues, saved locally to: {ai_fixed_path}")
                         except Exception as e_local:
-                            logger.error(f"❌ Failed to save AI corrected EDI locally as fallback. Error: {e_local}")
-                            
-                    #logger.info(f"✅ AI successfully corrected EDI format issues, saved to: {ai_fixed_path}")
+                            logger.error(
+                                f"❌ Failed to save AI corrected EDI locally as fallback. Error: {e_local}")
+
+                    # logger.info(f"✅ AI successfully corrected EDI format issues, saved to: {ai_fixed_path}")
 
                     # Optional: re-run validation
                     try:
@@ -2301,19 +2672,20 @@ async def _process_invoice_internal(
                         edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = await validate_edi_format(ai_fixed_path)
                     except:
                         edi_format_valid_retry, edi_format_message_retry, edi_format_details_retry = True, False, False
-                        #traceback.print_exc()
-                        
-                        
+                        # traceback.print_exc()
 
                     if edi_format_valid_retry:
-                        logger.info("✅ AI correction successful — EDI passed re-validation.")
+                        logger.info(
+                            "✅ AI correction successful — EDI passed re-validation.")
                         edi_format_valid = True
                         edi_format_message = "AI correction successful and EDI passed format validation."
-                        #x12_path = str(ai_fixed_path)
+                        # x12_path = str(ai_fixed_path)
                     else:
-                        logger.warning("⚠️ AI attempted correction, but EDI still failed format validation.")
+                        logger.warning(
+                            "⚠️ AI attempted correction, but EDI still failed format validation.")
                 else:
-                    logger.warning("⚠️ AI could not improve EDI format; proceeding with failure handling.")
+                    logger.warning(
+                        "⚠️ AI could not improve EDI format; proceeding with failure handling.")
             except Exception as e:
                 traceback.print_exc()
                 logger.warning(f"🤖 AI format correction attempt failed: {e}")
@@ -2323,11 +2695,6 @@ async def _process_invoice_internal(
                 response.edi_convert_pass = False
                 response.edi_convert_message = f"EDI conversion completed but format validation failed: {edi_format_message}"
 
-        
-
-            
-            
-            
                 # Record failed step
                 processing_steps.append(ProcessingStepResult(
                     step_name="EDI Format Validation",
@@ -2336,42 +2703,49 @@ async def _process_invoice_internal(
                     duration_seconds=step4_duration,
                     error_details=edi_format_errors,
                     message=edi_format_message
-                    ))
-            
+                ))
+
                 logger.info(f"💾 Saving failed invoice to database...")
-            
+
                 # Determine blob paths for XML and EDI files
                 blob_xml_path = None
                 blob_edi_path = None
-                
+
                 if USE_BLOB_STORAGE:
                     if xml_path and isinstance(xml_path, dict):
                         blob_xml_path = xml_path.get('url')
-                        logger.info(f"🔗 Extracted blob XML URL: {blob_xml_path}")
+                        logger.info(
+                            f"🔗 Extracted blob XML URL: {blob_xml_path}")
                     if x12_path and isinstance(x12_path, dict):
                         blob_edi_path = x12_path.get('url')
-                        logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
+                        logger.info(
+                            f"🔗 Extracted blob EDI URL: {blob_edi_path}")
                 else:
-                    logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
-                
+                    logger.info(
+                        f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+
                 # Save to failed table
                 failed_invoice = FailedModel(
                     tracking_id=tracking_id,
                     user_id=current_user.id,
-                    xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                    xml_path=str(xml_path) if isinstance(
+                        xml_path, str) else xml_path.get('pathname', str(xml_path)),
                     xml_validation_pass=True,
                     xml_convert_message="XML validation passed",
-                    edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
+                    edi_path=str(x12_path) if isinstance(
+                        x12_path, str) else x12_path.get('pathname', str(x12_path)),
                     edi_convert_pass=False,  # EDI format validation failed
                     edi_convert_message=f"EDI conversion completed but format validation failed: {edi_format_message}",
-                    processing_steps_error=[error.dict() for error in all_errors],
+                    processing_steps_error=[error.dict()
+                                            for error in all_errors],
                     blob_xml_path=blob_xml_path,
                     blob_edi_path=blob_edi_path
                 )
                 db.add(failed_invoice)
                 db.commit()
-                logger.info(f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
-                
+                logger.info(
+                    f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
+
                 # Prepare comprehensive error response
                 response.processing_steps = processing_steps
                 response.error_summary = {
@@ -2386,21 +2760,24 @@ async def _process_invoice_internal(
                     ]
                 }
                 response.suggested_actions = response.error_summary["suggested_actions"]
-                
+
                 # Return 200 OK with structured error response (file upload succeeded, processing failed)
                 total_duration = time.time() - start_time
-                logger.info(f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
+                logger.info(
+                    f"📤 Returning 200 OK for processing failure (file upload succeeded) for tracking ID {tracking_id}")
                 logger.info(f"⏱️ Total processing time: {total_duration:.3f}s")
-                logger.info(f"🚫 ===== INVOICE PROCESSING FAILED (EDI FORMAT VALIDATION) =====")
+                logger.info(
+                    f"🚫 ===== INVOICE PROCESSING FAILED (EDI FORMAT VALIDATION) =====")
                 # Convert UUID to string for JSON serialization
                 response_dict = response.dict()
-                response_dict['tracking_id'] = str(response_dict['tracking_id'])
+                response_dict['tracking_id'] = str(
+                    response_dict['tracking_id'])
                 return Response(
                     content=json.dumps(response_dict),
                     status_code=status.HTTP_200_OK,
                     media_type="application/json"
                 )
-            
+
         # Record successful EDI format validation step
         processing_steps.append(ProcessingStepResult(
             step_name="EDI Format Validation",
@@ -2409,19 +2786,21 @@ async def _process_invoice_internal(
             duration_seconds=step4_duration,
             message="EDI format validation passed"
         ))
-        
-        logger.info(f"✅ STEP 4 COMPLETED: EDI format validation successful (took {step4_duration:.3f}s)")
-        
+
+        logger.info(
+            f"✅ STEP 4 COMPLETED: EDI format validation successful (took {step4_duration:.3f}s)")
+
         # Step 5: Success - Save to success table
         step5_start = time.time()
         logger.info(f"🎉 ===== STEP 5: DATABASE SAVE (SUCCESS) =====")
         logger.info(f"💾 Saving successful invoice to database...")
-        logger.info(f"📊 Creating success record with tracking ID: {tracking_id}")
+        logger.info(
+            f"📊 Creating success record with tracking ID: {tracking_id}")
         try:
             # Determine blob paths for XML and EDI files
             blob_xml_path = None
             blob_edi_path = None
-            
+
             if USE_BLOB_STORAGE:
                 if xml_path and isinstance(xml_path, dict):
                     blob_xml_path = xml_path.get('url')
@@ -2430,11 +2809,14 @@ async def _process_invoice_internal(
                     blob_edi_path = x12_path.get('url')
                     logger.info(f"🔗 Extracted blob EDI URL: {blob_edi_path}")
             else:
-                logger.info(f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
+                logger.info(
+                    f"📁 Using local paths - XML: {xml_path}, EDI: {x12_path}")
             logger.info("NOW TRYING EXTERNAL SAVE")
             try:
-                customer_id,customer_name = extract_supplier_info_from_string(xml_content)
-                format_type = (check_customer_table(customer_id,customer_name)).lower()
+                customer_id, customer_name = extract_supplier_info_from_string(
+                    xml_content)
+                format_type = (check_customer_table(
+                    customer_id, customer_name)).lower()
             except:
                 logging.info("ERROR IN GETTING FORMAT")
                 format_type = 'edifact'
@@ -2442,72 +2824,73 @@ async def _process_invoice_internal(
             try:
                 logging.info(f"printing the xml_path {xml_content}")
                 file_content = xml_content
-                
-                
+
                 invoice_id = str(tracking_id)
-                results_external = await send_file_to_external(file_content,invoice_id,format_type)
+                results_external = await send_file_to_external(file_content, invoice_id, format_type)
                 logger.info(str(results_external))
                 logger.info("THE EXTERNAL UPLOAD was successful")
-                
+
             except:
-                
-                
+
                 logger.error("ERROR IN EXTERNAL")
-            
-            
-            
-        
+
             success_invoice = SuccessModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
-                xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                xml_path=str(xml_path) if isinstance(
+                    xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=True,
-                xml_convert_message=response.xml_convert_message,  # Use the updated message with warning info
-                edi_path=str(x12_path) if isinstance(x12_path, str) else x12_path.get('pathname', str(x12_path)),
+                # Use the updated message with warning info
+                xml_convert_message=response.xml_convert_message,
+                edi_path=str(x12_path) if isinstance(
+                    x12_path, str) else x12_path.get('pathname', str(x12_path)),
                 edi_convert_pass=True,
                 edi_convert_message="EDI conversion and format validation completed successfully",
                 blob_xml_path=blob_xml_path,
                 blob_edi_path=blob_edi_path,
                 request_type=request_type,
-                external_status = results_external.get('status'),
-                external_message = results_external.get('error',"No error")
-                
-                
+                external_status=results_external.get('status'),
+                external_message=results_external.get('error', "No error")
+
+
             )
             db.add(success_invoice)
             db.commit()
-            
+
             step5_duration = time.time() - step5_start
-            logger.info(f"💾 Successfully saved invoice to database (took {step5_duration:.3f}s)")
+            logger.info(
+                f"💾 Successfully saved invoice to database (took {step5_duration:.3f}s)")
             logger.info(f"✅ STEP 5 COMPLETED: Database save successful")
         except Exception as e:
             logger.info(f"Exception {e}")
-            
+
         response.invoice_operation_success = True
         response.processing_steps = processing_steps
         total_duration = time.time() - start_time
-        
+
         # Log warnings if any were found during processing
         if xml_warnings:
-            logger.info(f"⚠️ Processing completed with {len(xml_warnings)} XML validation warnings")
+            logger.info(
+                f"⚠️ Processing completed with {len(xml_warnings)} XML validation warnings")
             logger.info(f"📋 Warnings summary:")
             for warning in xml_warnings:
                 logger.warning(f"   - {warning}")
         else:
             logger.info(f"✅ Processing completed cleanly with no warnings")
-        
+
         logger.info(f"🎉 ===== INVOICE PROCESSING COMPLETED SUCCESSFULLY =====")
         logger.info(f"🆔 Tracking ID: {tracking_id}")
         logger.info(f"⏱️ Total processing time: {total_duration:.3f}s")
-        logger.info(f"📊 Step timings: Upload={step1_duration:.3f}s, XML={step2_duration:.3f}s, EDI={step3_duration:.3f}s, EDI_Format={step4_duration:.3f}s, DB={step5_duration:.3f}s")
+        logger.info(
+            f"📊 Step timings: Upload={step1_duration:.3f}s, XML={step2_duration:.3f}s, EDI={step3_duration:.3f}s, EDI_Format={step4_duration:.3f}s, DB={step5_duration:.3f}s")
         logger.info(f"📁 Files created: XML={xml_filename}, X12={x12_filename}")
-        
+
         # Return 201 Created for successful processing
         logger.info(f"📤 Returning 201 Created for tracking ID {tracking_id}")
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
         results_external = ""
-            
+
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
         response_dict['external_upload_status'] = results_external
         return Response(
@@ -2515,23 +2898,26 @@ async def _process_invoice_internal(
             status_code=status.HTTP_201_CREATED,
             media_type="application/json"
         )
-        
+
     except HTTPException:
         total_duration = time.time() - start_time
         logger.error(f"❌ ===== HTTP EXCEPTION RAISED =====")
         logger.error(f"🆔 Tracking ID: {tracking_id}")
-        logger.error(f"⏱️ Processing time before failure: {total_duration:.3f}s")
+        logger.error(
+            f"⏱️ Processing time before failure: {total_duration:.3f}s")
         logger.error(f"💥 HTTP Exception raised for tracking ID {tracking_id}")
         raise
     except Exception as e:
         total_duration = time.time() - start_time
         logger.error(f"💥 ===== UNEXPECTED ERROR =====")
         logger.error(f"🆔 Tracking ID: {tracking_id}")
-        logger.error(f"⏱️ Processing time before failure: {total_duration:.3f}s")
-        logger.error(f"💥 Unexpected error during invoice processing for tracking ID {tracking_id}: {str(e)}")
+        logger.error(
+            f"⏱️ Processing time before failure: {total_duration:.3f}s")
+        logger.error(
+            f"💥 Unexpected error during invoice processing for tracking ID {tracking_id}: {str(e)}")
         logger.error(f"🔍 Error type: {type(e).__name__}")
         logger.error(f"📝 Error details: {str(e)}")
-        
+
         # Provide more informative error message for client
         error_message = f"Processing failed: {str(e)}"
         if "blob storage" in str(e).lower():
@@ -2542,10 +2928,10 @@ async def _process_invoice_internal(
             error_message = "EDI conversion error: Unable to convert XML to EDI format"
         elif "database" in str(e).lower():
             error_message = "Database error: Unable to save processing results"
-        
+
         response.file_upload_message = error_message
         response.invoice_operation_success = False
-        
+
         # Add error to processing steps
         processing_steps.append({
             "step": "Error Handling",
@@ -2554,15 +2940,18 @@ async def _process_invoice_internal(
             "timestamp": time.time(),
             "duration": total_duration
         })
-        
+
         # Convert UUID to string for JSON serialization
         response_dict = response.dict()
         response_dict['tracking_id'] = str(response_dict['tracking_id'])
         response_dict['processing_steps'] = processing_steps
-        
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response_dict)
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response_dict)
 
 # API Key Management Endpoints
+
+
 @router.get("/api-key")
 async def get_api_key(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2571,21 +2960,21 @@ async def get_api_key(
     """Get the current user's API key information"""
     try:
         logger.info(f"🔑 API Key request for user {current_user.id}")
-        
+
         # Check if user has API access
         if not current_user.api_user_allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="API access is not allowed for this user"
             )
-        
+
         # Check if user has an API key
         if not current_user.api_key_hashed:
             return {
                 "has_key": False,
                 "message": "No API key generated yet"
             }
-        
+
         # Check if key is deactivated
         if current_user.api_key_deactivated_at:
             return {
@@ -2594,7 +2983,7 @@ async def get_api_key(
                 "deactivated_at": current_user.api_key_deactivated_at.isoformat(),
                 "message": "API key is deactivated"
             }
-        
+
         return {
             "has_key": True,
             "is_active": True,
@@ -2604,7 +2993,7 @@ async def get_api_key(
             "allow_list": current_user.api_key_allow_list or [],
             "message": "API key is active"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2614,6 +3003,7 @@ async def get_api_key(
             detail=f"Failed to get API key: {str(e)}"
         )
 
+
 @router.post("/api-key/generate")
 async def generate_new_api_key(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2622,29 +3012,30 @@ async def generate_new_api_key(
     """Generate a new API key for the current user"""
     try:
         logger.info(f"🔑 Generating new API key for user {current_user.id}")
-        
+
         # Check if user has API access
         if not current_user.api_user_allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="API access is not allowed for this user"
             )
-        
+
         # Generate new API key
         new_api_key = generate_api_key()
         hashed_key = hash_api_key(new_api_key)
-        
+
         # Update user record
         current_user.api_key_hashed = hashed_key
         current_user.api_key_created_at = datetime.utcnow()
         current_user.api_key_updated_at = datetime.utcnow()
-        current_user.api_key_deactivated_at = None  # Reactivate if previously deactivated
-        
+        # Reactivate if previously deactivated
+        current_user.api_key_deactivated_at = None
+
         db.commit()
         db.refresh(current_user)
-        
+
         logger.info(f"✅ New API key generated for user {current_user.id}")
-        
+
         return {
             "success": True,
             "api_key": encode_api_key_for_transport(new_api_key),
@@ -2652,7 +3043,7 @@ async def generate_new_api_key(
             "created_at": current_user.api_key_created_at.isoformat(),
             "message": "New API key generated successfully"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2662,6 +3053,7 @@ async def generate_new_api_key(
             detail=f"Failed to generate API key: {str(e)}"
         )
 
+
 @router.post("/api-key/regenerate")
 async def regenerate_api_key(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2670,28 +3062,29 @@ async def regenerate_api_key(
     """Regenerate API key for the current user (confirmation required)"""
     try:
         logger.info(f"🔑 Regenerating API key for user {current_user.id}")
-        
+
         # Check if user has API access
         if not current_user.api_user_allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="API access is not allowed for this user"
             )
-        
+
         # Generate new API key
         new_api_key = generate_api_key()
         hashed_key = hash_api_key(new_api_key)
-        
+
         # Update user record
         current_user.api_key_hashed = hashed_key
         current_user.api_key_updated_at = datetime.utcnow()
-        current_user.api_key_deactivated_at = None  # Reactivate if previously deactivated
-        
+        # Reactivate if previously deactivated
+        current_user.api_key_deactivated_at = None
+
         db.commit()
         db.refresh(current_user)
-        
+
         logger.info(f"✅ API key regenerated for user {current_user.id}")
-        
+
         return {
             "success": True,
             "api_key": encode_api_key_for_transport(new_api_key),
@@ -2699,7 +3092,7 @@ async def regenerate_api_key(
             "updated_at": current_user.api_key_updated_at.isoformat(),
             "message": "API key regenerated successfully"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2709,6 +3102,7 @@ async def regenerate_api_key(
             detail=f"Failed to regenerate API key: {str(e)}"
         )
 
+
 @router.post("/api-key/suspend")
 async def suspend_api_key(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2717,29 +3111,29 @@ async def suspend_api_key(
     """Suspend the current user's API key"""
     try:
         logger.info(f"🔑 Suspending API key for user {current_user.id}")
-        
+
         # Check if user has an API key
         if not current_user.api_key_hashed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No API key found to suspend"
             )
-        
+
         # Suspend the API key
         current_user.api_key_deactivated_at = datetime.utcnow()
         current_user.api_key_updated_at = datetime.utcnow()
-        
+
         db.commit()
         db.refresh(current_user)
-        
+
         logger.info(f"✅ API key suspended for user {current_user.id}")
-        
+
         return {
             "success": True,
             "deactivated_at": current_user.api_key_deactivated_at.isoformat(),
             "message": "API key suspended successfully"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2749,6 +3143,7 @@ async def suspend_api_key(
             detail=f"Failed to suspend API key: {str(e)}"
         )
 
+
 @router.post("/api-key/activate")
 async def activate_api_key(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2757,29 +3152,29 @@ async def activate_api_key(
     """Activate the current user's API key"""
     try:
         logger.info(f"🔑 Activating API key for user {current_user.id}")
-        
+
         # Check if user has an API key
         if not current_user.api_key_hashed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No API key found to activate"
             )
-        
+
         # Activate the API key
         current_user.api_key_deactivated_at = None
         current_user.api_key_updated_at = datetime.utcnow()
-        
+
         db.commit()
         db.refresh(current_user)
-        
+
         logger.info(f"✅ API key activated for user {current_user.id}")
-        
+
         return {
             "success": True,
             "updated_at": current_user.api_key_updated_at.isoformat(),
             "message": "API key activated successfully"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2789,6 +3184,7 @@ async def activate_api_key(
             detail=f"Failed to activate API key: {str(e)}"
         )
 
+
 @router.post("/api-key/allow-list")
 async def update_api_key_allow_list(
     allow_list: list[str],
@@ -2797,42 +3193,45 @@ async def update_api_key_allow_list(
 ):
     """Update the API key allow list (IP addresses)"""
     try:
-        logger.info(f"🔑 Updating API key allow list for user {current_user.id}")
-        
+        logger.info(
+            f"🔑 Updating API key allow list for user {current_user.id}")
+
         # Check if user has an API key
         if not current_user.api_key_hashed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No API key found to update"
             )
-        
+
         # Validate IP addresses (basic validation)
         import re
-        ip_pattern = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
-        
+        ip_pattern = re.compile(
+            r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
+
         for ip in allow_list:
             if not ip_pattern.match(ip):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid IP address format: {ip}"
                 )
-        
+
         # Update allow list
         current_user.api_key_allow_list = allow_list
         current_user.api_key_updated_at = datetime.utcnow()
-        
+
         db.commit()
         db.refresh(current_user)
-        
-        logger.info(f"✅ API key allow list updated for user {current_user.id}: {allow_list}")
-        
+
+        logger.info(
+            f"✅ API key allow list updated for user {current_user.id}: {allow_list}")
+
         return {
             "success": True,
             "allow_list": current_user.api_key_allow_list,
             "updated_at": current_user.api_key_updated_at.isoformat(),
             "message": "API key allow list updated successfully"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2841,6 +3240,7 @@ async def update_api_key_allow_list(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update API key allow list: {str(e)}"
         )
+
 
 @router.get("/counts")
 async def get_invoice_counts(
@@ -2854,32 +3254,32 @@ async def get_invoice_counts(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.is_(None)
         ).count()
-        
+
         failed_count = db.query(FailedModel).filter(
             FailedModel.user_id == current_user.id,
             FailedModel.deleted_at.is_(None)
         ).count()
-        
+
         deleted_count = db.query(FailedModel).filter(
             FailedModel.user_id == current_user.id,
             FailedModel.deleted_at.isnot(None)
         ).count()
-        
+
         # Also count deleted successful invoices
         deleted_success_count = db.query(SuccessModel).filter(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.isnot(None)
         ).count()
-        
+
         total_deleted = deleted_count + deleted_success_count
         total_files = successful_count + failed_count
-        
+
         logger.info(f"📊 Invoice counts for user {current_user.id}:")
         logger.info(f"📊 - Successful: {successful_count}")
         logger.info(f"📊 - Failed: {failed_count}")
         logger.info(f"📊 - Deleted: {total_deleted}")
         logger.info(f"📊 - Total: {total_files}")
-        
+
         return {
             "successful": successful_count,
             "failed": failed_count,
@@ -2894,6 +3294,7 @@ async def get_invoice_counts(
             detail=f"Failed to get invoice counts: {str(e)}"
         )
 
+
 @router.get("/test")
 def test_endpoint(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2902,37 +3303,40 @@ def test_endpoint(
     """Test endpoint to check database connection and data"""
     try:
         logger.info(f"🧪 Test endpoint called for user {current_user.id}")
-        
+
         # Test basic database query
         user_count = db.query(ZodiacUser).count()
         logger.info(f"📊 Total users in DB: {user_count}")
-        
+
         # Test failed invoices table with raw SQL to avoid schema issues
         try:
-            failed_count = db.execute(text("SELECT COUNT(*) FROM zodiac_invoice_failed_edi")).scalar()
+            failed_count = db.execute(
+                text("SELECT COUNT(*) FROM zodiac_invoice_failed_edi")).scalar()
             logger.info(f"📊 Total failed invoices in DB: {failed_count}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to count failed invoices: {e}")
             failed_count = 0
-        
+
         # Test success invoices table with raw SQL
         try:
-            success_count = db.execute(text("SELECT COUNT(*) FROM zodiac_invoice_success_edi")).scalar()
+            success_count = db.execute(
+                text("SELECT COUNT(*) FROM zodiac_invoice_success_edi")).scalar()
             logger.info(f"📊 Total success invoices in DB: {success_count}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to count success invoices: {e}")
             success_count = 0
-        
+
         return {
             "user_id": current_user.id,
             "total_users": user_count,
             "total_failed": failed_count,
             "total_success": success_count
         }
-        
+
     except Exception as e:
         logger.error(f"❌ Test endpoint error: {str(e)}")
         return {"error": str(e)}
+
 
 @router.get("/success", response_model=list[ZodiacInvoiceSuccessEdi])
 def get_successful_invoices(
@@ -2945,7 +3349,8 @@ def get_successful_invoices(
     try:
         # Use raw SQL to avoid schema issues
         inspector = inspect(db.bind)
-        columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_success_edi")]
+        columns = [col["name"]
+                   for col in inspector.get_columns("zodiac_invoice_success_edi")]
 
         # Determine if columns exist
         has_external_status = "external_status" in columns
@@ -2965,13 +3370,13 @@ def get_successful_invoices(
             LIMIT :limit OFFSET :offset
         """
         # query = """
-        # SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
-        #        xml_validation_pass, xml_convert_message, edi_path, 
+        # SELECT id, tracking_id, user_id, uploaded_at, xml_path,
+        #        xml_validation_pass, xml_convert_message, edi_path,
         #        edi_convert_pass, edi_convert_message, processing_steps_error,
         #        blob_xml_path, blob_edi_path
-        # FROM zodiac_invoice_success_edi 
+        # FROM zodiac_invoice_success_edi
         # WHERE user_id = :user_id AND deleted_at IS NULL
-        # ORDER BY uploaded_at DESC 
+        # ORDER BY uploaded_at DESC
         # LIMIT :limit OFFSET :offset
         # """
         result = db.execute(text(query), {
@@ -2981,9 +3386,9 @@ def get_successful_invoices(
         }).fetchall()
         for row in result:
             print("🧾 external_status:", getattr(row, "external_status", None))
-            print("🧾 external_message:", getattr(row, "external_message", None))
-            
-            
+            print("🧾 external_message:", getattr(
+                row, "external_message", None))
+
         # Convert to model instances
         invoices = []
         for row in result:
@@ -3001,11 +3406,11 @@ def get_successful_invoices(
                 processing_steps_error=row.processing_steps_error,
                 blob_xml_path=row.blob_xml_path,
                 blob_edi_path=row.blob_edi_path,
-                external_status = row.external_status,
-                external_message = row.external_message
-               
+                external_status=row.external_status,
+                external_message=row.external_message
+
             )
-            
+
             # Add computed fields after model creation
             invoice.xml_content = ""  # Successful invoices don't need content in list view
             invoice.edi_content = ""  # Successful invoices don't need content in list view
@@ -3031,7 +3436,9 @@ def get_successful_invoices(
         return invoices
     except Exception as e:
         logger.error(f"❌ Error getting successful invoices: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting successful invoices: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting successful invoices: {str(e)}")
+
 
 @router.get("/failed", response_model=list[ZodiacInvoiceFailedEdi])
 async def get_failed_invoices(
@@ -3058,7 +3465,7 @@ async def get_failed_invoices(
             "limit": limit,
             "offset": skip
         }).fetchall()
-        
+
         # Convert to model instances
         invoices = []
         for row in result:
@@ -3070,18 +3477,20 @@ async def get_failed_invoices(
                     processing_steps_error = json.loads(processing_steps_error)
                 except (json.JSONDecodeError, TypeError):
                     processing_steps_error = None
-            
+
             # Read file contents
             xml_content = ""
             edi_content = ""
-            
+
             try:
                 # Use blob path if available, otherwise fall back to local path
                 if row.blob_xml_path and USE_BLOB_STORAGE:
-                    logger.info(f"🔍 Reading XML file from blob: {row.blob_xml_path}")
+                    logger.info(
+                        f"🔍 Reading XML file from blob: {row.blob_xml_path}")
                     xml_content_bytes = await read_file_from_storage(None, row.blob_xml_path, None)
                     xml_content = xml_content_bytes.decode('utf-8')
-                    logger.info(f"✅ XML content read from blob successfully, length: {len(xml_content)}")
+                    logger.info(
+                        f"✅ XML content read from blob successfully, length: {len(xml_content)}")
                 else:
                     # Try to resolve the local path - it might be relative or have issues
                     xml_file_path = row.xml_path
@@ -3089,36 +3498,44 @@ async def get_failed_invoices(
                         # Convert to absolute path if it's relative
                         if not os.path.isabs(xml_file_path):
                             xml_file_path = os.path.abspath(xml_file_path)
-                        
-                        logger.info(f"🔍 Reading XML file from local storage: {xml_file_path}")
-                        logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
-                        
+
+                        logger.info(
+                            f"🔍 Reading XML file from local storage: {xml_file_path}")
+                        logger.info(
+                            f"🔍 File exists: {os.path.exists(xml_file_path)}")
+
                         if os.path.exists(xml_file_path):
                             xml_content_bytes = await read_file_from_storage(xml_file_path, None, None)
                             xml_content = xml_content_bytes.decode('utf-8')
-                            logger.info(f"✅ XML content read from local storage successfully, length: {len(xml_content)}")
+                            logger.info(
+                                f"✅ XML content read from local storage successfully, length: {len(xml_content)}")
                         else:
-                            logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+                            logger.warning(
+                                f"⚠️ XML file not found: {xml_file_path}")
                     else:
                         logger.warning(f"⚠️ XML path is None")
             except Exception as e:
                 logger.error(f"❌ Could not read XML file: {e}")
-            
+
             try:
                 # Use blob path if available, otherwise fall back to local path
                 if row.blob_edi_path and USE_BLOB_STORAGE:
-                    logger.info(f"🔍 Reading EDI file from blob: {row.blob_edi_path}")
+                    logger.info(
+                        f"🔍 Reading EDI file from blob: {row.blob_edi_path}")
                     edi_content_bytes = await read_file_from_storage(None, None, row.blob_edi_path)
                     edi_content = edi_content_bytes.decode('utf-8')
-                    logger.info(f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
+                    logger.info(
+                        f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
                 elif row.edi_path and (os.path.exists(row.edi_path) or USE_BLOB_STORAGE):
-                    logger.info(f"🔍 Reading EDI file from local storage: {row.edi_path}")
+                    logger.info(
+                        f"🔍 Reading EDI file from local storage: {row.edi_path}")
                     edi_content_bytes = await read_file_from_storage(row.edi_path, None, None)
                     edi_content = edi_content_bytes.decode('utf-8')
-                    logger.info(f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
+                    logger.info(
+                        f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not read EDI file: {e}")
-            
+
             invoice = FailedModel(
                 id=row.id,
                 tracking_id=row.tracking_id,
@@ -3134,21 +3551,20 @@ async def get_failed_invoices(
                 blob_xml_path=row.blob_xml_path,
                 blob_edi_path=row.blob_edi_path
             )
-            
+
             # Add computed fields after model creation
-            #logging.info(f"This is xml content {xml_content}")
+            # logging.info(f"This is xml content {xml_content}")
             invoice.xml_content = xml_content
             invoice.edi_content = edi_content
-            
-            invoices.append(invoice)
-        
 
-            
+            invoices.append(invoice)
 
         return invoices
     except Exception as e:
         logger.error(f"❌ Error getting failed invoices: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting failed invoices: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting failed invoices: {str(e)}")
+
 
 @router.get("/failed/{tracking_id}", response_model=ZodiacInvoiceFailedEdi)
 async def get_failed_invoice_by_tracking_id(
@@ -3159,7 +3575,7 @@ async def get_failed_invoice_by_tracking_id(
     """Get a specific failed invoice by tracking ID"""
     try:
         logger.info(f"🔍 Getting failed invoice by tracking ID: {tracking_id}")
-        
+
         # Use raw SQL to find the failed invoice by tracking ID
         query = """
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
@@ -3173,14 +3589,16 @@ async def get_failed_invoice_by_tracking_id(
             "tracking_id": tracking_id,
             "user_id": current_user.id
         }).fetchone()
-        
+
         if not result:
-            logger.warning(f"⚠️ Failed invoice not found for tracking ID: {tracking_id}")
+            logger.warning(
+                f"⚠️ Failed invoice not found for tracking ID: {tracking_id}")
             logger.warning(f"⚠️ User ID: {current_user.id}")
             logger.warning(f"⚠️ Tracking ID type: {type(tracking_id)}")
             logger.warning(f"⚠️ User ID type: {type(current_user.id)}")
-            raise HTTPException(status_code=404, detail="Failed invoice not found")
-        
+            raise HTTPException(
+                status_code=404, detail="Failed invoice not found")
+
         # Convert to model instance
         invoice = FailedModel(
             id=result.id,
@@ -3197,38 +3615,48 @@ async def get_failed_invoice_by_tracking_id(
             blob_xml_path=result.blob_xml_path,
             blob_edi_path=result.blob_edi_path
         )
-        
+
         logger.info(f"✅ Found failed invoice for tracking ID: {tracking_id}")
-        logger.info(f"🔍 Processing steps error from DB (raw): {result.processing_steps_error}")
-        logger.info(f"🔍 Processing steps error type: {type(result.processing_steps_error)}")
-        logger.info(f"🔍 Processing steps error is None: {result.processing_steps_error is None}")
-        
+        logger.info(
+            f"🔍 Processing steps error from DB (raw): {result.processing_steps_error}")
+        logger.info(
+            f"🔍 Processing steps error type: {type(result.processing_steps_error)}")
+        logger.info(
+            f"🔍 Processing steps error is None: {result.processing_steps_error is None}")
+
         # Parse the JSON data if it's stored as a string
         processing_steps_error = result.processing_steps_error
         if isinstance(processing_steps_error, str):
             try:
                 import json
                 processing_steps_error = json.loads(processing_steps_error)
-                logger.info(f"🔍 Parsed JSON processing steps error: {processing_steps_error}")
+                logger.info(
+                    f"🔍 Parsed JSON processing steps error: {processing_steps_error}")
             except (json.JSONDecodeError, TypeError) as e:
-                logger.error(f"❌ Failed to parse processing_steps_error JSON: {e}")
+                logger.error(
+                    f"❌ Failed to parse processing_steps_error JSON: {e}")
                 processing_steps_error = None
-        
+
         # Read file contents
         xml_content = ""
         edi_content = ""
-        
-        logger.info(f"🔍 File content reading - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
-        logger.info(f"🔍 File content reading - blob_xml_path: {invoice.blob_xml_path}")
-        logger.info(f"🔍 File content reading - blob_edi_path: {invoice.blob_edi_path}")
-        
+
+        logger.info(
+            f"🔍 File content reading - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+        logger.info(
+            f"🔍 File content reading - blob_xml_path: {invoice.blob_xml_path}")
+        logger.info(
+            f"🔍 File content reading - blob_edi_path: {invoice.blob_edi_path}")
+
         try:
             # Use blob path if available, otherwise fall back to local path
             if invoice.blob_xml_path and USE_BLOB_STORAGE:
-                logger.info(f"🔍 Reading XML file from blob: {invoice.blob_xml_path}")
+                logger.info(
+                    f"🔍 Reading XML file from blob: {invoice.blob_xml_path}")
                 xml_content_bytes = await read_file_from_storage(None, invoice.blob_xml_path, None)
                 xml_content = xml_content_bytes.decode('utf-8')
-                logger.info(f"✅ XML content read from blob successfully, length: {len(xml_content)}")
+                logger.info(
+                    f"✅ XML content read from blob successfully, length: {len(xml_content)}")
             else:
                 logger.info(f"🔍 Using local XML path fallback")
                 # Try to resolve the local path - it might be relative or have issues
@@ -3237,51 +3665,63 @@ async def get_failed_invoice_by_tracking_id(
                     # Convert to absolute path if it's relative
                     if not os.path.isabs(xml_file_path):
                         xml_file_path = os.path.abspath(xml_file_path)
-                    
-                    logger.info(f"🔍 Reading XML file from local storage: {xml_file_path}")
-                    logger.info(f"🔍 File exists: {os.path.exists(xml_file_path)}")
-                    
+
+                    logger.info(
+                        f"🔍 Reading XML file from local storage: {xml_file_path}")
+                    logger.info(
+                        f"🔍 File exists: {os.path.exists(xml_file_path)}")
+
                     if os.path.exists(xml_file_path):
                         with open(xml_file_path, 'r', encoding='utf-8') as f:
                             xml_content = f.read()
-                        logger.info(f"✅ XML content read from local storage successfully, length: {len(xml_content)}")
+                        logger.info(
+                            f"✅ XML content read from local storage successfully, length: {len(xml_content)}")
                     else:
-                        logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+                        logger.warning(
+                            f"⚠️ XML file not found: {xml_file_path}")
                 else:
                     logger.warning(f"⚠️ XML path is None")
         except Exception as e:
             logger.error(f"❌ Could not read XML file: {e}")
-        
+
         try:
             # Use blob path if available, otherwise fall back to local path
             if invoice.blob_edi_path and USE_BLOB_STORAGE:
-                logger.info(f"🔍 Reading EDI file from blob: {invoice.blob_edi_path}")
+                logger.info(
+                    f"🔍 Reading EDI file from blob: {invoice.blob_edi_path}")
                 edi_content_bytes = await read_file_from_storage(None, None, invoice.blob_edi_path)
                 edi_content = edi_content_bytes.decode('utf-8')
-                logger.info(f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
+                logger.info(
+                    f"✅ EDI content read from blob successfully, length: {len(edi_content)}")
             else:
                 logger.info(f"🔍 Using local EDI path fallback")
                 if invoice.edi_path and (os.path.exists(invoice.edi_path) or USE_BLOB_STORAGE):
-                    logger.info(f"🔍 Reading EDI file from local storage: {invoice.edi_path}")
+                    logger.info(
+                        f"🔍 Reading EDI file from local storage: {invoice.edi_path}")
                     edi_content_bytes = await read_file_from_storage(invoice.edi_path, None, None)
                     edi_content = edi_content_bytes.decode('utf-8')
-                    logger.info(f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
+                    logger.info(
+                        f"✅ EDI content read from local storage successfully, length: {len(edi_content)}")
         except Exception as e:
             logger.warning(f"⚠️ Could not read EDI file: {e}")
-        
-        logger.info(f"🔍 Final content lengths - XML: {len(xml_content)}, EDI: {len(edi_content)}")
-        
+
+        logger.info(
+            f"🔍 Final content lengths - XML: {len(xml_content)}, EDI: {len(edi_content)}")
+
         # Add file content as additional attributes (not part of the model)
         invoice.xml_content = xml_content
         invoice.edi_content = edi_content
-        
+
         # Create a response object that includes stored error details and file contents
-        logger.info(f"🔍 Response construction - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
-        logger.info(f"🔍 Response construction - blob_xml_path: {invoice.blob_xml_path}")
-        logger.info(f"🔍 Response construction - blob_edi_path: {invoice.blob_edi_path}")
+        logger.info(
+            f"🔍 Response construction - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+        logger.info(
+            f"🔍 Response construction - blob_xml_path: {invoice.blob_xml_path}")
+        logger.info(
+            f"🔍 Response construction - blob_edi_path: {invoice.blob_edi_path}")
         logger.info(f"🔍 Response construction - xml_path: {invoice.xml_path}")
         logger.info(f"🔍 Response construction - edi_path: {invoice.edi_path}")
-        
+
         response_data = {
             "id": invoice.id,
             "tracking_id": str(invoice.tracking_id),
@@ -3302,40 +3742,52 @@ async def get_failed_invoice_by_tracking_id(
             "local_edi_path": invoice.edi_path,
             "use_blob_storage": USE_BLOB_STORAGE
         }
-        
-        logger.info(f"🔍 Final response - xml_path: {response_data['xml_path']}")
-        logger.info(f"🔍 Final response - edi_path: {response_data['edi_path']}")
-        
+
+        logger.info(
+            f"🔍 Final response - xml_path: {response_data['xml_path']}")
+        logger.info(
+            f"🔍 Final response - edi_path: {response_data['edi_path']}")
+
         # Ensure processing_steps_error is JSON serializable
         try:
             import json
             json.dumps(response_data['processing_steps_error'])
             logger.info("✅ Processing steps error is JSON serializable")
         except (TypeError, ValueError) as e:
-            logger.error(f"❌ Processing steps error is not JSON serializable: {e}")
+            logger.error(
+                f"❌ Processing steps error is not JSON serializable: {e}")
             # Convert to a safe format
             if response_data['processing_steps_error']:
-                response_data['processing_steps_error'] = json.loads(json.dumps(response_data['processing_steps_error'], default=str))
-        
-        logger.info(f"🔍 Response data includes processing_steps_error: {'processing_steps_error' in response_data}")
-        logger.info(f"🔍 Processing steps error value: {response_data.get('processing_steps_error')}")
+                response_data['processing_steps_error'] = json.loads(
+                    json.dumps(response_data['processing_steps_error'], default=str))
+
+        logger.info(
+            f"🔍 Response data includes processing_steps_error: {'processing_steps_error' in response_data}")
+        logger.info(
+            f"🔍 Processing steps error value: {response_data.get('processing_steps_error')}")
         logger.info(f"🔍 Full response data keys: {list(response_data.keys())}")
-        
+
         # Ensure processing_steps_error is properly serialized
         if response_data.get('processing_steps_error'):
-            logger.info(f"🔍 Processing steps error before return: {response_data['processing_steps_error']}")
-            logger.info(f"🔍 Processing steps error type: {type(response_data['processing_steps_error'])}")
+            logger.info(
+                f"🔍 Processing steps error before return: {response_data['processing_steps_error']}")
+            logger.info(
+                f"🔍 Processing steps error type: {type(response_data['processing_steps_error'])}")
         else:
-            logger.warning("⚠️ Processing steps error is missing from response_data!")
-        
+            logger.warning(
+                "⚠️ Processing steps error is missing from response_data!")
+
         # Return as JSONResponse to ensure proper serialization
         return JSONResponse(content=response_data)
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Error getting failed invoice by tracking ID {tracking_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting failed invoice: {str(e)}")
+        logger.error(
+            f"❌ Error getting failed invoice by tracking ID {tracking_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting failed invoice: {str(e)}")
+
 
 @router.get("/deleted", response_model=list[InvoiceResponse])
 def get_deleted_invoices(
@@ -3346,28 +3798,29 @@ def get_deleted_invoices(
 ):
     """Get deleted invoices for current user"""
     logger.info(f"🗑️ Getting deleted invoices for user: {current_user.id}")
-    
+
     try:
         # Get deleted successful invoices
         deleted_success_invoices = db.query(SuccessModel).filter(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.isnot(None)
         ).offset(skip).limit(limit).all()
-        
+
         # Get deleted failed invoices
         deleted_failed_invoices = db.query(FailedModel).filter(
             FailedModel.user_id == current_user.id,
             FailedModel.deleted_at.isnot(None)
         ).offset(skip).limit(limit).all()
-        
+
         # Convert to InvoiceResponse format
         deleted_invoices = []
-        
+
         # Add successful invoices
         for invoice in deleted_success_invoices:
             deleted_invoices.append(InvoiceResponse(
                 id=invoice.id,
-                filename=f"{invoice.tracking_id}_invoice.xml",  # Generate filename from tracking_id
+                # Generate filename from tracking_id
+                filename=f"{invoice.tracking_id}_invoice.xml",
                 status="success",
                 accepted=1,
                 rejected=0,
@@ -3382,12 +3835,13 @@ def get_deleted_invoices(
                 edi_convert_message=invoice.edi_convert_message,
                 deleted_at=invoice.deleted_at.isoformat() if invoice.deleted_at else None
             ))
-        
+
         # Add failed invoices
         for invoice in deleted_failed_invoices:
             deleted_invoices.append(InvoiceResponse(
                 id=invoice.id,
-                filename=f"{invoice.tracking_id}_invoice.xml",  # Generate filename from tracking_id
+                # Generate filename from tracking_id
+                filename=f"{invoice.tracking_id}_invoice.xml",
                 status="failed",
                 accepted=0,
                 rejected=1,
@@ -3402,16 +3856,19 @@ def get_deleted_invoices(
                 edi_convert_message=invoice.edi_convert_message,
                 deleted_at=invoice.deleted_at.isoformat() if invoice.deleted_at else None
             ))
-        
+
         # Sort by deleted_at descending (most recently deleted first)
         deleted_invoices.sort(key=lambda x: x.deleted_at or "", reverse=True)
-        
-        logger.info(f"✅ Found {len(deleted_invoices)} deleted invoices for user: {current_user.id}")
+
+        logger.info(
+            f"✅ Found {len(deleted_invoices)} deleted invoices for user: {current_user.id}")
         return deleted_invoices
-        
+
     except Exception as e:
         logger.error(f"❌ Error getting deleted invoices: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting deleted invoices: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting deleted invoices: {str(e)}")
+
 
 @router.delete("/{invoice_id}")
 def delete_invoice(
@@ -3420,8 +3877,9 @@ def delete_invoice(
     db: Session = Depends(get_db)
 ):
     """Mark an invoice as deleted (soft delete)"""
-    logger.info(f"🗑️ Delete invoice request for ID: {invoice_id}, User: {current_user.id}")
-    
+    logger.info(
+        f"🗑️ Delete invoice request for ID: {invoice_id}, User: {current_user.id}")
+
     try:
         # First check if it's a successful invoice
         success_invoice = db.query(SuccessModel).filter(
@@ -3429,38 +3887,46 @@ def delete_invoice(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.is_(None)  # Only non-deleted invoices
         ).first()
-        
+
         if success_invoice:
-            logger.info(f"🗑️ Found successful invoice to delete: {success_invoice.tracking_id}")
+            logger.info(
+                f"🗑️ Found successful invoice to delete: {success_invoice.tracking_id}")
             success_invoice.deleted_at = datetime.utcnow()
             db.commit()
-            logger.info(f"✅ Successfully soft-deleted successful invoice: {invoice_id}")
+            logger.info(
+                f"✅ Successfully soft-deleted successful invoice: {invoice_id}")
             return {"success": True, "message": "Invoice deleted successfully"}
-        
+
         # Check if it's a failed invoice
         failed_invoice = db.query(FailedModel).filter(
             FailedModel.id == invoice_id,
             FailedModel.user_id == current_user.id,
             FailedModel.deleted_at.is_(None)  # Only non-deleted invoices
         ).first()
-        
+
         if failed_invoice:
-            logger.info(f"🗑️ Found failed invoice to delete: {failed_invoice.tracking_id}")
+            logger.info(
+                f"🗑️ Found failed invoice to delete: {failed_invoice.tracking_id}")
             failed_invoice.deleted_at = datetime.utcnow()
             db.commit()
-            logger.info(f"✅ Successfully soft-deleted failed invoice: {invoice_id}")
+            logger.info(
+                f"✅ Successfully soft-deleted failed invoice: {invoice_id}")
             return {"success": True, "message": "Invoice deleted successfully"}
-        
+
         # Invoice not found or already deleted
-        logger.warning(f"⚠️ Invoice not found or already deleted: {invoice_id}")
-        raise HTTPException(status_code=404, detail="Invoice not found or already deleted")
-        
+        logger.warning(
+            f"⚠️ Invoice not found or already deleted: {invoice_id}")
+        raise HTTPException(
+            status_code=404, detail="Invoice not found or already deleted")
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ Error deleting invoice {invoice_id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error deleting invoice: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error deleting invoice: {str(e)}")
+
 
 @router.post("/{invoice_id}/restore")
 def restore_invoice(
@@ -3469,8 +3935,9 @@ def restore_invoice(
     db: Session = Depends(get_db)
 ):
     """Restore a soft-deleted invoice"""
-    logger.info(f"🔄 Restore invoice request for ID: {invoice_id}, User: {current_user.id}")
-    
+    logger.info(
+        f"🔄 Restore invoice request for ID: {invoice_id}, User: {current_user.id}")
+
     try:
         # First check if it's a successful invoice
         success_invoice = db.query(SuccessModel).filter(
@@ -3478,35 +3945,41 @@ def restore_invoice(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.isnot(None)  # Only deleted invoices
         ).first()
-        
+
         if success_invoice:
-            logger.info(f"🔄 Found deleted successful invoice to restore: {success_invoice.tracking_id}")
+            logger.info(
+                f"🔄 Found deleted successful invoice to restore: {success_invoice.tracking_id}")
             success_invoice.deleted_at = None
             db.commit()
-            logger.info(f"✅ Successfully restored successful invoice: {invoice_id}")
+            logger.info(
+                f"✅ Successfully restored successful invoice: {invoice_id}")
             return {"success": True, "message": "Invoice restored successfully"}
-        
+
         # Check if it's a failed invoice
         failed_invoice = db.query(FailedModel).filter(
             FailedModel.id == invoice_id,
             FailedModel.user_id == current_user.id,
             FailedModel.deleted_at.isnot(None)  # Only deleted invoices
         ).first()
-        
+
         if failed_invoice:
-            logger.info(f"🔄 Found deleted failed invoice to restore: {failed_invoice.tracking_id}")
+            logger.info(
+                f"🔄 Found deleted failed invoice to restore: {failed_invoice.tracking_id}")
             failed_invoice.deleted_at = None
             db.commit()
-            logger.info(f"✅ Successfully restored failed invoice: {invoice_id}")
+            logger.info(
+                f"✅ Successfully restored failed invoice: {invoice_id}")
             return {"success": True, "message": "Invoice restored successfully"}
-        
+
         # Invoice not found or not deleted
         logger.warning(f"⚠️ Invoice not found or not deleted: {invoice_id}")
-        raise HTTPException(status_code=404, detail="Invoice not found or not deleted")
-        
+        raise HTTPException(
+            status_code=404, detail="Invoice not found or not deleted")
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ Error restoring invoice {invoice_id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error restoring invoice: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error restoring invoice: {str(e)}")
