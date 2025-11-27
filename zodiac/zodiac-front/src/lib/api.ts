@@ -451,7 +451,7 @@ export const fileApi = {
             rejected: 0,
             customerName:invoice.customer_name,
             invoice_id:invoice.invoice_id,
-            formate: 'XML',
+            formate: invoice.target_file_format?.toUpperCase() || 'X12',
             export: false,
             uploaded_at: invoice.uploaded_at,
             tracking_id: invoice.tracking_id,
@@ -466,6 +466,7 @@ export const fileApi = {
             use_blob_storage: invoice.use_blob_storage,
             external_status: invoice?.external_status,
             external_message: invoice?.external_message,
+            target_file_format: invoice.target_file_format,
           };
         }),
         ...failedInvoices.map((invoice: any) => {
@@ -487,7 +488,7 @@ export const fileApi = {
             accepted: 0,
             rejected: 1,
             customerName: 'N/A',
-            formate: 'XML',
+            formate: invoice.target_file_format?.toUpperCase() || 'X12',
             export: false,
             uploaded_at: invoice.uploaded_at,
             tracking_id: invoice.tracking_id,

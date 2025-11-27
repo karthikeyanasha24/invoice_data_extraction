@@ -1046,6 +1046,10 @@ function FileUploadComponent({ onUpload, error, success, uploading, onDismissErr
                     <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
                     <span>Validating EDI format</span>
                   </div>
+                  <div className="flex items-center justify-center space-x-2 text-xs text-gray-500">
+                    <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
+                    <span>3rd Party Endpoint</span>
+                  </div>
                 </div>
               </div>
             </div>

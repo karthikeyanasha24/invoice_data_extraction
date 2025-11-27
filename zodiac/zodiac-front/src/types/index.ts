@@ -75,6 +75,7 @@ export interface Invoice {
   customerName?: string;
   supplier_id?: string;
   supplier_name?: string;
+  invoice_id?: string;
   status?: string;
   accepted: number;
   rejected: number;
@@ -104,6 +105,7 @@ export interface Invoice {
   edi_content?: string;
   external_status?: string;
   external_message?: string;
+  target_file_format?: string;
 }
 
 export interface FailedInvoiceDetails {

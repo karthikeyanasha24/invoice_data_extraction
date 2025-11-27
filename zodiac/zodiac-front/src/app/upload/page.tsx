@@ -224,6 +224,10 @@ export default function UploadPage() {
                       <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
                       <span>Validating EDI format</span>
                     </div>
+                    <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
+                      <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
+                      <span>3rd Party Endpoint</span>
+                    </div>
                   </div>
                   <p className="mt-3 text-sm text-blue-600">This may take a few moments...</p>
                 </div>

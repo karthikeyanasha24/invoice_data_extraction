@@ -375,6 +375,24 @@ export default function InvoiceDetailsPage() {
                     </div>
                     <p className="text-sm text-gray-600">EDI format validation completed successfully</p>
                   </div>
+
+                  {/* Step 5: 3rd Party Endpoint */}
+                  <div className="border rounded-lg p-4">
+                    <div className="flex items-center space-x-3 mb-2">
+                      <CheckCircle className="h-5 w-5 text-green-500" />
+                      <span className="font-medium text-gray-900">5. 3rd Party Endpoint</span>
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        Passed
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600">
+                      {invoice.external_status === 'success' 
+                        ? 'Successfully sent to 3rd party endpoint'
+                        : invoice.external_status === 'error'
+                        ? `3rd party endpoint error: ${invoice.external_message || 'Unknown error'}`
+                        : 'Sent to 3rd party endpoint'}
+                    </p>
+                  </div>
                 </>
               )}
             </div>
