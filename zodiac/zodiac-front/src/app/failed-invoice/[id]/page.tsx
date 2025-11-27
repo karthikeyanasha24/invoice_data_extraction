@@ -642,6 +642,37 @@ export default function FailedInvoicePage() {
                         </span>
                       </div>
                     </div>
+
+                    {/* Connecting Line */}
+                    <div className="flex-1 h-0.5 bg-gray-300 mx-4 relative">
+                      <div className={cn(
+                        "absolute top-0 left-0 h-full transition-all duration-500",
+                        "bg-gray-300 w-0"
+                      )}></div>
+                    </div>
+
+                    {/* Step 5: 3rd Party Endpoint */}
+                    <div className="flex flex-col items-center relative z-10">
+                      <button
+                        className={cn(
+                          "w-10 h-10 rounded-full flex items-center justify-center border-4 transition-all",
+                          "bg-gray-300 border-gray-300 text-gray-500 cursor-not-allowed"
+                        )}
+                      >
+                        <XCircle className="h-5 w-5" />
+                      </button>
+                      <div className="mt-2 text-center">
+                        <h3 className={cn(
+                          "text-xs font-medium text-gray-500"
+                        )}>3rd Party Endpoint</h3>
+                        <span className={cn(
+                          "inline-block px-2 py-1 rounded-full text-xs font-medium mt-1",
+                          "bg-gray-100 text-gray-500"
+                        )}>
+                          Skipped
+                        </span>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Warnings and Error Messages */}

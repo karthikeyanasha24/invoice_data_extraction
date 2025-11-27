@@ -80,15 +80,42 @@ export default function InvoicesLanding() {
   // Filter and search invoices based on current view
   const filteredInvoices = showRecycleBin
     ? deletedInvoices.filter(invoice => {
-      const matchesSearch = invoice.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        invoice.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
+      // Check if search term is empty - show all
+      if (!searchTerm) return true;
+      
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch = invoice.filename?.toLowerCase().includes(searchLower) ||
+        invoice.customerName?.toLowerCase().includes(searchLower) ||
+        invoice.status?.toLowerCase().includes(searchLower);
       return matchesSearch;
     })
     : invoices.filter(invoice => {
-      const matchesSearch = invoice.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        invoice.customerName?.toLowerCase().includes(searchTerm.toLowerCase());
-      return matchesSearch && invoice.status !== 'deleted';
+      // Exclude deleted invoices
+      if (invoice.status === 'deleted') return false;
+      
+      // Check if search term is empty - show all active invoices
+      if (!searchTerm) return true;
+      
+      const searchLower = searchTerm.toLowerCase();
+      const searchTerms = searchLower.split(' '); // Split by space to handle multiple terms
+      
+      // Check if any search term matches
+      const matchesSearch = searchTerms.some(term => 
+        invoice.filename?.toLowerCase().includes(term) ||
+        invoice.customerName?.toLowerCase().includes(term) ||
+        invoice.status?.toLowerCase().includes(term) ||
+        invoice.invoice_id?.toLowerCase().includes(term)
+      );
+      
+      return matchesSearch;
     });
+
+  // Calculate total counts (independent of search/filter)
+  const activeInvoices = invoices.filter(inv => inv.status !== 'deleted');
+  const totalInvoicesCount = showRecycleBin ? deletedInvoices.length : activeInvoices.length;
+  const completedCount = activeInvoices.filter(inv => inv.status === 'successful' || inv.status === 'completed').length;
+  const failedCount = activeInvoices.filter(inv => inv.status === 'failed' || inv.status === 'error').length;
+  const deletedCount = deletedInvoices.length;
 
   const handleDeleteInvoice = async (invoice: Invoice) => {
     console.log('🗑️ InvoicesLanding - Requesting to delete invoice:', invoice.id);
@@ -231,129 +258,126 @@ export default function InvoicesLanding() {
     );
   }
 
+  // Reusable StatCard component
+  const StatCard = ({ 
+    icon: Icon, 
+    iconColor, 
+    count, 
+    label, 
+    onClick 
+  }: { 
+    icon: any; 
+    iconColor: string; 
+    count: number; 
+    label: string; 
+    onClick: () => void;
+  }) => (
+    <div
+      className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+      onClick={onClick}
+    >
+      <div className="flex items-center">
+        <Icon className={`h-8 w-8 ${iconColor}`} />
+        <div className="ml-3">
+          <div className="text-lg font-semibold text-gray-900">{count}</div>
+          <div className="text-sm text-gray-500">{label}</div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div
-          className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
-          onClick={() => {
-            console.log('📊 Total invoices card clicked');
-            setShowRecycleBin(false);
-            setSearchTerm('');
-          }}
-        >
-          <div className="flex items-center">
-            <FileText className="h-8 w-8 text-blue-500" />
-            <div className="ml-3">
-              <div className="text-lg font-semibold text-gray-900">{filteredInvoices.length}</div>
-              <div className="text-sm text-gray-500">{showRecycleBin ? 'Deleted Invoices' : 'Total Invoices'}</div>
-            </div>
-          </div>
-        </div>
-        {!showRecycleBin && (
+        {!showRecycleBin ? (
           <>
-            <div
-              className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+            <StatCard
+              icon={FileText}
+              iconColor="text-blue-500"
+              count={totalInvoicesCount}
+              label="Total Invoices"
+              onClick={() => {
+                console.log('📊 Total invoices card clicked');
+                setSearchTerm('');
+              }}
+            />
+            <StatCard
+              icon={CheckCircle}
+              iconColor="text-green-500"
+              count={completedCount}
+              label="Completed"
               onClick={() => {
                 console.log('📊 Completed invoices card clicked');
                 setSearchTerm('successful completed');
               }}
-            >
-              <div className="flex items-center">
-                <CheckCircle className="h-8 w-8 text-green-500" />
-                <div className="ml-3">
-                  <div className="text-lg font-semibold text-gray-900">
-                    {filteredInvoices.filter(inv => inv.status === 'successful' || inv.status === 'completed').length}
-                  </div>
-                  <div className="text-sm text-gray-500">Completed</div>
-                </div>
-              </div>
-            </div>
-            <div
-              className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <StatCard
+              icon={XCircle}
+              iconColor="text-red-500"
+              count={failedCount}
+              label="Failed"
               onClick={() => {
                 console.log('📊 Failed invoices card clicked');
                 setSearchTerm('failed error');
               }}
-            >
-              <div className="flex items-center">
-                <XCircle className="h-8 w-8 text-red-500" />
-                <div className="ml-3">
-                  <div className="text-lg font-semibold text-gray-900">
-                    {filteredInvoices.filter(inv => inv.status === 'failed' || inv.status === 'error').length}
-                  </div>
-                  <div className="text-sm text-gray-500">Failed</div>
-                </div>
-              </div>
-            </div>
-            <div
-              className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <StatCard
+              icon={Trash}
+              iconColor="text-gray-500"
+              count={deletedCount}
+              label="Deleted"
               onClick={() => {
                 console.log('📊 Deleted invoices card clicked - showing recycle bin');
                 setShowRecycleBin(true);
                 setSearchTerm('');
               }}
-            >
-              <div className="flex items-center">
-                <Trash className="h-8 w-8 text-gray-500" />
-                <div className="ml-3">
-                  <div className="text-lg font-semibold text-gray-900">{deletedInvoices.length}</div>
-                  <div className="text-sm text-gray-500">Deleted</div>
-                </div>
-              </div>
-            </div>
+            />
           </>
-        )}
-        {showRecycleBin && (
+        ) : (
           <>
-            <div
-              className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+            <StatCard
+              icon={FileText}
+              iconColor="text-blue-500"
+              count={deletedCount}
+              label="Deleted Invoices"
+              onClick={() => {
+                console.log('📊 Deleted Invoices card clicked');
+                setSearchTerm('');
+              }}
+            />
+            <StatCard
+              icon={RotateCcw}
+              iconColor="text-blue-500"
+              count={deletedCount}
+              label="Can Restore"
               onClick={() => {
                 console.log('📊 Can Restore card clicked');
                 setSearchTerm('');
               }}
-            >
-              <div className="flex items-center">
-                <RotateCcw className="h-8 w-8 text-blue-500" />
-                <div className="ml-3">
-                  <div className="text-lg font-semibold text-gray-900">{filteredInvoices.length}</div>
-                  <div className="text-sm text-gray-500">Can Restore</div>
-                </div>
-              </div>
-            </div>
-            <div
-              className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <StatCard
+              icon={Trash2}
+              iconColor="text-red-500"
+              count={deletedCount}
+              label="Can Delete Permanently"
               onClick={() => {
                 console.log('📊 Can Delete Permanently card clicked');
                 setSearchTerm('');
               }}
-            >
-              <div className="flex items-center">
-                <Trash2 className="h-8 w-8 text-red-500" />
-                <div className="ml-3">
-                  <div className="text-lg font-semibold text-gray-900">{filteredInvoices.length}</div>
-                  <div className="text-sm text-gray-500">Can Delete Permanently</div>
-                </div>
-              </div>
-            </div>
-            <div
-              className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <StatCard
+              icon={FileText}
+              iconColor="text-gray-500"
+              count={activeInvoices.length}
+              label="Active Invoices"
               onClick={() => {
                 console.log('📊 Active Invoices card clicked - going back to main view');
                 setShowRecycleBin(false);
                 setSearchTerm('');
               }}
-            >
-              <div className="flex items-center">
-                <FileText className="h-8 w-8 text-gray-500" />
-                <div className="ml-3">
-                  <div className="text-lg font-semibold text-gray-900">{invoices.filter(inv => inv.status !== 'deleted').length}</div>
-                  <div className="text-sm text-gray-500">Active Invoices</div>
-                </div>
-              </div>
-            </div>
+            />
           </>
         )}
       </div>
