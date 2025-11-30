@@ -5,7 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { fileApi } from '@/lib/api';
 import { Invoice } from '@/types';
-import { ArrowLeft, CheckCircle, Download, Share2, FileText, Calendar, User, Building2, AlertTriangle, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Download, Share2, FileText, Calendar, User, Building2, AlertTriangle, XCircle, Clock, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import MainLayout from '@/components/MainLayout';
@@ -255,53 +255,163 @@ export default function InvoiceDetailsPage() {
             <div className="space-y-4">
               {/* Display actual processing steps if available, otherwise show default */}
               {invoice.processing_steps && invoice.processing_steps.length > 0 ? (
-                invoice.processing_steps.map((step, index) => (
-                  <div key={index} className="border rounded-lg p-4">
-                    <div className="flex items-center space-x-3 mb-2">
-                      {step.step_name === 'XML Validation' && invoice.xml_convert_message?.includes('warnings') ? (
-                        <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                      ) : step.success ? (
-                        <CheckCircle className="h-5 w-5 text-green-500" />
-                      ) : (
-                        <XCircle className="h-5 w-5 text-red-500" />
+                invoice.processing_steps.map((step, index) => {
+                  const hasErrors = step.error_details && step.error_details.length > 0;
+                  const hasWarnings = step.status?.xml_convert_message?.includes('warnings') || 
+                                     step.message?.includes('warnings');
+                  
+                  return (
+                    <div
+                      key={index}
+                      className={cn(
+                        "border rounded-lg p-4 transition-all",
+                        step.success
+                          ? hasWarnings
+                            ? "border-yellow-200 bg-yellow-50/30"
+                            : "border-green-200 bg-green-50/30"
+                          : "border-red-200 bg-red-50/30"
                       )}
-                      <span className="font-medium text-gray-900">
-                        {step.step_number}. {step.step_name}
-                      </span>
-                      <span className={cn(
-                        "px-2 py-1 rounded-full text-xs font-medium",
-                        step.step_name === 'XML Validation' && invoice.xml_convert_message?.includes('warnings')
-                          ? "bg-yellow-100 text-yellow-800"
-                          : step.success
-                            ? "bg-green-100 text-green-800"
-                            : "bg-red-100 text-red-800"
-                      )}>
-                        {step.step_name === 'XML Validation' && invoice.xml_convert_message?.includes('warnings')
-                          ? 'Passed with Warnings'
-                          : step.success ? 'Passed' : 'Failed'
-                        }
-                      </span>
-                      {step.duration_seconds && (
-                        <span className="text-xs text-gray-500">
-                          ({step.duration_seconds.toFixed(2)}s)
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-gray-600">
-                      {step.message || (step.success ? 'Step completed successfully' : 'Step failed')}
-                    </p>
-                    {step.error_details && step.error_details.length > 0 && (
-                      <div className="mt-2 text-xs text-red-600">
-                        <p className="font-medium">Errors:</p>
-                        <ul className="list-disc list-inside mt-1">
-                          {step.error_details.map((error, errorIndex) => (
-                            <li key={errorIndex}>{error.error_message}</li>
-                          ))}
-                        </ul>
+                    >
+                      <div className="flex items-start space-x-3">
+                        {/* Step Icon */}
+                        <div className={cn(
+                          "w-10 h-10 rounded-full flex items-center justify-center border-2 flex-shrink-0",
+                          step.success
+                            ? hasWarnings
+                              ? "bg-yellow-100 border-yellow-500 text-yellow-700"
+                              : "bg-green-100 border-green-500 text-green-700"
+                            : "bg-red-100 border-red-500 text-red-700"
+                        )}>
+                          {hasWarnings ? (
+                            <AlertTriangle className="h-5 w-5" />
+                          ) : step.success ? (
+                            <CheckCircle className="h-5 w-5" />
+                          ) : (
+                            <XCircle className="h-5 w-5" />
+                          )}
+                        </div>
+
+                        {/* Step Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <span className="font-semibold text-gray-900">
+                              {step.step_number}. {step.step_name}
+                            </span>
+                            <span className={cn(
+                              "px-2 py-1 rounded-full text-xs font-medium",
+                              step.success
+                                ? hasWarnings
+                                  ? "bg-yellow-100 text-yellow-800"
+                                  : "bg-green-100 text-green-800"
+                                : "bg-red-100 text-red-800"
+                            )}>
+                              {hasWarnings
+                                ? 'Passed with Warnings'
+                                : step.success ? 'Passed' : 'Failed'
+                              }
+                            </span>
+                            {step.duration_seconds !== undefined && (
+                              <span className="text-xs text-gray-500 flex items-center">
+                                <Clock className="h-3 w-3 mr-1" />
+                                {step.duration_seconds.toFixed(2)}s
+                              </span>
+                            )}
+                          </div>
+                          
+                          {step.message && (
+                            <p className="text-sm text-gray-600 mb-2">{step.message}</p>
+                          )}
+
+                          {/* Status Information */}
+                          {step.status && (
+                            <div className="mt-2 space-y-1">
+                              {step.status.xml_convert_message && (
+                                <p className="text-xs text-gray-600">
+                                  <Info className="h-3 w-3 inline mr-1" />
+                                  {step.status.xml_convert_message}
+                                </p>
+                              )}
+                              {step.status.edi_convert_message && (
+                                <p className="text-xs text-gray-600">
+                                  <Info className="h-3 w-3 inline mr-1" />
+                                  {step.status.edi_convert_message}
+                                </p>
+                              )}
+                              {step.status.file_upload_message && (
+                                <p className="text-xs text-gray-600">
+                                  <Info className="h-3 w-3 inline mr-1" />
+                                  {step.status.file_upload_message}
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Error Details */}
+                          {hasErrors && step.error_details && (
+                            <div className="mt-3 pt-3 border-t border-red-200 space-y-2">
+                              {step.error_details.map((error, errorIndex) => (
+                                <div
+                                  key={errorIndex}
+                                  className={cn(
+                                    "bg-white border rounded-lg p-3",
+                                    error.severity === 'CRITICAL'
+                                      ? "border-red-300 bg-red-50/50"
+                                      : error.severity === 'ERROR'
+                                        ? "border-orange-300 bg-orange-50/50"
+                                        : "border-yellow-300 bg-yellow-50/50"
+                                  )}
+                                >
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className={cn(
+                                        "px-2 py-0.5 rounded text-xs font-mono font-semibold",
+                                        error.severity === 'CRITICAL'
+                                          ? "bg-red-200 text-red-900"
+                                          : error.severity === 'ERROR'
+                                            ? "bg-orange-200 text-orange-900"
+                                            : "bg-yellow-200 text-yellow-900"
+                                      )}>
+                                        {error.error_code}
+                                      </span>
+                                      <span className={cn(
+                                        "px-2 py-0.5 rounded text-xs font-medium",
+                                        error.severity === 'CRITICAL'
+                                          ? "bg-red-100 text-red-800"
+                                          : error.severity === 'ERROR'
+                                            ? "bg-orange-100 text-orange-800"
+                                            : "bg-yellow-100 text-yellow-800"
+                                      )}>
+                                        {error.severity}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  
+                                  <p className="text-sm text-gray-700 mb-2">{error.user_message}</p>
+                                  
+                                  {error.suggested_actions && error.suggested_actions.length > 0 && (
+                                    <div className="mt-2">
+                                      <p className="text-xs font-semibold text-gray-700 mb-1">Suggested Actions:</p>
+                                      <ul className="space-y-1">
+                                        {error.suggested_actions.map((action, actionIndex) => (
+                                          <li key={actionIndex} className="flex items-start text-xs text-gray-600">
+                                            <span className="text-blue-600 font-semibold mr-2 mt-0.5">
+                                              {actionIndex + 1}.
+                                            </span>
+                                            <span className="flex-1">{action}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                ))
+                    </div>
+                  );
+                })
               ) : (
                 /* Fallback to default steps if processing_steps not available */
                 <>

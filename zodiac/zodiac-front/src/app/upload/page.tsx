@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { fileApi } from '@/lib/api';
 import { Upload, FileText, CheckCircle, XCircle, ArrowLeft } from 'lucide-react';
@@ -8,7 +9,7 @@ import { cn } from '@/lib/utils';
 import MainLayout from '@/components/MainLayout';
 import TopSection from '@/components/TopSection';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import { useRouter } from 'next/navigation';
+import ProcessingStatusTracker from '@/components/ProcessingStatusTracker';
 
 export default function UploadPage() {
   const router = useRouter();
@@ -16,6 +17,8 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState('');
+  const [trackingId, setTrackingId] = useState<string | null>(null);
+  const [showStatusTracker, setShowStatusTracker] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
   const handleFileUpload = async (file: File) => {
@@ -59,27 +62,61 @@ export default function UploadPage() {
       
       console.log('📤 Upload Page - Calling fileApi.uploadFile...');
       const result = await fileApi.uploadFile(file);
-      console.log('📤 Upload Page - Upload result:', result);
+      console.log('📤 Upload Page - Upload result:', JSON.stringify(result, null, 2));
       
-      if (result.success && result.data) {
-        setUploadSuccess(`File "${file.name}" uploaded and processed successfully!`);
-        setTimeout(() => {
-          setUploadSuccess('');
-          router.push('/invoices');
-        }, 2000);
+      // Extract tracking ID from response (InvoiceProcessingResponse format)
+      // The response.data is InvoiceProcessingResponse with tracking_id directly
+      const responseData = result.data;
+      const resultTrackingId = responseData?.tracking_id;
+      const responseStatus = (result as any).status;
+      
+      console.log('📤 Upload Page - Full result object:', result);
+      console.log('📤 Upload Page - Response data:', responseData);
+      console.log('📤 Upload Page - Response data type:', typeof responseData);
+      console.log('📤 Upload Page - Response data keys:', responseData ? Object.keys(responseData) : 'null');
+      console.log('📤 Upload Page - Extracted tracking ID:', resultTrackingId);
+      console.log('📤 Upload Page - Response status:', responseStatus);
+      console.log('📤 Upload Page - Result success:', result.success);
+      
+      // Check if we have a 202 response or tracking_id
+      const is202Response = responseStatus === 202;
+      
+      if (result.success && (is202Response || resultTrackingId)) {
+        // 202 Accepted means processing started, or we have a tracking_id
+        if (resultTrackingId) {
+          console.log('✅ Upload Page - Setting up status tracker with tracking ID:', resultTrackingId);
+          setTrackingId(resultTrackingId);
+          setShowStatusTracker(true);
+          setUploading(false); // Stop showing upload spinner, show status tracker instead
+          // Don't return here - let the rest of the code handle success message
+        } else if (is202Response) {
+          console.warn('⚠️ Upload Page - 202 response but no tracking ID found in expected location');
+          console.warn('⚠️ Upload Page - Attempting alternative extraction methods...');
+          // Try alternative extraction methods
+          const altTrackingId = (responseData as any)?.tracking_id || 
+                               (result as any)?.tracking_id;
+          if (altTrackingId) {
+            console.log('✅ Upload Page - Found tracking ID via alternative method:', altTrackingId);
+            setTrackingId(altTrackingId);
+            setShowStatusTracker(true);
+            setUploading(false);
+          } else {
+            console.error('❌ Upload Page - 202 response but could not extract tracking_id');
+            console.error('❌ Upload Page - Response data structure:', JSON.stringify(responseData, null, 2));
+            setUploadError('Processing started but tracking ID not found. Please check the console for details.');
+            setUploading(false);
+            return;
+          }
+        }
+        
+        // Processing started - status tracker will show progress
+        console.log('📤 Upload Page - Processing started, showing status tracker');
       } else {
         // Handle error responses
         if (result.isProcessingError) {
-          // File upload succeeded but processing failed - redirect to failed invoice page
-          console.log('📤 Upload Page - Processing error detected, redirecting to failed invoice page');
-          console.log('📤 Upload Page - Error data:', result.data);
-          
-          // Extract tracking ID from the error data
-          const trackingId = result.data?.tracking_id;
-          if (trackingId) {
-            console.log('📤 Upload Page - Redirecting to failed invoice page with tracking ID:', trackingId);
-            router.push(`/failed-invoice/${trackingId}`);
-          } else {
+          // File upload succeeded but processing failed
+          // Show status tracker to see what failed - no redirect, user can see details
+          if (!resultTrackingId) {
             console.error('📤 Upload Page - No tracking ID found in processing error data');
             setUploadError('Processing failed but unable to locate invoice details. Please check your invoices list.');
             setTimeout(() => setUploadError(''), 10000);
@@ -140,9 +177,10 @@ export default function UploadPage() {
       console.error('📤 Upload Page - Error is Error:', error instanceof Error);
       setUploadError('Upload failed. Please try again.');
       setTimeout(() => setUploadError(''), 10000);
-    } finally {
       setUploading(false);
     }
+    // Don't reset uploading in finally if we're showing status tracker
+    // The status tracker will handle its own state
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -196,8 +234,36 @@ export default function UploadPage() {
         <div className="max-w-4xl mx-auto space-y-8">
           {/* Upload Area */}
           <div className="bg-white rounded-lg shadow p-8">
-            {/* Upload Progress */}
-            {uploading && (
+            {/* Real-time Status Tracker */}
+            {showStatusTracker && trackingId && (
+              <div className="mb-6">
+                <ProcessingStatusTracker
+                  trackingId={trackingId}
+                  onComplete={(finalSteps) => {
+                    console.log('📊 Upload Page - Processing completed:', finalSteps);
+                    // Check if processing was successful
+                    const hasFailures = finalSteps.some(step => step.success === false);
+                    if (hasFailures) {
+                      // Show error message but stay on page
+                      setUploadError('Processing completed with errors. Please review the details below.');
+                    } else {
+                      // Show success message but stay on page
+                      setUploadSuccess(`File processed successfully! You can view it in the invoices list.`);
+                    }
+                    // Don't redirect - let user stay on page to see results
+                  }}
+                  onError={(error) => {
+                    console.error('📊 Upload Page - Status tracker error:', error);
+                    setUploadError(error);
+                  }}
+                  pollInterval={500} // Poll every 500ms for faster updates
+                  autoStopPolling={false} // Keep polling to show final status
+                />
+              </div>
+            )}
+
+            {/* Upload Progress - Only show if not showing status tracker */}
+            {uploading && !showStatusTracker && (
               <div className="mb-6 rounded-md bg-blue-50 p-6">
                 <div className="text-center">
                   <div className="mx-auto h-12 w-12 text-blue-500 animate-spin mb-4">
@@ -206,30 +272,8 @@ export default function UploadPage() {
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
                   </div>
-                  <h3 className="text-lg font-medium text-blue-800 mb-2">Processing Invoice...</h3>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-center space-x-2 text-sm text-blue-700">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                      <span>Uploading file</span>
-                    </div>
-                    <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
-                      <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-                      <span>Validating XML format</span>
-                    </div>
-                    <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
-                      <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-                      <span>Converting to EDI</span>
-                    </div>
-                    <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
-                      <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-                      <span>Validating EDI format</span>
-                    </div>
-                    <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
-                      <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-                      <span>3rd Party Endpoint</span>
-                    </div>
-                  </div>
-                  <p className="mt-3 text-sm text-blue-600">This may take a few moments...</p>
+                  <h3 className="text-lg font-medium text-blue-800 mb-2">Uploading Invoice...</h3>
+                  <p className="mt-3 text-sm text-blue-600">Please wait while we upload your file...</p>
                 </div>
               </div>
             )}

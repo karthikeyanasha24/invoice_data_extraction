@@ -1,0 +1,70 @@
+"""Configuration module for storage and environment setup."""
+import os
+import logging
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+logger = logging.getLogger("zodiac-api.config")
+
+# Environment configuration
+DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
+BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
+OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
+# Import Vercel Blob for production file storage
+try:
+    import vercel_blob
+    VERCEL_BLOB_AVAILABLE = True
+    logger.info("✅ Vercel Blob package imported successfully")
+except ImportError:
+    VERCEL_BLOB_AVAILABLE = False
+    logger.warning("⚠️ Vercel Blob not available - will use local storage only")
+
+# Determine if we MUST use blob storage (PROD + token provided)
+MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None
+USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
+
+# Local storage directories
+UPLOAD_DIR = Path("uploads")
+EDI_DIR = Path("converted")
+
+
+def initialize_storage():
+    """Initialize storage system (blob or local)."""
+    logger.info("=" * 60)
+    logger.info("🗂️ FILE STORAGE CONFIGURATION")
+    logger.info("=" * 60)
+    logger.info(f"🌍 DEPLOY_ENV: {DEPLOY_ENV}")
+    logger.info(f"🔑 BLOB_READ_WRITE_TOKEN: {'✅ Set' if BLOB_READ_WRITE_TOKEN else '❌ Not set'}")
+    logger.info(f"📦 VERCEL_BLOB_AVAILABLE: {VERCEL_BLOB_AVAILABLE}")
+    logger.info(f"🚨 MUST_USE_BLOB_STORAGE: {MUST_USE_BLOB_STORAGE}")
+    logger.info(f"✅ FINAL DECISION - USE_BLOB_STORAGE: {USE_BLOB_STORAGE}")
+    
+    if MUST_USE_BLOB_STORAGE:
+        logger.info("🚨 MANDATORY BLOB STORAGE REQUIRED")
+        if not VERCEL_BLOB_AVAILABLE:
+            logger.error("❌ CRITICAL ERROR: Vercel Blob package not available!")
+            raise RuntimeError("Vercel Blob package not available but required for PROD deployment")
+    
+    if USE_BLOB_STORAGE:
+        logger.info("🚀 STORAGE MODE: VERCEL BLOB STORAGE")
+        try:
+            logger.info("🔧 Initializing Vercel Blob API...")
+            logger.info("✅ Vercel Blob API initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Vercel Blob API: {e}")
+            if MUST_USE_BLOB_STORAGE:
+                raise RuntimeError(f"Failed to initialize mandatory Vercel Blob API: {str(e)}")
+    else:
+        logger.info("📁 STORAGE MODE: LOCAL FILE STORAGE")
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        EDI_DIR.mkdir(parents=True, exist_ok=True)
+    
+    logger.info("=" * 60)
+
+
+# Initialize storage on module import
+initialize_storage()
+

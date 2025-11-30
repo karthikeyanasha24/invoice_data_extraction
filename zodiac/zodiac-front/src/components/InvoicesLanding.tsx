@@ -17,12 +17,15 @@ import {
   XCircle,
   RotateCcw,
   Trash,
-  Upload
+  Upload,
+  Clock,
+  X
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Pagination from '@/components/Pagination';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
+import RestoreConfirmationModal from '@/components/RestoreConfirmationModal';
 
 export default function InvoicesLanding() {
   const router = useRouter();
@@ -39,6 +42,14 @@ export default function InvoicesLanding() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedInvoiceToDelete, setSelectedInvoiceToDelete] = useState<Invoice | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Restore confirmation modal state
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [selectedInvoiceToRestore, setSelectedInvoiceToRestore] = useState<Invoice | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -128,6 +139,7 @@ export default function InvoicesLanding() {
 
     console.log('🗑️ InvoicesLanding - Confirming delete for invoice:', selectedInvoiceToDelete.id);
     setIsDeleting(true);
+    setDeleteError(null);
 
     try {
       const result = await fileApi.deleteFile(Number(selectedInvoiceToDelete.id));
@@ -142,31 +154,60 @@ export default function InvoicesLanding() {
         // Close modal
         setShowDeleteModal(false);
         setSelectedInvoiceToDelete(null);
+        setDeleteError(null);
+        setSuccessMessage('Invoice moved to recycle bin successfully');
+        setTimeout(() => setSuccessMessage(null), 5000);
       } else {
         console.error('Failed to delete invoice:', result.error);
+        setDeleteError(result.error || 'Failed to delete invoice. Please try again.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete invoice:', error);
+      setDeleteError(error.message || 'Failed to delete invoice. Please try again.');
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const handleRestoreInvoice = async (invoice: Invoice) => {
+  const handleRestoreInvoice = (invoice: Invoice) => {
+    console.log('🔄 InvoicesLanding - Requesting to restore invoice:', invoice.id);
+    setSelectedInvoiceToRestore(invoice);
+    setShowRestoreModal(true);
+    setRestoreError(null);
+  };
+
+  const confirmRestoreInvoice = async () => {
+    if (!selectedInvoiceToRestore) return;
+
+    console.log('🔄 InvoicesLanding - Confirming restore for invoice:', selectedInvoiceToRestore.id);
+    setIsRestoring(true);
+    setRestoreError(null);
+
     try {
-      const result = await fileApi.restoreFile(Number(invoice.id));
+      const result = await fileApi.restoreFile(Number(selectedInvoiceToRestore.id));
+      
       if (result.success) {
-        console.log('🔄 Invoice restored successfully, refreshing data');
+        console.log('🔄 InvoicesLanding - Restore successful, refreshing data');
         // Refresh both active and deleted invoices from server
         await Promise.all([
           fetchInvoices(),
           fetchDeletedInvoices()
         ]);
+        // Close modal
+        setShowRestoreModal(false);
+        setSelectedInvoiceToRestore(null);
+        setRestoreError(null);
+        setSuccessMessage('Invoice restored successfully');
+        setTimeout(() => setSuccessMessage(null), 5000);
       } else {
         console.error('Failed to restore invoice:', result.error);
+        setRestoreError(result.error || 'Failed to restore invoice. Please try again.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to restore invoice:', error);
+      setRestoreError(error.message || 'Failed to restore invoice. Please try again.');
+    } finally {
+      setIsRestoring(false);
     }
   };
 
@@ -569,15 +610,85 @@ export default function InvoicesLanding() {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        invoice={selectedInvoiceToDelete}
         isOpen={showDeleteModal}
         onClose={() => {
           setShowDeleteModal(false);
           setSelectedInvoiceToDelete(null);
+          setDeleteError(null);
         }}
         onConfirm={confirmDeleteInvoice}
-        isLoading={isDeleting}
-        invoiceName={selectedInvoiceToDelete?.filename || 'Unknown'}
+        isDeleting={isDeleting}
       />
+
+      {/* Restore Confirmation Modal */}
+      <RestoreConfirmationModal
+        invoice={selectedInvoiceToRestore}
+        isOpen={showRestoreModal}
+        onClose={() => {
+          setShowRestoreModal(false);
+          setSelectedInvoiceToRestore(null);
+          setRestoreError(null);
+        }}
+        onConfirm={confirmRestoreInvoice}
+        isRestoring={isRestoring}
+      />
+
+      {/* Error Messages */}
+      {deleteError && (
+        <div className="fixed bottom-4 right-4 bg-red-50 border border-red-200 rounded-lg p-4 shadow-lg z-50 max-w-md">
+          <div className="flex items-start space-x-3">
+            <XCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-red-800">Delete Failed</h4>
+              <p className="text-sm text-red-700 mt-1">{deleteError}</p>
+            </div>
+            <button
+              onClick={() => setDeleteError(null)}
+              className="text-red-400 hover:text-red-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {restoreError && (
+        <div className="fixed bottom-4 right-4 bg-red-50 border border-red-200 rounded-lg p-4 shadow-lg z-50 max-w-md">
+          <div className="flex items-start space-x-3">
+            <XCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-red-800">Restore Failed</h4>
+              <p className="text-sm text-red-700 mt-1">{restoreError}</p>
+            </div>
+            <button
+              onClick={() => setRestoreError(null)}
+              className="text-red-400 hover:text-red-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {successMessage && (
+        <div className="fixed bottom-4 right-4 bg-green-50 border border-green-200 rounded-lg p-4 shadow-lg z-50 max-w-md">
+          <div className="flex items-start space-x-3">
+            <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-green-800">Success</h4>
+              <p className="text-sm text-green-700 mt-1">{successMessage}</p>
+            </div>
+            <button
+              onClick={() => setSuccessMessage(null)}
+              className="text-green-400 hover:text-green-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
