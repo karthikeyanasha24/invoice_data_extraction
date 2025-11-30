@@ -252,16 +252,36 @@ export const fileApi = {
       
       console.log('📁 File API - Upload response:', { 
         responseData: response.data,
-        responseStatus: response.status
+        responseStatus: response.status,
+        responseDataType: typeof response.data
       });
       
-      // Handle success case (201 Created)
-      if (response.status === 201) {
-        console.log('📁 File API - Invoice processing completed successfully (201 Created)');
+      // Handle success case (201 Created or 202 Accepted for async processing)
+      if (response.status === 201 || response.status === 202) {
+        // Parse response data if it's a string (backend returns JSONResponse with json.dumps)
+        let parsedData = response.data;
+        if (typeof response.data === 'string') {
+          try {
+            parsedData = JSON.parse(response.data);
+            console.log('📁 File API - Parsed response data:', parsedData);
+          } catch (e) {
+            console.error('📁 File API - Failed to parse response data:', e);
+            parsedData = response.data;
+          }
+        }
+        
+        if (response.status === 202) {
+          console.log('📁 File API - Invoice processing started (202 Accepted), tracking_id returned for real-time status');
+          console.log('📁 File API - Parsed data:', parsedData);
+          console.log('📁 File API - Tracking ID from response:', parsedData?.tracking_id);
+        } else {
+          console.log('📁 File API - Invoice processing completed successfully (201 Created)');
+        }
         return { 
           success: true, 
-          data: response.data,
-          warnings: response.data.warnings || []
+          data: parsedData,
+          status: response.status, // Include status code for frontend handling
+          warnings: parsedData.warnings || []
         };
       } else if (response.status === 200) {
         // Handle 200 OK responses - could be processing failure or unexpected success
@@ -985,6 +1005,210 @@ export const fileApi = {
         throw new Error('Network error. Please check your connection and try again.');
       } else {
         throw new Error('Failed to update API key allow list. Please try again.');
+      }
+    }
+  },
+
+  getProcessingStatus: async (trackingId: string): Promise<any> => {
+    console.log('📊 File API - Get processing status:', trackingId);
+    try {
+      const response = await api.get(`/api/v1/invoices/status/${trackingId}`);
+      
+      console.log('📊 File API - Processing status response:', response.data);
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('📊 File API - Get processing status failed:', {
+        error: error.response?.data || error.message,
+        status: error.response?.status,
+        trackingId
+      });
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('Processing status not found');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else {
+        throw new Error(error.response?.data?.detail || 'Failed to fetch processing status');
+      }
+    }
+  },
+};
+
+// Customer API
+export const customerApi = {
+  getCustomers: async (skip: number = 0, limit: number = 100, search?: string): Promise<any> => {
+    console.log('👥 Customer API - Fetching customers:', { skip, limit, search });
+    try {
+      const params = new URLSearchParams();
+      params.append('skip', skip.toString());
+      params.append('limit', limit.toString());
+      if (search) {
+        params.append('search', search);
+      }
+      
+      const response = await api.get(`/api/v1/customers/?${params}`);
+      
+      console.log('👥 Customer API - Fetched customers:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to fetch customers:', error.response?.data || error.message);
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error('Failed to fetch customers.');
+      }
+    }
+  },
+
+  getCustomerById: async (customerId: string): Promise<any> => {
+    console.log('👥 Customer API - Fetching customer:', customerId);
+    try {
+      const response = await api.get(`/api/v1/customers/${customerId}`);
+      console.log('👥 Customer API - Fetched customer:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to fetch customer:', error.response?.data || error.message);
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('Customer not found.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error('Failed to fetch customer.');
+      }
+    }
+  },
+
+  createCustomer: async (data: any): Promise<any> => {
+    console.log('👥 Customer API - Creating customer:', data);
+    try {
+      const response = await api.post('/api/v1/customers/', data);
+      console.log('👥 Customer API - Customer created:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to create customer:', error.response?.data || error.message);
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 409) {
+        throw new Error('Customer with this ID already exists.');
+      } else if (error.response?.status === 400) {
+        throw new Error('Invalid customer data provided.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error(error.response?.data?.detail || 'Failed to create customer.');
+      }
+    }
+  },
+
+  updateCustomer: async (customerId: string, data: any): Promise<any> => {
+    console.log('👥 Customer API - Updating customer:', { customerId, data });
+    try {
+      const response = await api.put(`/api/v1/customers/${customerId}`, data);
+      console.log('👥 Customer API - Customer updated:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to update customer:', error.response?.data || error.message);
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('Customer not found.');
+      } else if (error.response?.status === 409) {
+        throw new Error('New customer ID already exists.');
+      } else if (error.response?.status === 400) {
+        throw new Error('Invalid customer data provided.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error(error.response?.data?.detail || 'Failed to update customer.');
+      }
+    }
+  },
+
+  deleteCustomer: async (customerId: string): Promise<any> => {
+    console.log('👥 Customer API - Deleting customer:', customerId);
+    try {
+      const response = await api.delete(`/api/v1/customers/${customerId}`);
+      console.log('👥 Customer API - Customer deleted:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to delete customer:', error.response?.data || error.message);
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 404) {
+        throw new Error('Customer not found.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error(error.response?.data?.detail || 'Failed to delete customer.');
+      }
+    }
+  },
+
+  getSupportedFormats: async (): Promise<any> => {
+    console.log('👥 Customer API - Fetching supported formats');
+    try {
+      const response = await api.get('/api/v1/customers/formats/list');
+      console.log('👥 Customer API - Supported formats:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to fetch formats:', error.response?.data || error.message);
+      
+      // Return default formats if API fails
+      return {
+        supported_formats: ['edifact', 'x12', 'x12_embed', 'xml'],
+        descriptions: {
+          edifact: 'UN/EDIFACT electronic data interchange format',
+          x12: 'ASC X12 EDI format',
+          x12_embed: 'X12 embedded in another format',
+          xml: 'XML format',
+        },
+      };
+    }
+  },
+
+  bulkCreateCustomers: async (customers: any[]): Promise<any> => {
+    console.log('👥 Customer API - Bulk creating customers:', { count: customers.length });
+    try {
+      const response = await api.post('/api/v1/customers/bulk/create', customers);
+      console.log('👥 Customer API - Bulk create response:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('👥 Customer API - Failed to bulk create:', error.response?.data || error.message);
+      
+      if (error.response?.status === 401) {
+        throw new Error('Session expired. Please log in again.');
+      } else if (error.response?.status === 400) {
+        throw new Error('Invalid customer data provided.');
+      } else if (error.response?.status >= 500) {
+        throw new Error('Server error. Please try again later.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your connection.');
+      } else {
+        throw new Error(error.response?.data?.detail || 'Failed to bulk create customers.');
       }
     }
   },

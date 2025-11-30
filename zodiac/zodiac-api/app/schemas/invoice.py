@@ -3,41 +3,48 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 
-class ErrorDetail(BaseModel):
-    """Detailed error information for specific validation steps"""
-    step: str  # e.g., "XML_VALIDATION", "EDI_CONVERSION", "EDI_FORMAT_VALIDATION"
-    error_type: str  # e.g., "VALIDATION_ERROR", "FORMAT_ERROR", "DATA_TYPE_ERROR"
-    field_name: Optional[str] = None  # Specific field that failed
-    error_message: str
-    expected_format: Optional[str] = None
-    actual_value: Optional[str] = None
-    suggestions: Optional[List[str]] = None
+class DetailedErrorInfo(BaseModel):
+    """Comprehensive error information with all context and remediation guidance"""
+    error_code: str  # e.g., "E2003", "E4010"
+    error_category: str  # e.g., "XML_VALIDATION", "EDI_FORMAT_VALIDATION"
+    error_message: str  # Technical error message
+    severity: str  # "CRITICAL", "ERROR", "WARNING"
+    user_message: str  # User-friendly message
+    technical_details: str  # Detailed technical explanation
+    suggested_actions: Optional[List[str]] = None
+    file_name: Optional[str] = None
+    timestamp: Optional[float] = None
+    additional_context: Optional[Dict[str, Any]] = None
+    documentation_links: Optional[List[str]] = None
+    is_recoverable: Optional[bool] = None
+    estimated_fix_time: Optional[str] = None
+
+class StepStatus(BaseModel):
+    """Status information specific to each processing step"""
+    # File Upload Step
+    file_upload_pass: Optional[bool] = None
+    file_upload_message: Optional[str] = None
+    # XML Validation Step
+    xml_validation_pass: Optional[bool] = None
+    xml_convert_message: Optional[str] = None
+    # EDI Conversion Step
+    edi_convert_pass: Optional[bool] = None
+    edi_convert_message: Optional[str] = None
 
 class ProcessingStepResult(BaseModel):
-    """Result of a specific processing step"""
+    """Result of a specific processing step with complete error details"""
     step_name: str
     step_number: int
     success: bool
     duration_seconds: Optional[float] = None
-    error_details: Optional[List[ErrorDetail]] = None
     message: Optional[str] = None
+    status: Optional[StepStatus] = None  # Step-specific status fields
+    error_details: Optional[List[DetailedErrorInfo]] = None  # Complete error information
 
 class InvoiceProcessingResponse(BaseModel):
-    invoice_operation_success: bool
-    file_upload_pass: bool
-    file_upload_message: Optional[str] = None
-    xml_validation_pass: bool
-    xml_convert_message: Optional[str] = None
-    edi_convert_pass: bool
-    edi_convert_message: Optional[str] = None
+    """Simplified response structure with only tracking_id and processing_steps"""
     tracking_id: Optional[uuid.UUID] = None
-    
-    # Enhanced error information
     processing_steps: Optional[List[ProcessingStepResult]] = None
-    error_summary: Optional[Dict[str, Any]] = None
-    file_content_preview: Optional[str] = None  # First 500 chars of XML file
-    suggested_actions: Optional[List[str]] = None
-    warnings: Optional[List[str]] = None  # Non-blocking validation warnings
 
 class InvoiceResponse(BaseModel):
     """Response format that matches frontend Invoice interface"""
@@ -100,7 +107,7 @@ class ZodiacInvoiceFailedEdi(BaseModel):
     blob_edi_path: Optional[str] = None
     xml_content: Optional[str] = None
     edi_content: Optional[str] = None
-    processing_steps_error: Optional[List[ErrorDetail]] = None
+    processing_steps: Optional[List[Dict[str, Any]]] = None
     
     class Config:
         from_attributes = True

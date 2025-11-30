@@ -10,7 +10,8 @@ import {
   ChevronLeft, 
   ChevronRight,
   User,
-  LogOut
+  LogOut,
+  Building2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -46,6 +47,13 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
       icon: Receipt,
       path: '/quotations',
       description: 'Manage quotation files'
+    },
+    {
+      id: 'customers',
+      label: 'Customers',
+      icon: Building2,
+      path: '/customers',
+      description: 'Manage EDI customers'
     },
     {
       id: 'settings',

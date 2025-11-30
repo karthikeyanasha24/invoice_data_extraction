@@ -36,13 +36,49 @@ export interface ErrorDetail {
   suggestions?: string[];
 }
 
+// New comprehensive error information structure matching API
+export interface DetailedErrorInfo {
+  error_code: string; // e.g., "E2003", "E4010"
+  error_category: string; // e.g., "XML_VALIDATION", "EDI_FORMAT_VALIDATION"
+  error_message: string; // Technical error message
+  severity: string; // "CRITICAL", "ERROR", "WARNING"
+  user_message: string; // User-friendly message
+  technical_details: string; // Detailed technical explanation
+  suggested_actions?: string[];
+  file_name?: string;
+  timestamp?: number;
+  additional_context?: Record<string, any>;
+  documentation_links?: string[];
+  is_recoverable?: boolean;
+  estimated_fix_time?: string;
+}
+
+export interface StepStatus {
+  file_upload_pass?: boolean;
+  file_upload_message?: string;
+  xml_validation_pass?: boolean;
+  xml_convert_message?: string;
+  edi_convert_pass?: boolean;
+  edi_convert_message?: string;
+}
+
 export interface ProcessingStepResult {
-  step_name: string;
-  step_number: number;
-  success: boolean;
+  step_name?: string;
+  step_number?: number;
+  success?: boolean;
   duration_seconds?: number;
-  error_details?: ErrorDetail[];
   message?: string;
+  status?: StepStatus; // Step-specific status fields
+  error_details?: DetailedErrorInfo[]; // Complete error information with all details
+  // API response fields (when step itself is an error)
+  user_message?: string;
+  error_context?: Record<string, any>;
+  is_recoverable?: boolean;
+  related_errors?: any[];
+  suggested_actions?: string[];
+  technical_details?: string;
+  estimated_fix_time?: string;
+  documentation_links?: string[];
 }
 
 export interface FileUploadResponse {
@@ -66,6 +102,11 @@ export interface FileUploadResponse {
   file_content_preview?: string; // First 500 chars of XML file
   suggested_actions?: string[];
   warnings?: string[]; // XML validation warnings
+}
+
+export interface InvoiceProcessingResponse {
+  tracking_id?: string;
+  processing_steps?: ProcessingStepResult[];
 }
 
 export interface Invoice {
@@ -173,4 +214,40 @@ export interface ApiKeyResponse {
   created_at?: string;
   updated_at?: string;
   message: string;
+}
+
+// === VERSION CONTROL TYPES ===
+export interface DiffLine {
+  line_number: number;
+  original_text: string;
+  fixed_text: string;
+  change_type: 'added' | 'removed' | 'modified' | 'unchanged';
+  is_modified: boolean;
+}
+
+export interface VersionComparison {
+  file_type: string;
+  original_content: string;
+  fixed_content: string;
+  diffs: DiffLine[];
+  total_lines: number;
+  modified_line_count: number;
+  is_ai_corrected: boolean;
+  correction_method?: string;
+}
+
+export interface FileEditorRequest {
+  tracking_id: string;
+  file_type: string;
+  content: string;
+  is_success_invoice: boolean;
+}
+
+export interface FileEditorResponse {
+  status: string;
+  message: string;
+  tracking_id: string;
+  file_type: string;
+  content_length: number;
+  line_count: number;
 }

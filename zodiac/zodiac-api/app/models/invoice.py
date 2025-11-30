@@ -20,8 +20,8 @@ class ZodiacInvoiceSuccessEdi(Base):
     edi_convert_pass = Column(Boolean, default=False)
     edi_convert_message = Column(Text, nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
-    # Store detailed error information
-    processing_steps_error = Column(JSON, nullable=True)
+    # Store detailed processing steps with full error information
+    processing_steps = Column(JSON, nullable=True)
     # Store blob paths for blob-stored files
     blob_xml_path = Column(Text, nullable=True)
     blob_edi_path = Column(Text, nullable=True)
@@ -42,6 +42,7 @@ class ZodiacInvoiceFailedEdi(Base):
     tracking_id = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
     user_id = Column(Integer, ForeignKey("zodiac_users.id"), nullable=False)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=True)  # Track updates for reprocessing
     xml_path = Column(Text, nullable=True)
     xml_validation_pass = Column(Boolean, default=False)
     xml_convert_message = Column(Text, nullable=True)
@@ -49,8 +50,8 @@ class ZodiacInvoiceFailedEdi(Base):
     edi_convert_pass = Column(Boolean, default=False)
     edi_convert_message = Column(Text, nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
-    # Store detailed error information
-    processing_steps_error = Column(JSON, nullable=True)
+    # Store detailed processing steps with full error information
+    processing_steps = Column(JSON, nullable=True)
     # Store blob paths for blob-stored files
     blob_xml_path = Column(Text, nullable=True)
     blob_edi_path = Column(Text, nullable=True)

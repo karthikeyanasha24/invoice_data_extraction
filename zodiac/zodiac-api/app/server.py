@@ -11,6 +11,7 @@ from .database import get_db, Base, engine
 from .database_init import initialize_database, get_database_status
 from .api.auth import router as auth_router
 from .api.invoices import router as invoices_router
+from .api.customers import router as customers_router
 from .models.user import ZodiacUser
 from .models.invoice import ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi
 
@@ -149,6 +150,7 @@ async def health_check():
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(invoices_router, prefix="/api/v1")
+app.include_router(customers_router, prefix="/api/v1")
 
 if __name__ == "__main__":
     import uvicorn
