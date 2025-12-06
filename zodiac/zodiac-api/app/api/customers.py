@@ -321,12 +321,14 @@ def get_supported_formats(
     """Get list of supported file formats"""
     logger.info("📋 Fetching supported formats")
     return {
-        "supported_formats": ["edifact", "x12", "x12_embed", "xml"],
+        "supported_formats": ["XML", "X12", "EDIFACT", "XML_EMBED_PDF", "XML_EMBED_X12", "XML_EMBED_EDIFACT"],
         "descriptions": {
-            "edifact": "UN/EDIFACT electronic data interchange format",
-            "x12": "ASC X12 EDI format",
-            "x12_embed": "X12 embedded in another format",
-            "xml": "XML format",
+            "XML": "XML format with validation (pass-through)",
+            "X12": "ASC X12 EDI format with EDINation validation",
+            "EDIFACT": "UN/EDIFACT electronic data interchange format",
+            "XML_EMBED_PDF": "Generate PDF from XML and embed in XML for third-party API",
+            "XML_EMBED_X12": "Generate X12 from XML and embed in XML for third-party API",
+            "XML_EMBED_EDIFACT": "Generate EDIFACT from XML and embed in XML for third-party API",
         },
     }
 

@@ -58,23 +58,65 @@ export default function InvoiceDetailsPage() {
   };
   const handleDownload = async () => {
     if (!invoice) return;
-    const fileUrl = invoice.blob_edi_path
     
     setDownloading(true);
     try {
-      const response = await fetch(fileUrl);
+      // Use API endpoint for download (works with both blob storage and local files)
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/invoices/${invoice.tracking_id}/download`;
+      
+      console.log('📥 Downloading from API:', apiUrl);
+      
+      // Construct proper filename from invoice data
+      const format = (invoice.target_file_format || 'unknown').toUpperCase();
+      const invoiceId = invoice.customerId || invoice.tracking_id.split('-')[0] || 'invoice';
+      
+      let fileExtension: string;
+      switch (format) {
+        case 'X12':
+          fileExtension = 'x12';
+          break;
+        case 'EDIFACT':
+          fileExtension = 'edi';
+          break;
+        case 'XML':
+        case 'XML_EMBED_PDF':
+        case 'XML_EMBED_X12':
+        case 'XML_EMBED_EDIFACT':
+          fileExtension = 'xml';
+          break;
+        default:
+          fileExtension = 'txt';
+      }
+      
+      const filename = `${invoiceId}_${format}.${fileExtension}`;
+      console.log('📁 Downloading as:', filename);
+      
+      // Fetch from API (backend handles file serving for both local and blob storage)
+      const response = await fetch(apiUrl, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.statusText}`);
+      }
+      
+      // Download the file
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const uniqueNumber = Date.now()
-      a.download = `edi_file_${uniqueNumber}`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
+      
+      console.log(`✅ Downloaded: ${filename} (${blob.size} bytes)`);
     } catch (error) {
-      console.error('Download failed:', error);
+      console.error('❌ Download failed:', error);
+      alert('Failed to download file. Please try again.');
     } finally {
       setDownloading(false);
     }
