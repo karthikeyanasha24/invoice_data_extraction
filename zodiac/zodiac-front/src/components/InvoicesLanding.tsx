@@ -63,7 +63,16 @@ export default function InvoicesLanding() {
   const fetchInvoices = async () => {
     try {
       const data = await fileApi.getFiles();
-      console.log(data, "data invoices")
+      console.log("📊 TOTAL INVOICES RECEIVED:", data.length);
+      
+      // Log the first invoice to see all available fields
+      if (data.length > 0) {
+        console.log("📊 FIRST INVOICE COMPLETE DATA:", data[0]);
+        console.log("📊 AVAILABLE FIELDS:", Object.keys(data[0]));
+        console.log("📊 invoice_id value:", data[0].customerId);
+        console.log("📊 customerName value:", data[0].customerName);
+      }
+      
       setInvoices(data);
     } catch (error: any) {
       console.error('Failed to fetch invoices:', error);
@@ -115,7 +124,7 @@ export default function InvoicesLanding() {
         invoice.filename?.toLowerCase().includes(term) ||
         invoice.customerName?.toLowerCase().includes(term) ||
         invoice.status?.toLowerCase().includes(term) ||
-        invoice.invoice_id?.toLowerCase().includes(term)
+        invoice.customerId?.toLowerCase().includes(term)
       );
       
       return matchesSearch;
@@ -220,18 +229,64 @@ export default function InvoicesLanding() {
   };
 
   const handleDownloadClick = async(invoice: Invoice) => {
-    const fileUrl = invoice.blob_edi_path
-      const response = await fetch(fileUrl);
+    try {
+      // Use API endpoint for download (works with both blob storage and local files)
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/invoices/${invoice.tracking_id}/download`;
+      
+      console.log('📥 Downloading from API:', apiUrl);
+      
+      // Construct proper filename from invoice data
+      const format = (invoice.target_file_format || 'unknown').toUpperCase();
+      const invoiceId = invoice.customerId || invoice.tracking_id.split('-')[0] || 'invoice';
+      
+      let fileExtension: string;
+      switch (format) {
+        case 'X12':
+          fileExtension = 'x12';
+          break;
+        case 'EDIFACT':
+          fileExtension = 'edi';
+          break;
+        case 'XML':
+        case 'XML_EMBED_PDF':
+        case 'XML_EMBED_X12':
+        case 'XML_EMBED_EDIFACT':
+          fileExtension = 'xml';
+          break;
+        default:
+          fileExtension = 'txt';
+      }
+      
+      const filename = `${invoiceId}_${format}.${fileExtension}`;
+      console.log('📁 Downloading as:', filename);
+      
+      // Fetch from API (backend handles file serving for both local and blob storage)
+      const response = await fetch(apiUrl, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.statusText}`);
+      }
+      
+      // Download the file
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const uniqueNumber = Date.now()
-      a.download = `edi_file_${uniqueNumber}`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
+      
+      console.log(`✅ Downloaded: ${filename} (${blob.size} bytes)`);
+    } catch (error) {
+      console.error('❌ Download failed:', error);
+      alert('Failed to download file. Please try again.');
+    }
   };
 
   const handlePermanentDeleteClick = (invoice: Invoice) => {
@@ -503,7 +558,7 @@ export default function InvoicesLanding() {
                 {paginatedInvoices.map((invoice, index) => (
                   <tr key={invoice.id || `invoice-${index}`} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {invoice.invoice_id || 'N/A'}
+                      {invoice.customerId || invoice.invoice_id || 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {invoice.customerName || 'N/A'}

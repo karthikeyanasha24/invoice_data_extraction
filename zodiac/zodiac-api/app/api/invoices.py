@@ -2,14 +2,14 @@ from .utils import extract_invoice_info
 import re
 from ..api.auth import get_current_user
 from ..api.api_key_auth import get_api_user
-from ..schemas.invoice import InvoiceProcessingResponse, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse
+from ..schemas.invoice import InvoiceProcessingResponse, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse, ProcessingStepResult, StepStatus, DetailedErrorInfo
 from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
 from ..models.user import ZodiacUser, generate_api_key, hash_api_key, encode_api_key_for_transport
 from ..database import get_db, SessionLocal
 from enum import Enum
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
 from typing import Optional, Union
@@ -38,6 +38,8 @@ class FormatEnum(str, Enum):
     x12 = "x12"
     x12embed = "x12_embed"
     edifact = "edifact"
+
+# X12 modules will be used for OUTPUT validation, not input processing
 
 async def send_file_to_external(
     file_content: str,
@@ -183,6 +185,9 @@ async def process_invoice(
     async def process_background():
         db_session = SessionLocal()
         try:
+            logger.info(f"🔄 ===== BACKGROUND PROCESSING STARTED =====")
+            logger.info(f"🆔 Background task for tracking_id: {tracking_id}")
+            
             # Create new UploadFile for background task with proper headers
             from starlette.datastructures import Headers
             content_type = file.content_type if file.content_type else "application/xml"
@@ -192,17 +197,50 @@ async def process_invoice(
                 file=BytesIO(file_content),
                 headers=headers
             )
+            
+            logger.info(f"📄 Background task - calling process_invoice_internal...")
+            
             # Pass the tracking_id to process_invoice_internal so it uses the same one
-            await process_invoice_internal(background_file, strict_validation, db_session, request, current_user, "web", tracking_id)
-        except Exception as e:
-            logger.error(f"❌ Background processing error for tracking_id {tracking_id}: {str(e)}")
+            result = await process_invoice_internal(background_file, strict_validation, db_session, request, current_user, "web", tracking_id)
+            
+            logger.info(f"✅ Background processing completed for tracking_id {tracking_id}")
+            
+        except ImportError as import_err:
+            logger.error(f"❌❌❌ IMPORT ERROR in background task: {str(import_err)}")
             import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+            # Update status tracker with error
+            from ..schemas.invoice import ProcessingStepResult
+            error_step = ProcessingStepResult(
+                step_name="Import Error",
+                step_number=2,
+                success=False,
+                duration_seconds=0,
+                message=f"Module import failed: {str(import_err)}"
+            )
+            status_tracker.update_step(tracking_id, error_step)
+        except Exception as e:
+            logger.error(f"❌❌❌ BACKGROUND PROCESSING ERROR for tracking_id {tracking_id}: {str(e)}")
+            import traceback
+            logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+            # Update status tracker with error
+            from ..schemas.invoice import ProcessingStepResult
+            error_step = ProcessingStepResult(
+                step_name="Processing Error",
+                step_number=2,
+                success=False,
+                duration_seconds=0,
+                message=f"Error: {str(e)}"
+            )
+            status_tracker.update_step(tracking_id, error_step)
         finally:
+            logger.info(f"🔚 Background task finished for tracking_id {tracking_id}")
             db_session.close()
     
     # Start background processing (non-blocking)
+    logger.info(f"🚀 Starting background task for tracking_id {tracking_id}")
     asyncio.create_task(process_background())
+    logger.info(f"✅ Background task created, returning 202 to frontend")
     
     # Return immediately with tracking_id so frontend can start polling
     initial_response = InvoiceProcessingResponse(
@@ -616,7 +654,7 @@ def test_endpoint(
         return {"error": str(e)}
 
 
-@router.get("/success", response_model=list[ZodiacInvoiceSuccessEdi])
+@router.get("/success")
 def get_successful_invoices(
     skip: int = 0,
     limit: int = 100,
@@ -633,6 +671,7 @@ def get_successful_invoices(
         # Determine if columns exist
         has_external_status = "external_status" in columns
         has_external_message = "external_message" in columns
+        has_target_file_format = "target_file_format" in columns
 
         # Build query dynamically
         query = f"""
@@ -641,31 +680,19 @@ def get_successful_invoices(
                 edi_convert_pass, edi_convert_message, processing_steps,
                 blob_xml_path, blob_edi_path,
                 {"external_status" if has_external_status else "'False' AS external_status"},
-                {"external_message" if has_external_message else "'No msg' AS external_message"}
+                {"external_message" if has_external_message else "'No msg' AS external_message"},
+                {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"}
             FROM zodiac_invoice_success_edi 
             WHERE user_id = :user_id AND deleted_at IS NULL
             ORDER BY uploaded_at DESC 
             LIMIT :limit OFFSET :offset
         """
-        # query = """
-        # SELECT id, tracking_id, user_id, uploaded_at, xml_path,
-        #        xml_validation_pass, xml_convert_message, edi_path,
-        #        edi_convert_pass, edi_convert_message, processing_steps_error,
-        #        blob_xml_path, blob_edi_path
-        # FROM zodiac_invoice_success_edi
-        # WHERE user_id = :user_id AND deleted_at IS NULL
-        # ORDER BY uploaded_at DESC
-        # LIMIT :limit OFFSET :offset
-        # """
+        
         result = db.execute(text(query), {
             "user_id": current_user.id,
             "limit": limit,
             "offset": skip
         }).fetchall()
-        for row in result:
-            print("🧾 external_status:", getattr(row, "external_status", None))
-            print("🧾 external_message:", getattr(
-                row, "external_message", None))
 
         # Convert to model instances
         invoices = []
@@ -686,47 +713,130 @@ def get_successful_invoices(
                 blob_edi_path=row.blob_edi_path,
                 external_status=row.external_status,
                 external_message=row.external_message,
-                target_file_format=getattr(row, 'target_file_format', None)
-
+                target_file_format=getattr(row, 'target_file_format', 'X12')
             )
 
             # Add computed fields after model creation
-            invoice.xml_content = ""  # Successful invoices don't need content in list view
-            invoice.edi_content = ""  # Successful invoices don't need content in list view
+            invoice.xml_content = ""
+            invoice.edi_content = ""
             invoice.info = {}
             data = vars(invoice).copy()
             data.pop("_sa_instance_state", None)
 
             # Safely extract and merge invoice info
             try:
-                # Try blob path first, fall back to local path
-                edi_path_to_extract = row.blob_edi_path or row.edi_path
-                if edi_path_to_extract:
-                    info = extract_invoice_info(edi_path_to_extract)
-                    invoice.info = info
-
-                    invoice.edi_content = info or {}
-                    if isinstance(info, dict):
-                        data.update(info)
+                # Determine which file to extract from based on format
+                target_format = getattr(row, 'target_file_format', 'X12') or 'X12'
+                
+                # For XML format, extract from XML file
+                if target_format.upper() in ['XML', 'XML_EMBED_PDF', 'XML_EMBED_X12', 'XML_EMBED_EDIFACT']:
+                    xml_path_to_extract = row.blob_xml_path or row.xml_path
+                    
+                    if xml_path_to_extract:
+                        logger.info(f"🔍 Extracting info from XML file: {xml_path_to_extract}")
+                        
+                        # Read XML content
+                        try:
+                            if xml_path_to_extract.startswith('http://') or xml_path_to_extract.startswith('https://'):
+                                # Blob storage URL
+                                import requests
+                                response = requests.get(xml_path_to_extract)
+                                response.raise_for_status()
+                                xml_content = response.text
+                            else:
+                                # Local file
+                                import os
+                                if os.path.exists(xml_path_to_extract):
+                                    with open(xml_path_to_extract, 'r', encoding='utf-8') as f:
+                                        xml_content = f.read()
+                                else:
+                                    logger.warning(f"⚠️ XML file not found: {xml_path_to_extract}")
+                                    xml_content = None
+                            
+                            if xml_content:
+                                # Use existing XML extraction function
+                                from ..services.database import extract_supplier_info_from_string
+                                customer_id, customer_name = extract_supplier_info_from_string(xml_content)
+                                
+                                # Also try to get invoice ID from XML
+                                from lxml import etree
+                                root = etree.fromstring(xml_content.encode('utf-8'))
+                                namespaces = {
+                                    'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+                                }
+                                invoice_id_elem = root.find('.//cbc:ID', namespaces)
+                                invoice_id = invoice_id_elem.text.strip() if invoice_id_elem is not None and invoice_id_elem.text else None
+                                
+                                # Use invoice_id if available, otherwise use customer_id
+                                data['customerId'] = invoice_id or customer_id
+                                data['customerName'] = customer_name
+                                
+                                logger.info(f"✅ Extracted from XML - customerId: {data['customerId']}, customerName: {data['customerName']}")
+                            else:
+                                data['customerId'] = None
+                                data['customerName'] = None
+                        except Exception as xml_err:
+                            logger.error(f"❌ Error reading/parsing XML: {xml_err}")
+                            data['customerId'] = None
+                            data['customerName'] = None
+                    else:
+                        logger.warning(f"⚠️ No XML path for {row.tracking_id}")
+                        data['customerId'] = None
+                        data['customerName'] = None
+                
+                # For EDI formats (X12, EDIFACT), extract from EDI file
                 else:
-                    logger.warning(
-                        f"⚠️ No EDI path available for {row.tracking_id}"
-                    )
+                    edi_path_to_extract = row.blob_edi_path or row.edi_path
+                    
+                    if edi_path_to_extract:
+                        logger.info(f"🔍 Extracting info from EDI file: {edi_path_to_extract}")
+                        info = extract_invoice_info(edi_path_to_extract)
+                        logger.info(f"📊 Extracted info: {info}")
+                        
+                        if info and isinstance(info, dict):
+                            # Map invoice_id -> customerId and customer_name -> customerName for frontend
+                            data['customerId'] = info.get('invoice_id')
+                            data['customerName'] = info.get('customer_name')
+                            
+                            logger.info(f"✅ customerId: {data['customerId']}, customerName: {data['customerName']}")
+                        else:
+                            logger.warning(f"⚠️ No valid info extracted for {row.tracking_id}")
+                            data['customerId'] = None
+                            data['customerName'] = None
+                    else:
+                        logger.warning(f"⚠️ No EDI path for {row.tracking_id}")
+                        data['customerId'] = None
+                        data['customerName'] = None
 
             except Exception as info_err:
-                logger.warning(
-                    f"⚠️ Failed to extract invoice info for {row.tracking_id}: {info_err}"
-                )
+                logger.error(f"❌ Failed to extract invoice info for {row.tracking_id}: {info_err}")
+                import traceback
+                logger.error(f"❌ Traceback: {traceback.format_exc()}")
+                data['customerId'] = None
+                data['customerName'] = None
+
+            # Set the format from target_file_format or default to X12
+            data['formate'] = getattr(row, 'target_file_format', 'X12') or 'X12'
+            
+            # Set status for frontend
+            data['status'] = 'successful'
+            
             invoices.append(data)
-        logger.info(f"INVOICES {invoices}")
+            
+        logger.info(f"✅ Returning {len(invoices)} successful invoices")
+        if invoices:
+            logger.info(f"📊 Sample invoice: customerId={invoices[0].get('customerId')}, customerName={invoices[0].get('customerName')}, formate={invoices[0].get('formate')}")
+        
         return invoices
+        
     except Exception as e:
         logger.error(f"❌ Error getting successful invoices: {str(e)}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500, detail=f"Error getting successful invoices: {str(e)}")
 
-
-@router.get("/failed", response_model=list[ZodiacInvoiceFailedEdi])
+@router.get("/failed")
 async def get_failed_invoices(
     skip: int = 0,
     limit: int = 100,
@@ -840,11 +950,112 @@ async def get_failed_invoices(
             )
 
             # Add computed fields after model creation
-            # logging.info(f"This is xml content {xml_content}")
             invoice.xml_content = xml_content
             invoice.edi_content = edi_content
-
-            invoices.append(invoice)
+            
+            # Convert to dict and extract invoice info
+            data = vars(invoice).copy()
+            data.pop("_sa_instance_state", None)
+            
+            # Extract invoice info based on format
+            try:
+                target_format = getattr(row, 'target_file_format', 'X12') or 'X12'
+                
+                # For XML format, extract from XML file
+                if target_format.upper() in ['XML', 'XML_EMBED_PDF', 'XML_EMBED_X12', 'XML_EMBED_EDIFACT']:
+                    xml_path_to_extract = row.blob_xml_path or row.xml_path
+                    
+                    if xml_path_to_extract:
+                        logger.info(f"🔍 Extracting info from failed XML file: {xml_path_to_extract}")
+                        
+                        # Read XML content (use already loaded xml_content if available)
+                        try:
+                            if xml_content:
+                                xml_content_to_parse = xml_content
+                            elif xml_path_to_extract.startswith('http://') or xml_path_to_extract.startswith('https://'):
+                                # Blob storage URL
+                                import requests
+                                response = requests.get(xml_path_to_extract)
+                                response.raise_for_status()
+                                xml_content_to_parse = response.text
+                            else:
+                                # Local file
+                                import os
+                                xml_file_path = xml_path_to_extract
+                                if not os.path.isabs(xml_file_path):
+                                    xml_file_path = os.path.abspath(xml_file_path)
+                                
+                                if os.path.exists(xml_file_path):
+                                    with open(xml_file_path, 'r', encoding='utf-8') as f:
+                                        xml_content_to_parse = f.read()
+                                else:
+                                    logger.warning(f"⚠️ XML file not found: {xml_file_path}")
+                                    xml_content_to_parse = None
+                            
+                            if xml_content_to_parse:
+                                # Use existing XML extraction function
+                                from ..services.database import extract_supplier_info_from_string
+                                customer_id, customer_name = extract_supplier_info_from_string(xml_content_to_parse)
+                                
+                                # Also try to get invoice ID from XML
+                                from lxml import etree
+                                root = etree.fromstring(xml_content_to_parse.encode('utf-8'))
+                                namespaces = {
+                                    'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+                                }
+                                invoice_id_elem = root.find('.//cbc:ID', namespaces)
+                                invoice_id = invoice_id_elem.text.strip() if invoice_id_elem is not None and invoice_id_elem.text else None
+                                
+                                # Use invoice_id if available, otherwise use customer_id
+                                data['customerId'] = invoice_id or customer_id
+                                data['customerName'] = customer_name
+                                
+                                logger.info(f"✅ Extracted from XML - customerId: {data['customerId']}, customerName: {data['customerName']}")
+                            else:
+                                data['customerId'] = None
+                                data['customerName'] = None
+                        except Exception as xml_err:
+                            logger.error(f"❌ Error reading/parsing XML: {xml_err}")
+                            data['customerId'] = None
+                            data['customerName'] = None
+                    else:
+                        logger.warning(f"⚠️ No XML path for failed invoice {row.tracking_id}")
+                        data['customerId'] = None
+                        data['customerName'] = None
+                
+                # For EDI formats, extract from EDI file
+                else:
+                    edi_path_to_extract = row.blob_edi_path or row.edi_path
+                    
+                    if edi_path_to_extract:
+                        logger.info(f"🔍 Extracting info from failed EDI file: {edi_path_to_extract}")
+                        info = extract_invoice_info(edi_path_to_extract)
+                        logger.info(f"📊 Extracted info: {info}")
+                        
+                        if info and isinstance(info, dict):
+                            # Map invoice_id -> customerId and customer_name -> customerName for frontend
+                            data['customerId'] = info.get('invoice_id')
+                            data['customerName'] = info.get('customer_name')
+                            logger.info(f"✅ customerId: {data['customerId']}, customerName: {data['customerName']}")
+                        else:
+                            data['customerId'] = None
+                            data['customerName'] = None
+                    else:
+                        logger.info(f"⚠️ No EDI path for failed invoice {row.tracking_id}")
+                        data['customerId'] = None
+                        data['customerName'] = None
+            except Exception as info_err:
+                logger.error(f"❌ Failed to extract invoice info: {info_err}")
+                data['customerId'] = None
+                data['customerName'] = None
+            
+            # Set format
+            data['formate'] = getattr(row, 'target_file_format', 'X12') or 'X12'
+            
+            # Set status for frontend
+            data['status'] = 'failed'
+            
+            invoices.append(data)
 
         return invoices
     except Exception as e:
@@ -1078,7 +1289,7 @@ async def get_failed_invoice_by_tracking_id(
 
 
 @router.get("/deleted", response_model=list[InvoiceResponse])
-def get_deleted_invoices(
+async def get_deleted_invoices(
     skip: int = 0,
     limit: int = 100,
     current_user: ZodiacUser = Depends(get_current_user),
@@ -1088,75 +1299,198 @@ def get_deleted_invoices(
     logger.info(f"🗑️ Getting deleted invoices for user: {current_user.id}")
 
     try:
-        # Get deleted successful invoices
-        deleted_success_invoices = db.query(SuccessModel).filter(
-            SuccessModel.user_id == current_user.id,
-            SuccessModel.deleted_at.isnot(None)
-        ).offset(skip).limit(limit).all()
+        # Get deleted successful invoices with raw SQL to get target_file_format
+        inspector = inspect(db.bind)
+        success_columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_success_edi")]
+        has_target_file_format = "target_file_format" in success_columns
+        
+        success_query = f"""
+        SELECT id, tracking_id, user_id, uploaded_at, deleted_at,
+               blob_xml_path, blob_edi_path, xml_path, edi_path,
+               {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"}
+        FROM zodiac_invoice_success_edi
+        WHERE user_id = :user_id AND deleted_at IS NOT NULL
+        ORDER BY deleted_at DESC
+        LIMIT :limit OFFSET :offset
+        """
+        
+        deleted_success_result = db.execute(text(success_query), {
+            "user_id": current_user.id,
+            "limit": limit,
+            "offset": skip
+        }).fetchall()
 
         # Get deleted failed invoices
-        deleted_failed_invoices = db.query(FailedModel).filter(
-            FailedModel.user_id == current_user.id,
-            FailedModel.deleted_at.isnot(None)
-        ).offset(skip).limit(limit).all()
+        failed_query = f"""
+        SELECT id, tracking_id, user_id, uploaded_at, deleted_at,
+               blob_xml_path, blob_edi_path, xml_path, edi_path,
+               {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"}
+        FROM zodiac_invoice_failed_edi
+        WHERE user_id = :user_id AND deleted_at IS NOT NULL
+        ORDER BY deleted_at DESC
+        LIMIT :limit OFFSET :offset
+        """
+        
+        deleted_failed_result = db.execute(text(failed_query), {
+            "user_id": current_user.id,
+            "limit": limit,
+            "offset": skip
+        }).fetchall()
 
-        # Convert to InvoiceResponse format
         deleted_invoices = []
 
-        # Add successful invoices
-        for invoice in deleted_success_invoices:
+        # Process successful invoices
+        for row in deleted_success_result:
+            # Extract invoice info
+            invoice_id = None
+            customer_name = None
+            
+            try:
+                target_format = getattr(row, 'target_file_format', 'X12') or 'X12'
+                
+                # For XML format, extract from XML file
+                if target_format.upper() in ['XML', 'XML_EMBED_PDF', 'XML_EMBED_X12', 'XML_EMBED_EDIFACT']:
+                    xml_path = row.blob_xml_path or row.xml_path
+                    if xml_path:
+                        logger.info(f"🔍 Extracting info from deleted XML invoice: {xml_path}")
+                        try:
+                            if xml_path.startswith('http://') or xml_path.startswith('https://'):
+                                import requests
+                                response = requests.get(xml_path)
+                                response.raise_for_status()
+                                xml_content = response.text
+                            else:
+                                import os
+                                if os.path.exists(xml_path):
+                                    with open(xml_path, 'r', encoding='utf-8') as f:
+                                        xml_content = f.read()
+                                else:
+                                    xml_content = None
+                            
+                            if xml_content:
+                                from ..services.database import extract_supplier_info_from_string
+                                customer_id, customer_name = extract_supplier_info_from_string(xml_content)
+                                
+                                from lxml import etree
+                                root = etree.fromstring(xml_content.encode('utf-8'))
+                                namespaces = {'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'}
+                                invoice_id_elem = root.find('.//cbc:ID', namespaces)
+                                invoice_id = invoice_id_elem.text.strip() if invoice_id_elem is not None and invoice_id_elem.text else customer_id
+                                
+                                logger.info(f"✅ Extracted from XML - invoice_id: {invoice_id}, customer_name: {customer_name}")
+                        except Exception as xml_err:
+                            logger.warning(f"⚠️ Could not extract from XML: {xml_err}")
+                
+                # For EDI formats, extract from EDI file
+                else:
+                    edi_path = row.blob_edi_path or row.edi_path
+                    if edi_path:
+                        logger.info(f"🔍 Extracting info from deleted EDI invoice: {edi_path}")
+                        info = extract_invoice_info(edi_path)
+                        if info and isinstance(info, dict):
+                            invoice_id = info.get('invoice_id')
+                            customer_name = info.get('customer_name')
+                            logger.info(f"✅ Extracted - invoice_id: {invoice_id}, customer_name: {customer_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not extract info: {e}")
+            
             deleted_invoices.append(InvoiceResponse(
-                id=invoice.id,
-                # Generate filename from tracking_id
-                filename=f"{invoice.tracking_id}_invoice.xml",
-                status="success",
+                id=row.id,
+                filename=f"{row.tracking_id}_invoice.xml",
+                customerId=invoice_id,  # Use customerId field
+                customerName=customer_name or "N/A",
+                status="successful",
                 accepted=1,
                 rejected=0,
-                customerName="N/A",
-                formate="XML",
+                formate=getattr(row, 'target_file_format', 'X12') or 'X12',
                 export=False,
-                uploaded_at=invoice.uploaded_at.isoformat() if invoice.uploaded_at else None,
-                tracking_id=str(invoice.tracking_id),
-                xml_validation_pass=invoice.xml_validation_pass,
-                xml_convert_message=invoice.xml_convert_message,
-                edi_convert_pass=invoice.edi_convert_pass,
-                edi_convert_message=invoice.edi_convert_message,
-                deleted_at=invoice.deleted_at.isoformat() if invoice.deleted_at else None
+                uploaded_at=row.uploaded_at.isoformat() if row.uploaded_at else None,
+                tracking_id=str(row.tracking_id),
+                deleted_at=row.deleted_at.isoformat() if row.deleted_at else None
             ))
 
-        # Add failed invoices
-        for invoice in deleted_failed_invoices:
+        # Process failed invoices
+        for row in deleted_failed_result:
+            # Extract invoice info
+            invoice_id = None
+            customer_name = None
+            
+            try:
+                target_format = getattr(row, 'target_file_format', 'X12') or 'X12'
+                
+                # For XML format, extract from XML file
+                if target_format.upper() in ['XML', 'XML_EMBED_PDF', 'XML_EMBED_X12', 'XML_EMBED_EDIFACT']:
+                    xml_path = row.blob_xml_path or row.xml_path
+                    if xml_path:
+                        logger.info(f"🔍 Extracting info from deleted failed XML invoice: {xml_path}")
+                        try:
+                            if xml_path.startswith('http://') or xml_path.startswith('https://'):
+                                import requests
+                                response = requests.get(xml_path)
+                                response.raise_for_status()
+                                xml_content = response.text
+                            else:
+                                import os
+                                if os.path.exists(xml_path):
+                                    with open(xml_path, 'r', encoding='utf-8') as f:
+                                        xml_content = f.read()
+                                else:
+                                    xml_content = None
+                            
+                            if xml_content:
+                                from ..services.database import extract_supplier_info_from_string
+                                customer_id, customer_name = extract_supplier_info_from_string(xml_content)
+                                
+                                from lxml import etree
+                                root = etree.fromstring(xml_content.encode('utf-8'))
+                                namespaces = {'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'}
+                                invoice_id_elem = root.find('.//cbc:ID', namespaces)
+                                invoice_id = invoice_id_elem.text.strip() if invoice_id_elem is not None and invoice_id_elem.text else customer_id
+                                
+                                logger.info(f"✅ Extracted from XML - invoice_id: {invoice_id}, customer_name: {customer_name}")
+                        except Exception as xml_err:
+                            logger.warning(f"⚠️ Could not extract from XML: {xml_err}")
+                
+                # For EDI formats, extract from EDI file
+                else:
+                    edi_path = row.blob_edi_path or row.edi_path
+                    if edi_path:
+                        logger.info(f"🔍 Extracting info from deleted failed EDI invoice: {edi_path}")
+                        info = extract_invoice_info(edi_path)
+                        if info and isinstance(info, dict):
+                            invoice_id = info.get('invoice_id')
+                            customer_name = info.get('customer_name')
+                            logger.info(f"✅ Extracted - invoice_id: {invoice_id}, customer_name: {customer_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not extract info: {e}")
+            
             deleted_invoices.append(InvoiceResponse(
-                id=invoice.id,
-                # Generate filename from tracking_id
-                filename=f"{invoice.tracking_id}_invoice.xml",
+                id=row.id,
+                filename=f"{row.tracking_id}_invoice.xml",
+                customerId=invoice_id,  # Use customerId field
+                customerName=customer_name or "N/A",
                 status="failed",
                 accepted=0,
                 rejected=1,
-                customerName="N/A",
-                formate="XML",
+                formate=getattr(row, 'target_file_format', 'X12') or 'X12',
                 export=False,
-                uploaded_at=invoice.uploaded_at.isoformat() if invoice.uploaded_at else None,
-                tracking_id=str(invoice.tracking_id),
-                xml_validation_pass=invoice.xml_validation_pass,
-                xml_convert_message=invoice.xml_convert_message,
-                edi_convert_pass=invoice.edi_convert_pass,
-                edi_convert_message=invoice.edi_convert_message,
-                deleted_at=invoice.deleted_at.isoformat() if invoice.deleted_at else None
+                uploaded_at=row.uploaded_at.isoformat() if row.uploaded_at else None,
+                tracking_id=str(row.tracking_id),
+                deleted_at=row.deleted_at.isoformat() if row.deleted_at else None
             ))
 
-        # Sort by deleted_at descending (most recently deleted first)
+        # Sort by deleted_at descending
         deleted_invoices.sort(key=lambda x: x.deleted_at or "", reverse=True)
 
-        logger.info(
-            f"✅ Found {len(deleted_invoices)} deleted invoices for user: {current_user.id}")
+        logger.info(f"✅ Found {len(deleted_invoices)} deleted invoices")
         return deleted_invoices
 
     except Exception as e:
         logger.error(f"❌ Error getting deleted invoices: {str(e)}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500, detail=f"Error getting deleted invoices: {str(e)}")
-
 
 @router.get("/status/{tracking_id}", response_model=InvoiceProcessingResponse)
 async def get_processing_status(
@@ -1414,18 +1748,118 @@ async def save_edited_xml(
             logger.error(f"❌ Failed to update database: {db_err}")
             # Don't fail the whole operation if just the timestamp update fails
         
-        logger.info(f"✅ XML file saved successfully")
-        return JSONResponse(
-            content={
-                "success": True,
-                "message": "XML file saved successfully",
-                "tracking_id": tracking_id,
-                "file_path": save_path,
-                "file_size": len(xml_content),
-                "saved_at": datetime.utcnow().isoformat()
-            },
-            status_code=status.HTTP_200_OK
-        )
+        logger.info(f"✅ XML file saved successfully, now triggering reprocessing...")
+        
+        # 🔄 Automatically trigger reprocessing after saving
+        try:
+            # Create UploadFile from saved content for reprocessing
+            from io import BytesIO
+            from starlette.datastructures import Headers
+            
+            xml_file = UploadFile(
+                filename=f"{tracking_id}_edited.xml",
+                file=BytesIO(file_content),
+                headers=Headers({"content-type": "application/xml"})
+            )
+            
+            # Call process_invoice_internal for reprocessing
+            logger.info(f"🔄 Calling process_invoice_internal for full reprocessing...")
+            result = await process_invoice_internal(
+                xml_file,           # file
+                False,              # strict_validation
+                db,                 # db session
+                None,               # request
+                current_user,       # current_user
+                "reprocess",        # source
+                uuid.UUID(tracking_id)  # tracking_id (reuse existing)
+            )
+            
+            logger.info(f"🔄 Reprocessing completed, checking result...")
+            
+            # Refresh the database session to see latest data
+            db.expire_all()
+            
+            # Check if invoice moved to success table
+            success_invoice = db.query(SuccessModel).filter(
+                SuccessModel.tracking_id == tracking_id,
+                SuccessModel.user_id == current_user.id
+            ).first()
+            
+            if success_invoice:
+                # Successfully moved to success table, delete from failed table
+                logger.info(f"✅ Invoice successfully moved to success table! Deleting from failed table...")
+                
+                # Check if failed invoice still exists before deleting
+                failed_check = db.query(FailedModel).filter(
+                    FailedModel.tracking_id == tracking_id,
+                    FailedModel.user_id == current_user.id
+                ).first()
+                
+                if failed_check:
+                    db.delete(failed_check)
+                    db.commit()
+                    logger.info(f"✅ Deleted from failed table")
+                
+                return JSONResponse(
+                    content={
+                        "success": True,
+                        "message": "✅ File saved and reprocessed successfully! Invoice moved to successful invoices.",
+                        "tracking_id": tracking_id,
+                        "file_path": save_path,
+                        "saved_at": datetime.utcnow().isoformat(),
+                        "status": "successful",
+                        "moved_to_success": True,
+                        "invoice_id": success_invoice.id
+                    },
+                    status_code=status.HTTP_200_OK
+                )
+            else:
+                # Still in failed state - check for updated error messages
+                logger.info(f"⚠️ Invoice reprocessed but still contains errors")
+                
+                updated_failed = db.query(FailedModel).filter(
+                    FailedModel.tracking_id == tracking_id,
+                    FailedModel.user_id == current_user.id
+                ).first()
+                
+                error_message = "Invoice still contains validation errors"
+                if updated_failed and updated_failed.xml_convert_message:
+                    error_message = updated_failed.xml_convert_message
+                elif updated_failed and updated_failed.edi_convert_message:
+                    error_message = updated_failed.edi_convert_message
+                
+                return JSONResponse(
+                    content={
+                        "success": True,
+                        "message": f"File saved and reprocessed, but {error_message}",
+                        "tracking_id": tracking_id,
+                        "file_path": save_path,
+                        "saved_at": datetime.utcnow().isoformat(),
+                        "status": "failed",
+                        "moved_to_success": False,
+                        "error_message": error_message
+                    },
+                    status_code=status.HTTP_200_OK
+                )
+                
+        except Exception as reprocess_err:
+            logger.error(f"⚠️ Reprocessing failed: {reprocess_err}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            
+            # File was saved but reprocessing failed
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": f"File saved but reprocessing failed: {str(reprocess_err)}",
+                    "tracking_id": tracking_id,
+                    "file_path": save_path,
+                    "saved_at": datetime.utcnow().isoformat(),
+                    "status": "failed",
+                    "moved_to_success": False
+                },
+                status_code=status.HTTP_200_OK
+            )
         
     except HTTPException:
         raise
@@ -1552,3 +1986,119 @@ def restore_invoice(
         db.rollback()
         raise HTTPException(
             status_code=500, detail=f"Error restoring invoice: {str(e)}")
+
+
+@router.get("/{tracking_id}/download")
+async def download_invoice_file(
+    tracking_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Download the processed invoice file (works with local storage)
+    Returns the converted/processed file that was sent to third-party API
+    """
+    logger.info(f"📥 Download request for tracking_id: {tracking_id}")
+    
+    try:
+        # Try to find in success table first
+        invoice = db.query(SuccessModel).filter(
+            SuccessModel.tracking_id == tracking_id,
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at == None
+        ).first()
+        
+        if not invoice:
+            # Try failed table
+            invoice = db.query(FailedModel).filter(
+                FailedModel.tracking_id == tracking_id,
+                FailedModel.user_id == current_user.id,
+                FailedModel.deleted_at == None
+            ).first()
+        
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        
+        # Determine file path - prioritize blob paths, fallback to local paths
+        file_path = None
+        filename = None
+        
+        # For local storage, use edi_path or xml_path
+        if not USE_BLOB_STORAGE:
+            # Try edi_path first (converted file), then xml_path (original)
+            file_path = invoice.edi_path or invoice.xml_path
+            
+            if not file_path:
+                raise HTTPException(
+                    status_code=404, 
+                    detail="File path not found in database"
+                )
+            
+            # Check if file exists
+            from pathlib import Path
+            full_path = Path(file_path)
+            if not full_path.exists():
+                logger.error(f"❌ File not found at path: {full_path}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File not found on server: {file_path}"
+                )
+            
+            # Determine filename and media type based on format
+            format_type = invoice.target_file_format or 'unknown'
+            customer_id = tracking_id[:8]  # Use first 8 chars of tracking_id
+            
+            # Map format to extension
+            if format_type.upper() == 'X12':
+                extension = 'x12'
+                media_type = 'application/x12'
+            elif format_type.upper() == 'EDIFACT':
+                extension = 'edi'
+                media_type = 'application/edifact'
+            elif format_type.upper().startswith('XML'):
+                extension = 'xml'
+                media_type = 'application/xml'
+            else:
+                extension = 'txt'
+                media_type = 'text/plain'
+            
+            filename = f"{customer_id}_{format_type}.{extension}"
+            
+            logger.info(f"✅ Serving file: {full_path}")
+            logger.info(f"📁 Filename: {filename}")
+            logger.info(f"📋 Media type: {media_type}")
+            
+            # Return file with proper Content-Disposition header
+            from fastapi.responses import FileResponse
+            response = FileResponse(
+                path=str(full_path),
+                media_type=media_type,
+                filename=filename
+            )
+            # Ensure Content-Disposition header is set
+            response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            # Expose Content-Disposition header for CORS
+            response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+            return response
+        else:
+            # For blob storage, redirect to blob URL
+            blob_url = invoice.blob_edi_path or invoice.blob_xml_path
+            if not blob_url:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Blob URL not found in database"
+                )
+            
+            # Return redirect to blob URL
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=blob_url)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error downloading file: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error downloading file: {str(e)}"
+        )
+
