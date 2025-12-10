@@ -367,6 +367,7 @@ async def process_invoice_internal(
         customer_format = None
         customer_id = None
         customer_name = None
+        customer_validation_rules = None
         xml_content = xml_content_str  # Use already loaded content from early validation
         
         try:
@@ -376,14 +377,16 @@ async def process_invoice_internal(
             logger.info(f"✅ Customer info extracted - ID: {customer_id}, Name: {customer_name}")
             
             logger.info(f"🔍 Checking customer table in database...")
-            customer_format = check_customer_table(customer_id, customer_name, db)
-            logger.info(f"✅ Customer format retrieved from database")
+            customer_format, customer_validation_rules = check_customer_table(customer_id, customer_name, db)
+            logger.info(f"✅ Customer format and validation rules retrieved from database")
             logger.info(f"📊 Customer ID: {customer_id}, Name: {customer_name}")
             logger.info(f"🎯 Target format from customer table: {customer_format}")
+            logger.info(f"📋 Custom validation rules: {'Yes' if customer_validation_rules else 'No (using defaults)'}")
         except Exception as e:
             logger.error(f"❌ Error determining customer format: {e}")
             logger.exception(e)  # Log full exception for debugging
             customer_format = 'EDIFACT'  # Default to EDIFACT processing
+            customer_validation_rules = None
             logger.info(f"🎯 Using default format: {customer_format}")
         
         # Try to at least get the XML content for later use (should already be loaded)
@@ -428,6 +431,70 @@ async def process_invoice_internal(
 
             xml_valid, xml_message, xml_warnings = validate_xml(
                 xml_path, strict_validation)
+            
+            # Step 3A: Customer-specific field validation
+            if xml_valid and customer_validation_rules:
+                logger.info(f"🔍 ===== STEP 3A: CUSTOMER-SPECIFIC FIELD VALIDATION =====")
+                logger.info(f"📋 Validating customer-specific required fields...")
+                
+                try:
+                    from ..services.customer_validation import customer_validation_service
+                    
+                    # Validate with customer rules and apply defaults if needed
+                    fields_valid, fields_message, missing_fields, corrected_xml = customer_validation_service.validate_xml_with_customer_rules(
+                        xml_content, customer_validation_rules, use_defaults=False, apply_defaults=True
+                    )
+                    
+                    if not fields_valid:
+                        logger.warning(f"⚠️ Customer-specific validation failed: {fields_message}")
+                        missing_xpaths = [f['xpath'] for f in missing_fields]
+                        logger.warning(f"Missing fields: {', '.join(missing_xpaths)}")
+                        
+                        # Add as warnings (non-blocking) or errors (blocking) based on strict mode
+                        if strict_validation:
+                            xml_valid = False
+                            xml_message = f"Customer validation failed: {fields_message}"
+                            logger.error(f"❌ Customer validation failed in strict mode")
+                        else:
+                            xml_warnings.append(f"Customer validation warning: {fields_message}")
+                            logger.info(f"⚠️ Customer validation failed but continuing (non-strict mode)")
+                    else:
+                        logger.info(f"✅ Customer-specific validation passed: {fields_message}")
+                        
+                        # If defaults were applied, update xml_content
+                        if corrected_xml:
+                            logger.info(f"🔧 Applied default values to {len(missing_fields)} field(s)")
+                            xml_content = corrected_xml
+                            xml_warnings.append(f"Applied {len(missing_fields)} default value(s) to missing fields")
+                            
+                            # Update the XML file with corrected content
+                            try:
+                                if isinstance(xml_path, dict):
+                                    # Blob storage - upload corrected XML
+                                    from ..services.file_service import save_file_to_storage
+                                    xml_path = await save_file_to_storage(
+                                        corrected_xml.encode('utf-8'),
+                                        f"corrected_{file.filename}",
+                                        "text/xml"
+                                    )
+                                    logger.info(f"✅ Uploaded corrected XML to blob storage")
+                                else:
+                                    # Local storage - save corrected XML
+                                    with open(xml_path, 'w', encoding='utf-8') as f:
+                                        f.write(corrected_xml)
+                                    logger.info(f"✅ Saved corrected XML to: {xml_path}")
+                            except Exception as save_error:
+                                logger.error(f"⚠️ Failed to save corrected XML: {save_error}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error during customer-specific validation: {e}")
+                    logger.exception(e)
+                    # Don't fail the whole process if customer validation has an error
+                    xml_warnings.append(f"Customer validation error: {str(e)}")
+            elif customer_validation_rules:
+                logger.info(f"⏭️ Skipping customer-specific validation (XML validation already failed)")
+            else:
+                logger.info(f"ℹ️ No customer-specific validation rules defined")
 
             step2_duration = time.time() - step2_start
             logger.info(f"🔍 XML validation completed in {step2_duration:.3f}s")

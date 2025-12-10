@@ -44,7 +44,6 @@ def create_customer(
         db_customer = Customer(
             customer_id=customer.customer_id,
             format=customer.format,
-            api_address=customer.api_address,
             validation_rules=customer.validation_rules,
         )
         db.add(db_customer)
@@ -365,7 +364,6 @@ def bulk_create_customers(
                 db_customer = Customer(
                     customer_id=customer_data.customer_id,
                     format=customer_data.format,
-                    api_address=customer_data.api_address,
                     validation_rules=customer_data.validation_rules,
                 )
                 db.add(db_customer)
