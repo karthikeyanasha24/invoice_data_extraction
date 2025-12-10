@@ -7,7 +7,7 @@ import time
 import logging
 from dotenv import load_dotenv
 
-from .database import get_db, Base, engine
+from .database import get_db, Base, engine, ensure_columns_exist
 from .database_init import initialize_database, get_database_status
 from .api.auth import router as auth_router
 from .api.invoices import router as invoices_router
@@ -31,6 +31,14 @@ logger = logging.getLogger("zodiac-api")
 try:
     Base.metadata.create_all(bind=engine)
     logger.info("✅ Database tables created successfully")
+    
+    # Ensure all required columns exist (for existing tables or if create_all didn't add all columns)
+    try:
+        ensure_columns_exist()
+        logger.info("✅ All required columns verified/added successfully")
+    except Exception as e:
+        logger.warning(f"⚠️ Column check failed (non-critical): {e}")
+        
 except Exception as e:
     logger.error(f"❌ Could not create database tables: {e}")
     logger.error("Make sure PostgreSQL is running and DATABASE_URL is correct in .env")
