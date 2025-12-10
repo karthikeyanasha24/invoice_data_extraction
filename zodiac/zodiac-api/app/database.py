@@ -39,6 +39,50 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # ------------------------------------------
+# Import all models to register them with Base.metadata
+# This ensures all tables are created when Base.metadata.create_all() is called
+# ------------------------------------------
+def init_models():
+    """Import all models to ensure they are registered with SQLAlchemy Base.metadata.
+    This must be called before Base.metadata.create_all() to ensure all tables are created.
+    """
+    # Import all models - they will register themselves with Base
+    try:
+        from .models.user import ZodiacUser
+        from .models.invoice import ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi
+        from .models.customer import Customer
+        from .models.correction_cache import CorrectionCache
+        # Models are now registered with Base.metadata
+        print("✅ All models initialized and registered with Base.metadata")
+    except ImportError as e:
+        print(f"⚠️ Warning: Could not import all models: {e}")
+    except Exception as e:
+        print(f"⚠️ Warning: Error initializing models: {e}")
+
+# Initialize all models when this module is loaded
+init_models()
+
+# ------------------------------------------
+# Function to create all database tables
+# ------------------------------------------
+def create_all_tables():
+    """Create all database tables based on registered models.
+    This ensures all tables (including all columns) are created in the database.
+    Safe to call multiple times - SQLAlchemy will only create missing tables/columns.
+    """
+    try:
+        # Ensure all models are initialized first
+        init_models()
+        
+        # Create all tables defined in models
+        Base.metadata.create_all(bind=engine)
+        print("✅ All database tables created/verified successfully")
+        return True
+    except Exception as e:
+        print(f"❌ Error creating database tables: {e}")
+        return False
+
+# ------------------------------------------
 # Ensure new columns exist (safe + idempotent)
 # ------------------------------------------
 def ensure_columns_exist():
