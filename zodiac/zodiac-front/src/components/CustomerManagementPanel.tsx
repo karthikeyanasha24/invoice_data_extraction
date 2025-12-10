@@ -22,10 +22,60 @@ interface Customer {
   id: number;
   customer_id: string;
   format: string;
-  api_address?: string;
   validation_rules?: string;
   created_at: string;
 }
+
+// Format information mapping
+const FORMAT_INFO: Record<string, {
+  name: string;
+  description: string;
+  targetFormat: string;
+  color: string;
+  bgColor: string;
+  steps: string[];
+}> = {
+  'edifact': {
+    name: 'EDIFACT',
+    description: 'European standard for electronic data interchange',
+    targetFormat: 'EDIFACT',
+    color: 'text-purple-800',
+    bgColor: 'bg-purple-100',
+    steps: ['XML Validation', 'XML → EDIFACT Conversion', 'Database Save']
+  },
+  'x12': {
+    name: 'X12',
+    description: 'North American EDI standard',
+    targetFormat: 'X12',
+    color: 'text-orange-800',
+    bgColor: 'bg-orange-100',
+    steps: ['XML Validation', 'XML → X12 Conversion', 'EDI Format Validation', 'EDINation Validation', 'Database Save']
+  },
+  'xml': {
+    name: 'XML Passthrough',
+    description: 'XML file without conversion',
+    targetFormat: 'XML',
+    color: 'text-blue-800',
+    bgColor: 'bg-blue-100',
+    steps: ['File Upload', 'Database Save']
+  },
+  'x12_embed': {
+    name: 'X12 Embed',
+    description: 'XML with embedded X12 content',
+    targetFormat: 'XML + X12',
+    color: 'text-indigo-800',
+    bgColor: 'bg-indigo-100',
+    steps: ['XML Validation', 'XML → X12 Conversion', 'Embed X12 in XML', '3rd Party API', 'Database Save']
+  },
+  'xmlembed': {
+    name: 'XML Embed',
+    description: 'XML with embedded EDIFACT/X12 content',
+    targetFormat: 'XML + EDIFACT',
+    color: 'text-teal-800',
+    bgColor: 'bg-teal-100',
+    steps: ['XML → EDIFACT Conversion', 'Embed in XML', '3rd Party API', 'Database Save']
+  },
+};
 
 export default function CustomerManagementPanel() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -47,9 +97,52 @@ export default function CustomerManagementPanel() {
   const [formData, setFormData] = useState({
     customer_id: '',
     format: 'edifact',
-    api_address: '',
     validation_rules: '',
   });
+  
+  // Validation rules UI states
+  const [selectedFields, setSelectedFields] = useState<string[]>([]);
+  const [customField, setCustomField] = useState('');
+  const [customFieldError, setCustomFieldError] = useState('');
+  const [availableFields, setAvailableFields] = useState<Array<{value: string, label: string}>>([
+    // Invoice Header
+    { value: '//cbc:ID', label: 'Invoice ID' },
+    { value: '//cbc:IssueDate', label: 'Issue Date' },
+    { value: '//cbc:DueDate', label: 'Due Date' },
+    { value: '//cbc:InvoiceTypeCode', label: 'Invoice Type Code' },
+    { value: '//cbc:DocumentCurrencyCode', label: 'Currency Code' },
+    
+    // Party Information
+    { value: '//cac:AccountingSupplierParty', label: 'Supplier Information' },
+    { value: '//cac:AccountingCustomerParty', label: 'Customer Information' },
+    { value: '//cac:AccountingSupplierParty/cac:Party/cbc:EndpointID', label: 'Supplier Endpoint ID' },
+    { value: '//cac:AccountingCustomerParty/cac:Party/cbc:EndpointID', label: 'Customer Endpoint ID' },
+    { value: '//cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name', label: 'Supplier Name' },
+    { value: '//cac:AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name', label: 'Customer Name' },
+    
+    // Tax Information
+    { value: '//cac:TaxTotal/cbc:TaxAmount', label: 'Tax Amount' },
+    { value: '//cac:TaxTotal/cac:TaxSubtotal/cbc:TaxableAmount', label: 'Taxable Amount' },
+    { value: '//cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:ID', label: 'Tax Category ID' },
+    { value: '//cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:Percent', label: 'Tax Percentage' },
+    
+    // Financial Information
+    { value: '//cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount', label: 'Amount Excluding Tax' },
+    { value: '//cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount', label: 'Amount Including Tax' },
+    { value: '//cac:LegalMonetaryTotal/cbc:PayableAmount', label: 'Total Payable Amount' },
+    
+    // Line Items
+    { value: '//cac:InvoiceLine', label: 'Invoice Line Items' },
+    { value: '//cac:InvoiceLine/cbc:ID', label: 'Line Item ID' },
+    { value: '//cac:InvoiceLine/cac:Item/cbc:Name', label: 'Item Name' },
+    { value: '//cac:InvoiceLine/cbc:InvoicedQuantity', label: 'Item Quantity' },
+    { value: '//cac:InvoiceLine/cac:Price/cbc:PriceAmount', label: 'Item Price' },
+    
+    // PEPPOL Specific
+    { value: '//cbc:CustomizationID', label: 'PEPPOL Customization ID' },
+    { value: '//cbc:ProfileID', label: 'PEPPOL Profile ID' },
+    { value: '//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID', label: 'Supplier Tax ID' },
+  ]);
 
   const [submitting, setSubmitting] = useState(false);
   const [supportedFormats, setSupportedFormats] = useState<string[]>([
@@ -57,7 +150,10 @@ export default function CustomerManagementPanel() {
     'x12',
     'x12_embed',
     'xml',
+    'xmlembed',
   ]);
+  const [showFormatInfo, setShowFormatInfo] = useState(false);
+  const [selectedFormatInfo, setSelectedFormatInfo] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCustomers();
@@ -96,14 +192,82 @@ export default function CustomerManagementPanel() {
     setCurrentPage(0);
   };
 
+  // Helper: Parse validation rules JSON to selected fields
+  const parseValidationRules = (rulesJson: string): string[] => {
+    if (!rulesJson) return [];
+    try {
+      const parsed = JSON.parse(rulesJson);
+      return parsed.required_fields || [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Helper: Convert selected fields to validation rules JSON
+  const fieldsToValidationRules = (fields: string[]): string => {
+    if (fields.length === 0) return '';
+    return JSON.stringify({ required_fields: fields }, null, 2);
+  };
+
+  // Helper: Validate custom field XPath
+  const validateCustomField = (field: string): string => {
+    if (!field.trim()) {
+      return 'Field cannot be empty';
+    }
+    if (!field.startsWith('//')) {
+      return 'XPath must start with // (e.g., //cbc:ID)';
+    }
+    if (!field.includes(':')) {
+      return 'XPath must include namespace prefix (e.g., cbc:, cac:)';
+    }
+    // Check for valid namespace prefixes
+    const validPrefixes = ['cbc:', 'cac:', 'ubl:'];
+    const hasValidPrefix = validPrefixes.some(prefix => field.includes(prefix));
+    if (!hasValidPrefix) {
+      return 'XPath must use valid namespace (cbc:, cac:, or ubl:)';
+    }
+    return '';
+  };
+
+  // Handle adding custom field
+  const handleAddCustomField = () => {
+    const error = validateCustomField(customField);
+    if (error) {
+      setCustomFieldError(error);
+      return;
+    }
+
+    // Check if field already exists
+    if (availableFields.some(f => f.value === customField)) {
+      setCustomFieldError('This field already exists');
+      return;
+    }
+
+    // Add to available fields
+    const newField = {
+      value: customField,
+      label: `Custom: ${customField}`,
+    };
+    setAvailableFields([...availableFields, newField]);
+
+    // Add to selected fields
+    setSelectedFields([...selectedFields, customField]);
+
+    // Clear custom field input
+    setCustomField('');
+    setCustomFieldError('');
+  };
+
   const openCreateForm = () => {
     setEditingCustomer(null);
     setFormData({
       customer_id: '',
       format: 'edifact',
-      api_address: '',
       validation_rules: '',
     });
+    setSelectedFields([]);
+    setCustomField('');
+    setCustomFieldError('');
     setShowForm(true);
     setError('');
   };
@@ -113,9 +277,27 @@ export default function CustomerManagementPanel() {
     setFormData({
       customer_id: customer.customer_id,
       format: customer.format,
-      api_address: customer.api_address || '',
       validation_rules: customer.validation_rules || '',
     });
+    
+    // Parse validation rules to selected fields
+    const fields = parseValidationRules(customer.validation_rules || '');
+    setSelectedFields(fields);
+    
+    // Add any custom fields that aren't in the default list
+    const customFields = fields.filter(field => 
+      !availableFields.some(af => af.value === field)
+    );
+    if (customFields.length > 0) {
+      const newCustomFields = customFields.map(field => ({
+        value: field,
+        label: `Custom: ${field}`,
+      }));
+      setAvailableFields([...availableFields, ...newCustomFields]);
+    }
+    
+    setCustomField('');
+    setCustomFieldError('');
     setShowForm(true);
     setError('');
   };
@@ -126,9 +308,11 @@ export default function CustomerManagementPanel() {
     setFormData({
       customer_id: '',
       format: 'edifact',
-      api_address: '',
       validation_rules: '',
     });
+    setSelectedFields([]);
+    setCustomField('');
+    setCustomFieldError('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -137,6 +321,9 @@ export default function CustomerManagementPanel() {
     setError('');
 
     try {
+      // Convert selected fields to JSON
+      const validationRulesJson = fieldsToValidationRules(selectedFields);
+      
       if (editingCustomer) {
         // Update existing customer
         const updateData: any = {};
@@ -146,11 +333,8 @@ export default function CustomerManagementPanel() {
         if (formData.format !== editingCustomer.format) {
           updateData.format = formData.format;
         }
-        if (formData.api_address !== (editingCustomer.api_address || '')) {
-          updateData.api_address = formData.api_address;
-        }
-        if (formData.validation_rules !== (editingCustomer.validation_rules || '')) {
-          updateData.validation_rules = formData.validation_rules;
+        if (validationRulesJson !== (editingCustomer.validation_rules || '')) {
+          updateData.validation_rules = validationRulesJson;
         }
 
         if (Object.keys(updateData).length > 0) {
@@ -162,8 +346,7 @@ export default function CustomerManagementPanel() {
         await customerApi.createCustomer({
           customer_id: formData.customer_id,
           format: formData.format,
-          api_address: formData.api_address || null,
-          validation_rules: formData.validation_rules || null,
+          validation_rules: validationRulesJson || null,
         });
         setSuccess('Customer created successfully');
       }
@@ -301,9 +484,9 @@ export default function CustomerManagementPanel() {
           <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Other Formats</p>
+                <p className="text-gray-600 text-sm font-medium">XML Embed</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {customers.filter((c) => !['edifact', 'x12'].includes(c.format)).length}
+                  {customers.filter((c) => ['x12_embed', 'xmlembed'].includes(c.format)).length}
                 </p>
               </div>
               <FileText className="w-8 h-8 text-indigo-500 opacity-20" />
@@ -345,10 +528,13 @@ export default function CustomerManagementPanel() {
                         Customer ID
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wide">
-                        Format
+                        Source Format
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wide">
-                        API Address
+                        Target Format
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wide">
+                        Required Fields
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wide">
                         Created
@@ -373,35 +559,48 @@ export default function CustomerManagementPanel() {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span
-                            className={cn(
-                              'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
-                              {
-                                'bg-purple-100 text-purple-800':
-                                  customer.format === 'edifact',
-                                'bg-orange-100 text-orange-800':
-                                  customer.format === 'x12',
-                                'bg-blue-100 text-blue-800': customer.format === 'xml',
-                                'bg-indigo-100 text-indigo-800':
-                                  customer.format === 'x12_embed',
-                              }
-                            )}
-                          >
-                            {customer.format.toUpperCase()}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
+                                FORMAT_INFO[customer.format]?.bgColor || 'bg-gray-100',
+                                FORMAT_INFO[customer.format]?.color || 'text-gray-800'
+                              )}
+                            >
+                              XML
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
+                                FORMAT_INFO[customer.format]?.bgColor || 'bg-gray-100',
+                                FORMAT_INFO[customer.format]?.color || 'text-gray-800'
+                              )}
+                            >
+                              {FORMAT_INFO[customer.format]?.targetFormat || customer.format.toUpperCase()}
+                            </span>
+                            <button
+                              onClick={() => {
+                                setSelectedFormatInfo(customer.format);
+                                setShowFormatInfo(true);
+                              }}
+                              className="text-gray-400 hover:text-gray-600 transition-colors"
+                              title="View processing steps"
+                            >
+                              <AlertCircle className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                         <td className="px-6 py-4">
                           <div className="text-sm text-gray-600">
-                            {customer.api_address ? (
-                              <a
-                                href={customer.api_address}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-500 hover:underline truncate inline-flex items-center gap-1"
-                              >
-                                {customer.api_address.substring(0, 40)}...
-                                <ArrowRight className="w-3 h-3" />
-                              </a>
+                            {customer.validation_rules ? (
+                              <span className="inline-flex items-center gap-1 text-green-600">
+                                <CheckCircle className="w-4 h-4" />
+                                {JSON.parse(customer.validation_rules || '{"required_fields": []}').required_fields?.length || 0} fields
+                              </span>
                             ) : (
                               <span className="text-gray-400">—</span>
                             )}
@@ -521,7 +720,7 @@ export default function CustomerManagementPanel() {
 
               <div>
                 <label className="block text-sm font-semibold text-gray-900 mb-1">
-                  Format
+                  Processing Format
                 </label>
                 <select
                   value={formData.format}
@@ -532,43 +731,130 @@ export default function CustomerManagementPanel() {
                 >
                   {supportedFormats.map((format) => (
                     <option key={format} value={format}>
-                      {format.toUpperCase()}
+                      {FORMAT_INFO[format]?.name || format.toUpperCase()} - {FORMAT_INFO[format]?.description || 'Custom format'}
                     </option>
                   ))}
                 </select>
+                {FORMAT_INFO[formData.format] && (
+                  <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-900 font-medium mb-1">
+                      XML → {FORMAT_INFO[formData.format].targetFormat}
+                    </p>
+                    <p className="text-xs text-blue-700">
+                      {FORMAT_INFO[formData.format].description}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-900 mb-1">
-                  API Address
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  Required XML Fields (Optional)
                 </label>
-                <input
-                  type="url"
-                  value={formData.api_address}
-                  onChange={(e) =>
-                    setFormData({ ...formData, api_address: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="https://api.example.com"
-                />
-              </div>
+                <p className="text-xs text-gray-600 mb-3">
+                  Select which fields must be present in the XML invoice.
+                </p>
+                
+                {/* Multi-select dropdown */}
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Select from common fields:
+                  </label>
+                  <select
+                    multiple
+                    value={selectedFields}
+                    onChange={(e) => {
+                      const selected = Array.from(e.target.selectedOptions, option => option.value);
+                      setSelectedFields(selected);
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    size={8}
+                  >
+                    {availableFields.map((field) => (
+                      <option key={field.value} value={field.value} className="py-1">
+                        {field.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Hold Ctrl (Cmd on Mac) to select multiple fields. Selected: {selectedFields.length} field{selectedFields.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-900 mb-1">
-                  Validation Rules (JSON)
-                </label>
-                <textarea
-                  value={formData.validation_rules}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      validation_rules: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-                  placeholder='{"required_fields": ["id", "name"]}'
-                  rows={4}
-                />
+                {/* Custom field input */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-gray-700">
+                    Add custom XPath field:
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customField}
+                      onChange={(e) => {
+                        setCustomField(e.target.value);
+                        setCustomFieldError('');
+                      }}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCustomField();
+                        }
+                      }}
+                      className={cn(
+                        "flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        customFieldError ? "border-red-300" : "border-gray-300"
+                      )}
+                      placeholder="e.g., //cbc:CustomField"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomField}
+                      className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-medium"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {customFieldError && (
+                    <p className="text-xs text-red-600">
+                      {customFieldError}
+                    </p>
+                  )}
+                  <div className="p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+                    <strong>XPath format:</strong> Must start with <code className="text-blue-900">//</code> and use namespace prefix
+                    <br />
+                    <strong>Examples:</strong> <code className="text-blue-900">//cbc:ID</code>, <code className="text-blue-900">//cac:PaymentMeans/cbc:PaymentMeansCode</code>
+                  </div>
+                </div>
+
+                {/* Selected fields preview */}
+                {selectedFields.length > 0 && (
+                  <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <p className="text-xs font-semibold text-green-900 mb-2">
+                      ✓ {selectedFields.length} Required Field{selectedFields.length !== 1 ? 's' : ''} Selected:
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedFields.map((field) => {
+                        const fieldInfo = availableFields.find(f => f.value === field);
+                        return (
+                          <span
+                            key={field}
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-green-300 rounded text-xs text-green-800"
+                          >
+                            {fieldInfo?.label || field}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFields(selectedFields.filter(f => f !== field))}
+                              className="hover:text-red-600 transition-colors"
+                              title="Remove field"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {error && (
@@ -652,6 +938,96 @@ export default function CustomerManagementPanel() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Format Information Modal */}
+      {showFormatInfo && selectedFormatInfo && FORMAT_INFO[selectedFormatInfo] && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-4 flex items-center justify-between rounded-t-lg">
+              <div className="flex items-center gap-3">
+                <FileText className="w-6 h-6 text-white" />
+                <h2 className="text-lg font-bold text-white">
+                  {FORMAT_INFO[selectedFormatInfo].name} Format
+                </h2>
+              </div>
+              <button
+                onClick={() => {
+                  setShowFormatInfo(false);
+                  setSelectedFormatInfo(null);
+                }}
+                className="text-white hover:bg-white/20 rounded-lg p-1 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Format Description */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Description</h3>
+                <p className="text-sm text-gray-600">
+                  {FORMAT_INFO[selectedFormatInfo].description}
+                </p>
+              </div>
+
+              {/* Conversion Path */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Conversion Path</h3>
+                <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+                  <span className="px-2.5 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                    XML
+                  </span>
+                  <ArrowRight className="w-4 h-4 text-gray-400" />
+                  <span className={cn(
+                    'px-2.5 py-1 rounded text-xs font-medium',
+                    FORMAT_INFO[selectedFormatInfo].bgColor,
+                    FORMAT_INFO[selectedFormatInfo].color
+                  )}>
+                    {FORMAT_INFO[selectedFormatInfo].targetFormat}
+                  </span>
+                </div>
+              </div>
+
+              {/* Processing Steps */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Processing Steps</h3>
+                <div className="space-y-2">
+                  {FORMAT_INFO[selectedFormatInfo].steps.map((step, index) => (
+                    <div key={index} className="flex items-start gap-3 p-2 rounded-lg hover:bg-gray-50">
+                      <div className="flex-shrink-0 w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-bold mt-0.5">
+                        {index + 1}
+                      </div>
+                      <span className="text-sm text-gray-700 flex-1">{step}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Note */}
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-800">
+                    Processing times vary by file size and complexity. Average: 3-15 seconds.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 pb-6">
+              <button
+                onClick={() => {
+                  setShowFormatInfo(false);
+                  setSelectedFormatInfo(null);
+                }}
+                className="w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-lg font-medium transition-all"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

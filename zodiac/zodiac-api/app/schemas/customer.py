@@ -7,8 +7,7 @@ class CustomerBase(BaseModel):
     """Base customer schema with common fields"""
     customer_id: str = Field(..., description="Unique customer identifier")
     format: str = Field(default="edifact", description="Target format for this customer (e.g., 'edifact', 'x12', 'xml')")
-    api_address: Optional[str] = Field(None, description="API endpoint address for this customer")
-    validation_rules: Optional[str] = Field(None, description="JSON string containing validation rules")
+    validation_rules: Optional[str] = Field(None, description="JSON string containing required XML fields (XPath notation)")
 
 
 class CustomerCreate(CustomerBase):
@@ -20,7 +19,6 @@ class CustomerUpdate(BaseModel):
     """Schema for updating an existing customer"""
     customer_id: Optional[str] = None
     format: Optional[str] = None
-    api_address: Optional[str] = None
     validation_rules: Optional[str] = None
 
 

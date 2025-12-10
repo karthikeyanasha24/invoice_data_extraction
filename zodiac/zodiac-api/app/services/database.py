@@ -7,7 +7,12 @@ from lxml import etree
 logger = logging.getLogger("zodiac-api.database")
 
 def check_customer_table(cust_id, cust_name, db: Session = None):
-    """Lookup customer format from zodiac_customers table."""
+    """Lookup customer format and validation rules from zodiac_customers table.
+    
+    Returns:
+        tuple: (format, validation_rules) where format is the target format string
+               and validation_rules is the JSON string with required fields
+    """
     close_after = db is None
     if close_after:
         db = SessionLocal()
@@ -17,18 +22,26 @@ def check_customer_table(cust_id, cust_name, db: Session = None):
         customer = db.query(Customer).filter(
             (Customer.customer_id == cust_id) | (Customer.customer_id == cust_name)
         ).first()
-        logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
-                    f"{'Found format ' + customer.format if customer else 'Not found, defaulting to edifact'}")
-        return customer.format if customer and customer.format else 'edifact'
+        
+        if customer:
+            logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
+                        f"Found format '{customer.format}' with "
+                        f"{'custom validation rules' if customer.validation_rules else 'default validation'}")
+            return customer.format or 'edifact', customer.validation_rules
+        else:
+            logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
+                        f"Not found, defaulting to edifact with no custom rules")
+            return 'edifact', None
+            
     except (ProgrammingError, OperationalError) as e:
         # Handle table doesn't exist or other DB structure errors
         logger.warning(f"⚠️ check_customer_table lookup failed (table may not exist): {e}")
         db.rollback()  # Rollback to clear the failed transaction
-        return 'edifact'
+        return 'edifact', None
     except Exception as e:
         logger.warning(f"⚠️ check_customer_table lookup failed: {e}")
         db.rollback()  # Rollback for any other errors
-        return 'edifact'
+        return 'edifact', None
     finally:
         if close_after:
             db.close()

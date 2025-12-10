@@ -114,7 +114,6 @@ def ensure_columns_exist():
         "zodiac_customers": {
             "customer_id": "VARCHAR(255) NOT NULL",
             "format": "VARCHAR(32) NOT NULL DEFAULT 'edifact'",
-            "api_address": "VARCHAR(1024) NULL",
             "validation_rules": "TEXT NULL",
             "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         },
