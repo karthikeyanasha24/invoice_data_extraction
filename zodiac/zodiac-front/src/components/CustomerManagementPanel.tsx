@@ -101,47 +101,48 @@ export default function CustomerManagementPanel() {
   });
   
   // Validation rules UI states
-  const [selectedFields, setSelectedFields] = useState<string[]>([]);
+  const [selectedFields, setSelectedFields] = useState<Record<string, {selected: boolean, defaultValue: string, expanded: boolean}>>({});
   const [customField, setCustomField] = useState('');
+  const [customFieldLabel, setCustomFieldLabel] = useState('');
   const [customFieldError, setCustomFieldError] = useState('');
-  const [availableFields, setAvailableFields] = useState<Array<{value: string, label: string}>>([
+  const [availableFields] = useState<Array<{value: string, label: string, category: string}>>([
     // Invoice Header
-    { value: '//cbc:ID', label: 'Invoice ID' },
-    { value: '//cbc:IssueDate', label: 'Issue Date' },
-    { value: '//cbc:DueDate', label: 'Due Date' },
-    { value: '//cbc:InvoiceTypeCode', label: 'Invoice Type Code' },
-    { value: '//cbc:DocumentCurrencyCode', label: 'Currency Code' },
+    { value: '//cbc:ID', label: 'Invoice ID', category: 'Invoice Header' },
+    { value: '//cbc:IssueDate', label: 'Issue Date', category: 'Invoice Header' },
+    { value: '//cbc:DueDate', label: 'Due Date', category: 'Invoice Header' },
+    { value: '//cbc:InvoiceTypeCode', label: 'Invoice Type Code', category: 'Invoice Header' },
+    { value: '//cbc:DocumentCurrencyCode', label: 'Currency Code', category: 'Invoice Header' },
     
     // Party Information
-    { value: '//cac:AccountingSupplierParty', label: 'Supplier Information' },
-    { value: '//cac:AccountingCustomerParty', label: 'Customer Information' },
-    { value: '//cac:AccountingSupplierParty/cac:Party/cbc:EndpointID', label: 'Supplier Endpoint ID' },
-    { value: '//cac:AccountingCustomerParty/cac:Party/cbc:EndpointID', label: 'Customer Endpoint ID' },
-    { value: '//cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name', label: 'Supplier Name' },
-    { value: '//cac:AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name', label: 'Customer Name' },
+    { value: '//cac:AccountingSupplierParty', label: 'Supplier Information', category: 'Party Information' },
+    { value: '//cac:AccountingCustomerParty', label: 'Customer Information', category: 'Party Information' },
+    { value: '//cac:AccountingSupplierParty/cac:Party/cbc:EndpointID', label: 'Supplier Endpoint ID', category: 'Party Information' },
+    { value: '//cac:AccountingCustomerParty/cac:Party/cbc:EndpointID', label: 'Customer Endpoint ID', category: 'Party Information' },
+    { value: '//cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name', label: 'Supplier Name', category: 'Party Information' },
+    { value: '//cac:AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name', label: 'Customer Name', category: 'Party Information' },
     
     // Tax Information
-    { value: '//cac:TaxTotal/cbc:TaxAmount', label: 'Tax Amount' },
-    { value: '//cac:TaxTotal/cac:TaxSubtotal/cbc:TaxableAmount', label: 'Taxable Amount' },
-    { value: '//cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:ID', label: 'Tax Category ID' },
-    { value: '//cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:Percent', label: 'Tax Percentage' },
+    { value: '//cac:TaxTotal/cbc:TaxAmount', label: 'Tax Amount', category: 'Tax Information' },
+    { value: '//cac:TaxTotal/cac:TaxSubtotal/cbc:TaxableAmount', label: 'Taxable Amount', category: 'Tax Information' },
+    { value: '//cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:ID', label: 'Tax Category ID', category: 'Tax Information' },
+    { value: '//cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory/cbc:Percent', label: 'Tax Percentage', category: 'Tax Information' },
     
     // Financial Information
-    { value: '//cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount', label: 'Amount Excluding Tax' },
-    { value: '//cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount', label: 'Amount Including Tax' },
-    { value: '//cac:LegalMonetaryTotal/cbc:PayableAmount', label: 'Total Payable Amount' },
+    { value: '//cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount', label: 'Amount Excluding Tax', category: 'Financial Information' },
+    { value: '//cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount', label: 'Amount Including Tax', category: 'Financial Information' },
+    { value: '//cac:LegalMonetaryTotal/cbc:PayableAmount', label: 'Total Payable Amount', category: 'Financial Information' },
     
     // Line Items
-    { value: '//cac:InvoiceLine', label: 'Invoice Line Items' },
-    { value: '//cac:InvoiceLine/cbc:ID', label: 'Line Item ID' },
-    { value: '//cac:InvoiceLine/cac:Item/cbc:Name', label: 'Item Name' },
-    { value: '//cac:InvoiceLine/cbc:InvoicedQuantity', label: 'Item Quantity' },
-    { value: '//cac:InvoiceLine/cac:Price/cbc:PriceAmount', label: 'Item Price' },
+    { value: '//cac:InvoiceLine', label: 'Invoice Line Items', category: 'Line Items' },
+    { value: '//cac:InvoiceLine/cbc:ID', label: 'Line Item ID', category: 'Line Items' },
+    { value: '//cac:InvoiceLine/cac:Item/cbc:Name', label: 'Item Name', category: 'Line Items' },
+    { value: '//cac:InvoiceLine/cbc:InvoicedQuantity', label: 'Item Quantity', category: 'Line Items' },
+    { value: '//cac:InvoiceLine/cac:Price/cbc:PriceAmount', label: 'Item Price', category: 'Line Items' },
     
     // PEPPOL Specific
-    { value: '//cbc:CustomizationID', label: 'PEPPOL Customization ID' },
-    { value: '//cbc:ProfileID', label: 'PEPPOL Profile ID' },
-    { value: '//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID', label: 'Supplier Tax ID' },
+    { value: '//cbc:CustomizationID', label: 'PEPPOL Customization ID', category: 'PEPPOL' },
+    { value: '//cbc:ProfileID', label: 'PEPPOL Profile ID', category: 'PEPPOL' },
+    { value: '//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID', label: 'Supplier Tax ID', category: 'PEPPOL' },
   ]);
 
   const [submitting, setSubmitting] = useState(false);
@@ -193,20 +194,45 @@ export default function CustomerManagementPanel() {
   };
 
   // Helper: Parse validation rules JSON to selected fields
-  const parseValidationRules = (rulesJson: string): string[] => {
-    if (!rulesJson) return [];
+  const parseValidationRules = (rulesJson: string): Record<string, {selected: boolean, defaultValue: string, expanded: boolean}> => {
+    if (!rulesJson) return {};
     try {
       const parsed = JSON.parse(rulesJson);
-      return parsed.required_fields || [];
+      const result: Record<string, {selected: boolean, defaultValue: string, expanded: boolean}> = {};
+      
+      if (Array.isArray(parsed.required_fields)) {
+        parsed.required_fields.forEach((field: any) => {
+          if (typeof field === 'string') {
+            // Old format compatibility
+            result[field] = { selected: true, defaultValue: '', expanded: false };
+          } else if (field.xpath) {
+            // New format with default values
+            result[field.xpath] = { 
+              selected: true, 
+              defaultValue: field.default_value || '', 
+              expanded: false 
+            };
+          }
+        });
+      }
+      
+      return result;
     } catch {
-      return [];
+      return {};
     }
   };
 
   // Helper: Convert selected fields to validation rules JSON
-  const fieldsToValidationRules = (fields: string[]): string => {
-    if (fields.length === 0) return '';
-    return JSON.stringify({ required_fields: fields }, null, 2);
+  const fieldsToValidationRules = (fields: Record<string, {selected: boolean, defaultValue: string, expanded: boolean}>): string => {
+    const selectedEntries = Object.entries(fields).filter(([_, data]) => data.selected);
+    if (selectedEntries.length === 0) return '';
+    
+    const requiredFields = selectedEntries.map(([xpath, data]) => ({
+      xpath: xpath,
+      default_value: data.defaultValue || null
+    }));
+    
+    return JSON.stringify({ required_fields: requiredFields }, null, 2);
   };
 
   // Helper: Validate custom field XPath
@@ -238,24 +264,55 @@ export default function CustomerManagementPanel() {
     }
 
     // Check if field already exists
-    if (availableFields.some(f => f.value === customField)) {
+    if (selectedFields[customField]) {
       setCustomFieldError('This field already exists');
       return;
     }
 
-    // Add to available fields
-    const newField = {
-      value: customField,
-      label: `Custom: ${customField}`,
-    };
-    setAvailableFields([...availableFields, newField]);
-
     // Add to selected fields
-    setSelectedFields([...selectedFields, customField]);
+    setSelectedFields({
+      ...selectedFields,
+      [customField]: { selected: true, defaultValue: '', expanded: false }
+    });
 
-    // Clear custom field input
+    // Clear custom field inputs
     setCustomField('');
+    setCustomFieldLabel('');
     setCustomFieldError('');
+  };
+  
+  // Toggle field selection
+  const toggleFieldSelection = (xpath: string) => {
+    setSelectedFields(prev => ({
+      ...prev,
+      [xpath]: {
+        selected: !prev[xpath]?.selected,
+        defaultValue: prev[xpath]?.defaultValue || '',
+        expanded: prev[xpath]?.expanded || false
+      }
+    }));
+  };
+  
+  // Toggle field expansion
+  const toggleFieldExpansion = (xpath: string) => {
+    setSelectedFields(prev => ({
+      ...prev,
+      [xpath]: {
+        ...prev[xpath],
+        expanded: !prev[xpath]?.expanded
+      }
+    }));
+  };
+  
+  // Update default value
+  const updateDefaultValue = (xpath: string, value: string) => {
+    setSelectedFields(prev => ({
+      ...prev,
+      [xpath]: {
+        ...prev[xpath],
+        defaultValue: value
+      }
+    }));
   };
 
   const openCreateForm = () => {
@@ -265,8 +322,9 @@ export default function CustomerManagementPanel() {
       format: 'edifact',
       validation_rules: '',
     });
-    setSelectedFields([]);
+    setSelectedFields({});
     setCustomField('');
+    setCustomFieldLabel('');
     setCustomFieldError('');
     setShowForm(true);
     setError('');
@@ -284,19 +342,8 @@ export default function CustomerManagementPanel() {
     const fields = parseValidationRules(customer.validation_rules || '');
     setSelectedFields(fields);
     
-    // Add any custom fields that aren't in the default list
-    const customFields = fields.filter(field => 
-      !availableFields.some(af => af.value === field)
-    );
-    if (customFields.length > 0) {
-      const newCustomFields = customFields.map(field => ({
-        value: field,
-        label: `Custom: ${field}`,
-      }));
-      setAvailableFields([...availableFields, ...newCustomFields]);
-    }
-    
     setCustomField('');
+    setCustomFieldLabel('');
     setCustomFieldError('');
     setShowForm(true);
     setError('');
@@ -310,8 +357,9 @@ export default function CustomerManagementPanel() {
       format: 'edifact',
       validation_rules: '',
     });
-    setSelectedFields([]);
+    setSelectedFields({});
     setCustomField('');
+    setCustomFieldLabel('');
     setCustomFieldError('');
   };
 
@@ -599,7 +647,15 @@ export default function CustomerManagementPanel() {
                             {customer.validation_rules ? (
                               <span className="inline-flex items-center gap-1 text-green-600">
                                 <CheckCircle className="w-4 h-4" />
-                                {JSON.parse(customer.validation_rules || '{"required_fields": []}').required_fields?.length || 0} fields
+                                {(() => {
+                                  try {
+                                    const rules = JSON.parse(customer.validation_rules || '{"required_fields": []}');
+                                    const fields = rules.required_fields || [];
+                                    return fields.length;
+                                  } catch {
+                                    return 0;
+                                  }
+                                })()} fields
                               </span>
                             ) : (
                               <span className="text-gray-400">—</span>
@@ -752,37 +808,103 @@ export default function CustomerManagementPanel() {
                   Required XML Fields (Optional)
                 </label>
                 <p className="text-xs text-gray-600 mb-3">
-                  Select which fields must be present in the XML invoice.
+                  Select which fields must be present in the XML invoice and optionally set default values.
                 </p>
                 
-                {/* Multi-select dropdown */}
-                <div className="mb-3">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Select from common fields:
-                  </label>
-                  <select
-                    multiple
-                    value={selectedFields}
-                    onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions, option => option.value);
-                      setSelectedFields(selected);
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    size={8}
-                  >
-                    {availableFields.map((field) => (
-                      <option key={field.value} value={field.value} className="py-1">
-                        {field.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Hold Ctrl (Cmd on Mac) to select multiple fields. Selected: {selectedFields.length} field{selectedFields.length !== 1 ? 's' : ''}
-                  </p>
+                {/* Checkbox list by category */}
+                <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg p-3 space-y-3">
+                  {['Invoice Header', 'Party Information', 'Tax Information', 'Financial Information', 'Line Items', 'PEPPOL'].map(category => {
+                    const categoryFields = availableFields.filter(f => f.category === category);
+                    return (
+                      <div key={category} className="space-y-2">
+                        <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">{category}</h4>
+                        {categoryFields.map((field) => (
+                          <div key={field.value} className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                id={`field-${field.value}`}
+                                checked={selectedFields[field.value]?.selected || false}
+                                onChange={() => toggleFieldSelection(field.value)}
+                                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                              />
+                              <label htmlFor={`field-${field.value}`} className="flex-1 text-sm text-gray-900 cursor-pointer">
+                                {field.label}
+                              </label>
+                              {selectedFields[field.value]?.selected && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleFieldExpansion(field.value)}
+                                  className="text-xs text-blue-600 hover:text-blue-800 transition-colors flex items-center gap-1"
+                                >
+                                  {selectedFields[field.value]?.expanded ? '▼' : '▶'} Default
+                                </button>
+                              )}
+                            </div>
+                            {selectedFields[field.value]?.selected && selectedFields[field.value]?.expanded && (
+                              <div className="ml-6 p-2 bg-gray-50 border border-gray-200 rounded">
+                                <input
+                                  type="text"
+                                  value={selectedFields[field.value]?.defaultValue || ''}
+                                  onChange={(e) => updateDefaultValue(field.value, e.target.value)}
+                                  placeholder="Enter default value (optional)"
+                                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Will be used if field is missing or empty
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  
+                  {/* Custom fields */}
+                  {Object.entries(selectedFields).filter(([xpath]) => !availableFields.some(f => f.value === xpath)).map(([xpath, data]) => (
+                    <div key={xpath} className="space-y-1 border-t pt-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id={`field-${xpath}`}
+                          checked={data.selected}
+                          onChange={() => toggleFieldSelection(xpath)}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <label htmlFor={`field-${xpath}`} className="flex-1 text-sm text-gray-900 cursor-pointer font-mono">
+                          {xpath}
+                        </label>
+                        {data.selected && (
+                          <button
+                            type="button"
+                            onClick={() => toggleFieldExpansion(xpath)}
+                            className="text-xs text-blue-600 hover:text-blue-800 transition-colors flex items-center gap-1"
+                          >
+                            {data.expanded ? '▼' : '▶'} Default
+                          </button>
+                        )}
+                      </div>
+                      {data.selected && data.expanded && (
+                        <div className="ml-6 p-2 bg-gray-50 border border-gray-200 rounded">
+                          <input
+                            type="text"
+                            value={data.defaultValue || ''}
+                            onChange={(e) => updateDefaultValue(xpath, e.target.value)}
+                            placeholder="Enter default value (optional)"
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            Will be used if field is missing or empty
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
 
                 {/* Custom field input */}
-                <div className="space-y-2">
+                <div className="mt-3 space-y-2">
                   <label className="block text-xs font-medium text-gray-700">
                     Add custom XPath field:
                   </label>
@@ -819,40 +941,12 @@ export default function CustomerManagementPanel() {
                       {customFieldError}
                     </p>
                   )}
-                  <div className="p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-                    <strong>XPath format:</strong> Must start with <code className="text-blue-900">//</code> and use namespace prefix
-                    <br />
-                    <strong>Examples:</strong> <code className="text-blue-900">//cbc:ID</code>, <code className="text-blue-900">//cac:PaymentMeans/cbc:PaymentMeansCode</code>
-                  </div>
                 </div>
 
-                {/* Selected fields preview */}
-                {selectedFields.length > 0 && (
-                  <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <p className="text-xs font-semibold text-green-900 mb-2">
-                      ✓ {selectedFields.length} Required Field{selectedFields.length !== 1 ? 's' : ''} Selected:
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedFields.map((field) => {
-                        const fieldInfo = availableFields.find(f => f.value === field);
-                        return (
-                          <span
-                            key={field}
-                            className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-green-300 rounded text-xs text-green-800"
-                          >
-                            {fieldInfo?.label || field}
-                            <button
-                              type="button"
-                              onClick={() => setSelectedFields(selectedFields.filter(f => f !== field))}
-                              className="hover:text-red-600 transition-colors"
-                              title="Remove field"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        );
-                      })}
-                    </div>
+                {/* Selected count */}
+                {Object.values(selectedFields).filter(f => f.selected).length > 0 && (
+                  <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded text-sm text-green-800">
+                    ✓ {Object.values(selectedFields).filter(f => f.selected).length} field{Object.values(selectedFields).filter(f => f.selected).length !== 1 ? 's' : ''} selected
                   </div>
                 )}
               </div>
