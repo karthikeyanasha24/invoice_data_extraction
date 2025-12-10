@@ -125,10 +125,20 @@ class DatabaseInitializer:
             raise
     
     def add_processing_steps_columns(self):
-        """Add processing_steps_error columns for detailed error storage"""
-        logger.info("Checking for processing_steps_error columns...")
+        """Add processing_steps and processing_steps_error columns for detailed processing information"""
+        logger.info("Checking for processing_steps columns...")
         
         migrations = [
+            {
+                "table": "zodiac_invoice_success_edi",
+                "column": "processing_steps",
+                "sql": "ALTER TABLE zodiac_invoice_success_edi ADD COLUMN IF NOT EXISTS processing_steps JSON NULL;"
+            },
+            {
+                "table": "zodiac_invoice_failed_edi",
+                "column": "processing_steps",
+                "sql": "ALTER TABLE zodiac_invoice_failed_edi ADD COLUMN IF NOT EXISTS processing_steps JSON NULL;"
+            },
             {
                 "table": "zodiac_invoice_success_edi",
                 "column": "processing_steps_error",
@@ -142,6 +152,14 @@ class DatabaseInitializer:
         ]
         
         indexes = [
+            {
+                "name": "idx_zodiac_invoice_success_edi_processing_steps",
+                "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_invoice_success_edi_processing_steps ON zodiac_invoice_success_edi USING GIN ((processing_steps::jsonb));"
+            },
+            {
+                "name": "idx_zodiac_invoice_failed_edi_processing_steps",
+                "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_invoice_failed_edi_processing_steps ON zodiac_invoice_failed_edi USING GIN ((processing_steps::jsonb));"
+            },
             {
                 "name": "idx_zodiac_invoice_success_edi_processing_steps_error",
                 "sql": "CREATE INDEX IF NOT EXISTS idx_zodiac_invoice_success_edi_processing_steps_error ON zodiac_invoice_success_edi USING GIN ((processing_steps_error::jsonb));"
