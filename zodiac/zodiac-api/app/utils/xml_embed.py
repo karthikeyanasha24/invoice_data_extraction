@@ -161,17 +161,46 @@ def embed_content_in_xml(xml_content: str, content_to_embed: bytes, content_type
         )
         embedded_binary.text = base64_content
         
-        # Find the best insertion point (after AccountingCustomerParty, before PaymentMeans)
-        insertion_point = None
-        payment_means = root.find('.//cac:PaymentMeans', namespaces)
-        if payment_means is not None:
-            insertion_point = root.index(payment_means)
+        # Find the best insertion point according to UBL 2.1 schema order
+        # According to UBL 2.1 specification, AdditionalDocumentReference should come EARLY
+        # Correct order (simplified):
+        #   1. Header elements (ID, IssueDate, DueDate, etc.)
+        #   2. AdditionalDocumentReference (HERE - optional, repeatable)
+        #   3. AccountingSupplierParty
+        #   4. AccountingCustomerParty
+        #   5. Delivery, PaymentMeans, etc. (optional)
+        #   6. TaxTotal
+        #   7. LegalMonetaryTotal  
+        #   8. InvoiceLine (last, required)
         
-        # Insert the AdditionalDocumentReference
+        insertion_point = None
+        
+        # Strategy: Insert BEFORE AccountingSupplierParty (one of the first complex elements)
+        supplier_party = root.find('.//cac:AccountingSupplierParty', namespaces)
+        if supplier_party is not None:
+            insertion_point = root.index(supplier_party)
+            logger.info(f"📍 Inserting AdditionalDocumentReference before AccountingSupplierParty")
+        else:
+            # Fallback: Insert before AccountingCustomerParty
+            customer_party = root.find('.//cac:AccountingCustomerParty', namespaces)
+            if customer_party is not None:
+                insertion_point = root.index(customer_party)
+                logger.info(f"📍 Inserting AdditionalDocumentReference before AccountingCustomerParty")
+            else:
+                # Last resort: Insert before first InvoiceLine
+                invoice_lines = root.findall('.//cac:InvoiceLine', namespaces)
+                if invoice_lines:
+                    insertion_point = root.index(invoice_lines[0])
+                    logger.info(f"📍 Inserting AdditionalDocumentReference before InvoiceLine")
+        
+        # Insert the AdditionalDocumentReference at the correct position
         if insertion_point is not None:
             root.insert(insertion_point, additional_doc_ref)
+            logger.info(f"✅ Inserted at position {insertion_point}")
         else:
+            # Final fallback: append at the end (not ideal but better than failing)
             root.append(additional_doc_ref)
+            logger.warning(f"⚠️ Could not find ideal insertion point, appended at end")
         
         # Convert back to string
         modified_xml = etree.tostring(

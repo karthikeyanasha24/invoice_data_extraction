@@ -10,3 +10,4 @@ requests==2.32.3
 python-multipart
 vercel-blob
 lxml
+reportlab==4.0.9

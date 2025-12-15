@@ -1,10 +1,11 @@
 """
 XML to EDIFACT Converter
-Converts UBL XML invoices to EDIFACT format via X12 intermediate format
+Converts UBL XML invoices to EDIFACT format
 """
 import logging
 import os
 from typing import Union, Optional, Tuple
+from .xml_to_edifact_direct import convert_xml_to_edifact_direct
 from .xml_to_x12 import convert_xml_to_x12_content
 from .x12_converter import X12Converter
 from ..services.file_service import read_file_from_storage, save_file_to_storage
@@ -17,9 +18,12 @@ async def convert_xml_to_edifact(
     edifact_filename: str
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Convert XML to EDIFACT format using two-step process:
-    1. XML → X12 (using existing converter)
-    2. X12 → EDIFACT (using EDINation API)
+    Convert XML to EDIFACT format using direct conversion
+    
+    Strategy:
+    1. Try direct XML → EDIFACT conversion (proper EDIFACT format)
+    2. Fallback: XML → X12 → EDIFACT (via API if available)
+    3. Last resort: XML → X12 (if all else fails)
     
     Args:
         xml_path: Path to XML file (can be local path or blob dict)
@@ -38,69 +42,83 @@ async def convert_xml_to_edifact(
         xml_content = await read_file_from_storage(xml_path, None, None)
         logger.info(f"✅ XML content read ({len(xml_content)} bytes)")
         
-        # Step 2: Convert XML to X12
-        logger.info(f"🔄 Step 2: Converting XML to X12...")
+        # Step 2: Try direct XML to EDIFACT conversion (PRIMARY METHOD)
+        logger.info(f"🔄 Step 2: Converting XML to EDIFACT (direct method)...")
+        edifact_content = convert_xml_to_edifact_direct(xml_content)
+        
+        if edifact_content:
+            logger.info(f"✅ Direct EDIFACT conversion successful ({len(edifact_content)} characters)")
+            
+            # Validate EDIFACT content
+            if 'UNB' in edifact_content and 'UNH' in edifact_content:
+                logger.info(f"✅ EDIFACT format validated (contains UNB and UNH segments)")
+                
+                # Save EDIFACT content
+                logger.info(f"💾 Saving EDIFACT file...")
+                edifact_path = await save_file_to_storage(
+                    edifact_content.encode('utf-8'),
+                    edifact_filename,
+                    "converted"
+                )
+                
+                logger.info(f"✅ EDIFACT file saved successfully")
+                logger.info(f"📊 XML to EDIFACT conversion completed (direct method)")
+                
+                return True, "XML successfully converted to EDIFACT (direct)", edifact_path
+            else:
+                logger.warning("⚠️ Direct EDIFACT conversion produced invalid format, trying alternative method...")
+        else:
+            logger.warning("⚠️ Direct EDIFACT conversion failed, trying alternative method...")
+        
+        # Step 3: Fallback - Try X12 to EDIFACT via API
+        logger.info(f"🔄 Step 3: Fallback - Converting XML to X12...")
         x12_content = convert_xml_to_x12_content(xml_content)
         
         if not x12_content:
-            error_msg = "XML to X12 conversion failed"
+            error_msg = "Both EDIFACT and X12 conversion failed"
             logger.error(f"❌ {error_msg}")
             return False, error_msg, None
         
         logger.info(f"✅ X12 content generated ({len(x12_content)} characters)")
         
-        # Step 3: Convert X12 to EDIFACT using EDINation API
-        logger.info(f"🔄 Step 3: Converting X12 to EDIFACT...")
-        
-        # Get EDINation API key from environment
+        # Check if EDINation API is available
         api_key = os.getenv("EDINATION_API_KEY")
         
-        if not api_key:
-            logger.warning("⚠️ EDINATION_API_KEY not found - EDIFACT conversion not available")
-            logger.info("💡 For now, returning X12 format as fallback")
+        if api_key:
+            logger.info(f"🔄 Step 4: Converting X12 to EDIFACT via API...")
             
-            # Save X12 content as EDIFACT (temporary fallback)
-            edifact_path = await save_file_to_storage(
-                x12_content.encode('utf-8'),
-                edifact_filename,
-                "converted"
-            )
+            # Initialize converter
+            converter = X12Converter(api_key)
             
-            return True, "EDIFACT conversion skipped (API key not configured) - X12 format used", edifact_path
-        
-        # Initialize converter
-        converter = X12Converter(api_key)
-        
-        # Convert X12 to EDIFACT
-        success, edifact_content, message = converter.x12_to_edifact(x12_content)
-        
-        if not success:
-            logger.error(f"❌ X12 to EDIFACT conversion failed: {message}")
+            # Convert X12 to EDIFACT
+            success, api_edifact_content, message = converter.x12_to_edifact(x12_content)
             
-            # Fallback: Save X12 format instead
-            logger.warning("⚠️ Falling back to X12 format")
-            edifact_path = await save_file_to_storage(
-                x12_content.encode('utf-8'),
-                edifact_filename,
-                "converted"
-            )
-            
-            return True, f"EDIFACT conversion failed ({message}), using X12 format", edifact_path
+            if success and api_edifact_content:
+                logger.info(f"✅ API-based EDIFACT conversion successful ({len(api_edifact_content)} characters)")
+                
+                # Save EDIFACT content
+                edifact_path = await save_file_to_storage(
+                    api_edifact_content.encode('utf-8'),
+                    edifact_filename,
+                    "converted"
+                )
+                
+                logger.info(f"✅ EDIFACT file saved successfully (API method)")
+                return True, "XML successfully converted to EDIFACT (via API)", edifact_path
+            else:
+                logger.warning(f"⚠️ API-based conversion failed: {message}")
+        else:
+            logger.warning("⚠️ EDINATION_API_KEY not configured")
         
-        logger.info(f"✅ EDIFACT content generated ({len(edifact_content)} characters)")
-        
-        # Step 4: Save EDIFACT content
-        logger.info(f"💾 Step 4: Saving EDIFACT file...")
+        # Step 5: Last resort - Save X12 format with warning
+        logger.warning("⚠️ Using X12 format as last resort (EDIFACT conversion unavailable)")
         edifact_path = await save_file_to_storage(
-            edifact_content.encode('utf-8'),
+            x12_content.encode('utf-8'),
             edifact_filename,
             "converted"
         )
         
-        logger.info(f"✅ EDIFACT file saved successfully")
-        logger.info(f"📊 XML to EDIFACT conversion completed")
-        
-        return True, "XML successfully converted to EDIFACT", edifact_path
+        return True, "⚠️ EDIFACT conversion unavailable - X12 format used", edifact_path
         
     except Exception as e:
         error_msg = f"XML to EDIFACT conversion error: {str(e)}"

@@ -71,8 +71,8 @@ PROCESSING_PATHS: Dict[str, ProcessingPath] = {
         needs_conversion=False,
         needs_embed=True,
         embed_type="PDF",
-        needs_third_party=True,
-        description="Generate PDF, embed in XML, send to third party"
+        needs_third_party=False,
+        description="Generate PDF, embed in XML"
     ),
     "XML_EMBED_X12": ProcessingPath(
         format_name="XML_EMBED_X12",
@@ -93,6 +93,15 @@ PROCESSING_PATHS: Dict[str, ProcessingPath] = {
         embed_type="EDIFACT",
         needs_third_party=True,
         description="Generate EDIFACT, embed in XML, send to third party"
+    ),
+    "XML_EMBED_PDF_LOCAL": ProcessingPath(
+        format_name="XML_EMBED_PDF_LOCAL",
+        needs_xml_validation=True,
+        needs_conversion=False,
+        needs_embed=True,
+        embed_type="PDF",
+        needs_third_party=False,
+        description="Generate PDF and embed in XML (no third-party API call)"
     ),
 }
 

@@ -10,9 +10,13 @@ logger = logging.getLogger("zodiac-api.utils")
 
 def extract_invoice_info(url: str):
     """
-    Downloads an EDI X12 file and extracts Invoice ID and Buyer Name.
+    Downloads an EDI file (X12 or EDIFACT) and extracts Invoice ID and Buyer Name.
     Handles both blob URLs and local file paths.
     Handles messy spacing and hidden characters.
+    
+    Supports:
+    - X12 format: Looks for BIG (invoice) and N1+BY (buyer) segments
+    - EDIFACT format: Looks for BGM (invoice) and NAD+BY (buyer) segments
     """
     try:
         logger.info(f"🔍 extract_invoice_info called with: {url}")
@@ -55,27 +59,59 @@ def extract_invoice_info(url: str):
         # Log a sample of the content
         logger.info(f"📄 Content preview (first 200 chars): {content[:200]}")
         
-        # Remove all whitespace for easier parsing
-        content_clean = re.sub(r'\s+', '', content)
-        segments = content_clean.split('~')
-        
-        logger.info(f"📊 Found {len(segments)} segments in EDI file")
+        # Detect format: X12 or EDIFACT
+        is_edifact = 'UNB+' in content or 'UNH+' in content
+        is_x12 = 'ISA*' in content or 'GS*' in content
         
         invoice_id = None
         buyer_name = None
         
-        for i, segment in enumerate(segments):
-            parts = segment.split('*')
+        if is_edifact:
+            logger.info(f"📋 Detected EDIFACT format")
+            # EDIFACT uses ' as segment terminator and + as field separator
+            # Remove extra whitespace but preserve structure
+            content_clean = re.sub(r'\s+', '', content)
+            segments = content_clean.split("'")
             
-            # BIG segment contains invoice number
-            if parts[0] == 'BIG' and len(parts) >= 3:
-                invoice_id = parts[2]
-                logger.info(f"✅ Found invoice_id in segment {i}: {invoice_id}")
+            logger.info(f"📊 Found {len(segments)} EDIFACT segments")
             
-            # N1 segment with BY qualifier contains buyer name
-            elif parts[0] == 'N1' and len(parts) >= 3 and parts[1] == 'BY':
-                buyer_name = parts[2]
-                logger.info(f"✅ Found buyer_name in segment {i}: {buyer_name}")
+            for i, segment in enumerate(segments):
+                parts = segment.split('+')
+                
+                # BGM segment contains invoice number (BGM+380+INVOICE_ID+9)
+                if parts[0] == 'BGM' and len(parts) >= 3:
+                    invoice_id = parts[2]
+                    logger.info(f"✅ Found invoice_id in BGM segment {i}: {invoice_id}")
+                
+                # NAD segment with BY qualifier contains buyer name
+                # NAD+BY+ID::9++BUYER_NAME+...
+                elif parts[0] == 'NAD' and len(parts) >= 5 and parts[1] == 'BY':
+                    buyer_name = parts[4]
+                    logger.info(f"✅ Found buyer_name in NAD segment {i}: {buyer_name}")
+        
+        elif is_x12:
+            logger.info(f"📋 Detected X12 format")
+            # X12 uses ~ as segment terminator and * as field separator
+            content_clean = re.sub(r'\s+', '', content)
+            segments = content_clean.split('~')
+            
+            logger.info(f"📊 Found {len(segments)} X12 segments")
+            
+            for i, segment in enumerate(segments):
+                parts = segment.split('*')
+                
+                # BIG segment contains invoice number
+                if parts[0] == 'BIG' and len(parts) >= 3:
+                    invoice_id = parts[2]
+                    logger.info(f"✅ Found invoice_id in BIG segment {i}: {invoice_id}")
+                
+                # N1 segment with BY qualifier contains buyer name
+                elif parts[0] == 'N1' and len(parts) >= 3 and parts[1] == 'BY':
+                    buyer_name = parts[2]
+                    logger.info(f"✅ Found buyer_name in N1 segment {i}: {buyer_name}")
+        
+        else:
+            logger.warning(f"⚠️ Could not detect EDI format (neither X12 nor EDIFACT)")
         
         result = {
             "invoice_id": invoice_id,

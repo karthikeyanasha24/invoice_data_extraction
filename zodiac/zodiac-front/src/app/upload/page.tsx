@@ -236,10 +236,11 @@ export default function UploadPage() {
     const topSectionActions = (
         <button
             onClick={() => router.push('/invoices')}
-            className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors"
+            className="flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors text-sm"
         >
-            <ArrowLeft className="h-4 w-4" />
-            <span>Back to Documents</span>
+            <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4" />
+            <span className="hidden sm:inline">Back to Documents</span>
+            <span className="sm:hidden">Back</span>
         </button>
     );
 
@@ -253,10 +254,10 @@ export default function UploadPage() {
                 />
             }
         >
-            <div className="px-4 py-8">
-                <div className="max-w-4xl mx-auto space-y-8">
+            <div className="px-2 sm:px-4 py-4 sm:py-8">
+                <div className="max-w-4xl mx-auto space-y-4 sm:space-y-8">
                     {/* Upload Area */}
-                    <div className="bg-white rounded-lg shadow p-8">
+                    <div className="bg-white rounded-lg shadow p-4 sm:p-8">
                         {/* Real-time Status Tracker */}
                         {showStatusTracker && trackingId && (
                             <div className="mb-6">
@@ -306,16 +307,16 @@ export default function UploadPage() {
 
                         {/* Upload Progress - Only show if not showing status tracker */}
                         {uploading && !showStatusTracker && (
-                            <div className="mb-6 rounded-md bg-blue-50 p-6">
+                            <div className="mb-4 sm:mb-6 rounded-md bg-blue-50 p-4 sm:p-6">
                                 <div className="text-center">
-                                    <div className="mx-auto h-12 w-12 text-blue-500 animate-spin mb-4">
-                                        <svg className="h-12 w-12" fill="none" viewBox="0 0 24 24">
+                                    <div className="mx-auto h-10 w-10 sm:h-12 sm:w-12 text-blue-500 animate-spin mb-3 sm:mb-4">
+                                        <svg className="h-10 w-10 sm:h-12 sm:w-12" fill="none" viewBox="0 0 24 24">
                                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                         </svg>
                                     </div>
-                                    <h3 className="text-lg font-medium text-blue-800 mb-2">Uploading Invoice...</h3>
-                                    <p className="mt-3 text-sm text-blue-600">Please wait while we upload your file...</p>
+                                    <h3 className="text-base sm:text-lg font-medium text-blue-800 mb-2">Uploading Invoice...</h3>
+                                    <p className="mt-2 sm:mt-3 text-xs sm:text-sm text-blue-600">Please wait while we upload your file...</p>
                                 </div>
                             </div>
                         )}
@@ -352,7 +353,7 @@ export default function UploadPage() {
 
                         <div
                             className={cn(
-                                "border-2 border-dashed rounded-lg p-12 text-center",
+                                "border-2 border-dashed rounded-lg p-6 sm:p-12 text-center",
                                 dragActive ? "border-blue-400 bg-blue-50" : "border-gray-300",
                                 uploading && "opacity-50"
                             )}
@@ -362,12 +363,12 @@ export default function UploadPage() {
                             onDrop={handleDrop}
                         >
                             <label htmlFor="file-upload" className="cursor-pointer">
-                                <Upload className="mx-auto h-16 w-16 text-gray-400 hover:text-blue-500 transition-colors" />
-                                <div className="mt-6">
-                                    <span className="mt-2 block text-lg font-medium text-gray-900">
+                                <Upload className="mx-auto h-12 w-12 sm:h-16 sm:w-16 text-gray-400 hover:text-blue-500 transition-colors" />
+                                <div className="mt-4 sm:mt-6">
+                                    <span className="mt-2 block text-base sm:text-lg font-medium text-gray-900">
                                         {uploading ? 'Uploading...' : 'Drop files here or click to upload'}
                                     </span>
-                                    <span className="mt-2 block text-sm text-gray-500">
+                                    <span className="mt-2 block text-xs sm:text-sm text-gray-500">
                                         Supports EDI, XML, TXT, and X12 files (max 10MB)
                                     </span>
                                 </div>
@@ -385,19 +386,19 @@ export default function UploadPage() {
                     </div>
 
                     {/* File Requirements */}
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <h3 className="text-lg font-semibold text-gray-900 mb-4">File Requirements</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-white rounded-lg shadow p-4 sm:p-6">
+                        <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">File Requirements</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                             <div>
-                                <h4 className="font-medium text-gray-900 mb-2">Supported Input Format</h4>
-                                <ul className="text-sm text-gray-600 space-y-1">
+                                <h4 className="text-sm sm:text-base font-medium text-gray-900 mb-2">Supported Input Format</h4>
+                                <ul className="text-xs sm:text-sm text-gray-600 space-y-1">
                                     <li>• XML (.xml) only</li>
                                     <li className="text-xs text-gray-500 mt-2 ml-4">Output format is determined by customer settings</li>
                                 </ul>
                             </div>
                             <div>
-                                <h4 className="font-medium text-gray-900 mb-2">File Limits</h4>
-                                <ul className="text-sm text-gray-600 space-y-1">
+                                <h4 className="text-sm sm:text-base font-medium text-gray-900 mb-2">File Limits</h4>
+                                <ul className="text-xs sm:text-sm text-gray-600 space-y-1">
                                     <li>• Maximum file size: 10MB</li>
                                     <li>• One file per upload</li>
                                     <li>• Valid invoice format required</li>
@@ -407,8 +408,8 @@ export default function UploadPage() {
                     </div>
 
                     {/* Processing Steps */}
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <h3 className="text-lg font-semibold text-gray-900 mb-4">Processing Steps</h3>
+                    <div className="bg-white rounded-lg shadow p-4 sm:p-6">
+                        <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">Processing Steps</h3>
                         <div className="space-y-4">
                             <div className="flex items-center space-x-3">
                                 <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">

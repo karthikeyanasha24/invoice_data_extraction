@@ -369,24 +369,24 @@ export default function InvoicesLanding() {
     onClick: () => void;
   }) => (
     <div
-      className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+      className="bg-white rounded-lg shadow p-3 sm:p-4 cursor-pointer hover:shadow-md transition-shadow"
       onClick={onClick}
     >
-      <div className="flex items-center">
-        <Icon className={`h-8 w-8 ${iconColor}`} />
-        <div className="ml-3">
-          <div className="text-lg font-semibold text-gray-900">{count}</div>
-          <div className="text-sm text-gray-500">{label}</div>
+      <div className="flex flex-col sm:flex-row items-center sm:items-start space-y-2 sm:space-y-0">
+        <Icon className={`h-6 w-6 sm:h-8 sm:w-8 ${iconColor} flex-shrink-0`} />
+        <div className="sm:ml-3 text-center sm:text-left">
+          <div className="text-base sm:text-lg font-semibold text-gray-900">{count}</div>
+          <div className="text-xs sm:text-sm text-gray-500 whitespace-nowrap">{label}</div>
         </div>
       </div>
     </div>
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {!showRecycleBin ? (
           <>
             <StatCard
@@ -479,29 +479,29 @@ export default function InvoicesLanding() {
       </div>
 
       {/* Search and Actions */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex items-center justify-between">
-          <div className="relative flex-1 max-w-md">
+      <div className="bg-white rounded-lg shadow p-3 sm:p-4">
+        <div className="flex flex-col space-y-3 sm:space-y-0 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative flex-1 sm:max-w-md">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <input
               type="text"
               placeholder="Search invoices..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
             />
           </div>
-          <div className="flex items-center space-x-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <button
               onClick={handleUploadClick}
-              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors cursor-pointer"
+              className="flex items-center space-x-2 px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors cursor-pointer text-sm flex-1 sm:flex-initial justify-center"
             >
               <Upload className="h-4 w-4" />
               <span>Upload</span>
             </button>
             <button
               onClick={handleExportClick}
-              className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors cursor-pointer"
+              className="flex items-center space-x-2 px-3 sm:px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors cursor-pointer text-sm flex-1 sm:flex-initial justify-center"
             >
               <Download className="h-4 w-4" />
               <span>Export</span>
@@ -509,14 +509,14 @@ export default function InvoicesLanding() {
             <button
               onClick={() => setShowRecycleBin(!showRecycleBin)}
               className={cn(
-                "flex items-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer",
+                "flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer w-full sm:w-auto justify-center",
                 showRecycleBin
                   ? "bg-red-100 text-red-700 hover:bg-red-200"
                   : "bg-gray-100 text-gray-700 hover:bg-gray-200"
               )}
             >
               <Trash className="h-4 w-4" />
-              <span>{showRecycleBin ? 'Hide Recycle Bin' : 'Show Recycle Bin'}</span>
+              <span className="whitespace-nowrap">{showRecycleBin ? 'Hide Recycle' : 'Recycle Bin'}</span>
             </button>
           </div>
         </div>
@@ -525,12 +525,12 @@ export default function InvoicesLanding() {
       {/* Invoices Table */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         {paginatedInvoices.length === 0 ? (
-          <div className="text-center py-12">
-            <FileText className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">
+          <div className="text-center py-12 px-4">
+            <FileText className="mx-auto h-10 w-10 sm:h-12 sm:w-12 text-gray-400 mb-4" />
+            <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-2">
               {showRecycleBin ? 'No deleted invoices found' : 'No invoices found'}
             </h3>
-            <p className="text-gray-500">
+            <p className="text-sm sm:text-base text-gray-500">
               {searchTerm
                 ? 'Try adjusting your search criteria'
                 : showRecycleBin
@@ -541,44 +541,45 @@ export default function InvoicesLanding() {
           </div>
         ) : (
           <>
-            <table className="w-full divide-y divide-gray-200">
+            <div className="overflow-x-auto">
+              <table className="w-full divide-y divide-gray-200 min-w-[640px]">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice ID</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Format</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice ID</th>
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Format</th>
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                     {showRecycleBin ? 'Deleted' : 'Uploaded'}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {paginatedInvoices.map((invoice, index) => (
                   <tr key={invoice.id || `invoice-${index}`} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       {invoice.customerId || invoice.invoice_id || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       {invoice.customerName || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={cn("inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", getStatusColor(invoice.status))}>
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+                      <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium", getStatusColor(invoice.status))}>
                         {getStatusIcon(invoice.status)}
                         <span className="ml-1">{invoice.status || 'Unknown'}</span>
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       {invoice.formate || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       {showRecycleBin
                         ? (invoice.deleted_at ? new Date(invoice.deleted_at).toLocaleDateString() : 'N/A')
                         : (invoice.uploaded_at ? new Date(invoice.uploaded_at).toLocaleDateString() : 'N/A')
                       }
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       <div className="flex items-center space-x-2">
                         {showRecycleBin ? (
                           <>
@@ -650,6 +651,7 @@ export default function InvoicesLanding() {
                 ))}
               </tbody>
             </table>
+            </div>
 
             {/* Pagination */}
             <Pagination

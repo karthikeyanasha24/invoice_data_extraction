@@ -146,24 +146,24 @@ export default function FailedInvoiceModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h3 className="text-lg font-medium text-gray-900">Invoice Processing Failed</h3>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="text-base sm:text-lg font-medium text-gray-900">Invoice Processing Failed</h3>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="text-gray-400 hover:text-gray-600 flex-shrink-0"
           >
-            <X className="h-6 w-6" />
+            <X className="h-5 w-5 sm:h-6 sm:w-6" />
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="border-b border-gray-200 px-6 flex items-center gap-4 bg-gray-50">
+        <div className="border-b border-gray-200 px-4 sm:px-6 flex items-center gap-2 sm:gap-4 bg-gray-50 overflow-x-auto">
           <button
             onClick={() => setActiveTab('info')}
             className={cn(
-              "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+              "px-3 sm:px-4 py-2 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap",
               activeTab === 'info'
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
@@ -174,38 +174,40 @@ export default function FailedInvoiceModal({
           <button
             onClick={() => setActiveTab('xml')}
             className={cn(
-              "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
+              "px-3 sm:px-4 py-2 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-2 whitespace-nowrap",
               activeTab === 'xml'
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
             )}
           >
-            <Eye className="h-4 w-4" />
-            XML Comparison
+            <Eye className="h-3 w-3 sm:h-4 sm:w-4" />
+            <span className="hidden sm:inline">XML Comparison</span>
+            <span className="sm:hidden">XML</span>
           </button>
           <button
             onClick={() => setActiveTab('edi')}
             className={cn(
-              "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
+              "px-3 sm:px-4 py-2 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1 sm:gap-2 whitespace-nowrap",
               activeTab === 'edi'
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
             )}
           >
-            <Eye className="h-4 w-4" />
-            EDI Comparison
+            <Eye className="h-3 w-3 sm:h-4 sm:w-4" />
+            <span className="hidden sm:inline">EDI Comparison</span>
+            <span className="sm:hidden">EDI</span>
           </button>
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-3 sm:py-4">
           {/* INFO TAB */}
           {activeTab === 'info' && (
             <div className="space-y-6">
               {/* Invoice Info */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h4 className="font-medium text-gray-900 mb-2">Invoice Information</h4>
-                <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="bg-gray-50 rounded-lg p-3 sm:p-4">
+                <h4 className="text-sm sm:text-base font-medium text-gray-900 mb-2">Invoice Information</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 text-xs sm:text-sm">
                   <div>
                     <span className="text-gray-500">Tracking ID:</span>
                     <p className="font-mono text-xs">{invoice.tracking_id}</p>
@@ -218,8 +220,8 @@ export default function FailedInvoiceModal({
               </div>
 
               {/* Processing Steps */}
-              <div className="space-y-4">
-                <h4 className="font-medium text-gray-900">Processing Steps</h4>
+              <div className="space-y-3 sm:space-y-4">
+                <h4 className="text-sm sm:text-base font-medium text-gray-900">Processing Steps</h4>
                 
                 {/* XML Validation */}
                 <div className="border rounded-lg p-4">
@@ -423,7 +425,7 @@ export default function FailedInvoiceModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-200">
           <button
             onClick={onClose}
             className="w-full px-4 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-200"

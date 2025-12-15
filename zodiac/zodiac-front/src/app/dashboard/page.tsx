@@ -14,9 +14,7 @@ export default function DashboardPage() {
         />
       }
     >
-      <div className="px-4 py-8">
-        <DashboardLanding />
-      </div>
+      <DashboardLanding />
     </MainLayout>
   );
 }

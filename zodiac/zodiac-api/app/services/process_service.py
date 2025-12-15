@@ -471,7 +471,6 @@ async def process_invoice_internal(
                             try:
                                 if isinstance(xml_path, dict):
                                     # Blob storage - upload corrected XML
-                                    from ..services.file_service import save_file_to_storage
                                     xml_path = await save_file_to_storage(
                                         corrected_xml.encode('utf-8'),
                                         f"corrected_{file.filename}",
@@ -1416,6 +1415,8 @@ async def process_invoice_internal(
                 ))
         
         # Step 4B: XML Embed Workflow (if needed)
+        original_xml_path_for_third_party = xml_path  # Save original XML path for third-party API
+        
         if processing_path.needs_embed:
             step4b_start = time.time()
             logger.info(f"📎 ===== STEP 4B: XML EMBED WORKFLOW ({processing_path.embed_type}) =====")
@@ -1440,12 +1441,15 @@ async def process_invoice_internal(
                 
                 if embed_success:
                     logger.info(f"✅ Embed workflow completed successfully")
-                    # Update xml_path to point to modified XML with embedded content
+                    logger.info(f"📝 Original XML (for third party): {original_xml_path_for_third_party}")
+                    logger.info(f"📝 Modified XML (with embedded {processing_path.embed_type}): {modified_xml_path}")
+                    
+                    # Update xml_path to point to modified XML with embedded content (for database storage)
                     xml_path = modified_xml_path
                     # IMPORTANT: Also update x12_path so blob_edi_path gets set correctly
-                    # For XML_EMBED formats, the final file to send to API is the modified XML
+                    # For XML_EMBED formats, the final file to store in DB is the modified XML
                     x12_path = modified_xml_path
-                    logger.info(f"📝 Updated x12_path to modified XML for blob_edi_path: {x12_path}")
+                    logger.info(f"📝 Database will store modified XML with embedded content")
                     add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                         step_name=f"{processing_path.embed_type} Embed",
                         step_number=5,
@@ -1486,13 +1490,18 @@ async def process_invoice_internal(
             
             third_party_errors = []
             try:
+                # IMPORTANT: For XML_EMBED formats, send the ORIGINAL XML (not the modified one with embedded content)
+                # The embedded version is only for storage and retrieval, the third-party expects clean UBL XML
+                xml_path_to_send = original_xml_path_for_third_party if processing_path.needs_embed else xml_path
+                logger.info(f"📤 Sending from: {xml_path_to_send} (original: {not processing_path.needs_embed})")
+                
                 # Read XML content to send
-                if USE_BLOB_STORAGE and isinstance(xml_path, dict):
-                    blob_xml_path_temp = xml_path.get('url')
+                if USE_BLOB_STORAGE and isinstance(xml_path_to_send, dict):
+                    blob_xml_path_temp = xml_path_to_send.get('url')
                     xml_content_bytes = await read_file_from_storage(None, blob_xml_path_temp, None)
                     xml_content_to_send = xml_content_bytes.decode('utf-8')
                 else:
-                    xml_content_to_send = Path(xml_path).read_text(encoding='utf-8')
+                    xml_content_to_send = Path(xml_path_to_send).read_text(encoding='utf-8')
                     
                 logger.info(f"📊 XML content loaded: {len(xml_content_to_send)} bytes")
                 
