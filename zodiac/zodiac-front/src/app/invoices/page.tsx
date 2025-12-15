@@ -14,9 +14,7 @@ export default function InvoicesPage() {
         />
       }
     >
-      <div className="px-4 py-8">
-        <InvoicesLanding />
-      </div>
+      <InvoicesLanding />
     </MainLayout>
   );
 }

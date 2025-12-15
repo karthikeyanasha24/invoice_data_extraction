@@ -22,27 +22,27 @@ export default function RestoreConfirmationModal({
   if (!isOpen || !invoice) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div className="px-6 py-4 border-b border-gray-200">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2 sm:space-x-3">
               <div className="flex-shrink-0">
-                <CheckCircle className="h-6 w-6 text-green-600" />
+                <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6 text-green-600" />
               </div>
-              <h3 className="text-lg font-medium text-gray-900">Restore Invoice</h3>
+              <h3 className="text-base sm:text-lg font-medium text-gray-900">Restore Invoice</h3>
             </div>
             <button
               onClick={onClose}
               disabled={isRestoring}
               className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
             >
-              <X className="h-6 w-6" />
+              <X className="h-5 w-5 sm:h-6 sm:w-6" />
             </button>
           </div>
         </div>
 
-        <div className="px-6 py-4">
+        <div className="px-4 sm:px-6 py-3 sm:py-4">
           <div className="mb-4">
             <p className="text-sm text-gray-600 mb-3">
               Are you sure you want to restore this invoice? It will be moved back to your active invoices list.
@@ -69,13 +69,13 @@ export default function RestoreConfirmationModal({
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-200">
-          <div className="flex items-center justify-end space-x-3">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-200">
+          <div className="flex flex-col-reverse sm:flex-row items-center justify-end space-y-reverse space-y-2 sm:space-y-0 sm:space-x-3 gap-2 sm:gap-0">
             <button
               onClick={onClose}
               disabled={isRestoring}
               className={cn(
-                "px-4 py-2 text-sm font-medium rounded-md transition-colors",
+                "w-full sm:w-auto px-4 py-2 text-sm font-medium rounded-md transition-colors",
                 isRestoring 
                   ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
                   : "bg-gray-100 text-gray-700 hover:bg-gray-200"
@@ -87,7 +87,7 @@ export default function RestoreConfirmationModal({
               onClick={onConfirm}
               disabled={isRestoring}
               className={cn(
-                "flex items-center space-x-2 px-4 py-2 text-sm font-medium rounded-md transition-colors",
+                "w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium rounded-md transition-colors",
                 isRestoring
                   ? "bg-green-300 text-green-100 cursor-not-allowed"
                   : "bg-green-600 text-white hover:bg-green-700"
