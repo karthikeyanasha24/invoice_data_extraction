@@ -791,16 +791,6 @@ export default function CustomerManagementPanel() {
                     </option>
                   ))}
                 </select>
-                {FORMAT_INFO[formData.format] && (
-                  <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <p className="text-sm text-blue-900 font-medium mb-1">
-                      XML → {FORMAT_INFO[formData.format].targetFormat}
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      {FORMAT_INFO[formData.format].description}
-                    </p>
-                  </div>
-                )}
               </div>
 
               <div>
