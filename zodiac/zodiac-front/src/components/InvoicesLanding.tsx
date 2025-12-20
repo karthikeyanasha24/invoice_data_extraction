@@ -271,16 +271,31 @@ export default function InvoicesLanding() {
         throw new Error(`Download failed: ${response.statusText}`);
       }
       
-      // Download the file
+      // Download the file (iOS/mobile-friendly approach)
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      
+      // Check if iOS/mobile
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      
+      if (isIOS || isMobile) {
+        // For iOS/mobile: Open in new tab
+        window.open(url, '_blank');
+        setTimeout(() => window.URL.revokeObjectURL(url), 100);
+      } else {
+        // For desktop: Traditional download
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(url);
+        }, 100);
+      }
       
       console.log(`✅ Downloaded: ${filename} (${blob.size} bytes)`);
     } catch (error) {

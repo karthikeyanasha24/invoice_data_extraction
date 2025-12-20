@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" 
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" 
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+    <cbc:ID>TEST-STATUS-001</cbc:ID>
+    <cbc:IssueDate>2024-12-20</cbc:IssueDate>
+    <cbc:DueDate>2025-01-20</cbc:DueDate>
+    <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
+    <cbc:DocumentCurrencyCode>USD</cbc:DocumentCurrencyCode>
+    
+    <cac:AccountingSupplierParty>
+        <cac:Party>
+            <cbc:EndpointID schemeID="0088">5790000435975</cbc:EndpointID>
+            <cac:PartyName>
+                <cbc:Name>Test Supplier</cbc:Name>
+            </cac:PartyName>
+        </cac:Party>
+    </cac:AccountingSupplierParty>
+    
+    <cac:AccountingCustomerParty>
+        <cac:Party>
+            <cbc:EndpointID schemeID="0088">Test_pdf</cbc:EndpointID>
+            <cac:PartyIdentification>
+                <cbc:ID>Test_pdf</cbc:ID>
+            </cac:PartyIdentification>
+            <cac:PartyName>
+                <cbc:Name>Test Customer</cbc:Name>
+            </cac:PartyName>
+        </cac:Party>
+    </cac:AccountingCustomerParty>
+    
+    <cac:LegalMonetaryTotal>
+        <cbc:PayableAmount currencyID="USD">1000.00</cbc:PayableAmount>
+    </cac:LegalMonetaryTotal>
+    
+    <cac:InvoiceLine>
+        <cbc:ID>1</cbc:ID>
+        <cbc:InvoicedQuantity unitCode="EA">10</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="USD">1000.00</cbc:LineExtensionAmount>
+        <cac:Item>
+            <cbc:Name>Test Item</cbc:Name>
+        </cac:Item>
+        <cac:Price>
+            <cbc:PriceAmount currencyID="USD">100.00</cbc:PriceAmount>
+        </cac:Price>
+    </cac:InvoiceLine>
+</Invoice>
+
