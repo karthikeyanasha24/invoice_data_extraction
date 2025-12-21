@@ -1233,4 +1233,35 @@ export const customerApi = {
     },
 };
 
+// Dashboard API
+export const dashboardApi = {
+    // Get dashboard statistics (overview, timeline, distributions)
+    getStatistics: async (days: number = 30) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/statistics?days=${days}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch dashboard statistics:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load dashboard statistics.');
+        }
+    },
+
+    // Get AI-powered insights for failed invoices
+    getAIInsights: async () => {
+        try {
+            const response = await api.get('/api/v1/dashboard/ai-insights');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch AI insights:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load AI insights.');
+        }
+    },
+};
+
 export default api;

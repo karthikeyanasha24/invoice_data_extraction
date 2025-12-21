@@ -590,8 +590,8 @@ export default function InvoicesLanding() {
                     </td>
                     <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       {showRecycleBin
-                        ? (invoice.deleted_at ? new Date(invoice.deleted_at).toLocaleDateString() : 'N/A')
-                        : (invoice.uploaded_at ? new Date(invoice.uploaded_at).toLocaleDateString() : 'N/A')
+                        ? (invoice.deleted_at ? new Date(invoice.deleted_at).toLocaleString() : 'N/A')
+                        : (invoice.uploaded_at ? new Date(invoice.uploaded_at).toLocaleString() : 'N/A')
                       }
                     </td>
                     <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
