@@ -612,6 +612,205 @@ async def get_invoice_counts(
 
 
 @router.get("/test")
+async def get_dashboard_statistics(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    days: int = 30  # Default to last 30 days
+):
+    """Get comprehensive dashboard statistics including timeline, customer distribution, and format breakdown"""
+    try:
+        logger.info(f"📊 Fetching dashboard statistics for user {current_user.id} (last {days} days)")
+        
+        # Calculate date range
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=days)
+        
+        # 1. Overall Statistics
+        successful_count = db.query(SuccessModel).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None)
+        ).count()
+        
+        failed_count = db.query(FailedModel).filter(
+            FailedModel.user_id == current_user.id,
+            FailedModel.deleted_at.is_(None)
+        ).count()
+        
+        total_count = successful_count + failed_count
+        success_rate = (successful_count / total_count * 100) if total_count > 0 else 0
+        
+        # 2. Timeline Data (invoices per day for the last N days)
+        # Successful invoices timeline
+        success_timeline = db.query(
+            cast(SuccessModel.uploaded_at, Date).label('date'),
+            func.count(SuccessModel.id).label('count')
+        ).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None),
+            SuccessModel.uploaded_at >= start_date
+        ).group_by(cast(SuccessModel.uploaded_at, Date)).all()
+        
+        # Failed invoices timeline
+        failed_timeline = db.query(
+            cast(FailedModel.uploaded_at, Date).label('date'),
+            func.count(FailedModel.id).label('count')
+        ).filter(
+            FailedModel.user_id == current_user.id,
+            FailedModel.deleted_at.is_(None),
+            FailedModel.uploaded_at >= start_date
+        ).group_by(cast(FailedModel.uploaded_at, Date)).all()
+        
+        # Merge timelines
+        timeline_dict = defaultdict(lambda: {"date": None, "successful": 0, "failed": 0, "total": 0})
+        
+        for item in success_timeline:
+            date_str = item.date.strftime('%Y-%m-%d')
+            timeline_dict[date_str]["date"] = date_str
+            timeline_dict[date_str]["successful"] = item.count
+            timeline_dict[date_str]["total"] += item.count
+        
+        for item in failed_timeline:
+            date_str = item.date.strftime('%Y-%m-%d')
+            timeline_dict[date_str]["date"] = date_str
+            timeline_dict[date_str]["failed"] = item.count
+            timeline_dict[date_str]["total"] += item.count
+        
+        # Convert to sorted list
+        timeline_data = sorted(timeline_dict.values(), key=lambda x: x["date"])
+        
+        # 3. Format Distribution (from successful invoices)
+        format_distribution_query = db.query(
+            SuccessModel.target_file_format,
+            func.count(SuccessModel.id).label('count')
+        ).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None),
+            SuccessModel.target_file_format.isnot(None)
+        ).group_by(SuccessModel.target_file_format).all()
+        
+        format_distribution = [
+            {"format": item.target_file_format or "Unknown", "count": item.count}
+            for item in format_distribution_query
+        ]
+        
+        # 4. Top Customers (extract from processing_steps if available)
+        # This is a simplified version - you may need to adjust based on how customer info is stored
+        success_invoices = db.query(SuccessModel).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None)
+        ).limit(1000).all()  # Limit for performance
+        
+        customer_stats = defaultdict(lambda: {"successful": 0, "failed": 0})
+        
+        # Extract customer from file paths or processing steps
+        for invoice in success_invoices:
+            # Try to extract customer ID from processing steps or use a placeholder
+            customer_id = "Unknown"
+            if invoice.processing_steps:
+                # Look for customer info in processing steps
+                for step in invoice.processing_steps:
+                    if isinstance(step, dict) and 'message' in step:
+                        # You might have customer info in messages
+                        pass
+            
+            # For now, use a generic approach - you can enhance this
+            # Extract from xml_path if it contains customer info
+            if invoice.xml_path:
+                # Example: uploads/tracking_id_customer.xml
+                parts = invoice.xml_path.split('/')
+                if len(parts) > 1:
+                    filename = parts[-1]
+                    # Try to extract customer from filename
+                    customer_id = filename.split('_')[0] if '_' in filename else "Unknown"
+            
+            customer_stats[customer_id]["successful"] += 1
+        
+        # Convert to list and get top 10
+        customer_distribution = [
+            {"customer": customer, "successful": stats["successful"], "failed": stats["failed"], "total": stats["successful"] + stats["failed"]}
+            for customer, stats in customer_stats.items()
+        ]
+        customer_distribution = sorted(customer_distribution, key=lambda x: x["total"], reverse=True)[:10]
+        
+        # 5. Request Type Distribution (Web vs API)
+        request_type_query = db.query(
+            SuccessModel.request_type,
+            func.count(SuccessModel.id).label('count')
+        ).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None)
+        ).group_by(SuccessModel.request_type).all()
+        
+        request_type_distribution = [
+            {"type": item.request_type or "web", "count": item.count}
+            for item in request_type_query
+        ]
+        
+        # 6. Recent Activity (last 10 invoices)
+        recent_success = db.query(SuccessModel).filter(
+            SuccessModel.user_id == current_user.id,
+            SuccessModel.deleted_at.is_(None)
+        ).order_by(SuccessModel.uploaded_at.desc()).limit(5).all()
+        
+        recent_failed = db.query(FailedModel).filter(
+            FailedModel.user_id == current_user.id,
+            FailedModel.deleted_at.is_(None)
+        ).order_by(FailedModel.uploaded_at.desc()).limit(5).all()
+        
+        recent_activity = []
+        for inv in recent_success:
+            recent_activity.append({
+                "id": inv.id,
+                "tracking_id": str(inv.tracking_id),
+                "status": "successful",
+                "format": inv.target_file_format,
+                "uploaded_at": inv.uploaded_at.isoformat() if inv.uploaded_at else None,
+                "request_type": inv.request_type
+            })
+        
+        for inv in recent_failed:
+            recent_activity.append({
+                "id": inv.id,
+                "tracking_id": str(inv.tracking_id),
+                "status": "failed",
+                "format": inv.target_file_format,
+                "uploaded_at": inv.uploaded_at.isoformat() if inv.uploaded_at else None,
+                "request_type": inv.request_type
+            })
+        
+        # Sort by date
+        recent_activity = sorted(recent_activity, key=lambda x: x["uploaded_at"] or "", reverse=True)[:10]
+        
+        logger.info(f"✅ Dashboard statistics calculated successfully")
+        
+        return {
+            "overview": {
+                "total": total_count,
+                "successful": successful_count,
+                "failed": failed_count,
+                "success_rate": round(success_rate, 2)
+            },
+            "timeline": timeline_data,
+            "format_distribution": format_distribution,
+            "customer_distribution": customer_distribution,
+            "request_type_distribution": request_type_distribution,
+            "recent_activity": recent_activity,
+            "date_range": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "days": days
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get dashboard statistics: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get dashboard statistics: {str(e)}"
+        )
+
+
+@router.get("/test")
 def test_endpoint(
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)

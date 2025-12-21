@@ -251,3 +251,74 @@ export interface FileEditorResponse {
   content_length: number;
   line_count: number;
 }
+
+// Dashboard Types
+export interface DashboardOverview {
+  total: number;
+  successful: number;
+  failed: number;
+  success_rate: number;
+}
+
+export interface TimelineDataPoint {
+  date: string;
+  successful: number;
+  failed: number;
+  total: number;
+}
+
+export interface FormatDistribution {
+  format: string;
+  count: number;
+}
+
+export interface CustomerDistribution {
+  customer: string;
+  successful: number;
+  failed: number;
+  total: number;
+}
+
+export interface RequestTypeDistribution {
+  type: string;
+  count: number;
+}
+
+export interface RecentActivity {
+  id: number;
+  tracking_id: string;
+  status: string;
+  format: string;
+  uploaded_at: string;
+  request_type: string;
+}
+
+export interface DashboardStatistics {
+  overview: DashboardOverview;
+  timeline: TimelineDataPoint[];
+  format_distribution: FormatDistribution[];
+  customer_distribution: CustomerDistribution[];
+  request_type_distribution: RequestTypeDistribution[];
+  recent_activity: RecentActivity[];
+  date_range: {
+    start: string;
+    end: string;
+    days: number;
+  };
+}
+
+export interface ErrorPattern {
+  code: string;
+  count: number;
+  percentage: number;
+}
+
+export interface AIInsights {
+  summary: string;
+  insights: string[];
+  recommendations: string[];
+  root_causes?: string[];
+  error_patterns: ErrorPattern[];
+  total_failed: number;
+  analyzed_at: string;
+}

@@ -2,7 +2,8 @@
 
 import MainLayout from '@/components/MainLayout';
 import TopSection from '@/components/TopSection';
-import DashboardLanding from '@/components/DashboardLanding';
+import DashboardNew from '@/components/DashboardNew';
+import { BarChart3 } from 'lucide-react';
 
 export default function DashboardPage() {
   return (
@@ -14,7 +15,7 @@ export default function DashboardPage() {
         />
       }
     >
-      <DashboardLanding />
+      <DashboardNew />
     </MainLayout>
   );
 }
