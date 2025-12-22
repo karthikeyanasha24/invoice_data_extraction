@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { dashboardApi } from '@/lib/api';
 import { DashboardStatistics, AIInsights } from '@/types';
+import DashboardTabs from './DashboardTabs';
+import DashboardOperations from './DashboardOperations';
 import {
   TrendingUp,
   TrendingDown,
@@ -46,6 +48,7 @@ const CHART_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#0
 
 export default function DashboardNew() {
   const { user, handleAuthError } = useAuth();
+  const [activeTab, setActiveTab] = useState('overview');
   const [statistics, setStatistics] = useState<DashboardStatistics | null>(null);
   const [aiInsights, setAIInsights] = useState<AIInsights | null>(null);
   const [loading, setLoading] = useState(true);
@@ -120,12 +123,19 @@ export default function DashboardNew() {
     );
   }
 
-  const { overview, timeline, format_distribution, customer_distribution, request_type_distribution } = statistics;
+  const { overview, timeline, format_distribution, request_type_distribution } = statistics;
 
   return (
-    <div className="space-y-6">
-        {/* Time Range Selector and Refresh */}
-        <div className="flex items-center justify-end gap-3">
+    <div className="space-y-0">
+      {/* Tabs Navigation */}
+      <DashboardTabs activeTab={activeTab} onTabChange={setActiveTab} />
+      
+      {/* Tab Content */}
+      <div className="bg-gray-50">
+        {activeTab === 'overview' && (
+          <div className="space-y-6 p-6">
+            {/* Time Range Selector and Refresh */}
+            <div className="flex items-center justify-end gap-3">
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(Number(e.target.value))}
@@ -420,6 +430,33 @@ export default function DashboardNew() {
               </div>
             )}
         </div>
+          </div>
+        )}
+
+        {activeTab === 'operations' && (
+          <DashboardOperations />
+        )}
+
+        {activeTab === 'business' && (
+          <div className="p-6 text-center">
+            <div className="bg-white rounded-lg shadow p-12">
+              <TrendingUp className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">Business Intelligence</h3>
+              <p className="text-gray-600">Revenue, cost analysis, and business metrics coming soon.</p>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'analytics' && (
+          <div className="p-6 text-center">
+            <div className="bg-white rounded-lg shadow p-12">
+              <Activity className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">Advanced Analytics</h3>
+              <p className="text-gray-600">Product, industry, and trend analysis coming soon.</p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
