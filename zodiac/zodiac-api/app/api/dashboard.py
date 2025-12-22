@@ -110,20 +110,76 @@ async def get_dashboard_statistics(
         # ============================================================
         # 3. FORMAT DISTRIBUTION (Successful invoices only)
         # ============================================================
-        # Query successful invoices within date range
-        success_format_query = db.query(
-            SuccessModel.target_file_format,
-            func.count(SuccessModel.id).label('count')
-        ).filter(
+        # Get all successful invoices within date range to extract actual formats
+        success_invoices_for_format = db.query(SuccessModel).filter(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.is_(None),
-            SuccessModel.uploaded_at >= start_date  # Apply date range filter
-        ).group_by(SuccessModel.target_file_format).all()
+            SuccessModel.uploaded_at >= start_date
+        ).all()
         
-        # Convert to list format
+        format_counts = defaultdict(int)
+        
+        for invoice in success_invoices_for_format:
+            format_name = None
+            
+            # First, try to get from target_file_format if available
+            if invoice.target_file_format:
+                format_name = invoice.target_file_format
+            else:
+                # Extract from EDI file path/extension
+                edi_path = invoice.blob_edi_path or invoice.edi_path
+                
+                if edi_path:
+                    # Determine format from file extension
+                    if edi_path.endswith('.x12') or edi_path.endswith('.810'):
+                        format_name = 'X12'
+                    elif edi_path.endswith('.edi') or edi_path.endswith('.edifact'):
+                        format_name = 'EDIFACT'
+                    elif edi_path.endswith('.xml'):
+                        # Check if it's an embedded format
+                        xml_path = invoice.blob_xml_path or invoice.xml_path
+                        if xml_path:
+                            # Try to detect embedded format from filename
+                            if 'embed' in xml_path.lower():
+                                format_name = 'XML_EMBED'
+                            else:
+                                format_name = 'XML'
+                        else:
+                            format_name = 'XML'
+                    else:
+                        # Check processing steps to determine format
+                        if invoice.processing_steps:
+                            try:
+                                steps = invoice.processing_steps
+                                for step in steps:
+                                    if isinstance(step, dict):
+                                        # Look for format hints in step messages
+                                        message = step.get('message', '').lower()
+                                        if 'x12' in message or '810' in message:
+                                            format_name = 'X12'
+                                            break
+                                        elif 'edifact' in message:
+                                            format_name = 'EDIFACT'
+                                            break
+                                        elif 'xml' in message and 'embed' in message:
+                                            format_name = 'XML_EMBED'
+                                            break
+                            except:
+                                pass
+            
+            # If still no format found, check if it has an EDI path (likely X12) or XML only
+            if not format_name:
+                edi_path = invoice.blob_edi_path or invoice.edi_path
+                if edi_path:
+                    format_name = 'X12'  # Most common EDI format
+                else:
+                    format_name = 'XML'  # Pure XML without conversion
+            
+            format_counts[format_name] += 1
+        
         format_distribution = [
-            {"format": item.target_file_format or "Unknown", "count": item.count}
-            for item in success_format_query
+            {"format": format_name, "count": count}
+            for format_name, count in format_counts.items()
         ]
         
         # Sort by count descending
