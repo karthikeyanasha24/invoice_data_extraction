@@ -108,21 +108,26 @@ async def get_dashboard_statistics(
         timeline_data = sorted(timeline_dict.values(), key=lambda x: x["date"])
         
         # ============================================================
-        # 3. FORMAT DISTRIBUTION
+        # 3. FORMAT DISTRIBUTION (Successful invoices only)
         # ============================================================
-        format_distribution_query = db.query(
+        # Query successful invoices within date range
+        success_format_query = db.query(
             SuccessModel.target_file_format,
             func.count(SuccessModel.id).label('count')
         ).filter(
             SuccessModel.user_id == current_user.id,
             SuccessModel.deleted_at.is_(None),
-            SuccessModel.target_file_format.isnot(None)
+            SuccessModel.uploaded_at >= start_date  # Apply date range filter
         ).group_by(SuccessModel.target_file_format).all()
         
+        # Convert to list format
         format_distribution = [
             {"format": item.target_file_format or "Unknown", "count": item.count}
-            for item in format_distribution_query
+            for item in success_format_query
         ]
+        
+        # Sort by count descending
+        format_distribution = sorted(format_distribution, key=lambda x: x["count"], reverse=True)
         
         # ============================================================
         # 4. CUSTOMER DISTRIBUTION (Top 10)
