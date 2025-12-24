@@ -964,9 +964,87 @@ async def get_business_analytics(
         
         if total_bi_records == 0:
             logger.warning(f"⚠️ No business intelligence data found for user {current_user.id}")
+            
+            # Check if user has any invoices at all
+            total_invoices = (
+                db.query(func.count(SuccessModel.id))
+                .filter(SuccessModel.user_id == current_user.id)
+                .scalar() or 0
+            ) + (
+                db.query(func.count(FailedModel.id))
+                .filter(FailedModel.user_id == current_user.id)
+                .scalar() or 0
+            )
+            
+            if total_invoices > 0:
+                logger.info(f"🔄 Auto-triggering backfill for {total_invoices} invoices")
+                # Automatically trigger backfill in background
+                try:
+                    from ..services.bi_database_service import save_business_intelligence_data
+                    
+                    # Process a limited batch to avoid timeout (first 50 invoices)
+                    success_invoices = db.query(SuccessModel).filter(
+                        SuccessModel.user_id == current_user.id
+                    ).limit(50).all()
+                    
+                    failed_invoices = db.query(FailedModel).filter(
+                        FailedModel.user_id == current_user.id
+                    ).limit(50).all()
+                    
+                    processed = 0
+                    for invoice in success_invoices:
+                        try:
+                            xml_content = None
+                            if invoice.edi_file_path:
+                                xml_content = await read_file_from_storage(invoice.edi_file_path)
+                            
+                            processing_steps = invoice.processing_steps if hasattr(invoice, 'processing_steps') else []
+                            await save_business_intelligence_data(db, invoice, current_user.id, xml_content, processing_steps)
+                            processed += 1
+                        except Exception as e:
+                            logger.error(f"Error processing invoice {invoice.id}: {e}")
+                            continue
+                    
+                    for invoice in failed_invoices:
+                        try:
+                            xml_content = None
+                            if invoice.edi_file_path:
+                                xml_content = await read_file_from_storage(invoice.edi_file_path)
+                            
+                            processing_steps = invoice.processing_steps if hasattr(invoice, 'processing_steps') else []
+                            await save_business_intelligence_data(db, invoice, current_user.id, xml_content, processing_steps)
+                            processed += 1
+                        except Exception as e:
+                            logger.error(f"Error processing invoice {invoice.id}: {e}")
+                            continue
+                    
+                    logger.info(f"✅ Auto-backfill processed {processed} invoices")
+                    
+                    return {
+                        "message": f"Started processing {total_invoices} invoices. Processed {processed} so far. Refresh in a moment to see data.",
+                        "needs_backfill": True,
+                        "auto_backfill_triggered": True,
+                        "processed_count": processed,
+                        "total_invoices": total_invoices,
+                        "lifecycle_funnel": {
+                            'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
+                            'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
+                            'CONVERTED': {'total': 0, 'success': 0, 'failed': 0},
+                            'SENT': {'total': 0, 'success': 0, 'failed': 0},
+                            'ACKNOWLEDGED': {'total': 0, 'success': 0, 'failed': 0},
+                        },
+                        "customer_analysis": {"top_customers": [], "total_customers": 0},
+                        "country_distribution": [],
+                        "industry_breakdown": [],
+                        "product_analysis": {"top_products": [], "total_products": 0},
+                        "supplier_analysis": {"top_suppliers": []}
+                    }
+                except Exception as e:
+                    logger.error(f"❌ Auto-backfill failed: {e}")
+            
             # Return empty structure with helpful message
             return {
-                "message": "No business intelligence data available. Please run the backfill script or upload new invoices.",
+                "message": "No business intelligence data available. Please upload invoices to see analytics.",
                 "needs_backfill": True,
                 "lifecycle_funnel": {
                     'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
