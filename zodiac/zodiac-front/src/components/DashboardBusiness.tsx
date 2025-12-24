@@ -27,7 +27,7 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
-import { dashboardApi } from '@/lib/api';
+import { dashboardApi, adminApi } from '@/lib/api';
 import LoadingSpinner from './LoadingSpinner';
 import type { BusinessAnalytics } from '@/types';
 

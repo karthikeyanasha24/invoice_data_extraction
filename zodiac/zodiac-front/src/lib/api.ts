@@ -1320,4 +1320,33 @@ export const dashboardApi = {
     },
 };
 
+// Admin API
+export const adminApi = {
+    runBackfill: async () => {
+        try {
+            const response = await api.post('/api/v1/admin/backfill-business-intelligence');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to run backfill:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to start backfill process.');
+        }
+    },
+    
+    getBackfillStatus: async () => {
+        try {
+            const response = await api.get('/api/v1/admin/backfill-status');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get backfill status:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to get backfill status.');
+        }
+    },
+};
+
 export default api;
