@@ -980,67 +980,169 @@ async def get_business_analytics(
                 logger.info(f"🔄 Auto-triggering backfill for {total_invoices} invoices")
                 # Automatically trigger backfill in background
                 try:
-                    from ..services.bi_database_service import save_business_intelligence_data
+                    from ..services.business_intelligence_service import BusinessIntelligenceExtractor
+                    from ..models.invoice_business_data import InvoiceBusinessData
+                    import uuid
                     
-                    # Process a limited batch to avoid timeout (first 50 invoices)
+                    bi_extractor = BusinessIntelligenceExtractor()
+                    
+                    # Process a limited batch to avoid timeout (first 25 invoices)
                     success_invoices = db.query(SuccessModel).filter(
                         SuccessModel.user_id == current_user.id
-                    ).limit(50).all()
+                    ).limit(25).all()
                     
                     failed_invoices = db.query(FailedModel).filter(
                         FailedModel.user_id == current_user.id
-                    ).limit(50).all()
+                    ).limit(25).all()
                     
                     processed = 0
+                    errors = []
+                    
+                    # Process successful invoices
                     for invoice in success_invoices:
                         try:
                             xml_content = None
                             if invoice.edi_file_path:
-                                xml_content = await read_file_from_storage(invoice.edi_file_path)
+                                try:
+                                    xml_content = await read_file_from_storage(invoice.edi_file_path)
+                                except Exception as read_err:
+                                    logger.warning(f"Could not read file for invoice {invoice.id}: {read_err}")
                             
-                            processing_steps = invoice.processing_steps if hasattr(invoice, 'processing_steps') else []
-                            await save_business_intelligence_data(db, invoice, current_user.id, xml_content, processing_steps)
+                            # Extract BI data
+                            if xml_content:
+                                bi_data = bi_extractor.extract_from_xml(xml_content)
+                            else:
+                                bi_data = {}
+                            
+                            # Determine lifecycle stage
+                            current_stage = "SENT"
+                            stage_status = "SUCCESS"
+                            
+                            # Create BI record
+                            bi_record = InvoiceBusinessData(
+                                tracking_id=invoice.tracking_id if hasattr(invoice, 'tracking_id') else uuid.uuid4(),
+                                user_id=current_user.id,
+                                success_invoice_id=invoice.id,
+                                failed_invoice_id=None,
+                                customer_id=bi_data.get('customer', {}).get('id'),
+                                customer_name=bi_data.get('customer', {}).get('name'),
+                                customer_country=bi_data.get('customer', {}).get('country'),
+                                supplier_id=bi_data.get('supplier', {}).get('id'),
+                                supplier_name=bi_data.get('supplier', {}).get('name'),
+                                products=bi_data.get('products', []),
+                                total_products_count=len(bi_data.get('products', [])),
+                                total_amount=bi_data.get('financial', {}).get('total_amount'),
+                                tax_amount=bi_data.get('financial', {}).get('tax_amount'),
+                                currency=bi_data.get('financial', {}).get('currency'),
+                                invoice_date=bi_data.get('financial', {}).get('invoice_date'),
+                                industry=bi_data.get('industry', {}).get('name'),
+                                industry_confidence=bi_data.get('industry', {}).get('confidence'),
+                                current_stage=current_stage,
+                                stage_status=stage_status,
+                                source_file_format=invoice.file_format if hasattr(invoice, 'file_format') else None,
+                                target_file_format=invoice.target_file_format if hasattr(invoice, 'target_file_format') else None
+                            )
+                            
+                            db.add(bi_record)
+                            db.commit()
                             processed += 1
+                            
                         except Exception as e:
+                            db.rollback()
+                            error_msg = f"Invoice {invoice.id}: {str(e)}"
                             logger.error(f"Error processing invoice {invoice.id}: {e}")
+                            errors.append(error_msg)
                             continue
                     
+                    # Process failed invoices
                     for invoice in failed_invoices:
                         try:
                             xml_content = None
                             if invoice.edi_file_path:
-                                xml_content = await read_file_from_storage(invoice.edi_file_path)
+                                try:
+                                    xml_content = await read_file_from_storage(invoice.edi_file_path)
+                                except Exception as read_err:
+                                    logger.warning(f"Could not read file for invoice {invoice.id}: {read_err}")
                             
-                            processing_steps = invoice.processing_steps if hasattr(invoice, 'processing_steps') else []
-                            await save_business_intelligence_data(db, invoice, current_user.id, xml_content, processing_steps)
+                            # Extract BI data
+                            if xml_content:
+                                bi_data = bi_extractor.extract_from_xml(xml_content)
+                            else:
+                                bi_data = {}
+                            
+                            # Determine failure stage
+                            current_stage = "VALIDATED"
+                            stage_status = "FAILED"
+                            failed_at_stage = "VALIDATED"
+                            
+                            # Create BI record
+                            bi_record = InvoiceBusinessData(
+                                tracking_id=invoice.tracking_id if hasattr(invoice, 'tracking_id') else uuid.uuid4(),
+                                user_id=current_user.id,
+                                success_invoice_id=None,
+                                failed_invoice_id=invoice.id,
+                                customer_id=bi_data.get('customer', {}).get('id'),
+                                customer_name=bi_data.get('customer', {}).get('name'),
+                                customer_country=bi_data.get('customer', {}).get('country'),
+                                supplier_id=bi_data.get('supplier', {}).get('id'),
+                                supplier_name=bi_data.get('supplier', {}).get('name'),
+                                products=bi_data.get('products', []),
+                                total_products_count=len(bi_data.get('products', [])),
+                                total_amount=bi_data.get('financial', {}).get('total_amount'),
+                                tax_amount=bi_data.get('financial', {}).get('tax_amount'),
+                                currency=bi_data.get('financial', {}).get('currency'),
+                                invoice_date=bi_data.get('financial', {}).get('invoice_date'),
+                                industry=bi_data.get('industry', {}).get('name'),
+                                industry_confidence=bi_data.get('industry', {}).get('confidence'),
+                                current_stage=current_stage,
+                                stage_status=stage_status,
+                                failed_at_stage=failed_at_stage,
+                                failure_reason=invoice.error_message if hasattr(invoice, 'error_message') else None,
+                                source_file_format=invoice.file_format if hasattr(invoice, 'file_format') else None,
+                                target_file_format=invoice.target_file_format if hasattr(invoice, 'target_file_format') else None
+                            )
+                            
+                            db.add(bi_record)
+                            db.commit()
                             processed += 1
+                            
                         except Exception as e:
+                            db.rollback()
+                            error_msg = f"Invoice {invoice.id}: {str(e)}"
                             logger.error(f"Error processing invoice {invoice.id}: {e}")
+                            errors.append(error_msg)
                             continue
                     
-                    logger.info(f"✅ Auto-backfill processed {processed} invoices")
+                    logger.info(f"✅ Auto-backfill processed {processed} invoices (errors: {len(errors)})")
                     
-                    return {
-                        "message": f"Started processing {total_invoices} invoices. Processed {processed} so far. Refresh in a moment to see data.",
-                        "needs_backfill": True,
-                        "auto_backfill_triggered": True,
-                        "processed_count": processed,
-                        "total_invoices": total_invoices,
-                        "lifecycle_funnel": {
-                            'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
-                            'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
-                            'CONVERTED': {'total': 0, 'success': 0, 'failed': 0},
-                            'SENT': {'total': 0, 'success': 0, 'failed': 0},
-                            'ACKNOWLEDGED': {'total': 0, 'success': 0, 'failed': 0},
-                        },
-                        "customer_analysis": {"top_customers": [], "total_customers": 0},
-                        "country_distribution": [],
-                        "industry_breakdown": [],
-                        "product_analysis": {"top_products": [], "total_products": 0},
-                        "supplier_analysis": {"top_suppliers": []}
-                    }
+                    if processed > 0:
+                        return {
+                            "message": f"Successfully processed {processed} of {total_invoices} invoices! Refresh to see your analytics.",
+                            "needs_backfill": False,  # Set to false so it shows data on next refresh
+                            "auto_backfill_triggered": True,
+                            "processed_count": processed,
+                            "total_invoices": total_invoices,
+                            "errors_count": len(errors),
+                            "lifecycle_funnel": {
+                                'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
+                                'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
+                                'CONVERTED': {'total': 0, 'success': 0, 'failed': 0},
+                                'SENT': {'total': 0, 'success': 0, 'failed': 0},
+                                'ACKNOWLEDGED': {'total': 0, 'success': 0, 'failed': 0},
+                            },
+                            "customer_analysis": {"top_customers": [], "total_customers": 0},
+                            "country_distribution": [],
+                            "industry_breakdown": [],
+                            "product_analysis": {"top_products": [], "total_products": 0},
+                            "supplier_analysis": {"top_suppliers": []}
+                        }
+                    else:
+                        logger.error(f"❌ No invoices processed. Errors: {errors[:5]}")
+                        
                 except Exception as e:
                     logger.error(f"❌ Auto-backfill failed: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
             
             # Return empty structure with helpful message
             return {
