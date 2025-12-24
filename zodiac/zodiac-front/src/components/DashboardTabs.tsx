@@ -28,13 +28,13 @@ const tabs: Tab[] = [
     id: 'business',
     label: 'Business',
     icon: <TrendingUp className="h-4 w-4" />,
-    description: 'Revenue and cost analysis (Coming Soon)'
+    description: 'Customer analysis and business intelligence'
   },
   {
     id: 'analytics',
-    label: 'Analytics',
+    label: 'Industry',
     icon: <Brain className="h-4 w-4" />,
-    description: 'Advanced insights and trends (Coming Soon)'
+    description: 'Product performance and industry intelligence'
   },
 ];
 

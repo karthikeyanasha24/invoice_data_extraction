@@ -21,6 +21,7 @@ from ..services.correction_cache_service import CorrectionCacheService
 from ..services.file_service import save_file_to_storage, read_file_from_storage
 from ..services.database import check_customer_table, extract_supplier_info_from_string
 from ..services.external_api_service import send_to_third_party_endpoint
+from ..services.bi_database_service import save_business_intelligence_data
 from ..api.api_key_auth import get_client_ip
 from ..utils.xml_validation import validate_xml,validate_edi_format
 from ..utils.xml_to_x12 import convert_xml_to_x12
@@ -822,8 +823,26 @@ async def process_invoice_internal(
                     try:
                         db.add(failed_invoice)
                         db.commit()
+                        db.refresh(failed_invoice)
                         logger.info(
                             f"💾 Successfully saved failed invoice to database for tracking ID {tracking_id}")
+                        
+                        # Extract and save business intelligence data
+                        try:
+                            await save_business_intelligence_data(
+                                db=db,
+                                tracking_id=tracking_id,
+                                user_id=current_user.id,
+                                xml_path=xml_path,
+                                processing_steps=processing_steps,
+                                external_status=None,
+                                request_type=request_type,
+                                target_format=customer_format,
+                                is_failed=True,
+                                failed_invoice_id=failed_invoice.id
+                            )
+                        except Exception as bi_err:
+                            logger.warning(f"⚠️ Failed to save BI data: {bi_err}")
                     except Exception as db_err:
                         db.rollback()
                         logger.error(f"❌ Failed to save failed invoice to database: {db_err}")
@@ -1721,9 +1740,27 @@ async def process_invoice_internal(
             try:
                 db.add(failed_invoice)
                 db.commit()
+                db.refresh(failed_invoice)
                 step6_duration = time.time() - step6_start
                 logger.warning(f"💾 Successfully saved failed invoice to database (took {step6_duration:.3f}s)")
                 logger.warning(f"⚠️ STEP 6 COMPLETED: Database save to FAILED table (took {step6_duration:.3f}s)")
+                
+                # Extract and save business intelligence data
+                try:
+                    await save_business_intelligence_data(
+                        db=db,
+                        tracking_id=tracking_id,
+                        user_id=current_user.id,
+                        xml_path=xml_path,
+                        processing_steps=processing_steps,
+                        external_status=None,
+                        request_type=request_type,
+                        target_format=format_type,
+                        is_failed=True,
+                        failed_invoice_id=failed_invoice.id
+                    )
+                except Exception as bi_err:
+                    logger.warning(f"⚠️ Failed to save BI data: {bi_err}")
                 
                 # Add Step 6: Database Save
                 step6_result = ProcessingStepResult(
@@ -1782,10 +1819,28 @@ async def process_invoice_internal(
             try:
                 db.add(success_invoice)
                 db.commit()
+                db.refresh(success_invoice)
 
                 step6_duration = time.time() - step6_start
                 logger.info(f"💾 Successfully saved invoice to database (took {step6_duration:.3f}s)")
                 logger.info(f"✅ STEP 6 COMPLETED: Database save to SUCCESS table (took {step6_duration:.3f}s)")
+                
+                # Extract and save business intelligence data
+                try:
+                    await save_business_intelligence_data(
+                        db=db,
+                        tracking_id=tracking_id,
+                        user_id=current_user.id,
+                        xml_path=xml_path,
+                        processing_steps=processing_steps,
+                        external_status=third_party_message if third_party_success else "failed",
+                        request_type=request_type,
+                        target_format=format_type,
+                        is_failed=False,
+                        success_invoice_id=success_invoice.id
+                    )
+                except Exception as bi_err:
+                    logger.warning(f"⚠️ Failed to save BI data: {bi_err}")
                 
                 # Add Step 6: Database Save
                 step6_result = ProcessingStepResult(

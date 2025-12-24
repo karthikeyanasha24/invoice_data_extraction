@@ -6,6 +6,8 @@ import { dashboardApi } from '@/lib/api';
 import { DashboardStatistics, AIInsights } from '@/types';
 import DashboardTabs from './DashboardTabs';
 import DashboardOperations from './DashboardOperations';
+import DashboardBusiness from './DashboardBusiness';
+import DashboardIndustry from './DashboardIndustry';
 import {
   TrendingUp,
   TrendingDown,
@@ -438,23 +440,11 @@ export default function DashboardNew() {
         )}
 
         {activeTab === 'business' && (
-          <div className="p-6 text-center">
-            <div className="bg-white rounded-lg shadow p-12">
-              <TrendingUp className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Business Intelligence</h3>
-              <p className="text-gray-600">Revenue, cost analysis, and business metrics coming soon.</p>
-            </div>
-          </div>
+          <DashboardBusiness />
         )}
 
         {activeTab === 'analytics' && (
-          <div className="p-6 text-center">
-            <div className="bg-white rounded-lg shadow p-12">
-              <Activity className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Advanced Analytics</h3>
-              <p className="text-gray-600">Product, industry, and trend analysis coming soon.</p>
-            </div>
-          </div>
+          <DashboardIndustry />
         )}
       </div>
     </div>
