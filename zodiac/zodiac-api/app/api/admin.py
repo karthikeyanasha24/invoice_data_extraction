@@ -3,6 +3,7 @@ Admin API endpoints for maintenance and setup operations
 """
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from datetime import datetime
 import logging
 import json
