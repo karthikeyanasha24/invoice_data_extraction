@@ -143,49 +143,60 @@ export default function DashboardBusiness() {
 
   // Check if backfill is needed
   if ((data as any).needs_backfill) {
+    const autoBackfillTriggered = (data as any).auto_backfill_triggered;
+    const processedCount = (data as any).processed_count || 0;
+    const totalInvoices = (data as any).total_invoices || 0;
+    
     return (
       <div className="space-y-6 p-6">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-8 text-center">
-          <div className="bg-yellow-100 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
-            <Building2 className="h-8 w-8 text-yellow-600" />
+        <div className={`${autoBackfillTriggered ? 'bg-blue-50 border-blue-200' : 'bg-yellow-50 border-yellow-200'} border rounded-lg p-8 text-center`}>
+          <div className={`${autoBackfillTriggered ? 'bg-blue-100' : 'bg-yellow-100'} rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4`}>
+            {autoBackfillTriggered ? (
+              <RefreshCw className={`h-8 w-8 ${autoBackfillTriggered ? 'text-blue-600 animate-spin' : 'text-yellow-600'}`} />
+            ) : (
+              <Building2 className="h-8 w-8 text-yellow-600" />
+            )}
           </div>
-          <h3 className="text-xl font-semibold text-gray-900 mb-2">
-            Business Intelligence Data Needs Setup
-          </h3>
-          <p className="text-gray-700 mb-4 max-w-2xl mx-auto">
-            You have existing invoices, but business intelligence data hasn't been extracted yet.
-            Click the button below to analyze your existing invoices.
-          </p>
           
-          {backfillMessage && (
-            <div className={`mb-4 p-4 rounded-lg ${
-              backfillMessage.includes('Error') 
-                ? 'bg-red-100 text-red-800' 
-                : 'bg-green-100 text-green-800'
-            }`}>
-              {backfillMessage}
-            </div>
+          {autoBackfillTriggered ? (
+            <>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                🎉 Processing Your Invoices!
+              </h3>
+              <p className="text-gray-700 mb-4 max-w-2xl mx-auto">
+                We're analyzing your invoices to extract business intelligence data. 
+                {processedCount > 0 && ` Processed ${processedCount} of ${totalInvoices} invoices so far.`}
+              </p>
+              <div className="bg-white border border-blue-200 rounded-lg p-4 mb-4 max-w-md mx-auto">
+                <p className="text-sm text-gray-600">
+                  ⏳ This usually takes 1-3 minutes. Click the refresh button below in a moment to see your analytics.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                No Business Data Yet
+              </h3>
+              <p className="text-gray-700 mb-4 max-w-2xl mx-auto">
+                {(data as any).message || 'Upload invoices to see business analytics, or refresh if you just uploaded.'}
+              </p>
+            </>
           )}
 
-          <div className="flex gap-3 justify-center">
-            <button
-              onClick={handleRunBackfill}
-              disabled={backfillLoading}
-              className="px-6 py-3 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-            >
-              {backfillLoading ? 'Processing...' : 'Start Analysis Now'}
-            </button>
-            <button
-              onClick={fetchBusinessData}
-              className="px-6 py-3 bg-white border border-yellow-600 text-yellow-700 rounded-md hover:bg-yellow-50 font-medium"
-            >
-              Refresh Status
-            </button>
-          </div>
+          <button
+            onClick={fetchBusinessData}
+            className={`px-6 py-3 ${autoBackfillTriggered ? 'bg-blue-600 hover:bg-blue-700' : 'bg-yellow-600 hover:bg-yellow-700'} text-white rounded-md font-medium transition-colors`}
+          >
+            <RefreshCw className="h-4 w-4 inline mr-2" />
+            Refresh to See Data
+          </button>
           
-          <p className="text-xs text-gray-500 mt-4">
-            This is a one-time setup. Future invoices will automatically extract business intelligence data.
-          </p>
+          {!autoBackfillTriggered && (
+            <p className="text-xs text-gray-500 mt-4">
+              Business intelligence data is automatically extracted when you upload invoices.
+            </p>
+          )}
         </div>
       </div>
     );
