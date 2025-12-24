@@ -109,6 +109,41 @@ export default function DashboardBusiness() {
 
   // Check if backfill is needed
   if ((data as any).needs_backfill) {
+    const [backfillLoading, setBackfillLoading] = useState(false);
+    const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
+
+    const handleRunBackfill = async () => {
+      try {
+        setBackfillLoading(true);
+        setBackfillMessage(null);
+        
+        const response = await fetch('/api/v1/admin/backfill-business-intelligence', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+          setBackfillMessage(result.message);
+          // Auto-refresh after estimated time
+          const refreshDelay = (result.estimated_time_minutes || 2) * 60 * 1000;
+          setTimeout(() => {
+            fetchBusinessData();
+          }, refreshDelay);
+        } else {
+          setBackfillMessage(`Error: ${result.detail || 'Failed to start backfill'}`);
+        }
+      } catch (err: any) {
+        setBackfillMessage(`Error: ${err.message || 'Failed to start backfill'}`);
+      } finally {
+        setBackfillLoading(false);
+      }
+    };
+
     return (
       <div className="space-y-6 p-6">
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-8 text-center">
@@ -120,23 +155,38 @@ export default function DashboardBusiness() {
           </h3>
           <p className="text-gray-700 mb-4 max-w-2xl mx-auto">
             You have existing invoices, but business intelligence data hasn't been extracted yet.
-            Run the backfill script to analyze your existing invoices.
+            Click the button below to analyze your existing invoices.
           </p>
-          <div className="bg-gray-900 text-left rounded-lg p-4 max-w-xl mx-auto mb-4">
-            <code className="text-green-400 text-sm">
-              cd zodiac-api<br />
-              python backfill_business_intelligence.py
-            </code>
+          
+          {backfillMessage && (
+            <div className={`mb-4 p-4 rounded-lg ${
+              backfillMessage.includes('Error') 
+                ? 'bg-red-100 text-red-800' 
+                : 'bg-green-100 text-green-800'
+            }`}>
+              {backfillMessage}
+            </div>
+          )}
+
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={handleRunBackfill}
+              disabled={backfillLoading}
+              className="px-6 py-3 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+            >
+              {backfillLoading ? 'Processing...' : 'Start Analysis Now'}
+            </button>
+            <button
+              onClick={fetchBusinessData}
+              className="px-6 py-3 bg-white border border-yellow-600 text-yellow-700 rounded-md hover:bg-yellow-50 font-medium"
+            >
+              Refresh Status
+            </button>
           </div>
-          <p className="text-sm text-gray-600">
-            After running the script, refresh this page to see your business analytics.
+          
+          <p className="text-xs text-gray-500 mt-4">
+            This is a one-time setup. Future invoices will automatically extract business intelligence data.
           </p>
-          <button
-            onClick={fetchBusinessData}
-            className="mt-4 px-6 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
-          >
-            Refresh After Running Script
-          </button>
         </div>
       </div>
     );
