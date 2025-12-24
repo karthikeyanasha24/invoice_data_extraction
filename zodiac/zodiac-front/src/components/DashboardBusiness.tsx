@@ -46,6 +46,8 @@ export default function DashboardBusiness() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<BusinessAnalytics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [backfillLoading, setBackfillLoading] = useState(false);
+  const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchBusinessData();
@@ -62,6 +64,38 @@ export default function DashboardBusiness() {
       console.error('Failed to fetch business analytics:', err);
       setError(err.message || 'Failed to load business analytics');
       setLoading(false);
+    }
+  };
+
+  const handleRunBackfill = async () => {
+    try {
+      setBackfillLoading(true);
+      setBackfillMessage(null);
+      
+      const response = await fetch('/api/v1/admin/backfill-business-intelligence', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        setBackfillMessage(result.message);
+        // Auto-refresh after estimated time
+        const refreshDelay = (result.estimated_time_minutes || 2) * 60 * 1000;
+        setTimeout(() => {
+          fetchBusinessData();
+        }, refreshDelay);
+      } else {
+        setBackfillMessage(`Error: ${result.detail || 'Failed to start backfill'}`);
+      }
+    } catch (err: any) {
+      setBackfillMessage(`Error: ${err.message || 'Failed to start backfill'}`);
+    } finally {
+      setBackfillLoading(false);
     }
   };
 
@@ -109,41 +143,6 @@ export default function DashboardBusiness() {
 
   // Check if backfill is needed
   if ((data as any).needs_backfill) {
-    const [backfillLoading, setBackfillLoading] = useState(false);
-    const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
-
-    const handleRunBackfill = async () => {
-      try {
-        setBackfillLoading(true);
-        setBackfillMessage(null);
-        
-        const response = await fetch('/api/v1/admin/backfill-business-intelligence', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          }
-        });
-
-        const result = await response.json();
-
-        if (response.ok) {
-          setBackfillMessage(result.message);
-          // Auto-refresh after estimated time
-          const refreshDelay = (result.estimated_time_minutes || 2) * 60 * 1000;
-          setTimeout(() => {
-            fetchBusinessData();
-          }, refreshDelay);
-        } else {
-          setBackfillMessage(`Error: ${result.detail || 'Failed to start backfill'}`);
-        }
-      } catch (err: any) {
-        setBackfillMessage(`Error: ${err.message || 'Failed to start backfill'}`);
-      } finally {
-        setBackfillLoading(false);
-      }
-    };
-
     return (
       <div className="space-y-6 p-6">
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-8 text-center">
