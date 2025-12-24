@@ -9,8 +9,11 @@ import {
   CheckCircle,
   XCircle,
   RefreshCw,
-  TrendingUp
+  TrendingUp,
+  ChevronRight
 } from 'lucide-react';
+import AutoFixDetailsModal from './AutoFixDetailsModal';
+import { dashboardApi } from '@/lib/api';
 import {
   BarChart,
   Bar,
@@ -35,56 +38,122 @@ const COLORS = {
   manual: '#6b7280',
 };
 
-// Placeholder data - will be replaced with real API data
-const mockData = {
-  messageFlow: {
-    inbound: 89,
-    outbound: 156,
-    total: 245
-  },
-  autoFix: {
-    total: 45,
-    successful: 38,
-    failed: 7,
-    successRate: 84.4,
-    timeSaved: 127 // minutes
-  },
-  processingTime: {
-    average: 2.3, // seconds
-    min: 0.5,
-    max: 8.2
-  },
-  externalSystems: {
-    success: 142,
-    failed: 14,
-    successRate: 91.0
-  }
-};
-
-const autoFixBreakdown = [
-  { type: 'Missing Fields', count: 18, saved: 54 },
-  { type: 'Date Format', count: 12, saved: 24 },
-  { type: 'ID Padding', count: 8, saved: 16 },
-  { type: 'Party Info', count: 7, saved: 21 },
-];
-
-const processingTimeData = [
-  { hour: '00:00', avgTime: 2.1 },
-  { hour: '04:00', avgTime: 1.8 },
-  { hour: '08:00', avgTime: 2.8 },
-  { hour: '12:00', avgTime: 3.2 },
-  { hour: '16:00', avgTime: 2.5 },
-  { hour: '20:00', avgTime: 2.0 },
-];
-
 export default function DashboardOperations() {
-  const [loading, setLoading] = useState(false);
-  const [data, setData] = useState(mockData);
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<any>(null);
+  const [autoFixBreakdown, setAutoFixBreakdown] = useState<any[]>([]);
+  const [processingTimeData, setProcessingTimeData] = useState<any[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedFixType, setSelectedFixType] = useState('');
+  const [fixDetails, setFixDetails] = useState([]);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // TODO: Replace with real API call
-  // useEffect(() => {
-  //   fetchOperationsData();
-  // }, []);
+  // Fetch operations data on mount
+  useEffect(() => {
+    fetchOperationsData();
+  }, []);
+
+  const fetchOperationsData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await dashboardApi.getOperations(30);
+      
+      // Transform the data for the component
+      const transformedData = {
+        messageFlow: {
+          inbound: response.inbound.total,
+          outbound: response.outbound.total,
+          total: response.inbound.total + response.outbound.total
+        },
+        autoFix: {
+          total: response.autoFix.total,
+          successful: response.autoFix.successful,
+          failed: 0,
+          successRate: 100,
+          timeSaved: response.autoFix.breakdown.reduce((acc: number, item: any) => acc + item.saved, 0)
+        },
+        processingTime: {
+          average: response.processingTime.average,
+          min: 0,
+          max: 0
+        },
+        externalSystems: {
+          success: response.externalSystems.successful,
+          failed: response.externalSystems.failed,
+          successRate: response.externalSystems.total > 0 
+            ? Math.round((response.externalSystems.successful / response.externalSystems.total) * 100)
+            : 0
+        }
+      };
+      
+      setData(transformedData);
+      setAutoFixBreakdown(response.autoFix.breakdown);
+      setProcessingTimeData(response.processingTime.hourly);
+      setLoading(false);
+    } catch (err: any) {
+      console.error('Failed to fetch operations data:', err);
+      setError(err.message || 'Failed to load operations data');
+      setLoading(false);
+    }
+  };
+
+  const handleFixTypeClick = async (fixType: string) => {
+    setSelectedFixType(fixType);
+    setModalOpen(true);
+    setDetailsLoading(true);
+    
+    try {
+      const response = await dashboardApi.getAutoFixDetails(fixType);
+      setFixDetails(response.details || []);
+      setDetailsLoading(false);
+    } catch (err: any) {
+      console.error('Failed to fetch auto-fix details:', err);
+      setFixDetails([]);
+      setDetailsLoading(false);
+    }
+  };
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="space-y-6 p-6">
+        <div className="flex items-center justify-center py-12">
+          <LoadingSpinner />
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="space-y-6 p-6">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-red-900 mb-2">Failed to Load Operations Data</h3>
+          <p className="text-red-700">{error}</p>
+          <button
+            onClick={fetchOperationsData}
+            className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // No data state
+  if (!data) {
+    return (
+      <div className="space-y-6 p-6">
+        <div className="text-center py-12 text-gray-500">
+          <p>No operations data available</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 p-6">
@@ -95,6 +164,7 @@ export default function DashboardOperations() {
           <p className="text-sm text-gray-600 mt-1">Message flow, auto-fix analytics, and performance metrics</p>
         </div>
         <button
+          onClick={fetchOperationsData}
           className="p-2 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
           title="Refresh Data"
         >
@@ -168,15 +238,24 @@ export default function DashboardOperations() {
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Auto-Fix Breakdown</h3>
           <div className="space-y-3">
             {autoFixBreakdown.map((item, index) => (
-              <div key={index} className="flex items-center justify-between">
+              <button
+                key={index}
+                onClick={() => handleFixTypeClick(item.type)}
+                className="w-full flex items-center justify-between hover:bg-gray-50 p-2 rounded-lg transition-colors group cursor-pointer"
+              >
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">{item.type}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600 transition-colors">
+                        {item.type}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
+                    </div>
                     <span className="text-sm text-gray-500">{item.count} fixes</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2">
                     <div
-                      className="bg-orange-600 h-2 rounded-full"
+                      className="bg-orange-600 h-2 rounded-full transition-all group-hover:bg-orange-700"
                       style={{ width: `${(item.count / data.autoFix.total) * 100}%` }}
                     />
                   </div>
@@ -184,7 +263,7 @@ export default function DashboardOperations() {
                 <div className="ml-4 text-xs text-green-600 font-medium">
                   {item.saved}m saved
                 </div>
-              </div>
+              </button>
             ))}
           </div>
           <div className="mt-4 pt-4 border-t border-gray-200">
@@ -329,6 +408,15 @@ export default function DashboardOperations() {
           </div>
         </div>
       </div>
+
+      {/* Auto-Fix Details Modal */}
+      <AutoFixDetailsModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        fixType={selectedFixType}
+        details={fixDetails}
+        loading={detailsLoading}
+      />
     </div>
   );
 }

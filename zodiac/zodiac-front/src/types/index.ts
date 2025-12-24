@@ -322,3 +322,145 @@ export interface AIInsights {
   total_failed: number;
   analyzed_at: string;
 }
+
+// Business Intelligence Types
+export interface BusinessAnalytics {
+  lifecycle_funnel: LifecycleFunnel;
+  customer_analysis: CustomerAnalysis;
+  country_distribution: CountryDistribution[];
+  industry_breakdown: IndustryBreakdown[];
+  product_analysis: ProductAnalysis;
+  supplier_analysis: SupplierAnalysis;
+}
+
+export interface LifecycleFunnel {
+  RECEIVED: StageData;
+  VALIDATED: StageData;
+  CONVERTED: StageData;
+  SENT: StageData;
+  ACKNOWLEDGED: StageData;
+}
+
+export interface StageData {
+  total: number;
+  success: number;
+  failed: number;
+}
+
+export interface CustomerAnalysis {
+  top_customers: CustomerData[];
+  total_customers: number;
+}
+
+export interface CustomerData {
+  customer_id: string | null;
+  customer_name: string;
+  customer_country: string | null;
+  total_invoices: number;
+  successful: number;
+  failed: number;
+  success_rate: number;
+  total_revenue: number;
+}
+
+export interface CountryDistribution {
+  country: string;
+  count: number;
+}
+
+export interface IndustryBreakdown {
+  industry: string;
+  count: number;
+  total_revenue: number;
+}
+
+export interface ProductAnalysis {
+  top_products: ProductData[];
+  total_products: number;
+}
+
+export interface ProductData {
+  name: string;
+  count: number;
+  total_quantity: number;
+  total_revenue: number;
+}
+
+export interface SupplierAnalysis {
+  top_suppliers: SupplierData[];
+}
+
+export interface SupplierData {
+  supplier_id: string | null;
+  supplier_name: string;
+  count: number;
+}
+
+// Industry Intelligence Types
+export interface IndustryIntelligence {
+  summary: IndustrySummary;
+  products: ProductPerformance[];
+  industry_benchmarks: { [industry: string]: IndustryBenchmark };
+  ai_insights: AIProductInsights;
+  date_range: {
+    start: string;
+    end: string;
+    days: number;
+  };
+}
+
+export interface IndustrySummary {
+  total_products: number;
+  underperforming: number;
+  optimal: number;
+  outperforming: number;
+  total_revenue: number;
+}
+
+export interface ProductPerformance {
+  product_name: string;
+  industry: string;
+  performance_status: 'underperforming' | 'optimal' | 'outperforming';
+  performance_score: number;
+  metrics: ProductMetrics;
+  benchmarks: ProductBenchmarks;
+  trend: 'increasing' | 'stable' | 'declining' | 'insufficient_data';
+}
+
+export interface ProductMetrics {
+  avg_price: number;
+  total_quantity: number;
+  total_revenue: number;
+  order_count: number;
+  avg_revenue_per_order: number;
+  price_position: 'Economy' | 'Medium' | 'Premium';
+}
+
+export interface ProductBenchmarks {
+  industry_avg_price: number;
+  industry_avg_revenue: number;
+  price_diff_pct: number;
+  revenue_diff_pct: number;
+}
+
+export interface IndustryBenchmark {
+  avg_price: number;
+  median_price: number;
+  avg_revenue: number;
+  avg_quantity: number;
+  total_products: number;
+  price_std_dev: number;
+}
+
+export interface AIProductInsights {
+  overall_insights?: string[];
+  product_recommendations?: ProductRecommendation[];
+  industry_trends?: string[];
+}
+
+export interface ProductRecommendation {
+  product_name: string;
+  issue: string;
+  recommendation: string;
+  expected_impact: string;
+}

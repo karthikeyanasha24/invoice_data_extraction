@@ -1262,6 +1262,62 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to load AI insights.');
         }
     },
+
+    // Get auto-fix details by fix type
+    getAutoFixDetails: async (fixType: string) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/auto-fix-details?fix_type=${encodeURIComponent(fixType)}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch auto-fix details:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load auto-fix details.');
+        }
+    },
+
+    // Get operations statistics
+    getOperations: async (days: number = 30) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/operations?days=${days}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch operations data:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load operations data.');
+        }
+    },
+
+    // Get business analytics
+    getBusiness: async (days: number = 30) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/business?days=${days}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch business analytics:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load business analytics.');
+        }
+    },
+
+    // Get industry intelligence
+    getIndustryIntelligence: async (days: number = 30) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/industry-intelligence?days=${days}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch industry intelligence:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load industry intelligence.');
+        }
+    },
 };
 
 export default api;
