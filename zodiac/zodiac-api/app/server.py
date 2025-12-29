@@ -15,6 +15,9 @@ from .api.customers import router as customers_router
 from .api.corrections import router as corrections_router
 from .api.dashboard import router as dashboard_router
 from .api.admin import router as admin_router
+from .api.sat import router as sat_router
+from .api.sat_canonical import router as sat_canonical_router
+from .api.sat_supplier_mapping import router as sat_supplier_mapping_router
 from .models.user import ZodiacUser
 from .models.invoice import ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi
 from .models.correction_cache import CorrectionCache
@@ -165,6 +168,9 @@ app.include_router(invoices_router, prefix="/api/v1")
 app.include_router(customers_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(sat_router, prefix="/api/v1")
+app.include_router(sat_canonical_router, prefix="/api/v1")
+app.include_router(sat_supplier_mapping_router, prefix="/api/v1")
 app.include_router(corrections_router)
 
 if __name__ == "__main__":

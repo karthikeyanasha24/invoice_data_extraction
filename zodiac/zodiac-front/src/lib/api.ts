@@ -1349,4 +1349,340 @@ export const adminApi = {
     },
 };
 
+// SAT Documents API
+export const satApi = {
+    // List all SAT documents with filters
+    getDocuments: async (filters?: {
+        status?: string;
+        documentType?: string;
+        skip?: number;
+        limit?: number;
+    }) => {
+        try {
+            const params = new URLSearchParams();
+            if (filters?.status) params.append('status_filter', filters.status);
+            if (filters?.documentType) params.append('document_type_filter', filters.documentType);
+            if (filters?.skip !== undefined) params.append('skip', filters.skip.toString());
+            if (filters?.limit !== undefined) params.append('limit', filters.limit.toString());
+            
+            const queryString = params.toString();
+            const url = `/api/v1/sat/documents${queryString ? `?${queryString}` : ''}`;
+            
+            const response = await api.get(url);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch SAT documents:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch SAT documents.');
+        }
+    },
+
+    // Get single SAT document by ID
+    getDocument: async (documentId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/documents/${documentId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch SAT document:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch SAT document.');
+        }
+    },
+
+    // Get processing logs for a document
+    getLogs: async (documentId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/documents/${documentId}/logs`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch processing logs:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch processing logs.');
+        }
+    },
+
+    // Retry processing for a failed document
+    retryProcessing: async (documentId: string) => {
+        try {
+            const response = await api.post(`/api/v1/sat/documents/${documentId}/process`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to retry processing:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to retry processing.');
+        }
+    },
+
+    // Upload CFDI document
+    uploadDocument: async (xmlContent: string, documentType: string, supplierId: string, companyCode: string) => {
+        try {
+            const response = await api.post('/api/v1/sat/intake', {
+                documentType,
+                supplierId,
+                companyCode,
+                xmlContent
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to upload SAT document:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to upload SAT document.');
+        }
+    },
+};
+
+// SAT Canonical Merged API
+export const satCanonicalApi = {
+    // List canonical merged documents with filters
+    list: async (filters?: {
+        company_code?: string;
+        fiscal_year?: number;
+        fiscal_period?: number;
+        vendor_rfc?: string;
+        status?: string;
+        limit?: number;
+        offset?: number;
+    }) => {
+        try {
+            const params = new URLSearchParams();
+            if (filters?.company_code) params.append('company_code', filters.company_code);
+            if (filters?.fiscal_year) params.append('fiscal_year', filters.fiscal_year.toString());
+            if (filters?.fiscal_period) params.append('fiscal_period', filters.fiscal_period.toString());
+            if (filters?.vendor_rfc) params.append('vendor_rfc', filters.vendor_rfc);
+            if (filters?.status) params.append('status', filters.status);
+            if (filters?.limit) params.append('limit', filters.limit.toString());
+            if (filters?.offset) params.append('offset', filters.offset.toString());
+
+            const queryString = params.toString();
+            const url = `/api/v1/sat/canonical${queryString ? `?${queryString}` : ''}`;
+
+            const response = await api.get(url);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch canonical documents:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch canonical documents.');
+        }
+    },
+
+    // Get single canonical document by ID
+    get: async (canonicalId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/canonical/${canonicalId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch canonical document:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch canonical document.');
+        }
+    },
+
+    // Merge documents into canonical format
+    merge: async (request: {
+        company_code: string;
+        fiscal_year: number;
+        fiscal_period: number;
+    }) => {
+        try {
+            const response = await api.post('/api/v1/sat/canonical/merge', request);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to merge to canonical:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to merge to canonical format.');
+        }
+    },
+
+    // Preview SAP payload before sending
+    preview: async (canonicalId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/canonical/${canonicalId}/preview`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get preview:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to get preview.');
+        }
+    },
+
+    // Send canonical document to SAP
+    sendToSAP: async (canonicalId: string) => {
+        try {
+            const response = await api.post(`/api/v1/sat/canonical/${canonicalId}/send-to-sap`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to send canonical to SAP:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to send canonical to SAP.');
+        }
+    },
+
+    // Delete canonical document
+    delete: async (canonicalId: string) => {
+        try {
+            const response = await api.delete(`/api/v1/sat/canonical/${canonicalId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete canonical document:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to delete canonical document.');
+        }
+    },
+};
+
+// SAT Supplier Account Mapping API (Supplier RFC → SAP Account)
+export const supplierMappingApi = {
+    // Upload Excel file with mappings
+    uploadExcel: async (file: File, overwrite: boolean = false) => {
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('overwrite', overwrite.toString());
+
+            const response = await api.post('/api/v1/sat/supplier-mapping/upload-excel', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data'
+                }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to upload Excel file:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to upload Excel file.');
+        }
+    },
+
+    // List all mappings with pagination and filters
+    list: async (params?: {
+        skip?: number;
+        limit?: number;
+        search?: string;
+    }) => {
+        try {
+            const queryParams = new URLSearchParams();
+            if (params?.skip !== undefined) queryParams.append('skip', params.skip.toString());
+            if (params?.limit !== undefined) queryParams.append('limit', params.limit.toString());
+            if (params?.search) queryParams.append('search', params.search);
+
+            const queryString = queryParams.toString();
+            const url = `/api/v1/sat/supplier-mapping${queryString ? `?${queryString}` : ''}`;
+
+            const response = await api.get(url);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch mappings:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch mappings.');
+        }
+    },
+
+    // Lookup mapping by Supplier RFC
+    lookup: async (supplierRfc: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/supplier-mapping/lookup/${supplierRfc}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to lookup mapping:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to lookup mapping.');
+        }
+    },
+
+    // Create new mapping
+    create: async (mapping: {
+        supplier_rfc: string;
+        sap_gl_account: string;
+        account_description: string;
+        is_active?: boolean;
+    }) => {
+        try {
+            const response = await api.post('/api/v1/sat/supplier-mapping', mapping);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to create mapping:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to create mapping.');
+        }
+    },
+
+    // Update existing mapping
+    update: async (mappingId: number, updates: {
+        sap_gl_account?: string;
+        account_description?: string;
+        is_active?: boolean;
+    }) => {
+        try {
+            const response = await api.put(`/api/v1/sat/supplier-mapping/${mappingId}`, updates);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to update mapping:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to update mapping.');
+        }
+    },
+
+    // Delete mapping
+    delete: async (mappingId: number) => {
+        try {
+            const response = await api.delete(`/api/v1/sat/supplier-mapping/${mappingId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete mapping:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to delete mapping.');
+        }
+    },
+
+    // Get statistics
+    getStats: async () => {
+        try {
+            const response = await api.get('/api/v1/sat/supplier-mapping/stats/summary');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch mapping statistics:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to fetch statistics.');
+        }
+    },
+};
+
+// Keep old name for backwards compatibility
+export const accountMappingApi = supplierMappingApi;
+
 export default api;

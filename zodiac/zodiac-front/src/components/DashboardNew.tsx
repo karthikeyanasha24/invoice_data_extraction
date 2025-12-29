@@ -218,7 +218,7 @@ export default function DashboardNew() {
         {/* Timeline Chart */}
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Invoice Processing Timeline</h2>
-          <div className="h-80">
+          <div className="w-full h-80" style={{ minHeight: '320px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={timeline}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -267,7 +267,7 @@ export default function DashboardNew() {
           {/* Format Distribution */}
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Format Distribution</h2>
-            <div className="h-80">
+            <div className="w-full h-80" style={{ minHeight: '320px' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -293,7 +293,7 @@ export default function DashboardNew() {
           {/* Request Source */}
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Request Source</h2>
-            <div className="h-80">
+            <div className="w-full h-80" style={{ minHeight: '320px' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie

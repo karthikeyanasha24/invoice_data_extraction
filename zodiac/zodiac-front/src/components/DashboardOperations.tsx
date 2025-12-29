@@ -277,7 +277,7 @@ export default function DashboardOperations() {
         {/* Processing Time Trend */}
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Processing Time Trend</h3>
-          <div className="h-64">
+          <div className="w-full h-64" style={{ minHeight: '256px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={processingTimeData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
