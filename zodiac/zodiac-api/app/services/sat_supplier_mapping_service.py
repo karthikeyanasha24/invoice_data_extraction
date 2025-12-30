@@ -3,7 +3,6 @@ SAT Supplier Mapping Service
 Manages RFC to SAP G/L Account mappings.
 """
 import logging
-import pandas as pd
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -11,6 +10,15 @@ from sqlalchemy import func
 from ..models.sat_supplier_account_mapping import SATSupplierAccountMapping
 
 logger = logging.getLogger("zodiac-api.sat_supplier_mapping")
+
+# Lazy import pandas to avoid import errors if not installed
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ pandas not available - Excel upload feature will be disabled")
+    PANDAS_AVAILABLE = False
+    pd = None
 
 
 class SATSupplierMappingService:
@@ -22,6 +30,9 @@ class SATSupplierMappingService:
         Parse Excel file containing supplier RFC to G/L account mappings.
         Expected columns: RFC, CTA (G/L Account), CTAS (Description), IS_ACTIVE
         """
+        if not PANDAS_AVAILABLE:
+            raise ImportError("pandas library is required for Excel file parsing but is not installed")
+        
         try:
             # Read Excel file
             df = pd.read_excel(file_content, engine='openpyxl')
