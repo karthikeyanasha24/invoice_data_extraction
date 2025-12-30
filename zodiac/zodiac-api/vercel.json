@@ -1,7 +1,7 @@
 {
   "builds": [
     {
-      "src": "app/server_with_db.py",
+      "src": "app/server.py",
       "use": "@vercel/python",
       "config": { "includeFiles": ["requirements.txt"] }
     }
@@ -9,7 +9,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "app/server_with_db.py",
+      "dest": "app/server.py",
       "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     }
   ]

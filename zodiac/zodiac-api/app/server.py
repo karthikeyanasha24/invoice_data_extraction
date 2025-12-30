@@ -1,26 +1,11 @@
-from fastapi import FastAPI, Depends, HTTPException, Request, Response
+"""
+Zodiac API - FastAPI server optimized for Vercel serverless deployment
+"""
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
 import os
-import json
-import time
 import logging
 from dotenv import load_dotenv
-
-from .database import get_db, Base, engine, ensure_columns_exist
-from .database_init import initialize_database, get_database_status
-from .api.auth import router as auth_router
-from .api.invoices import router as invoices_router
-from .api.customers import router as customers_router
-from .api.corrections import router as corrections_router
-from .api.dashboard import router as dashboard_router
-from .api.admin import router as admin_router
-from .api.sat import router as sat_router
-from .api.sat_canonical import router as sat_canonical_router
-from .api.sat_supplier_mapping import router as sat_supplier_mapping_router
-from .models.user import ZodiacUser
-from .models.invoice import ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi
-from .models.correction_cache import CorrectionCache
 
 # Load environment variables
 load_dotenv()
@@ -32,9 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("zodiac-api")
 
-# Note: Database initialization is done lazily on first request to avoid blocking serverless function startup
-logger.info("⏭️ Skipping database initialization during import (will initialize on first request)")
-
 # Initialize FastAPI app
 app = FastAPI(
     title="Zodiac API",
@@ -45,7 +27,7 @@ app = FastAPI(
 # CORS middleware configuration
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS", 
-    "https://www.bridgeedi.com,https://bridgeedi.com,https://zodiac-front.vercel.app,http://localhost:3000,http://127.0.0.1:3000"
+    "https://www.bridgeedi.com,https://bridgeedi.com,https://zodiac-front.vercel.app,http://localhost:3000"
 )
 
 origins = [origin.strip() for origin in CORS_ORIGINS.split(",")]
@@ -53,7 +35,7 @@ logger.info(f"🌐 CORS origins configured: {origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Use specific origins instead of ["*"] for better security
+    allow_origins=["*"],  # Allow all origins for now (can restrict later if needed)
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
@@ -61,87 +43,97 @@ app.add_middleware(
     max_age=3600,
 )
 
-# Request/Response logging middleware
-@app.middleware("http")
-async def log_requests_and_responses(request: Request, call_next):
-    start_time = time.time()
-    
-    # Log request details
-    logger.info(f"🚀 REQUEST: {request.method} {request.url}")
-    logger.info(f"📋 Headers: {dict(request.headers)}")
-    
-    # Log request body (if not too large and not binary)
-    if request.method in ["POST", "PUT", "PATCH"]:
-        try:
-            # Check content type
-            content_type = request.headers.get("content-type", "")
-            if "application/json" in content_type:
-                body = await request.body()
-                if len(body) < 10000:  # Only log if body is not too large
-                    try:
-                        body_json = json.loads(body.decode())
-                        logger.info(f"📦 Request Body: {json.dumps(body_json, indent=2)}")
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        logger.info(f"📦 Request Body: <binary or invalid JSON data>")
-                else:
-                    logger.info(f"📦 Request Body: <too large to log ({len(body)} bytes)>")
-            elif "multipart/form-data" in content_type:
-                logger.info(f"📦 Request Body: <multipart/form-data - file upload>")
-            else:
-                logger.info(f"📦 Request Body: <content-type: {content_type}>")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not log request body: {e}")
-    
-    # Process request
-    response = await call_next(request)
-    
-    # Calculate processing time
-    process_time = time.time() - start_time
-    
-    # Log response details
-    logger.info(f"✅ RESPONSE: {response.status_code} - {process_time:.3f}s")
-    logger.info(f"📋 Response Headers: {dict(response.headers)}")
-    
-    # Log response body (if not too large)
-    if hasattr(response, 'body') and response.body:
-        try:
-            if len(response.body) < 5000:  # Only log if response is not too large
-                try:
-                    response_json = json.loads(response.body.decode())
-                    logger.info(f"📦 Response Body: {json.dumps(response_json, indent=2)}")
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    logger.info(f"📦 Response Body: <binary or invalid JSON data>")
-            else:
-                logger.info(f"📦 Response Body: <too large to log ({len(response.body)} bytes)>")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not log response body: {e}")
-    
-    return response
+# Explicit OPTIONS handler for CORS preflight requests
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle CORS preflight OPTIONS requests"""
+    return {"status": "ok"}
 
-# Health check endpoint
+# Health check endpoints
 @app.get("/")
 async def root():
-    return {"message": "Zodiac API is running", "status": "healthy"}
+    return {
+        "message": "Zodiac API is running", 
+        "status": "healthy",
+        "version": "1.0.0"
+    }
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint - simple check without database connection"""
+    """Health check endpoint"""
     return {
         "status": "healthy", 
         "service": "zodiac-api",
         "version": "1.0.0"
     }
 
-# Include routers
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(invoices_router, prefix="/api/v1")
-app.include_router(customers_router, prefix="/api/v1")
-app.include_router(dashboard_router, prefix="/api/v1")
-app.include_router(admin_router, prefix="/api/v1")
-app.include_router(corrections_router)
-app.include_router(sat_router, prefix="/api/v1")
-app.include_router(sat_canonical_router, prefix="/api/v1")
-app.include_router(sat_supplier_mapping_router, prefix="/api/v1")
+# Import and register routers with safe error handling
+logger.info("🔄 Loading API routers...")
+
+try:
+    from .api.auth import router as auth_router
+    app.include_router(auth_router, prefix="/api/v1")
+    logger.info("✅ Auth router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load auth router: {e}")
+
+try:
+    from .api.invoices import router as invoices_router
+    app.include_router(invoices_router, prefix="/api/v1")
+    logger.info("✅ Invoices router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load invoices router: {e}")
+
+try:
+    from .api.customers import router as customers_router
+    app.include_router(customers_router, prefix="/api/v1")
+    logger.info("✅ Customers router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load customers router: {e}")
+
+try:
+    from .api.corrections import router as corrections_router
+    app.include_router(corrections_router)
+    logger.info("✅ Corrections router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load corrections router: {e}")
+
+try:
+    from .api.dashboard import router as dashboard_router
+    app.include_router(dashboard_router, prefix="/api/v1")
+    logger.info("✅ Dashboard router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load dashboard router: {e}")
+
+try:
+    from .api.admin import router as admin_router
+    app.include_router(admin_router, prefix="/api/v1")
+    logger.info("✅ Admin router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load admin router: {e}")
+
+try:
+    from .api.sat import router as sat_router
+    app.include_router(sat_router, prefix="/api/v1")
+    logger.info("✅ SAT router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load SAT router: {e}")
+
+try:
+    from .api.sat_canonical import router as sat_canonical_router
+    app.include_router(sat_canonical_router, prefix="/api/v1")
+    logger.info("✅ SAT Canonical router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load SAT Canonical router: {e}")
+
+try:
+    from .api.sat_supplier_mapping import router as sat_supplier_mapping_router
+    app.include_router(sat_supplier_mapping_router, prefix="/api/v1")
+    logger.info("✅ SAT Supplier Mapping router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load SAT Supplier Mapping router: {e}")
+
+logger.info("✅ Zodiac API initialized successfully")
 
 if __name__ == "__main__":
     import uvicorn
