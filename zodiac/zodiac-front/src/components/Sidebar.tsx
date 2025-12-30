@@ -58,6 +58,20 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
       description: 'Manage EDI customers'
     },
     {
+      id: 'sat-documents',
+      label: 'SAT Documents',
+      icon: Receipt,
+      path: '/sat-documents',
+      description: 'CFDI documents & SAP integration'
+    },
+    {
+      id: 'account-mapping',
+      label: 'Account Mapping',
+      icon: Settings,
+      path: '/admin/account-mapping',
+      description: 'RFC to SAP G/L mapping'
+    },
+    {
       id: 'settings',
       label: 'Settings',
       icon: Settings,

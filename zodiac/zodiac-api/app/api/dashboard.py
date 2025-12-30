@@ -1385,10 +1385,24 @@ async def get_business_analytics(
         
     except Exception as e:
         logger.error(f"❌ Failed to fetch business analytics: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch business analytics: {str(e)}"
-        )
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        # Return empty data instead of 500 error
+        return {
+            "lifecycle_funnel": {
+                'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
+                'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
+                'CONVERTED': {'total': 0, 'success': 0, 'failed': 0},
+                'SENT': {'total': 0, 'success': 0, 'failed': 0},
+                'ACKNOWLEDGED': {'total': 0, 'success': 0, 'failed': 0},
+            },
+            "customer_analysis": {"top_customers": [], "total_customers": 0, "by_country": []},
+            "country_distribution": [],
+            "industry_breakdown": [],
+            "product_analysis": {"top_products": [], "total_products": 0},
+            "supplier_analysis": {"top_suppliers": []}
+        }
 
 
 @router.get("/industry-intelligence")

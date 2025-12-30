@@ -1349,4 +1349,206 @@ export const adminApi = {
     },
 };
 
+// SAT Documents API
+export const satApi = {
+    // Intake a CFDI document
+    intake: async (xmlContent: string) => {
+        try {
+            const response = await api.post('/api/v1/sat/intake', {
+                xml_content: xmlContent
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to intake CFDI:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to process CFDI document.');
+        }
+    },
+
+    // List SAT documents
+    list: async (
+        fiscal_year?: number,
+        fiscal_period?: number,
+        doc_type?: string,
+        status?: string,
+        skip: number = 0,
+        limit: number = 100
+    ) => {
+        try {
+            const params: any = { skip, limit };
+            if (fiscal_year) params.fiscal_year = fiscal_year;
+            if (fiscal_period) params.fiscal_period = fiscal_period;
+            if (doc_type) params.doc_type = doc_type;
+            if (status) params.status_filter = status;
+
+            const response = await api.get('/api/v1/sat/documents', { params });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to list SAT documents:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch SAT documents.');
+        }
+    },
+
+    // Get a specific document
+    getDocument: async (documentId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/documents/${documentId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get SAT document:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch document.');
+        }
+    },
+
+    // Get document XML
+    getDocumentXml: async (documentId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/documents/${documentId}/xml`, {
+                responseType: 'blob'
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get document XML:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch XML.');
+        }
+    },
+};
+
+// SAT Canonical Merged API
+export const satCanonicalApi = {
+    // Merge documents
+    merge: async (params: {
+        company_code: string;
+        fiscal_year: number;
+        fiscal_period: number;
+    }) => {
+        try {
+            const response = await api.post('/api/v1/sat/canonical/merge', params);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to merge documents:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to merge to canonical format.');
+        }
+    },
+
+    // List canonical documents
+    list: async (
+        fiscal_year?: number,
+        fiscal_period?: number,
+        skip: number = 0,
+        limit: number = 100
+    ) => {
+        try {
+            const params: any = { skip, limit };
+            if (fiscal_year) params.fiscal_year = fiscal_year;
+            if (fiscal_period) params.fiscal_period = fiscal_period;
+
+            const response = await api.get('/api/v1/sat/canonical', { params });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch canonical documents:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch canonical documents.');
+        }
+    },
+
+    // Get canonical document by ID
+    get: async (canonicalId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/canonical/${canonicalId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get canonical document:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch canonical document.');
+        }
+    },
+
+    // Preview SAP JSON
+    preview: async (canonicalId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/canonical/${canonicalId}/preview-sap-json`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get preview:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to generate preview.');
+        }
+    },
+
+    // Send to SAP
+    sendToSAP: async (canonicalId: string) => {
+        try {
+            const response = await api.post(`/api/v1/sat/canonical/${canonicalId}/send-to-sap`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to send to SAP:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to send to SAP.');
+        }
+    },
+};
+
+// SAT Supplier Mapping API
+export const satSupplierMappingApi = {
+    // Upload Excel mapping
+    uploadExcel: async (file: File) => {
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await api.post('/api/v1/sat/supplier-mapping/upload-excel', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to upload Excel:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to upload Excel file.');
+        }
+    },
+
+    // List mappings
+    list: async (active_only: boolean = false, skip: number = 0, limit: number = 100) => {
+        try {
+            const response = await api.get('/api/v1/sat/supplier-mapping/list', {
+                params: { active_only, skip, limit }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to list mappings:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch mappings.');
+        }
+    },
+
+    // Lookup mapping
+    lookup: async (supplierRfc: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/supplier-mapping/lookup/${supplierRfc}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to lookup mapping:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to lookup mapping.');
+        }
+    },
+
+    // Delete mapping
+    delete: async (mappingId: number) => {
+        try {
+            const response = await api.delete(`/api/v1/sat/supplier-mapping/${mappingId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete mapping:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to delete mapping.');
+        }
+    },
+
+    // Get stats
+    getStats: async () => {
+        try {
+            const response = await api.get('/api/v1/sat/supplier-mapping/stats/summary');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get stats:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch stats.');
+        }
+    },
+};
+
 export default api;
