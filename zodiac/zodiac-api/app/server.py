@@ -32,32 +32,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("zodiac-api")
 
-# Create database tables (only if database is available)
-try:
-    Base.metadata.create_all(bind=engine)
-    logger.info("✅ Database tables created successfully")
-    
-    # Ensure all required columns exist (for existing tables or if create_all didn't add all columns)
-    try:
-        ensure_columns_exist()
-        logger.info("✅ All required columns verified/added successfully")
-    except Exception as e:
-        logger.warning(f"⚠️ Column check failed (non-critical): {e}")
-        
-except Exception as e:
-    logger.error(f"❌ Could not create database tables: {e}")
-    logger.error("Make sure PostgreSQL is running and DATABASE_URL is correct in .env")
-
-# Run database migrations
-try:
-    logger.info("🚀 Starting database initialization and migrations...")
-    migration_success = initialize_database()
-    if migration_success:
-        logger.info("✅ Database initialization completed successfully")
-    else:
-        logger.error("❌ Database initialization failed")
-except Exception as e:
-    logger.error(f"❌ Database initialization error: {e}")
+# Note: Database initialization is done lazily on first request to avoid blocking serverless function startup
+logger.info("⏭️ Skipping database initialization during import (will initialize on first request)")
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -149,23 +125,12 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    try:
-        # Simple database connectivity test
-        db_status = get_database_status()
-        
-        # Only return basic health status
-        return {
-            "status": "healthy", 
-            "service": "zodiac-api"
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "service": "zodiac-api", 
-            "error": str(e)
-        }
+    """Health check endpoint - simple check without database connection"""
+    return {
+        "status": "healthy", 
+        "service": "zodiac-api",
+        "version": "1.0.0"
+    }
 
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")

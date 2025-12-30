@@ -12,18 +12,19 @@ load_dotenv()
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("\ufeffDATABASE_URL")
 if not DATABASE_URL:
+    print("❌ ERROR: DATABASE_URL environment variable is required but not set!")
     print("Available environment variables:")
     for key, value in os.environ.items():
         if 'DATABASE' in key or 'API' in key or 'CORS' in key:
-            print(f"  {key}={value}")
+            print(f"  {key}={value[:50]}..." if len(value) > 50 else f"  {key}={value}")
     raise ValueError("DATABASE_URL environment variable is required")
 
 # Convert asyncpg URL to psycopg2 URL for synchronous SQLAlchemy
 if DATABASE_URL.startswith("postgresql+asyncpg://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
 
-DATABASE_POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "10"))
-DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "20"))
+DATABASE_POOL_SIZE = int(os.getenv("DATABASE_POOL_SIZE", "5"))  # Reduced for serverless
+DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "10"))  # Reduced for serverless
 
 # --------------------------------
 # Create SQLAlchemy engine + Base
@@ -32,7 +33,12 @@ engine = create_engine(
     DATABASE_URL,
     pool_size=DATABASE_POOL_SIZE,
     max_overflow=DATABASE_MAX_OVERFLOW,
-    echo=False
+    pool_pre_ping=True,  # Verify connections before using them
+    pool_recycle=3600,  # Recycle connections after 1 hour
+    echo=False,
+    connect_args={
+        "connect_timeout": 10,  # 10 second timeout
+    }
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
