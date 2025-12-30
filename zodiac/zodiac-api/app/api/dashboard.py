@@ -976,7 +976,7 @@ async def get_business_analytics(
                 .scalar() or 0
             )
             
-            if False and total_invoices > 0:  # Disabled auto-backfill to prevent 500 errors
+            if total_invoices > 0:
                 logger.info(f"🔄 Auto-triggering backfill for {total_invoices} invoices")
                 # Automatically trigger backfill in background
                 try:
@@ -1145,16 +1145,9 @@ async def get_business_analytics(
                     logger.error(traceback.format_exc())
             
             # Return empty structure with helpful message
-            message = "No business analytics data yet."
-            if total_invoices > 0:
-                message = f"You have {total_invoices} existing invoices. New invoices will automatically appear here. For existing invoices, business analytics will be available in the next update."
-            else:
-                message = "Upload new invoices to see business analytics. Analytics are automatically extracted during invoice processing."
-            
             return {
-                "message": message,
-                "needs_backfill": total_invoices > 0,
-                "total_existing_invoices": total_invoices,
+                "message": "No business intelligence data available. Please upload invoices to see analytics.",
+                "needs_backfill": True,
                 "lifecycle_funnel": {
                     'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
                     'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
@@ -1392,24 +1385,10 @@ async def get_business_analytics(
         
     except Exception as e:
         logger.error(f"❌ Failed to fetch business analytics: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        
-        # Return empty data instead of 500 error
-        return {
-            "lifecycle_funnel": {
-                'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
-                'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
-                'CONVERTED': {'total': 0, 'success': 0, 'failed': 0},
-                'SENT': {'total': 0, 'success': 0, 'failed': 0},
-                'ACKNOWLEDGED': {'total': 0, 'success': 0, 'failed': 0},
-            },
-            "customer_analysis": {"top_customers": [], "total_customers": 0, "by_country": []},
-            "country_distribution": [],
-            "industry_breakdown": [],
-            "product_analysis": {"top_products": [], "total_products": 0},
-            "supplier_analysis": {"top_suppliers": []}
-        }
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch business analytics: {str(e)}"
+        )
 
 
 @router.get("/industry-intelligence")

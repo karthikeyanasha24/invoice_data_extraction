@@ -11,9 +11,7 @@ import {
   ChevronRight,
   User,
   LogOut,
-  Building2,
-  FileCheck,
-  GitCompare
+  Building2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -53,25 +51,11 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
       description: 'Manage quotation files'
     },
     {
-      id: 'sat-documents',
-      label: 'SAT Documents',
-      icon: FileCheck,
-      path: '/sat-documents',
-      description: 'SAT (CFDI) documents'
-    },
-    {
       id: 'customers',
       label: 'Customers',
       icon: Building2,
       path: '/customers',
       description: 'Manage EDI customers'
-    },
-    {
-      id: 'account-mapping',
-      label: 'Account Mapping',
-      icon: GitCompare,
-      path: '/admin/account-mapping',
-      description: 'SAT-SAP account mapping'
     },
     {
       id: 'settings',
