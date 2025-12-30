@@ -1,7 +1,7 @@
 {
   "builds": [
     {
-      "src": "app/server.py",
+      "src": "app/server_safe.py",
       "use": "@vercel/python",
       "config": { "includeFiles": ["requirements.txt"] }
     }
@@ -9,7 +9,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "app/server.py",
+      "dest": "app/server_safe.py",
       "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     }
   ]
