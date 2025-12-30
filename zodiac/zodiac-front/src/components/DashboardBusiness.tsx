@@ -27,7 +27,7 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
-import { dashboardApi } from '@/lib/api';
+import { dashboardApi, adminApi } from '@/lib/api';
 import LoadingSpinner from './LoadingSpinner';
 import type { BusinessAnalytics } from '@/types';
 
@@ -46,6 +46,8 @@ export default function DashboardBusiness() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<BusinessAnalytics | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [backfillLoading, setBackfillLoading] = useState(false);
+  const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchBusinessData();
@@ -62,6 +64,38 @@ export default function DashboardBusiness() {
       console.error('Failed to fetch business analytics:', err);
       setError(err.message || 'Failed to load business analytics');
       setLoading(false);
+    }
+  };
+
+  const handleRunBackfill = async () => {
+    try {
+      setBackfillLoading(true);
+      setBackfillMessage(null);
+      
+      const response = await fetch('/api/v1/admin/backfill-business-intelligence', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        setBackfillMessage(result.message);
+        // Auto-refresh after estimated time
+        const refreshDelay = (result.estimated_time_minutes || 2) * 60 * 1000;
+        setTimeout(() => {
+          fetchBusinessData();
+        }, refreshDelay);
+      } else {
+        setBackfillMessage(`Error: ${result.detail || 'Failed to start backfill'}`);
+      }
+    } catch (err: any) {
+      setBackfillMessage(`Error: ${err.message || 'Failed to start backfill'}`);
+    } finally {
+      setBackfillLoading(false);
     }
   };
 
@@ -94,61 +128,79 @@ export default function DashboardBusiness() {
     );
   }
 
-  // No data state - show empty state for new accounts
-  if (!data || (data as any).needs_backfill) {
+  // No data state
+  if (!data) {
     return (
       <div className="space-y-6 p-6">
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg shadow-lg p-12 text-center">
-          <div className="max-w-2xl mx-auto">
-            <Building2 className="h-20 w-20 mx-auto mb-6 text-indigo-500" />
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Business Analytics Coming Soon</h2>
-            <p className="text-lg text-gray-600 mb-6">
-              Your business intelligence dashboard is ready! Analytics will automatically populate as you upload and process invoices.
-            </p>
-            <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">What you'll see here:</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="h-5 w-5 text-green-500 mt-0.5" />
-                  <div>
-                    <p className="font-medium text-gray-900">E2E Lifecycle Tracking</p>
-                    <p className="text-sm text-gray-600">Track invoices from upload to delivery</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <Users className="h-5 w-5 text-blue-500 mt-0.5" />
-                  <div>
-                    <p className="font-medium text-gray-900">Customer Analysis</p>
-                    <p className="text-sm text-gray-600">Top customers and trends</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <Package className="h-5 w-5 text-purple-500 mt-0.5" />
-                  <div>
-                    <p className="font-medium text-gray-900">Product Insights</p>
-                    <p className="text-sm text-gray-600">Most ordered products</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <Building2 className="h-5 w-5 text-orange-500 mt-0.5" />
-                  <div>
-                    <p className="font-medium text-gray-900">Supplier Metrics</p>
-                    <p className="text-sm text-gray-600">Key supplier relationships</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 p-4 bg-blue-100 rounded-lg">
-              <p className="text-sm text-blue-900">
-                <strong>💡 Pro Tip:</strong> Upload invoices to start building your business insights automatically
-              </p>
-            </div>
-          </div>
+        <div className="text-center py-12 text-gray-500">
+          <Building2 className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+          <p className="text-lg font-medium mb-2">No Business Data Available</p>
+          <p className="text-sm">Upload some invoices to see business analytics</p>
         </div>
       </div>
     );
   }
 
+  // Check if backfill is needed
+  if ((data as any).needs_backfill) {
+    const autoBackfillTriggered = (data as any).auto_backfill_triggered;
+    const processedCount = (data as any).processed_count || 0;
+    const totalInvoices = (data as any).total_invoices || 0;
+    
+    return (
+      <div className="space-y-6 p-6">
+        <div className={`${autoBackfillTriggered ? 'bg-blue-50 border-blue-200' : 'bg-yellow-50 border-yellow-200'} border rounded-lg p-8 text-center`}>
+          <div className={`${autoBackfillTriggered ? 'bg-blue-100' : 'bg-yellow-100'} rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4`}>
+            {autoBackfillTriggered ? (
+              <RefreshCw className={`h-8 w-8 ${autoBackfillTriggered ? 'text-blue-600 animate-spin' : 'text-yellow-600'}`} />
+            ) : (
+              <Building2 className="h-8 w-8 text-yellow-600" />
+            )}
+          </div>
+          
+          {autoBackfillTriggered ? (
+            <>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                🎉 Processing Your Invoices!
+              </h3>
+              <p className="text-gray-700 mb-4 max-w-2xl mx-auto">
+                We're analyzing your invoices to extract business intelligence data. 
+                {processedCount > 0 && ` Processed ${processedCount} of ${totalInvoices} invoices so far.`}
+              </p>
+              <div className="bg-white border border-blue-200 rounded-lg p-4 mb-4 max-w-md mx-auto">
+                <p className="text-sm text-gray-600">
+                  ⏳ This usually takes 1-3 minutes. Click the refresh button below in a moment to see your analytics.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                No Business Data Yet
+              </h3>
+              <p className="text-gray-700 mb-4 max-w-2xl mx-auto">
+                {(data as any).message || 'Upload invoices to see business analytics, or refresh if you just uploaded.'}
+              </p>
+            </>
+          )}
+
+          <button
+            onClick={fetchBusinessData}
+            className={`px-6 py-3 ${autoBackfillTriggered ? 'bg-blue-600 hover:bg-blue-700' : 'bg-yellow-600 hover:bg-yellow-700'} text-white rounded-md font-medium transition-colors`}
+          >
+            <RefreshCw className="h-4 w-4 inline mr-2" />
+            Refresh to See Data
+          </button>
+          
+          {!autoBackfillTriggered && (
+            <p className="text-xs text-gray-500 mt-4">
+              Business intelligence data is automatically extracted when you upload invoices.
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Prepare funnel data for chart
   const funnelData = [
@@ -207,7 +259,7 @@ export default function DashboardBusiness() {
         <p className="text-sm text-gray-600 mb-6">Track where invoices succeed or fail in the end-to-end process</p>
         
         {funnelData.length > 0 ? (
-          <div className="w-full h-80" style={{ minHeight: '320px' }}>
+          <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={funnelData} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -377,7 +429,7 @@ export default function DashboardBusiness() {
           </div>
           
           {data.industry_breakdown.length > 0 ? (
-            <div className="w-full h-64" style={{ minHeight: '256px' }}>
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
