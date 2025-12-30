@@ -67,17 +67,22 @@ app = FastAPI(
 )
 
 # CORS middleware configuration
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "https://zodiac-front.vercel.app,zodiac-front.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS", 
+    "https://www.bridgeedi.com,https://bridgeedi.com,https://zodiac-front.vercel.app,http://localhost:3000,http://127.0.0.1:3000"
+)
 
-origins = CORS_ORIGINS.split(",")
+origins = [origin.strip() for origin in CORS_ORIGINS.split(",")]
 logger.info(f"🌐 CORS origins configured: {origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,  # Use specific origins instead of ["*"] for better security
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 # Request/Response logging middleware
