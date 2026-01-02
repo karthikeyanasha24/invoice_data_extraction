@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { satCanonicalApi, satApi } from '@/lib/api';
 import {
   RefreshCw,
@@ -10,7 +11,8 @@ import {
   Building2,
   FileText,
   CheckCircle,
-  Clock
+  Clock,
+  Eye
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -33,6 +35,7 @@ interface CanonicalDocument {
 }
 
 export default function SATCanonicalTab() {
+  const router = useRouter();
   const [canonicalDocs, setCanonicalDocs] = useState<CanonicalDocument[]>([]);
   const [individualDocs, setIndividualDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -396,7 +399,7 @@ export default function SATCanonicalTab() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -446,30 +449,48 @@ export default function SATCanonicalTab() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {doc.status === 'MERGED' ? (
+                      <div className="flex items-center gap-2 justify-end">
+                        {/* Details Button - Always visible */}
                         <button
-                          onClick={() => handleSendToSAP(doc)}
-                          disabled={sendingId === doc.id}
-                          className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-1 text-sm"
+                          onClick={() => router.push(`/sat-documents/canonical/${doc.id}`)}
+                          className="px-3 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow"
                         >
-                          {sendingId === doc.id ? (
-                            <>
-                              <RefreshCw className="w-3 h-3 animate-spin" />
-                              Loading...
-                            </>
-                          ) : (
-                            <>
-                              <Send className="w-3 h-3" />
-                              Send to SAP
-                            </>
-                          )}
+                          <Eye className="w-4 h-4" />
+                          <span className="hidden sm:inline">Details</span>
                         </button>
-                      ) : (
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <CheckCircle className="w-4 h-4 text-green-600" />
-                          Sent: {doc.sap_document_number}
-                        </div>
-                      )}
+
+                        {/* Send to SAP Button or Status */}
+                        {doc.status === 'MERGED' ? (
+                          <button
+                            onClick={() => handleSendToSAP(doc)}
+                            disabled={sendingId === doc.id}
+                            className="px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 min-w-[140px] justify-center"
+                          >
+                            {sendingId === doc.id ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                <span className="hidden sm:inline">Sending...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-4 h-4" />
+                                <span className="hidden sm:inline">Send to SAP</span>
+                                <span className="sm:hidden">Send</span>
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 rounded-lg text-sm">
+                            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+                            <span className="text-green-800 font-medium hidden md:inline">
+                              Sent: {doc.sap_document_number}
+                            </span>
+                            <span className="text-green-800 font-medium md:hidden">
+                              Sent ✓
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

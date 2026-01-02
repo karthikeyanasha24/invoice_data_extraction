@@ -121,7 +121,8 @@ async def save_business_intelligence_data(
     target_format: Optional[str],
     is_failed: bool = False,
     success_invoice_id: Optional[int] = None,
-    failed_invoice_id: Optional[int] = None
+    failed_invoice_id: Optional[int] = None,
+    blob_xml_path: Optional[str] = None
 ) -> Optional[InvoiceBusinessData]:
     """
     Extract and save business intelligence data for an invoice
@@ -130,7 +131,7 @@ async def save_business_intelligence_data(
         db: Database session
         tracking_id: Invoice tracking ID
         user_id: User ID
-        xml_path: Path to XML file (for extracting BI data)
+        xml_path: Path to XML file (for extracting BI data) - can be dict or string
         processing_steps: Processing steps from invoice
         external_status: External status
         request_type: 'web' or 'api'
@@ -138,24 +139,33 @@ async def save_business_intelligence_data(
         is_failed: Whether invoice failed
         success_invoice_id: ID from success table (if successful)
         failed_invoice_id: ID from failed table (if failed)
+        blob_xml_path: Blob storage URL for XML file (for production)
         
     Returns:
         InvoiceBusinessData object or None if extraction failed
     """
     try:
         logger.info(f"📊 Extracting business intelligence for tracking_id: {tracking_id}")
+        logger.info(f"🔍 BI Extraction - xml_path type: {type(xml_path)}, blob_xml_path: {blob_xml_path}")
         
         # Extract business data from XML
         business_data = {}
-        if xml_path:
+        if xml_path or blob_xml_path:
             try:
-                xml_content = await read_file_from_storage(xml_path)
+                # Use blob_xml_path if available (production), otherwise xml_path (local/test)
+                xml_content = await read_file_from_storage(
+                    file_path=xml_path,
+                    blob_xml_path=blob_xml_path,
+                    blob_edi_path=None
+                )
                 if xml_content:
+                    logger.info(f"✅ Successfully read XML content ({len(xml_content)} bytes)")
                     business_data = business_intelligence_extractor.extract_from_xml(xml_content)
+                    logger.info(f"✅ Extracted BI data: customer={business_data.get('customer_name')}, products={business_data.get('product_count')}, industry={business_data.get('industry')}")
                 else:
-                    logger.warning(f"⚠️ Could not read XML file: {xml_path}")
+                    logger.warning(f"⚠️ Could not read XML file: xml_path={xml_path}, blob_xml_path={blob_xml_path}")
             except Exception as e:
-                logger.warning(f"⚠️ Could not extract BI data from XML: {e}")
+                logger.warning(f"⚠️ Could not extract BI data from XML: {e}", exc_info=True)
         
         # Determine lifecycle stage
         lifecycle_data = determine_lifecycle_stage(

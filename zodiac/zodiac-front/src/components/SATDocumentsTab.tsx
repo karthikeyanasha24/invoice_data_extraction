@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { satApi } from '@/lib/api';
 import {
   RefreshCw,
@@ -9,7 +10,8 @@ import {
   Building2,
   DollarSign,
   CheckCircle,
-  XCircle
+  XCircle,
+  Eye
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -34,6 +36,7 @@ interface SATDocument {
 }
 
 export default function SATDocumentsTab() {
+  const router = useRouter();
   const [documents, setDocuments] = useState<SATDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +190,9 @@ export default function SATDocumentsTab() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
                   </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -236,6 +242,15 @@ export default function SATDocumentsTab() {
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(doc.status)}`}>
                         {doc.status}
                       </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button
+                        onClick={() => router.push(`/sat-documents/${doc.id}`)}
+                        className="inline-flex items-center gap-1 px-3 py-1 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                      >
+                        <Eye className="w-4 h-4" />
+                        Details
+                      </button>
                     </td>
                   </tr>
                 ))}

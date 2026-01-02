@@ -839,7 +839,8 @@ async def process_invoice_internal(
                                 request_type=request_type,
                                 target_format=customer_format,
                                 is_failed=True,
-                                failed_invoice_id=failed_invoice.id
+                                failed_invoice_id=failed_invoice.id,
+                                blob_xml_path=blob_xml_path
                             )
                         except Exception as bi_err:
                             logger.warning(f"⚠️ Failed to save BI data: {bi_err}")
@@ -1757,7 +1758,8 @@ async def process_invoice_internal(
                         request_type=request_type,
                         target_format=format_type,
                         is_failed=True,
-                        failed_invoice_id=failed_invoice.id
+                        failed_invoice_id=failed_invoice.id,
+                        blob_xml_path=blob_xml_path
                     )
                 except Exception as bi_err:
                     logger.warning(f"⚠️ Failed to save BI data: {bi_err}")
@@ -1837,7 +1839,8 @@ async def process_invoice_internal(
                         request_type=request_type,
                         target_format=format_type,
                         is_failed=False,
-                        success_invoice_id=success_invoice.id
+                        success_invoice_id=success_invoice.id,
+                        blob_xml_path=blob_xml_path
                     )
                 except Exception as bi_err:
                     logger.warning(f"⚠️ Failed to save BI data: {bi_err}")
