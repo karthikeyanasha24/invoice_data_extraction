@@ -133,6 +133,13 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to load SAT Supplier Mapping router: {e}")
 
+try:
+    from .api.sat_simple_merge import router as sat_simple_merge_router
+    app.include_router(sat_simple_merge_router, prefix="/api/v1")
+    logger.info("✅ SAT Simple Merge router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load SAT Simple Merge router: {e}")
+
 logger.info("✅ Zodiac API initialized successfully")
 
 if __name__ == "__main__":

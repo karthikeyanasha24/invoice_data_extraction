@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import MainLayout from '@/components/MainLayout';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import SATDocumentsTab from '@/components/SATDocumentsTab';
+import SATSimpleMergeTab from '@/components/SATSimpleMergeTab';
 import SATCanonicalTab from '@/components/SATCanonicalTab';
 import { FileText } from 'lucide-react';
 
@@ -34,10 +35,10 @@ export default function SATDocumentsPage() {
 
           {/* Tabs */}
           <div className="mt-4">
-            <div className="flex gap-2 sm:gap-4 border-b border-gray-200">
+            <div className="flex gap-2 sm:gap-4 border-b border-gray-200 overflow-x-auto">
               <button
                 onClick={() => setActiveTab('documents')}
-                className={`px-3 sm:px-4 py-2 sm:py-3 font-medium transition-colors relative text-sm sm:text-base ${
+                className={`px-3 sm:px-4 py-2 sm:py-3 font-medium transition-colors relative text-sm sm:text-base whitespace-nowrap ${
                   activeTab === 'documents'
                     ? 'text-blue-600 border-b-2 border-blue-600'
                     : 'text-gray-600 hover:text-gray-900'
@@ -46,8 +47,18 @@ export default function SATDocumentsPage() {
                 Documents
               </button>
               <button
+                onClick={() => setActiveTab('simple-merge')}
+                className={`px-3 sm:px-4 py-2 sm:py-3 font-medium transition-colors relative text-sm sm:text-base whitespace-nowrap ${
+                  activeTab === 'simple-merge'
+                    ? 'text-blue-600 border-b-2 border-blue-600'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Simple Merge
+              </button>
+              <button
                 onClick={() => setActiveTab('canonical')}
-                className={`px-3 sm:px-4 py-2 sm:py-3 font-medium transition-colors relative text-sm sm:text-base ${
+                className={`px-3 sm:px-4 py-2 sm:py-3 font-medium transition-colors relative text-sm sm:text-base whitespace-nowrap ${
                   activeTab === 'canonical'
                     ? 'text-blue-600 border-b-2 border-blue-600'
                     : 'text-gray-600 hover:text-gray-900'
@@ -61,6 +72,7 @@ export default function SATDocumentsPage() {
       }
     >
       {activeTab === 'documents' && <SATDocumentsTab />}
+      {activeTab === 'simple-merge' && <SATSimpleMergeTab />}
       {activeTab === 'canonical' && <SATCanonicalTab />}
     </MainLayout>
   );

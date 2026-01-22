@@ -1,27 +1,28 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { use } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { satCanonicalApi } from '@/lib/api';
 import MainLayout from '@/components/MainLayout';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import { satCanonicalApi } from '@/lib/api';
-import {
-  FileCode,
-  ArrowLeft,
-  Building2,
+import { 
+  ArrowLeft, 
+  Download, 
+  FileText, 
+  Building2, 
   Calendar,
   DollarSign,
-  Hash,
+  Package,
   CheckCircle,
-  Clock,
-  Send,
-  FileText,
-  Eye
+  TrendingUp,
+  TrendingDown,
+  Send
 } from 'lucide-react';
 import { format } from 'date-fns';
 
-interface CanonicalDocumentDetail {
+interface CanonicalDocument {
   id: string;
   vendor_rfc: string;
   vendor_name: string;
@@ -33,360 +34,472 @@ interface CanonicalDocumentDetail {
   total_payments: number;
   net_amount: number;
   currency: string;
-  payment_method: string | null;
+  payment_method: string;
   cfdi_uuids: string[];
   related_cfdi_uuids: string[];
   linked_document_ids: string[];
-  sap_gl_account: string | null;
+  sap_gl_account: string;
   status: string;
-  sap_document_number: string | null;
-  sent_to_sap_at: string | null;
+  sap_document_number: string;
+  sent_to_sap_at: string;
   created_at: string;
 }
 
-export default function CanonicalDocumentDetailPage() {
-  const params = useParams();
+export default function CanonicalMergedDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const resolvedParams = use(params);
   const router = useRouter();
   const { user } = useAuth();
-  const [document, setDocument] = useState<CanonicalDocumentDetail | null>(null);
+  const [document, setDocument] = useState<CanonicalDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewJson, setPreviewJson] = useState<any>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewJson, setPreviewJson] = useState<any | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
   useEffect(() => {
-    if (user && params.id) {
+    if (user && resolvedParams.id) {
       fetchDocument();
     }
-  }, [user, params.id]);
+  }, [user, resolvedParams.id]);
 
   const fetchDocument = async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await satCanonicalApi.get(params.id as string);
+      const data = await satCanonicalApi.get(resolvedParams.id as string);
       setDocument(data);
     } catch (err: any) {
       console.error('Error fetching canonical document:', err);
-      setError(err.message || 'Failed to fetch document details');
+      setError(err.message || 'Failed to fetch document details.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePreview = async () => {
+  const handleShowPreview = async () => {
+    if (!document) return;
+    
     try {
       setLoadingPreview(true);
-      const preview = await satCanonicalApi.preview(params.id as string);
-      setPreviewJson(preview.json_payload);
-      setShowPreview(true);
+      const response = await satCanonicalApi.preview(document.id);
+      setPreviewJson(response.json_payload);
+      setShowPreviewModal(true);
     } catch (err: any) {
-      console.error('Error fetching preview:', err);
-      alert('Failed to generate preview: ' + err.message);
+      console.error('Error loading preview:', err);
+      alert('Failed to load preview: ' + (err.message || 'Unknown error'));
     } finally {
       setLoadingPreview(false);
+    }
+  };
+
+  const handleDownloadXml = async () => {
+    if (!document) return;
+    
+    try {
+      setDownloading(true);
+      const xmlBlob = await satCanonicalApi.downloadXml(document.id);
+      const filename = `canonical_merged_${document.vendor_rfc}_${document.fiscal_year}_${document.fiscal_period.toString().padStart(2, '0')}.xml`;
+
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+
+      if (isIOS) {
+        // For iOS, open in a new tab as direct download is often blocked
+        const reader = new FileReader();
+        reader.onload = function() {
+          const dataUrl = reader.result as string;
+          const newWindow = window.open(dataUrl, '_blank');
+          if (!newWindow) {
+            alert('Please allow pop-ups for this website to download the XML.');
+          }
+        };
+        reader.readAsDataURL(xmlBlob);
+      } else {
+        // For other browsers, use the standard download method
+        const url = window.URL.createObjectURL(xmlBlob);
+        const link = window.document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        window.document.body.appendChild(link);
+        link.click();
+        // Clean up after a short delay to ensure the download starts
+        setTimeout(() => {
+          window.document.body.removeChild(link);
+          window.URL.revokeObjectURL(url);
+        }, 100);
+      }
+    } catch (err: any) {
+      console.error('Error downloading XML:', err);
+      alert('Failed to download XML: ' + (err.message || 'Unknown error'));
+    } finally {
+      setDownloading(false);
     }
   };
 
   const formatCurrency = (amount: number, currency: string = 'MXN') => {
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
-      currency: currency,
+      currency: currency || 'MXN'
     }).format(amount);
   };
 
-  const getStatusBadge = (status: string) => {
-    const styles = {
-      MERGED: { bg: 'bg-purple-100', text: 'text-purple-800', icon: FileCode },
-      SAP_SENT: { bg: 'bg-green-100', text: 'text-green-800', icon: Send },
-      SAP_CONFIRMED: { bg: 'bg-green-600', text: 'text-white', icon: CheckCircle },
-    };
-    const style = styles[status as keyof typeof styles] || { bg: 'bg-gray-100', text: 'text-gray-800', icon: FileText };
-    const Icon = style.icon;
-    return (
-      <span className={`px-3 py-1 ${style.bg} ${style.text} rounded-full text-sm font-medium inline-flex items-center gap-2`}>
-        <Icon className="w-4 h-4" />
-        {status}
-      </span>
-    );
+  const getMonthName = (month: number) => {
+    return new Date(2000, month - 1, 1).toLocaleString('default', { month: 'long' });
   };
 
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <LoadingSpinner />
-      </div>
-    );
-  }
+  const getStatusBadge = (status: string) => {
+    const badges = {
+      'MERGED': 'bg-blue-100 text-blue-800',
+      'SAP_SENT': 'bg-green-100 text-green-800',
+      'FAILED': 'bg-red-100 text-red-800',
+    };
+    return badges[status as keyof typeof badges] || 'bg-gray-100 text-gray-800';
+  };
 
   if (loading) {
     return (
-      <MainLayout topSection={null}>
-        <div className="flex items-center justify-center min-h-[400px]">
-          <LoadingSpinner />
-        </div>
-      </MainLayout>
+      <div className="flex items-center justify-center min-h-screen">
+        <LoadingSpinner size="lg" text="Loading document details..." />
+      </div>
     );
   }
 
   if (error || !document) {
     return (
-      <MainLayout topSection={null}>
-        <div className="max-w-4xl mx-auto px-4 py-8">
+      <MainLayout
+        topSection={
+          <div className="px-4 sm:px-6 lg:px-8">
+            <button
+              onClick={() => router.push('/sat-documents')}
+              className="flex items-center text-blue-600 hover:text-blue-700 mb-4"
+            >
+              <ArrowLeft className="w-5 h-5 mr-2" />
+              Back to SAT Documents
+            </button>
+            <h1 className="text-3xl font-bold text-gray-900">Canonical Merged Document</h1>
+          </div>
+        }
+      >
+        <div className="p-12 text-center">
+          <div className="text-red-600 mb-4">
+            {error || 'Document not found'}
+          </div>
           <button
             onClick={() => router.push('/sat-documents')}
-            className="mb-4 inline-flex items-center gap-2 text-blue-600 hover:text-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Documents
+            Back to SAT Documents
           </button>
-          <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-            <p className="text-red-800">{error || 'Document not found'}</p>
-          </div>
         </div>
       </MainLayout>
     );
   }
 
   return (
-    <MainLayout topSection={null}>
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-6">
+    <MainLayout
+      topSection={
+        <div className="px-4 sm:px-6 lg:px-8">
           <button
-            onClick={() => router.push('/sat-documents?tab=canonical')}
-            className="mb-4 inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 transition-colors"
+            onClick={() => router.push('/sat-documents')}
+            className="flex items-center text-blue-600 hover:text-blue-700 mb-4"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Canonical Documents
+            <ArrowLeft className="w-5 h-5 mr-2" />
+            Back to SAT Documents
           </button>
-          
-          <div className="flex items-start justify-between">
+          <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <FileCode className="w-8 h-8 text-purple-600" />
+                <FileText className="w-8 h-8 text-blue-600" />
                 <h1 className="text-3xl font-bold text-gray-900">Canonical Merged Document</h1>
               </div>
-              <p className="text-gray-600">Vendor: {document.vendor_rfc} - {document.vendor_name}</p>
-            </div>
-            <button
-              onClick={handlePreview}
-              disabled={loadingPreview}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-            >
-              <Eye className="w-4 h-4" />
-              {loadingPreview ? 'Loading...' : 'Preview SAP JSON'}
-            </button>
-          </div>
-        </div>
-
-        {/* Status */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-          <div className="flex items-center gap-4">
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Status</p>
-              {getStatusBadge(document.status)}
-            </div>
-            {document.sap_gl_account && (
-              <>
-                <div className="border-l border-gray-300 h-12"></div>
-                <div>
-                  <p className="text-sm text-gray-600 mb-1">SAP G/L Account</p>
-                  <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-mono font-medium">
-                    {document.sap_gl_account}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Vendor Information */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Building2 className="w-5 h-5 text-gray-600" />
-              <h2 className="text-xl font-semibold text-gray-900">Vendor Information</h2>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm text-gray-600">RFC</p>
-                <p className="font-mono text-gray-900">{document.vendor_rfc}</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Name</p>
-                <p className="text-gray-900">{document.vendor_name || 'N/A'}</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Company Code</p>
-                <p className="font-mono text-gray-900">{document.company_code}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Period Information */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Calendar className="w-5 h-5 text-gray-600" />
-              <h2 className="text-xl font-semibold text-gray-900">Period Information</h2>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm text-gray-600">Fiscal Year</p>
-                <p className="text-2xl font-bold text-gray-900">{document.fiscal_year}</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Fiscal Period</p>
-                <p className="text-2xl font-bold text-gray-900">{document.fiscal_period}</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Created At</p>
-                <p className="text-gray-900">
-                  {document.created_at ? format(new Date(document.created_at), 'PPP p') : 'N/A'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Financial Summary */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 lg:col-span-2">
-            <div className="flex items-center gap-2 mb-4">
-              <DollarSign className="w-5 h-5 text-gray-600" />
-              <h2 className="text-xl font-semibold text-gray-900">Financial Summary</h2>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-green-50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 mb-1">Total Invoices</p>
-                <p className="text-2xl font-bold text-green-700">
-                  {formatCurrency(document.total_invoices, document.currency)}
-                </p>
-              </div>
-              <div className="bg-orange-50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 mb-1">Total Credits</p>
-                <p className="text-2xl font-bold text-orange-700">
-                  {formatCurrency(document.total_credits, document.currency)}
-                </p>
-              </div>
-              <div className="bg-blue-50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 mb-1">Total Payments</p>
-                <p className="text-2xl font-bold text-blue-700">
-                  {formatCurrency(document.total_payments, document.currency)}
-                </p>
-              </div>
-              <div className="bg-purple-50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 mb-1">Net Amount</p>
-                <p className="text-2xl font-bold text-purple-700">
-                  {formatCurrency(document.net_amount, document.currency)}
-                </p>
-              </div>
-            </div>
-            {document.payment_method && (
-              <div className="mt-4">
-                <p className="text-sm text-gray-600">Payment Method</p>
-                <p className="text-gray-900">{document.payment_method}</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Linked Documents */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mt-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Hash className="w-5 h-5 text-gray-600" />
-            <h2 className="text-xl font-semibold text-gray-900">Linked Documents</h2>
-          </div>
-          <div className="space-y-4">
-            <div>
-              <p className="text-sm text-gray-600 mb-2">CFDI UUIDs ({document.cfdi_uuids.length})</p>
-              <div className="bg-gray-50 rounded-lg p-4 max-h-40 overflow-y-auto">
-                {document.cfdi_uuids.length > 0 ? (
-                  <ul className="space-y-2">
-                    {document.cfdi_uuids.map((uuid, index) => (
-                      <li key={index} className="font-mono text-xs text-gray-700 break-all">
-                        {uuid}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-gray-500 text-sm">No UUIDs</p>
-                )}
-              </div>
-            </div>
-            
-            {document.linked_document_ids && document.linked_document_ids.length > 0 && (
-              <div>
-                <p className="text-sm text-gray-600 mb-2">Linked Document IDs ({document.linked_document_ids.length})</p>
-                <div className="bg-gray-50 rounded-lg p-4 max-h-40 overflow-y-auto">
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {document.linked_document_ids.map((docId, index) => (
-                      <button
-                        key={index}
-                        onClick={() => router.push(`/sat-documents/${docId}`)}
-                        className="text-left px-3 py-2 bg-white rounded border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors text-xs font-mono text-blue-600 hover:text-blue-700"
-                      >
-                        {docId.substring(0, 8)}...
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* SAP Information */}
-        {(document.sap_document_number || document.sent_to_sap_at) && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mt-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Send className="w-5 h-5 text-gray-600" />
-              <h2 className="text-xl font-semibold text-gray-900">SAP Information</h2>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {document.sap_document_number && (
-                <div>
-                  <p className="text-sm text-gray-600">SAP Document Number</p>
-                  <p className="font-mono text-lg font-semibold text-gray-900">{document.sap_document_number}</p>
-                </div>
-              )}
-              {document.sent_to_sap_at && (
-                <div>
-                  <p className="text-sm text-gray-600">Sent to SAP At</p>
-                  <p className="text-gray-900">{format(new Date(document.sent_to_sap_at), 'PPP p')}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Preview Modal */}
-      {showPreview && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[80vh] flex flex-col">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-semibold text-gray-900">SAP JSON Preview</h3>
-                <button
-                  onClick={() => setShowPreview(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <span className="text-2xl">&times;</span>
-                </button>
-              </div>
-              <p className="text-sm text-gray-600 mt-1">
-                This is the format that will be sent to SAP
+              <p className="text-gray-600">
+                View and download canonical merged SAP XML
               </p>
             </div>
-            <div className="flex-1 overflow-y-auto p-6">
-              <pre className="bg-gray-50 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-x-auto">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleShowPreview}
+                disabled={loadingPreview}
+                className="inline-flex items-center px-6 py-3 bg-white text-blue-600 border-2 border-blue-600 font-medium rounded-lg hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
+              >
+                {loadingPreview ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-2"></div>
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    <FileText className="w-5 h-5 mr-2" />
+                    View JSON
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleDownloadXml}
+                disabled={downloading}
+                className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
+              >
+                {downloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-5 h-5 mr-2" />
+                    Download XML
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-6 py-6">
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Building2 className="w-6 h-6 text-blue-600" />
+              <h3 className="text-sm font-medium text-gray-600">Vendor</h3>
+            </div>
+            <p className="text-lg font-semibold text-gray-900">{document.vendor_name}</p>
+            <p className="text-sm text-gray-500 font-mono mt-1">{document.vendor_rfc}</p>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Calendar className="w-6 h-6 text-purple-600" />
+              <h3 className="text-sm font-medium text-gray-600">Fiscal Period</h3>
+            </div>
+            <p className="text-lg font-semibold text-gray-900">
+              {getMonthName(document.fiscal_period)} {document.fiscal_year}
+            </p>
+            <p className="text-sm text-gray-500 mt-1">
+              Period {document.fiscal_period} / {document.fiscal_year}
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Package className="w-6 h-6 text-green-600" />
+              <h3 className="text-sm font-medium text-gray-600">Documents</h3>
+            </div>
+            <p className="text-lg font-semibold text-gray-900">{document.linked_document_ids?.length || 0}</p>
+            <p className="text-sm text-gray-500 mt-1">
+              {document.cfdi_uuids?.length || 0} CFDIs
+            </p>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <DollarSign className="w-6 h-6 text-orange-600" />
+              <h3 className="text-sm font-medium text-gray-600">Net Amount</h3>
+            </div>
+            <p className="text-lg font-semibold text-gray-900">
+              {formatCurrency(document.net_amount, document.currency)}
+            </p>
+            <p className="text-sm text-gray-500 mt-1">{document.currency}</p>
+          </div>
+        </div>
+
+        {/* Financial Summary */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-6 border-b border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-900">Financial Summary</h2>
+          </div>
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-green-100 rounded-lg">
+                  <TrendingUp className="w-6 h-6 text-green-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Total Invoices</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {formatCurrency(document.total_invoices, document.currency)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-orange-100 rounded-lg">
+                  <TrendingDown className="w-6 h-6 text-orange-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Total Credits</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {formatCurrency(document.total_credits, document.currency)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-blue-100 rounded-lg">
+                  <Send className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Total Payments</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {formatCurrency(document.total_payments, document.currency)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="text-lg font-medium text-gray-900">Net Amount</span>
+                <span className="text-2xl font-bold text-blue-600">
+                  {formatCurrency(document.net_amount, document.currency)}
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-2">
+                Net Amount = Total Invoices - Total Credits - Total Payments
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Document Information */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-6 border-b border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-900">Document Information</h2>
+          </div>
+          <div className="p-6">
+            <dl className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-1">Document ID</dt>
+                <dd className="text-sm text-gray-900 font-mono">{document.id}</dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-1">Company Code</dt>
+                <dd className="text-sm text-gray-900">{document.company_code}</dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-1">SAP G/L Account</dt>
+                <dd className="text-sm text-gray-900 font-mono">{document.sap_gl_account || 'NO MAPPING'}</dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-1">Payment Method</dt>
+                <dd className="text-sm text-gray-900">{document.payment_method}</dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-1">Status</dt>
+                <dd>
+                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusBadge(document.status)}`}>
+                    {document.status}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-1">Created At</dt>
+                <dd className="text-sm text-gray-900">
+                  {format(new Date(document.created_at), 'MMMM dd, yyyy HH:mm:ss')}
+                </dd>
+              </div>
+              {document.sap_document_number && (
+                <>
+                  <div>
+                    <dt className="text-sm font-medium text-gray-500 mb-1">SAP Document Number</dt>
+                    <dd className="text-sm text-gray-900 font-mono">{document.sap_document_number}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-sm font-medium text-gray-500 mb-1">Sent to SAP At</dt>
+                    <dd className="text-sm text-gray-900">
+                      {document.sent_to_sap_at ? format(new Date(document.sent_to_sap_at), 'MMMM dd, yyyy HH:mm:ss') : 'N/A'}
+                    </dd>
+                  </div>
+                </>
+              )}
+            </dl>
+          </div>
+        </div>
+
+        {/* Included CFDIs */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-6 border-b border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-900">Included CFDI UUIDs</h2>
+            <p className="text-sm text-gray-600 mt-1">
+              {document.cfdi_uuids?.length || 0} CFDIs merged in this canonical document
+            </p>
+          </div>
+          <div className="p-6">
+            <div className="grid grid-cols-1 gap-3">
+              {document.cfdi_uuids?.map((uuid, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg"
+                >
+                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+                  <span className="text-sm font-mono text-gray-900 break-all">{uuid}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Download Section */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+          <div className="flex items-start gap-4">
+            <FileText className="w-8 h-8 text-blue-600 flex-shrink-0 mt-1" />
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-blue-900 mb-2">Download Canonical Merged XML</h3>
+              <p className="text-sm text-blue-800 mb-4">
+                Download the canonical merged XML file in SAP format. This XML contains all aggregated financial data and is ready to be sent to SAP ECC/S4HANA.
+              </p>
+              <button
+                onClick={handleDownloadXml}
+                disabled={downloading}
+                className="inline-flex items-center px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+              >
+                {downloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-5 h-5 mr-2" />
+                    Download XML File
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* JSON Preview Modal */}
+      {showPreviewModal && previewJson && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">SAP JSON Payload Preview</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  This is the format that will be sent to SAP
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
+              <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 overflow-x-auto text-sm font-mono">
                 {JSON.stringify(previewJson, null, 2)}
               </pre>
             </div>
-            <div className="p-6 border-t border-gray-200 flex justify-end">
+            <div className="p-6 border-t border-gray-200 flex items-center justify-end gap-3">
               <button
-                onClick={() => setShowPreview(false)}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                onClick={() => setShowPreviewModal(false)}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
               >
                 Close
               </button>
@@ -397,4 +510,3 @@ export default function CanonicalDocumentDetailPage() {
     </MainLayout>
   );
 }
-

@@ -3,6 +3,7 @@ SAT Canonical Merged API Endpoints
 Handles merging of SAT documents into canonical format
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -157,6 +158,24 @@ async def preview_sap_json(
                 detail="Canonical document not found"
             )
         
+        # Fetch linked documents to get detailed CFDI information with types
+        cfdi_details = []
+        if canonical.linked_document_ids:
+            from ..models.sat_document import SATDocument
+            linked_docs = db.query(SATDocument).filter(
+                SATDocument.id.in_([str(doc_id) for doc_id in canonical.linked_document_ids])
+            ).all()
+            
+            # Build detailed CFDI list with types
+            for doc in linked_docs:
+                cfdi_details.append({
+                    "uuid": doc.cfdi_uuid,
+                    "type": doc.doc_type,
+                    "total": float(doc.total) if doc.total else 0,
+                    "currency": doc.moneda or 'MXN',
+                    "date": doc.fecha.isoformat() if doc.fecha else None
+                })
+        
         # Build JSON payload for SAP
         sap_payload = {
             "COMPANY_CODE": canonical.company_code or 'MX01',
@@ -171,7 +190,8 @@ async def preview_sap_json(
             "NET_AMOUNT": float(canonical.net_amount or 0),
             "GL_ACCOUNT": canonical.sap_gl_account or 'NO MAPPING',
             "PAYMENT_METHOD": canonical.payment_method or 'PPD',
-            "CFDI_UUIDS": canonical.cfdi_uuids or [],
+            "CFDI_UUIDS": canonical.cfdi_uuids or [],  # Keep for backward compatibility
+            "CFDI_DETAILS": cfdi_details,  # NEW: Detailed info with types
             "RELATED_UUIDS": canonical.related_cfdi_uuids or [],
             "DOCUMENT_COUNT": len(canonical.linked_document_ids or []),
             "PORTAL_REF_ID": str(canonical.id)
@@ -210,7 +230,7 @@ async def send_canonical_to_sap(
         
         # Generate SAP XML
         from ..services.sap_transformer import SAPTransformer
-        sap_transformer = SAPTransformer()
+        sap_transformer = SAPTransformer(db)
         sap_xml = sap_transformer.transform_canonical_to_sap_xml(canonical)
         
         # Mock SAP send (replace with actual SAP API call)
@@ -240,5 +260,49 @@ async def send_canonical_to_sap(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to send to SAP: {str(e)}"
+        )
+
+
+@router.get("/{canonical_id}/download-xml", response_class=Response)
+async def download_canonical_xml(
+    canonical_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Download the canonical merged document as SAP XML.
+    """
+    try:
+        merge_service = SATCanonicalMergeService(db)
+        canonical = merge_service.get_canonical_by_id(current_user.id, canonical_id)
+        
+        if not canonical:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Canonical document not found"
+            )
+        
+        # Generate SAP XML
+        from ..services.sap_transformer import SAPTransformer
+        sap_transformer = SAPTransformer(db)
+        sap_xml = sap_transformer.transform_canonical_to_sap_xml(canonical)
+        
+        filename = f"canonical_merged_{canonical.vendor_rfc}_{canonical.fiscal_year}_{str(canonical.fiscal_period).zfill(2)}.xml"
+        
+        return Response(
+            content=sap_xml,
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to download canonical XML: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download XML: {str(e)}"
         )
 

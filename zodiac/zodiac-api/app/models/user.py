@@ -36,6 +36,7 @@ class ZodiacUser(Base):
     # Relationships
     successful_invoices = relationship("ZodiacInvoiceSuccessEdi", back_populates="user")
     failed_invoices = relationship("ZodiacInvoiceFailedEdi", back_populates="user")
+    sat_simple_merged_documents = relationship("SATSimpleMerged", back_populates="user")
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)

@@ -1413,6 +1413,68 @@ export const satApi = {
     },
 };
 
+// SAT Simple Merge API
+export const satSimpleMergeApi = {
+    // Merge documents and save to database
+    merge: async (params: {
+        fiscal_year: number;
+        fiscal_period: number;
+        supplier_rfc: string;
+    }) => {
+        try {
+            const response = await api.post('/api/v1/sat/simple-merge/merge', params);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to merge documents:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to merge documents.');
+        }
+    },
+
+    // List simple merged documents
+    list: async (
+        fiscal_year?: number,
+        fiscal_period?: number,
+        skip: number = 0,
+        limit: number = 100
+    ) => {
+        try {
+            const params: any = { skip, limit };
+            if (fiscal_year) params.fiscal_year = fiscal_year;
+            if (fiscal_period) params.fiscal_period = fiscal_period;
+
+            const response = await api.get('/api/v1/sat/simple-merge/', { params });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch simple merged documents:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch simple merged documents.');
+        }
+    },
+
+    // Get simple merged document by ID
+    get: async (mergedId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/simple-merge/${mergedId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get simple merged document:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch merged document.');
+        }
+    },
+
+    // Download merged XML
+    download: async (mergedId: string): Promise<Blob> => {
+        try {
+            const response = await api.get(`/api/v1/sat/simple-merge/${mergedId}/download`, {
+                responseType: 'blob'
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to download merged XML:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to download XML.');
+        }
+    },
+};
+
 // SAT Canonical Merged API
 export const satCanonicalApi = {
     // Merge documents
@@ -1480,6 +1542,19 @@ export const satCanonicalApi = {
         } catch (error: any) {
             console.error('Failed to send to SAP:', error);
             throw new Error(error.response?.data?.detail || 'Failed to send to SAP.');
+        }
+    },
+
+    // Download canonical merged XML
+    downloadXml: async (canonicalId: string): Promise<Blob> => {
+        try {
+            const response = await api.get(`/api/v1/sat/canonical/${canonicalId}/download-xml`, {
+                responseType: 'blob'
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to download canonical XML:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to download XML.');
         }
     },
 };
