@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, Text, Numeric, ForeignKey, JSON
+from sqlalchemy import Column, String, Integer, DateTime, Text, Numeric, ForeignKey, JSON, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -36,6 +36,12 @@ class SATSimpleMerged(Base):
     
     # Merged XML content
     merged_xml_content = Column(Text, nullable=False)
+    
+    # SAP Integration
+    sent_to_sap = Column(Boolean, default=False, nullable=False)
+    sap_document_number = Column(String(50), nullable=True)
+    sent_to_sap_at = Column(DateTime, nullable=True)
+    sap_response = Column(Text, nullable=True)
     
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow)

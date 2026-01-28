@@ -7,6 +7,7 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import SATDocumentsTab from '@/components/SATDocumentsTab';
 import SATSimpleMergeTab from '@/components/SATSimpleMergeTab';
 import SATCanonicalTab from '@/components/SATCanonicalTab';
+import SAPSendTab from '@/components/SAPSendTab';
 import { FileText } from 'lucide-react';
 
 export default function SATDocumentsPage() {
@@ -66,6 +67,16 @@ export default function SATDocumentsPage() {
               >
                 Canonical Merged
               </button>
+              <button
+                onClick={() => setActiveTab('send-to-sap')}
+                className={`px-3 sm:px-4 py-2 sm:py-3 font-medium transition-colors relative text-sm sm:text-base whitespace-nowrap ${
+                  activeTab === 'send-to-sap'
+                    ? 'text-green-600 border-b-2 border-green-600'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Send to SAP
+              </button>
             </div>
           </div>
         </div>
@@ -74,6 +85,7 @@ export default function SATDocumentsPage() {
       {activeTab === 'documents' && <SATDocumentsTab />}
       {activeTab === 'simple-merge' && <SATSimpleMergeTab />}
       {activeTab === 'canonical' && <SATCanonicalTab />}
+      {activeTab === 'send-to-sap' && <SAPSendTab />}
     </MainLayout>
   );
 }

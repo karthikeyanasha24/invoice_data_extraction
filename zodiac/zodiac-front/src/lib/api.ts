@@ -1473,6 +1473,28 @@ export const satSimpleMergeApi = {
             throw new Error(error.response?.data?.detail || 'Failed to download XML.');
         }
     },
+
+    // Preview SAP JSON
+    previewSapJson: async (mergedId: string) => {
+        try {
+            const response = await api.get(`/api/v1/sat/simple-merge/${mergedId}/preview-sap-json`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to preview SAP JSON:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to generate SAP JSON preview.');
+        }
+    },
+
+    // Send to SAP
+    sendToSAP: async (mergedId: string) => {
+        try {
+            const response = await api.post(`/api/v1/sat/simple-merge/${mergedId}/send-to-sap`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to send to SAP:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to send to SAP.');
+        }
+    },
 };
 
 // SAT Canonical Merged API
@@ -1545,6 +1567,17 @@ export const satCanonicalApi = {
         }
     },
 
+    // Send all documents to SAP (both canonical and simple merge)
+    sendAllToSAP: async (params: { fiscal_year: number; fiscal_period: number }) => {
+        try {
+            const response = await api.post('/api/v1/sat/send-all-to-sap', params);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to send all to SAP:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to send all documents to SAP.');
+        }
+    },
+
     // Download canonical merged XML
     downloadXml: async (canonicalId: string): Promise<Blob> => {
         try {
@@ -1555,6 +1588,66 @@ export const satCanonicalApi = {
         } catch (error: any) {
             console.error('Failed to download canonical XML:', error);
             throw new Error(error.response?.data?.detail || 'Failed to download XML.');
+        }
+    },
+};
+
+// Supplier Tokens API
+export const supplierTokensApi = {
+    // Generate new supplier token
+    generate: async (data: { supplier_rfc: string; supplier_name: string; expires_in_days?: number; notes?: string }) => {
+        try {
+            const response = await api.post('/api/v1/supplier-tokens/generate', data);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to generate supplier token:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to generate supplier token.');
+        }
+    },
+
+    // List all supplier tokens
+    list: async (skip: number = 0, limit: number = 100, active_only: boolean = false) => {
+        try {
+            const response = await api.get('/api/v1/supplier-tokens/list', {
+                params: { skip, limit, active_only }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch supplier tokens:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch supplier tokens.');
+        }
+    },
+
+    // Revoke token
+    revoke: async (tokenId: number) => {
+        try {
+            const response = await api.delete(`/api/v1/supplier-tokens/${tokenId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to revoke supplier token:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to revoke supplier token.');
+        }
+    },
+
+    // Refresh token
+    refresh: async (tokenId: number) => {
+        try {
+            const response = await api.post(`/api/v1/supplier-tokens/${tokenId}/refresh`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to refresh supplier token:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to refresh supplier token.');
+        }
+    },
+
+    // Get stats
+    getStats: async () => {
+        try {
+            const response = await api.get('/api/v1/supplier-tokens/stats');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get supplier token stats:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to get statistics.');
         }
     },
 };

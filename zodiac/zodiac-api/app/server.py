@@ -140,6 +140,13 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to load SAT Simple Merge router: {e}")
 
+try:
+    from .api.supplier_tokens import router as supplier_tokens_router
+    app.include_router(supplier_tokens_router, prefix="/api/v1")
+    logger.info("✅ Supplier Tokens router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load Supplier Tokens router: {e}")
+
 logger.info("✅ Zodiac API initialized successfully")
 
 if __name__ == "__main__":

@@ -86,17 +86,17 @@ def main():
     # ============================================================
     print_step(2, "Reading XML files")
     
-    invoice_xml = read_xml_file("INVOICE.xml")
-    credit_note_xml = read_xml_file("CREDIT NOTE.xml")
-    payment_xml = read_xml_file("PAYMENT COMPLEMENT.xml")
+    invoice_xml = read_xml_file("test_invoice_001.xml")
+    credit_note_xml = read_xml_file("test_credit_note_002.xml")
+    payment_xml = read_xml_file("test_payment_003.xml")
     
     if not all([invoice_xml, credit_note_xml, payment_xml]):
         print_error("Failed to read one or more XML files")
         return
     
-    print_success(f"INVOICE.xml: {len(invoice_xml)} bytes")
-    print_success(f"CREDIT NOTE.xml: {len(credit_note_xml)} bytes")
-    print_success(f"PAYMENT COMPLEMENT.xml: {len(payment_xml)} bytes")
+    print_success(f"test_invoice_001.xml: {len(invoice_xml)} bytes")
+    print_success(f"test_credit_note_002.xml: {len(credit_note_xml)} bytes")
+    print_success(f"test_payment_003.xml: {len(payment_xml)} bytes")
     
     # ============================================================
     # STEP 3: Send INVOICE
@@ -164,7 +164,6 @@ def main():
         print_info(f"UUID: {payment_data['cfdi_uuid']}")
         print_info(f"Document ID: {payment_data['document_id']}")
         print_info(f"Total: ${payment_data['total']} {payment_data['currency']}")
-        print_info(f"Related Invoice UUID: {payment_data.get('related_cfdi_uuid', 'N/A')}")
     else:
         print_error(f"Failed to upload PAYMENT: {payment_response.status_code}")
         print_error(payment_response.text)
@@ -174,8 +173,8 @@ def main():
     
     # Extract fiscal info from first document
     # If fiscal_year and fiscal_period are not in response, use defaults or fetch from API
-    fiscal_year = invoice_data.get('fiscal_year')
-    fiscal_period = invoice_data.get('fiscal_period')
+    fiscal_year = invoice_data.get('fiscal_year', 2026)
+    fiscal_period = invoice_data.get('fiscal_period', 1)
     supplier_rfc = invoice_data['supplier_rfc']
     
     # If fiscal info not in response, fetch from documents list
@@ -188,14 +187,14 @@ def main():
         if docs_response.status_code == 200:
             docs = docs_response.json().get('documents', [])
             if docs:
-                fiscal_year = docs[0].get('fiscal_year', 2025)
-                fiscal_period = docs[0].get('fiscal_period', 11)
+                fiscal_year = docs[0].get('fiscal_year', 2026)
+                fiscal_period = docs[0].get('fiscal_period', 1)
                 print_info(f"Found fiscal period: {fiscal_year}-{fiscal_period:02d}")
         
         # Fallback to defaults if still not found
         if not fiscal_year or not fiscal_period:
-            fiscal_year = 2025
-            fiscal_period = 11
+            fiscal_year = 2026
+            fiscal_period = 1
             print_info(f"Using default period: {fiscal_year}-{fiscal_period:02d}")
     
     # ============================================================
@@ -222,11 +221,11 @@ def main():
         print_info(f"Creating new mapping for RFC: {supplier_rfc}")
         mapping_response = requests.post(
             f"{BASE_URL}/api/v1/sat/supplier-mapping/create",
-            headers=headers,
+            headers=headers,  # Use JSON headers for this endpoint
             json={
                 "supplier_rfc": supplier_rfc,
                 "sap_gl_account": "40000001",
-                "account_description": "Test Supplier - Illumination Equipment",
+                "account_description": "Test Supplier - Technology Equipment",
                 "is_active": True
             }
         )
@@ -339,8 +338,10 @@ def main():
     
     print(f"\n{Colors.BOLD}View in Portal:{Colors.END}")
     print(f"  • http://localhost:3000/sat-documents")
-    print(f"  • Go to 'Canonical' tab")
-    print(f"  • Filter by Year: {fiscal_year}, Month: {fiscal_period}")
+    print(f"  • Go to 'Documents' tab to see uploaded files")
+    print(f"  • Go to 'Canonical Merged' tab to see the canonical document")
+    print(f"  • Go to 'Send to SAP' tab to see SAP integration status")
+    print(f"  • Filter by Year: {fiscal_year}, Period: {fiscal_period}")
     
     print(f"\n{Colors.BOLD}Database Queries:{Colors.END}")
     print(f"  • Individual docs: SELECT * FROM sat_documents WHERE fiscal_year = {fiscal_year} AND fiscal_period = {fiscal_period};")

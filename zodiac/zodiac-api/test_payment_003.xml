@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:pago20="http://www.sat.gob.mx/Pagos20" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd http://www.sat.gob.mx/Pagos20 http://www.sat.gob.mx/sitio_internet/cfd/Pagos/Pagos20.xsd" Version="4.0" Serie="P" Folio="11111" Fecha="2026-01-25T09:00:00" SubTotal="0.00" Moneda="XXX" Total="0.00" TipoDeComprobante="P" Exportacion="01" LugarExpedicion="54720">
+    
+    <cfdi:Emisor Rfc="TEC940201K89" Nombre="TECNOLOGIA AVANZADA SA DE CV" RegimenFiscal="601"/>
+    
+    <cfdi:Receptor Rfc="CLI850315HG2" Nombre="CLIENTE COMERCIAL SA" DomicilioFiscalReceptor="06000" RegimenFiscalReceptor="601" UsoCFDI="CP01"/>
+    
+    <cfdi:Conceptos>
+        <cfdi:Concepto ClaveProdServ="84111506" Cantidad="1" ClaveUnidad="ACT" Descripcion="Pago" ValorUnitario="0.00" Importe="0.00" ObjetoImp="01"/>
+    </cfdi:Conceptos>
+    
+    <cfdi:Complemento>
+        <pago20:Pagos Version="2.0">
+            <pago20:Totales TotalRetencionesIVA="0.00" TotalRetencionesISR="0.00" TotalRetencionesIEPS="0.00" TotalTrasladosBaseIVA16="4520.00" TotalTrasladosImpuestoIVA16="723.20" TotalTrasladosBaseIVA8="0.00" TotalTrasladosImpuestoIVA8="0.00" TotalTrasladosBaseIVA0="0.00" TotalTrasladosImpuestoIVA0="0.00" TotalTrasladosBaseIVAExento="0.00" MontoTotalPagos="5243.20"/>
+            <pago20:Pago FechaPago="2026-01-25T09:00:00" FormaDePagoP="03" MonedaP="MXN" TipoCambioP="1.00" Monto="5243.20" NumOperacion="TRF-2026-001">
+                <pago20:DoctoRelacionado IdDocumento="A1B2C3D4-E5F6-7890-ABCD-123456789001" Serie="A" Folio="12345" MonedaDR="MXN" EquivalenciaDR="1.00" NumParcialidad="1" ImpSaldoAnt="5800.00" ImpPagado="5243.20" ImpSaldoInsoluto="556.80" ObjetoImpDR="02">
+                    <pago20:ImpuestosDR>
+                        <pago20:TrasladosDR>
+                            <pago20:TrasladoDR BaseDR="4520.00" ImpuestoDR="002" TipoFactorDR="Tasa" TasaOCuotaDR="0.160000" ImporteDR="723.20"/>
+                        </pago20:TrasladosDR>
+                    </pago20:ImpuestosDR>
+                </pago20:DoctoRelacionado>
+            </pago20:Pago>
+        </pago20:Pagos>
+        
+        <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="C3D4E5F6-A7B8-9012-CDEF-345678901003" FechaTimbrado="2026-01-25T09:05:00" RfcProvCertif="SAT970701NN3" SelloCFD="IJKL9012MNOP3456..." SelloSAT="WXYZ9876ABCD1234..." NoCertificadoSAT="30001000000500003456"/>
+    </cfdi:Complemento>
+    
+</cfdi:Comprobante>
+

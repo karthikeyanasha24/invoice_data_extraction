@@ -11,7 +11,8 @@ import {
   ChevronRight,
   User,
   LogOut,
-  Building2
+  Building2,
+  Key
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -70,6 +71,13 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
       icon: Settings,
       path: '/admin/account-mapping',
       description: 'RFC to SAP G/L mapping'
+    },
+    {
+      id: 'supplier-tokens',
+      label: 'Supplier Tokens',
+      icon: Key,
+      path: '/admin/supplier-tokens',
+      description: 'Manage supplier API tokens'
     },
     {
       id: 'settings',

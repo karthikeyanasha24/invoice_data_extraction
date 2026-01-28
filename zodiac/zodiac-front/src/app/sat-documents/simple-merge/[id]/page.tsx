@@ -42,6 +42,9 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewJson, setPreviewJson] = useState<any | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   useEffect(() => {
     if (user && resolvedParams.id) {
@@ -60,6 +63,22 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
       setError(err.message || 'Failed to fetch document details.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleShowPreview = async () => {
+    if (!document) return;
+    
+    try {
+      setLoadingPreview(true);
+      const response = await satSimpleMergeApi.previewSapJson(document.id);
+      setPreviewJson(response.json_payload);
+      setShowPreviewModal(true);
+    } catch (err: any) {
+      console.error('Error loading preview:', err);
+      alert('Failed to load SAP JSON preview: ' + (err.message || 'Unknown error'));
+    } finally {
+      setLoadingPreview(false);
     }
   };
 
@@ -177,23 +196,42 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
                 View and download merged CFDI XML
               </p>
             </div>
-            <button
-              onClick={handleDownloadXml}
-              disabled={downloading}
-              className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
-            >
-              {downloading ? (
-                <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                  Downloading...
-                </>
-              ) : (
-                <>
-                  <Download className="w-5 h-5 mr-2" />
-                  Download XML
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleShowPreview}
+                disabled={loadingPreview}
+                className="inline-flex items-center px-6 py-3 bg-white text-blue-600 border-2 border-blue-600 font-medium rounded-lg hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
+              >
+                {loadingPreview ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-2"></div>
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    <FileText className="w-5 h-5 mr-2" />
+                    View JSON
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleDownloadXml}
+                disabled={downloading}
+                className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
+              >
+                {downloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-5 h-5 mr-2" />
+                    Download XML
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       }
@@ -341,6 +379,43 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
           </div>
         </div>
       </div>
+
+      {/* JSON Preview Modal */}
+      {showPreviewModal && previewJson && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">SAP JSON Payload Preview</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  This is the format that will be sent to SAP
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
+              <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 overflow-x-auto text-sm font-mono">
+                {JSON.stringify(previewJson, null, 2)}
+              </pre>
+            </div>
+            <div className="p-6 border-t border-gray-200 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   );
 }

@@ -38,6 +38,9 @@ class SimpleMergedResponse(BaseModel):
     cfdi_uuids: Optional[List[str]]
     total_amount: Optional[float]
     currency: str
+    sent_to_sap: Optional[bool] = False
+    sap_document_number: Optional[str] = None
+    sent_to_sap_at: Optional[datetime] = None
     created_at: datetime
 
     class Config:
@@ -260,6 +263,9 @@ async def list_simple_merged_documents(
                     cfdi_uuids=doc.cfdi_uuids,
                     total_amount=float(doc.total_amount) if doc.total_amount else None,
                     currency=doc.currency,
+                    sent_to_sap=doc.sent_to_sap if hasattr(doc, 'sent_to_sap') else False,
+                    sap_document_number=doc.sap_document_number if hasattr(doc, 'sap_document_number') else None,
+                    sent_to_sap_at=doc.sent_to_sap_at if hasattr(doc, 'sent_to_sap_at') else None,
                     created_at=doc.created_at
                 )
                 for doc in documents
@@ -356,4 +362,204 @@ async def download_simple_merged_xml(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to download XML: {str(e)}"
+        )
+
+
+@router.get("/{merged_id}/preview-sap-json")
+async def preview_simple_merge_sap_json(
+    merged_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate and return the SAP JSON payload for preview before sending.
+    """
+    try:
+        from ..services.sap_transformer import SAPTransformer
+        
+        # Fetch the document
+        document = db.query(SATSimpleMerged).filter(
+            SATSimpleMerged.id == merged_id,
+            SATSimpleMerged.user_id == current_user.id
+        ).first()
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Simple merged document {merged_id} not found"
+            )
+        
+        # Transform to SAP format
+        transformer = SAPTransformer(db)
+        sap_payload = transformer.transform_simple_to_sap_format(document)
+        
+        return {"json_payload": sap_payload}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to generate preview: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate preview: {str(e)}"
+        )
+
+
+@router.post("/{merged_id}/send-to-sap")
+async def send_simple_merge_to_sap(
+    merged_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Send a simple merged document to SAP.
+    Converts the XML to the format specified by client (singlefile/multiplefiles).
+    """
+    try:
+        from ..services.sap_api_client import sap_client
+        from lxml import etree
+        
+        logger.info(f"📤 Sending simple merged document {merged_id} to SAP...")
+        
+        # Fetch the document
+        document = db.query(SATSimpleMerged).filter(
+            SATSimpleMerged.id == merged_id,
+            SATSimpleMerged.user_id == current_user.id
+        ).first()
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Simple merged document {merged_id} not found"
+            )
+        
+        # Check if already sent
+        if document.sent_to_sap:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document already sent to SAP. SAP Doc #: {document.sap_document_number}"
+            )
+        
+        # Parse the merged XML to extract individual documents
+        try:
+            merged_root = etree.fromstring(document.merged_xml_content.encode('utf-8'))
+        except Exception as e:
+            logger.error(f"Failed to parse merged XML: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid merged XML content: {str(e)}"
+            )
+        
+        # Build JSON payload in client's format (array of documents)
+        sap_payload = []
+        
+        # Extract each document
+        for doc_wrapper in merged_root.findall('.//Document'):
+            try:
+                # Extract metadata from wrapper
+                doc_id = doc_wrapper.findtext('DocumentID', 'N/A')
+                doc_type = doc_wrapper.findtext('DocumentType', 'I')  # Default to INVOICE
+                cfdi_uuid = doc_wrapper.findtext('CFDI_UUID', '')
+                total = doc_wrapper.findtext('Total', '0')
+                currency = doc_wrapper.findtext('Currency', 'MXN')
+                doc_date = doc_wrapper.findtext('Date', '')
+                
+                # Map document type to SAP format
+                # INVOICE → I, CREDIT_NOTE → C, PAYMENT → P
+                sap_doc_type = {
+                    'INVOICE': 'I',
+                    'CREDIT_NOTE': 'C',
+                    'PAYMENT': 'P'
+                }.get(doc_type, 'I')
+                
+                # Extract CFDI content
+                cfdi_content = doc_wrapper.find('.//CFDIContent')
+                if cfdi_content is not None and len(cfdi_content) > 0:
+                    cfdi_root = cfdi_content[0]  # Get first child (the actual CFDI)
+                    
+                    # Extract more fields from CFDI if available
+                    # This is a simplified version - adjust based on actual CFDI structure
+                    comprobante_ns = cfdi_root.nsmap.get(None, '')
+                    
+                    # Build document payload matching client's format
+                    doc_payload = {
+                        "DS_UUID": cfdi_uuid,
+                        "DOCUMENT_TYPE": sap_doc_type,
+                        "DOC_NUMBER": doc_id,
+                        "VERSION": "4.0",
+                        "ISSUE_DATETIME": doc_date.replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] if doc_date else "",
+                        "CURRENCY": currency,
+                        "TOTAL_AMOUNT": float(total),
+                        "ISSUER_NAME": document.vendor_name or document.vendor_rfc,
+                        "ISSUER_TAX_ID": document.vendor_rfc,
+                        # Add more fields as needed
+                        "ITEMS": []  # Can be extracted from CFDI if needed
+                    }
+                    
+                    sap_payload.append(doc_payload)
+                    
+            except Exception as e:
+                logger.error(f"Error processing document {doc_id}: {e}")
+                continue
+        
+        if not sap_payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid documents found in merged XML"
+            )
+        
+        logger.info(f"   Prepared {len(sap_payload)} document(s) for SAP")
+        
+        # Send to SAP using the new client
+        sap_response = await sap_client.send_json_to_sap(
+            payload=sap_payload,
+            document_type="SIMPLE_MERGE",
+            portal_reference=str(merged_id)
+        )
+        
+        if sap_response.get('success'):
+            # Update document status
+            document.sent_to_sap = True
+            document.sent_to_sap_at = datetime.utcnow()
+            
+            # Try to extract SAP document number from response
+            sap_doc_number = None
+            if isinstance(sap_response.get('sap_response'), dict):
+                sap_doc_number = sap_response['sap_response'].get('document_number') or sap_response['sap_response'].get('sap_document_number')
+            
+            # If no document number, generate a reference
+            if not sap_doc_number:
+                import random
+                sap_doc_number = f"SM{random.randint(1000000, 9999999)}"
+            
+            document.sap_document_number = sap_doc_number
+            document.sap_response = str(sap_response)
+            
+            db.commit()
+            db.refresh(document)
+            
+            logger.info(f"✅ Simple merge {merged_id} sent to SAP successfully. SAP Doc #: {sap_doc_number}")
+            
+            return {
+                "success": True,
+                "sap_document_number": sap_doc_number,
+                "sent_at": document.sent_to_sap_at.isoformat(),
+                "message": "Simple merged document sent to SAP successfully",
+                "sap_response": sap_response
+            }
+        else:
+            logger.error(f"❌ Failed to send to SAP: {sap_response.get('error')}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"SAP returned error: {sap_response.get('error')}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Unexpected error sending to SAP: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to send to SAP: {str(e)}"
         )

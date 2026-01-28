@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd" Version="4.0" Serie="B" Folio="54321" Fecha="2026-01-18T15:45:00" FormaPago="04" SubTotal="3500.00" Moneda="MXN" Total="4060.00" TipoDeComprobante="I" Exportacion="01" MetodoPago="PPD" LugarExpedicion="54720">
+    
+    <cfdi:Emisor Rfc="SUP850615JH4" Nombre="SUMINISTROS PROFESIONALES SA" RegimenFiscal="601"/>
+    
+    <cfdi:Receptor Rfc="REC920425KL8" Nombre="RECEPTOR INDUSTRIAL SA" DomicilioFiscalReceptor="03100" RegimenFiscalReceptor="601" UsoCFDI="G03"/>
+    
+    <cfdi:Conceptos>
+        <cfdi:Concepto ClaveProdServ="31201500" NoIdentificacion="MOUSE-PRO" Cantidad="100" ClaveUnidad="H87" Unidad="Pieza" Descripcion="Mouse Ergonomico Inalambrico" ValorUnitario="25.00" Importe="2500.00" ObjetoImp="02">
+            <cfdi:Impuestos>
+                <cfdi:Traslados>
+                    <cfdi:Traslado Base="2500.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="400.00"/>
+                </cfdi:Traslados>
+            </cfdi:Impuestos>
+        </cfdi:Concepto>
+        <cfdi:Concepto ClaveProdServ="31201500" NoIdentificacion="KEYB-MECH" Cantidad="50" ClaveUnidad="H87" Unidad="Pieza" Descripcion="Teclado Mecanico RGB" ValorUnitario="20.00" Importe="1000.00" ObjetoImp="02">
+            <cfdi:Impuestos>
+                <cfdi:Traslados>
+                    <cfdi:Traslado Base="1000.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="160.00"/>
+                </cfdi:Traslados>
+            </cfdi:Impuestos>
+        </cfdi:Concepto>
+    </cfdi:Conceptos>
+    
+    <cfdi:Impuestos TotalImpuestosTrasladados="560.00">
+        <cfdi:Traslados>
+            <cfdi:Traslado Base="3500.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="560.00"/>
+        </cfdi:Traslados>
+    </cfdi:Impuestos>
+    
+    <cfdi:Complemento>
+        <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="D4E5F6A7-B8C9-0123-DEFG-456789012004" FechaTimbrado="2026-01-18T15:50:00" RfcProvCertif="SAT970701NN3" SelloCFD="MNOP3456QRST7890..." SelloSAT="ABCD1234EFGH5678..." NoCertificadoSAT="30001000000500003456"/>
+    </cfdi:Complemento>
+    
+</cfdi:Comprobante>
+

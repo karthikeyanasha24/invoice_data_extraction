@@ -1,0 +1,223 @@
+{
+  "info": {
+    "name": "Supplier Intake API - Testing",
+    "description": "Test collection for Supplier Token Authentication and CFDI document submission",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "admin_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "supplier_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Admin Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var jsonData = pm.response.json();",
+              "    pm.collectionVariables.set('admin_token', jsonData.access_token);",
+              "    console.log('Admin token saved');",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"puspesh@gmail.com\",\n  \"password\": \"12345\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/user/auth/login",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "user", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "2. Generate Supplier Token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var jsonData = pm.response.json();",
+              "    pm.collectionVariables.set('supplier_token', jsonData.token);",
+              "    console.log('Supplier token saved: ' + jsonData.token);",
+              "    console.log('COPY THIS TOKEN - IT WILL NOT BE SHOWN AGAIN!');",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{admin_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"supplier_rfc\": \"IIA040805DZ4\",\n  \"supplier_name\": \"INDISTRIA ILUMINADORA DE ALMACENES\",\n  \"expires_in_days\": 365,\n  \"notes\": \"Test supplier token\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/supplier-tokens/generate",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "supplier-tokens", "generate"]
+        }
+      }
+    },
+    {
+      "name": "3. Supplier Intake - Valid Token",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Supplier-Token",
+            "value": "{{supplier_token}}",
+            "description": "Supplier token authentication"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"xml_content\": \"<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?><cfdi:Comprobante xmlns:cfdi=\\\"http://www.sat.gob.mx/cfd/4\\\" Version=\\\"4.0\\\"><!-- PUT ACTUAL CFDI XML HERE --></cfdi:Comprobante>\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/sat/supplier-intake",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "sat", "supplier-intake"]
+        }
+      }
+    },
+    {
+      "name": "4. Supplier Intake - Invalid Token (401)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Supplier-Token",
+            "value": "INVALID_TOKEN_123456789",
+            "description": "Invalid token for testing"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"xml_content\": \"<?xml version=\\\"1.0\\\">...\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/sat/supplier-intake",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "sat", "supplier-intake"]
+        }
+      }
+    },
+    {
+      "name": "5. List Supplier Tokens (Admin)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{admin_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/supplier-tokens/list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "supplier-tokens", "list"]
+        }
+      }
+    },
+    {
+      "name": "6. Get Token Stats (Admin)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{admin_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/supplier-tokens/stats",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "supplier-tokens", "stats"]
+        }
+      }
+    },
+    {
+      "name": "7. Refresh Token (Admin)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{admin_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/supplier-tokens/1/refresh",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "supplier-tokens", "1", "refresh"]
+        }
+      }
+    },
+    {
+      "name": "8. Revoke Token (Admin)",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{admin_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/supplier-tokens/1",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "supplier-tokens", "1"]
+        }
+      }
+    }
+  ]
+}

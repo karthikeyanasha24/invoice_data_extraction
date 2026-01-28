@@ -1,0 +1,119 @@
+{
+  "info": {
+    "name": "Bridge Portal - SAP Connectivity",
+    "description": "Test Bridge Portal connectivity by simulating SAP pushing invoices",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/health",
+          "host": [
+            "localhost:8000"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "2. Login (Get Access Token)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"testsalmen123@gmail.com\",\n  \"password\": \"testsalmen123\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/v1/user/auth/login",
+          "host": [
+            "localhost:8000"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "user",
+            "auth",
+            "login"
+          ]
+        }
+      }
+    },
+    {
+      "name": "3. Push Invoice via API (SAP Simulation)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer NmxwS2sxNnRsZy1SVThOVkFWdTMtN3p5MGJhLU1IQUF5TExGVmRFaUNqNndycW0xRlk0VTM4TTN4bG4xSV9DNGVhbk0wMll0bFU4LVliQU5NbFZEelE="
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": "INVOICE.xml"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/v1/invoices/api/process",
+          "host": [
+            "localhost:8000"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "invoices",
+            "api",
+            "process"
+          ]
+        }
+      }
+    },
+    {
+      "name": "4. Check Successful Invoices",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8000/api/v1/invoices/success?limit=10",
+          "host": [
+            "localhost:8000"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "invoices",
+            "success"
+          ],
+          "query": [
+            {
+              "key": "limit",
+              "value": "10"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

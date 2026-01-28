@@ -5,13 +5,11 @@ import { useRouter } from 'next/navigation';
 import { satCanonicalApi, satApi } from '@/lib/api';
 import {
   RefreshCw,
-  Send,
   Calendar,
   DollarSign,
   Building2,
   FileText,
   CheckCircle,
-  Clock,
   Eye
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -43,12 +41,6 @@ export default function SATCanonicalTab() {
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [merging, setMerging] = useState(false);
-  const [sendingId, setSendingId] = useState<string | null>(null);
-  
-  // Preview modal state
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [previewJson, setPreviewJson] = useState<any | null>(null);
-  const [previewCanonicalDoc, setPreviewCanonicalDoc] = useState<CanonicalDocument | null>(null);
 
   // Filters
   const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear());
@@ -122,47 +114,6 @@ export default function SATCanonicalTab() {
     } finally {
       setMerging(false);
     }
-  };
-
-  const handleShowPreview = async (doc: CanonicalDocument) => {
-    setPreviewCanonicalDoc(doc);
-    setSendingId(doc.id);
-    setError(null);
-    
-    try {
-      const response = await satCanonicalApi.preview(doc.id);
-      setPreviewJson(response.json_payload);
-      setShowPreviewModal(true);
-    } catch (err: any) {
-      console.error('Error loading preview:', err);
-      setError(err.message || 'Failed to generate preview');
-    } finally {
-      setSendingId(null);
-    }
-  };
-
-  const handleConfirmSendToSAP = async () => {
-    if (!previewCanonicalDoc) return;
-    
-    setShowPreviewModal(false);
-    setSendingId(previewCanonicalDoc.id);
-    setError(null);
-
-    try {
-      await satCanonicalApi.sendToSAP(previewCanonicalDoc.id);
-      await fetchCanonicalDocuments();
-    } catch (err: any) {
-      console.error('Error sending to SAP:', err);
-      setError(err.message || 'Failed to send to SAP.');
-    } finally {
-      setSendingId(null);
-      setPreviewCanonicalDoc(null);
-      setPreviewJson(null);
-    }
-  };
-
-  const handleSendToSAP = async (doc: CanonicalDocument) => {
-    await handleShowPreview(doc);
   };
 
   const formatCurrency = (amount: number, currency: string = 'MXN') => {
@@ -450,7 +401,7 @@ export default function SATCanonicalTab() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 justify-end">
-                        {/* Details Button - Always visible */}
+                        {/* Details Button */}
                         <button
                           onClick={() => router.push(`/sat-documents/canonical/${doc.id}`)}
                           className="px-3 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow"
@@ -459,27 +410,8 @@ export default function SATCanonicalTab() {
                           <span className="hidden sm:inline">Details</span>
                         </button>
 
-                        {/* Send to SAP Button or Status */}
-                        {doc.status === 'MERGED' ? (
-                          <button
-                            onClick={() => handleSendToSAP(doc)}
-                            disabled={sendingId === doc.id}
-                            className="px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 min-w-[140px] justify-center"
-                          >
-                            {sendingId === doc.id ? (
-                              <>
-                                <RefreshCw className="w-4 h-4 animate-spin" />
-                                <span className="hidden sm:inline">Sending...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Send className="w-4 h-4" />
-                                <span className="hidden sm:inline">Send to SAP</span>
-                                <span className="sm:hidden">Send</span>
-                              </>
-                            )}
-                          </button>
-                        ) : (
+                        {/* SAP Status Badge */}
+                        {doc.status === 'SAP_SENT' || doc.status === 'SAP_CONFIRMED' ? (
                           <div className="flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 rounded-lg text-sm">
                             <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
                             <span className="text-green-800 font-medium hidden md:inline">
@@ -489,6 +421,10 @@ export default function SATCanonicalTab() {
                               Sent ✓
                             </span>
                           </div>
+                        ) : (
+                          <span className="px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-medium rounded-full">
+                            Ready to Send
+                          </span>
                         )}
                       </div>
                     </td>
@@ -499,60 +435,6 @@ export default function SATCanonicalTab() {
           </div>
         )}
       </div>
-
-      {/* Preview Modal */}
-      {showPreviewModal && previewCanonicalDoc && previewJson && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
-            <div className="p-6 border-b border-gray-200">
-              <h3 className="text-xl font-semibold text-gray-900">SAP JSON Preview</h3>
-              <p className="text-sm text-gray-600 mt-1">
-                This is the format that will be sent to SAP
-              </p>
-            </div>
-
-            <div className="p-6 overflow-auto flex-1">
-              {/* Summary */}
-              <div className="mb-4 p-4 bg-blue-50 rounded-lg">
-                <h4 className="font-medium text-gray-900 mb-2">Document Summary</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-gray-600">Vendor RFC:</span> <span className="font-medium">{previewCanonicalDoc.vendor_rfc}</span></div>
-                  <div><span className="text-gray-600">Period:</span> <span className="font-medium">{previewCanonicalDoc.fiscal_year}-{previewCanonicalDoc.fiscal_period.toString().padStart(2, '0')}</span></div>
-                  <div><span className="text-gray-600">Net Amount:</span> <span className="font-medium">{formatCurrency(previewCanonicalDoc.net_amount, previewCanonicalDoc.currency)}</span></div>
-                  <div><span className="text-gray-600">GL Account:</span> <span className="font-medium">{previewCanonicalDoc.sap_gl_account || 'N/A'}</span></div>
-                </div>
-              </div>
-
-              {/* JSON Preview */}
-              <div className="bg-gray-900 rounded-lg p-4 overflow-auto">
-                <pre className="text-green-400 text-xs font-mono whitespace-pre-wrap">
-                  {JSON.stringify(previewJson, null, 2)}
-                </pre>
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
-              <button
-                onClick={() => {
-                  setShowPreviewModal(false);
-                  setPreviewCanonicalDoc(null);
-                  setPreviewJson(null);
-                }}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmSendToSAP}
-                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
-              >
-                <Send className="w-4 h-4" />
-                Confirm & Send to SAP
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

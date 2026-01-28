@@ -217,8 +217,12 @@ async def send_canonical_to_sap(
 ):
     """
     Send a canonical merged document to SAP.
+    Uses real SAP endpoint provided by client.
     """
     try:
+        from ..services.sap_api_client import sap_client
+        from datetime import datetime
+        
         merge_service = SATCanonicalMergeService(db)
         canonical = merge_service.get_canonical_by_id(current_user.id, canonical_id)
         
@@ -228,34 +232,115 @@ async def send_canonical_to_sap(
                 detail="Canonical document not found"
             )
         
-        # Generate SAP XML
-        from ..services.sap_transformer import SAPTransformer
-        sap_transformer = SAPTransformer(db)
-        sap_xml = sap_transformer.transform_canonical_to_sap_xml(canonical)
+        # Check if already sent
+        if canonical.status == "SAP_SENT" or canonical.sap_document_number:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document already sent to SAP. SAP Doc #: {canonical.sap_document_number}"
+            )
         
-        # Mock SAP send (replace with actual SAP API call)
-        import random
-        from datetime import datetime
+        logger.info(f"📤 Sending canonical document {canonical_id} to SAP...")
         
-        canonical.sap_document_number = f"TB{random.randint(1000000, 9999999)}"
-        canonical.sent_to_sap_at = datetime.utcnow()
-        canonical.status = "SAP_SENT"
-        canonical.sap_response = f"Mock: Document posted successfully. XML size: {len(sap_xml)} bytes"
+        # Fetch linked documents to get CFDI details
+        cfdi_details = []
+        if canonical.linked_document_ids:
+            linked_docs = db.query(SATDocument).filter(
+                SATDocument.id.in_([str(doc_id) for doc_id in canonical.linked_document_ids])
+            ).all()
+            
+            # Build detailed CFDI list with types
+            for doc in linked_docs:
+                # Map document type to SAP format
+                sap_doc_type = {
+                    'INVOICE': 'I',
+                    'CREDIT_NOTE': 'C',
+                    'PAYMENT': 'P'
+                }.get(doc.doc_type, 'I')
+                
+                cfdi_details.append({
+                    'DS_UUID': doc.cfdi_uuid,
+                    'DOCUMENT_TYPE': sap_doc_type,
+                    'DOC_NUMBER': doc.folio or str(doc.id),
+                    'TOTAL_AMOUNT': float(doc.total) if doc.total else 0.00,
+                    'CURRENCY': doc.moneda or 'MXN',
+                    'ISSUER_TAX_ID': doc.supplier_rfc,
+                    'ISSUER_NAME': doc.supplier_name or doc.supplier_rfc,
+                    'RECEIVER_TAX_ID': doc.receiver_rfc,
+                    'RECEIVER_NAME': doc.receiver_name or doc.receiver_rfc,
+                })
         
-        db.commit()
-        db.refresh(canonical)
-        
-        return {
-            "success": True,
-            "sap_document_number": canonical.sap_document_number,
-            "sent_at": canonical.sent_to_sap_at.isoformat(),
-            "message": "Document sent to SAP successfully"
+        # Build JSON payload matching client's format
+        sap_payload = {
+            "DS_UUID": str(canonical.id),
+            "DOCUMENT_TYPE": "C",  # Canonical
+            "DOC_NUMBER": f"CANONICAL_{canonical.fiscal_year}_{str(canonical.fiscal_period).zfill(2)}",
+            "VERSION": "4.0",
+            "FISCAL_YEAR": canonical.fiscal_year,
+            "FISCAL_PERIOD": canonical.fiscal_period,
+            "CURRENCY": canonical.currency or 'MXN',
+            "SUBTOTAL_AMOUNT": float(canonical.total_invoices or 0),
+            "TOTAL_AMOUNT": float(canonical.net_amount or 0),
+            "ISSUER_NAME": canonical.vendor_name or canonical.vendor_rfc,
+            "ISSUER_TAX_ID": canonical.vendor_rfc,
+            "TOTAL_INVOICES": float(canonical.total_invoices or 0),
+            "TOTAL_CREDITS": float(canonical.total_credits or 0),
+            "TOTAL_PAYMENTS": float(canonical.total_payments or 0),
+            "NET_AMOUNT": float(canonical.net_amount or 0),
+            "GL_ACCOUNT": canonical.sap_gl_account or "",
+            "PAYMENT_METHOD": canonical.payment_method or "PPD",
+            "ITEMS": cfdi_details  # Individual CFDIs
         }
+        
+        logger.info(f"   Prepared payload with {len(cfdi_details)} CFDI document(s)")
+        
+        # Send to SAP using the new client
+        sap_response = await sap_client.send_json_to_sap(
+            payload=sap_payload,
+            document_type="CANONICAL",
+            portal_reference=str(canonical_id)
+        )
+        
+        if sap_response.get('success'):
+            # Update document status
+            canonical.sent_to_sap_at = datetime.utcnow()
+            canonical.status = "SAP_SENT"
+            
+            # Try to extract SAP document number from response
+            sap_doc_number = None
+            if isinstance(sap_response.get('sap_response'), dict):
+                sap_doc_number = sap_response['sap_response'].get('document_number') or sap_response['sap_response'].get('sap_document_number')
+            
+            # If no document number, generate a reference
+            if not sap_doc_number:
+                import random
+                sap_doc_number = f"TB{random.randint(1000000, 9999999)}"
+            
+            canonical.sap_document_number = sap_doc_number
+            canonical.sap_response = str(sap_response)
+            
+            db.commit()
+            db.refresh(canonical)
+            
+            logger.info(f"✅ Canonical {canonical_id} sent to SAP successfully. SAP Doc #: {sap_doc_number}")
+            
+            return {
+                "success": True,
+                "sap_document_number": sap_doc_number,
+                "sent_at": canonical.sent_to_sap_at.isoformat(),
+                "message": "Document sent to SAP successfully",
+                "sap_response": sap_response
+            }
+        else:
+            logger.error(f"❌ Failed to send to SAP: {sap_response.get('error')}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"SAP returned error: {sap_response.get('error')}"
+            )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Failed to send to SAP: {e}")
+        logger.error(f"❌ Failed to send to SAP: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

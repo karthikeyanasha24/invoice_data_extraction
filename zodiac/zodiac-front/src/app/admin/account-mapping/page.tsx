@@ -22,6 +22,14 @@ interface SupplierAccountMapping {
   account_description: string | null;
   is_active: boolean;
   is_default: boolean;
+  // New GL account fields
+  company_code: string | null;
+  fiscal_year: number | null;
+  currency: string;
+  opening_balance: number;
+  credit_amount: number;
+  debit_amount: number;
+  closing_balance: number;
   created_at: string;
   updated_at: string;
 }
@@ -180,17 +188,33 @@ export default function AccountMappingPage() {
             
             <div className="mb-4 p-4 bg-blue-50 rounded-lg">
               <p className="text-sm text-gray-700 mb-2 font-medium">
-                Excel file format:
+                Excel file format (required: RFC, CTA; optional: other fields):
               </p>
-              <div className="grid grid-cols-4 gap-4 text-xs font-mono bg-white p-2 rounded">
-                <div className="font-bold">RFC</div>
-                <div className="font-bold">CTA</div>
-                <div className="font-bold">CTAS</div>
-                <div className="font-bold">IS_ACTIVE</div>
-                <div>ABC123456789</div>
-                <div>210100</div>
-                <div>Proveedores Nacionales</div>
-                <div>Yes</div>
+              <div className="overflow-x-auto">
+                <div className="grid grid-cols-11 gap-2 text-xs font-mono bg-white p-2 rounded min-w-max">
+                  <div className="font-bold">RFC</div>
+                  <div className="font-bold">COMPANY_CO</div>
+                  <div className="font-bold">GL_ACC</div>
+                  <div className="font-bold">CTAS</div>
+                  <div className="font-bold">FISC_YR</div>
+                  <div className="font-bold">CURR</div>
+                  <div className="font-bold">OPEN_BAL</div>
+                  <div className="font-bold">CRED</div>
+                  <div className="font-bold">DEBE</div>
+                  <div className="font-bold">CLOS_BAL</div>
+                  <div className="font-bold">IS_ACTIVE</div>
+                  <div>ABC123456789</div>
+                  <div>MX01</div>
+                  <div>40000001</div>
+                  <div>Proveedores</div>
+                  <div>2026</div>
+                  <div>MXN</div>
+                  <div>0.00</div>
+                  <div>0.00</div>
+                  <div>0.00</div>
+                  <div>0.00</div>
+                  <div>Yes</div>
+                </div>
               </div>
             </div>
 
@@ -273,10 +297,22 @@ export default function AccountMappingPage() {
                         Supplier RFC
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Company Code
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         SAP G/L Account
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Description
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Fiscal Year
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Currency
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Balances
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
@@ -299,6 +335,9 @@ export default function AccountMappingPage() {
                             </span>
                           )}
                         </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {mapping.company_code || '-'}
+                        </td>
                         <td className="px-6 py-4">
                           <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-sm font-medium">
                             {mapping.sap_gl_account}
@@ -306,6 +345,20 @@ export default function AccountMappingPage() {
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {mapping.account_description || '-'}
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {mapping.fiscal_year || '-'}
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {mapping.currency || 'MXN'}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-xs text-gray-600 space-y-1">
+                            <div>Open: {mapping.opening_balance?.toFixed(2) || '0.00'}</div>
+                            <div>Cred: {mapping.credit_amount?.toFixed(2) || '0.00'}</div>
+                            <div>Debe: {mapping.debit_amount?.toFixed(2) || '0.00'}</div>
+                            <div>Close: {mapping.closing_balance?.toFixed(2) || '0.00'}</div>
+                          </div>
                         </td>
                         <td className="px-6 py-4">
                           {mapping.is_active ? (

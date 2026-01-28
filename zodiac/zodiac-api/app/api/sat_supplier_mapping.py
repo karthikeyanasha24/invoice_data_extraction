@@ -26,7 +26,12 @@ async def upload_excel_mapping(
 ):
     """
     Upload Excel file with supplier RFC to G/L account mappings.
-    Expected columns: RFC, CTA, CTAS, IS_ACTIVE
+    
+    Required columns: RFC, CTA (or GL_ACC)
+    Optional columns: CTAS, COMPANY_CO, FISC_YR, CURR, OPEN_BAL, CRED, DEBE, CLOS_BAL, IS_ACTIVE
+    
+    Example Excel format:
+    RFC | COMPANY_CO | GL_ACC | CTAS | FISC_YR | CURR | OPEN_BAL | CRED | DEBE | CLOS_BAL | IS_ACTIVE
     """
     try:
         # Read file content

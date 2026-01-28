@@ -29,6 +29,7 @@ class SATSupplierMappingService:
         """
         Parse Excel file containing supplier RFC to G/L account mappings.
         Expected columns: RFC, CTA (G/L Account), CTAS (Description), IS_ACTIVE
+        New columns: COMPANY_CO, FISC_YR, CURR, OPEN_BAL, CRED, DEBE, CLOS_BAL
         """
         if not PANDAS_AVAILABLE:
             raise ImportError("pandas library is required for Excel file parsing but is not installed")
@@ -56,7 +57,15 @@ class SATSupplierMappingService:
                         'supplier_rfc': str(row['rfc']).strip().upper(),
                         'sap_gl_account': str(row['cta']).strip(),
                         'account_description': str(row.get('ctas', '')) if pd.notna(row.get('ctas')) else None,
-                        'is_active': self._parse_boolean(row.get('is_active', True))
+                        'is_active': self._parse_boolean(row.get('is_active', True)),
+                        # New fields
+                        'company_code': str(row['company_co']).strip() if 'company_co' in row and pd.notna(row.get('company_co')) else None,
+                        'fiscal_year': int(row['fisc_yr']) if 'fisc_yr' in row and pd.notna(row.get('fisc_yr')) else None,
+                        'currency': str(row['curr']).strip().upper() if 'curr' in row and pd.notna(row.get('curr')) else 'MXN',
+                        'opening_balance': float(row['open_bal']) if 'open_bal' in row and pd.notna(row.get('open_bal')) else 0.0,
+                        'credit_amount': float(row['cred']) if 'cred' in row and pd.notna(row.get('cred')) else 0.0,
+                        'debit_amount': float(row['debe']) if 'debe' in row and pd.notna(row.get('debe')) else 0.0,
+                        'closing_balance': float(row['clos_bal']) if 'clos_bal' in row and pd.notna(row.get('clos_bal')) else 0.0
                     }
                     
                     # Skip empty rows
@@ -83,12 +92,26 @@ class SATSupplierMappingService:
             # Map common variations
             if col_lower in ['rfc', 'supplier_rfc', 'vendor_rfc']:
                 normalized.append('rfc')
-            elif col_lower in ['cta', 'gl_account', 'sap_gl_account', 'account']:
+            elif col_lower in ['cta', 'gl_account', 'sap_gl_account', 'account', 'gl_acc']:
                 normalized.append('cta')
             elif col_lower in ['ctas', 'description', 'account_description']:
                 normalized.append('ctas')
             elif col_lower in ['is_active', 'active', 'status']:
                 normalized.append('is_active')
+            elif col_lower in ['company_co', 'company_code', 'companyco']:
+                normalized.append('company_co')
+            elif col_lower in ['fisc_yr', 'fiscal_year', 'fiscyr']:
+                normalized.append('fisc_yr')
+            elif col_lower in ['curr', 'currency']:
+                normalized.append('curr')
+            elif col_lower in ['open_bal', 'opening_balance', 'openbal']:
+                normalized.append('open_bal')
+            elif col_lower in ['cred', 'credit', 'credit_amount']:
+                normalized.append('cred')
+            elif col_lower in ['debe', 'debit', 'debit_amount']:
+                normalized.append('debe')
+            elif col_lower in ['clos_bal', 'closing_balance', 'closbal']:
+                normalized.append('clos_bal')
             else:
                 normalized.append(col_lower)
         return normalized
@@ -128,6 +151,14 @@ class SATSupplierMappingService:
                     existing.sap_gl_account = mapping_data['sap_gl_account']
                     existing.account_description = mapping_data.get('account_description')
                     existing.is_active = mapping_data.get('is_active', True)
+                    # Update new fields
+                    existing.company_code = mapping_data.get('company_code')
+                    existing.fiscal_year = mapping_data.get('fiscal_year')
+                    existing.currency = mapping_data.get('currency', 'MXN')
+                    existing.opening_balance = mapping_data.get('opening_balance', 0.0)
+                    existing.credit_amount = mapping_data.get('credit_amount', 0.0)
+                    existing.debit_amount = mapping_data.get('debit_amount', 0.0)
+                    existing.closing_balance = mapping_data.get('closing_balance', 0.0)
                     updated += 1
                 else:
                     # Create
@@ -136,7 +167,15 @@ class SATSupplierMappingService:
                         sap_gl_account=mapping_data['sap_gl_account'],
                         account_description=mapping_data.get('account_description'),
                         is_active=mapping_data.get('is_active', True),
-                        is_default=False
+                        is_default=False,
+                        # New fields
+                        company_code=mapping_data.get('company_code'),
+                        fiscal_year=mapping_data.get('fiscal_year'),
+                        currency=mapping_data.get('currency', 'MXN'),
+                        opening_balance=mapping_data.get('opening_balance', 0.0),
+                        credit_amount=mapping_data.get('credit_amount', 0.0),
+                        debit_amount=mapping_data.get('debit_amount', 0.0),
+                        closing_balance=mapping_data.get('closing_balance', 0.0)
                     )
                     self.db.add(new_mapping)
                     created += 1
@@ -180,6 +219,15 @@ class SATSupplierMappingService:
                     "account_description": m.account_description,
                     "is_active": m.is_active,
                     "is_default": m.is_default,
+                    # New fields
+                    "company_code": m.company_code,
+                    "fiscal_year": m.fiscal_year,
+                    "currency": m.currency,
+                    "opening_balance": float(m.opening_balance) if m.opening_balance else 0.0,
+                    "credit_amount": float(m.credit_amount) if m.credit_amount else 0.0,
+                    "debit_amount": float(m.debit_amount) if m.debit_amount else 0.0,
+                    "closing_balance": float(m.closing_balance) if m.closing_balance else 0.0,
+                    # Timestamps
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                     "updated_at": m.updated_at.isoformat() if m.updated_at else None
                 }

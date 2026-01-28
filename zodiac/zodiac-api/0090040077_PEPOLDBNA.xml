@@ -1,0 +1,145 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+    <cbc:UBLVersionID>2.3</cbc:UBLVersionID>
+    <cbc:CustomizationID>urn:oasis:names:specification:ubl:schema:xsd:Invoice-2::Invoice##DBNAlliance-1.0-data-Extended-embeddedattachments</cbc:CustomizationID>
+    <cbc:ProfileID>bdx:noprocess</cbc:ProfileID>
+	<cbc:ID>0090040077</cbc:ID>
+	<cbc:IssueDate>2015-11-04</cbc:IssueDate>
+	<cbc:DueDate>2015-11-18</cbc:DueDate>
+	<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
+	<cbc:Note>.</cbc:Note>
+	<cbc:DocumentCurrencyCode>USD</cbc:DocumentCurrencyCode>
+	<cac:OrderReference>
+		<cbc:ID>0000017733</cbc:ID>
+	</cac:OrderReference>
+	<cac:AdditionalDocumentReference>
+		<cbc:ID>0090040077</cbc:ID>
+		<cbc:DocumentDescription/>
+		<cac:Attachment>
+            <cbc:EmbeddedDocumentBinaryObject filename="" mimeCode=""/>
+        </cac:Attachment>
+	</cac:AdditionalDocumentReference>
+	<cac:AccountingSupplierParty>
+		<cac:Party>
+			<cbc:EndpointID schemeID="0088">365060483</cbc:EndpointID>
+			<cac:PartyName>
+				<cbc:Name>PEPPOLSOFT LLC</cbc:Name>
+            </cac:PartyName>
+            <cac:PostalAddress>
+                <cac:Country>
+                    <cbc:IdentificationCode>1A</cbc:IdentificationCode>
+                </cac:Country>
+            </cac:PostalAddress>
+			<cac:PartyTaxScheme>
+				<cbc:CompanyID/>
+				<cac:TaxScheme>
+					<cbc:ID>VAT</cbc:ID>
+				</cac:TaxScheme>
+			</cac:PartyTaxScheme>
+			<cac:PartyLegalEntity>
+				<cbc:RegistrationName>PEPPOLSOFT LLC</cbc:RegistrationName>
+				<cbc:CompanyID/>
+			</cac:PartyLegalEntity>
+			<cac:Contact>
+				<cbc:Name>PEPPOLSOFT LLC</cbc:Name>
+				<cbc:Telephone>010 62798888</cbc:Telephone>
+				<cbc:ElectronicMail>a@b.c</cbc:ElectronicMail>
+			</cac:Contact>
+		</cac:Party>
+	</cac:AccountingSupplierParty>
+	<cac:AccountingCustomerParty>
+		<cac:Party>
+			<cbc:EndpointID schemeID="0088">EDI101020E99</cbc:EndpointID>
+			<cac:PartyName>
+				<cbc:Name>EDIFACTMX</cbc:Name>
+			</cac:PartyName>
+			<cac:PostalAddress>
+				<cbc:StreetName></cbc:StreetName>
+				<cbc:CityName></cbc:CityName>
+				<cbc:PostalZone></cbc:PostalZone>
+				<cac:Country>
+					<cbc:IdentificationCode>MX</cbc:IdentificationCode>
+				</cac:Country>
+			</cac:PostalAddress>
+			<cac:PartyLegalEntity>
+				<cbc:RegistrationName>EDIFACTMX</cbc:RegistrationName>
+			</cac:PartyLegalEntity>
+			<cac:Contact>
+				<cbc:Name></cbc:Name>
+			</cac:Contact>
+		</cac:Party>
+	</cac:AccountingCustomerParty>
+	<cac:Delivery>
+		<cbc:ActualDeliveryDate>2015-11-05</cbc:ActualDeliveryDate>
+		<cac:DeliveryLocation>
+			<cbc:ID schemeID="0088"/>
+			<cac:Address>
+				<cbc:StreetName></cbc:StreetName>
+				<cbc:CityName></cbc:CityName>
+				<cbc:PostalZone></cbc:PostalZone>
+				<cac:Country>
+					<cbc:IdentificationCode>MX</cbc:IdentificationCode>
+				</cac:Country>
+			</cac:Address>
+		</cac:DeliveryLocation>
+	</cac:Delivery>
+	<cac:PaymentMeans>
+		<cbc:PaymentMeansCode name="ZZZ"/>
+		<cbc:PaymentID/>
+		<cac:PayeeFinancialAccount>
+			<cbc:ID/>
+			<cbc:Name/>
+		</cac:PayeeFinancialAccount>
+		<cac:PaymentMandate>
+			<cbc:ID/>
+			<cac:PayerFinancialAccount>
+				<cbc:ID/>
+			</cac:PayerFinancialAccount>
+		</cac:PaymentMandate>
+	</cac:PaymentMeans>
+	<cac:TaxTotal>
+		<cbc:TaxAmount currencyID="USD">0.0</cbc:TaxAmount>
+		<cac:TaxSubtotal>
+			<cbc:TaxableAmount currencyID="USD">90.0</cbc:TaxableAmount>
+			<cbc:TaxAmount currencyID="USD">0.0</cbc:TaxAmount>
+			<cac:TaxCategory>
+				<cbc:ID>S</cbc:ID>
+				<cbc:Percent>0.0</cbc:Percent>
+				<cac:TaxScheme>
+					<cbc:ID>VAT</cbc:ID>
+				</cac:TaxScheme>
+			</cac:TaxCategory>
+		</cac:TaxSubtotal>
+	</cac:TaxTotal>
+	<cac:LegalMonetaryTotal>
+		<cbc:LineExtensionAmount currencyID="USD">90.0</cbc:LineExtensionAmount>
+		<cbc:TaxExclusiveAmount currencyID="USD">90.0</cbc:TaxExclusiveAmount>
+		<cbc:TaxInclusiveAmount currencyID="USD">90.0</cbc:TaxInclusiveAmount>
+		<cbc:PayableAmount currencyID="USD">90.0</cbc:PayableAmount>
+	</cac:LegalMonetaryTotal>
+	<cac:InvoiceLine>
+		<cbc:ID>000010</cbc:ID>
+		<cbc:InvoicedQuantity unitCode="EA">10</cbc:InvoicedQuantity>
+		<cbc:LineExtensionAmount currencyID="USD">90.0</cbc:LineExtensionAmount>
+		<cac:OrderLineReference>
+			<cbc:LineID>000010</cbc:LineID>
+		</cac:OrderLineReference>
+		<cac:Item>
+			<cbc:Description>婚礼喜宴国缘系列红色</cbc:Description>
+			<cbc:Name>C2F_I40_002</cbc:Name>
+			<cac:SellersItemIdentification>
+				<cbc:ID>C2F_I40_002</cbc:ID>
+			</cac:SellersItemIdentification>
+			<cac:ClassifiedTaxCategory>
+				<cbc:ID>S</cbc:ID>
+				<cbc:Percent>0.0</cbc:Percent>
+				<cac:TaxScheme>
+					<cbc:ID>VAT</cbc:ID>
+				</cac:TaxScheme>
+			</cac:ClassifiedTaxCategory>
+		</cac:Item>
+		<cac:Price>
+			<cbc:PriceAmount currencyID="USD">90.0</cbc:PriceAmount>
+		</cac:Price>
+	</cac:InvoiceLine>
+</Invoice>
