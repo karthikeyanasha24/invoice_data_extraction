@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # SAP Configuration (from client)
 SAP_BASE_URL = "https://saperp.abor-tech.online"
-SAP_ENDPOINT = f"{SAP_BASE_URL}/pisf_bill_srv/billing_integration"
+SAP_PATH = "/pisf_bill_srv/billing_integration"
 SAP_CLIENT = "800"
 SAP_USERNAME = "andix"
 SAP_PASSWORD = "init1234"
@@ -22,12 +22,14 @@ class SAPAPIClient:
     
     def __init__(self):
         self.base_url = SAP_BASE_URL
-        self.endpoint = SAP_ENDPOINT
+        self.path = SAP_PATH
         self.sap_client = SAP_CLIENT
         self.username = SAP_USERNAME
         self.password = SAP_PASSWORD
         self.timeout = 60.0  # 60 seconds timeout
-        
+        # Build full endpoint URL with query parameter
+        self.endpoint = f"{self.base_url}{self.path}?sap-client={self.sap_client}"
+    
     def _get_auth_header(self) -> str:
         """Generate Basic Auth header"""
         credentials = f"{self.username}:{self.password}"
@@ -53,17 +55,17 @@ class SAPAPIClient:
         """
         try:
             logger.info(f"🚀 Sending {document_type} document to SAP...")
-            logger.info(f"   Endpoint: {self.endpoint}?sap-client={self.sap_client}")
+            logger.info(f"   Full Endpoint: {self.endpoint}")
             logger.info(f"   Portal Reference: {portal_reference}")
             
-            # Prepare headers
+            # Prepare headers (NO CSRF token needed as per client)
             headers = {
                 "Authorization": self._get_auth_header(),
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             }
             
-            # Add custom headers if needed
+            # Add custom headers if needed (optional)
             if portal_reference:
                 headers["X-Portal-Reference"] = portal_reference
             headers["X-Document-Type"] = document_type
@@ -79,12 +81,12 @@ class SAPAPIClient:
             logger.info(f"   Payload structure: {len(json_payload)} document(s)")
             logger.debug(f"   Full payload: {json.dumps(json_payload, indent=2)}")
             
-            # Send request to SAP
+            # Send request to SAP (endpoint already includes ?sap-client=800)
             async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
                 response = await client.post(
-                    f"{self.endpoint}?sap-client={self.sap_client}",
+                    self.endpoint,  # Full URL with query param
                     headers=headers,
-                    json=json_payload  # Send as JSON
+                    json=json_payload  # Send as JSON array
                 )
                 
                 logger.info(f"   SAP Response Status: {response.status_code}")
@@ -156,7 +158,7 @@ class SAPAPIClient:
             
             async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
                 response = await client.get(
-                    f"{self.endpoint}?sap-client={self.sap_client}&ds_uuid={ds_uuid}",
+                    f"{self.base_url}{self.path}?sap-client={self.sap_client}&ds_uuid={ds_uuid}",
                     headers=headers
                 )
                 
