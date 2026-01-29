@@ -343,3 +343,75 @@ async def get_supplier_token_stats(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get statistics"
         )
+
+
+@router.get("/retrieve")
+async def retrieve_supplier_token(
+    supplier_rfc: str,
+    db: Session = Depends(get_db)
+):
+    """
+    PUBLIC endpoint for suppliers to retrieve their token.
+    Requires only RFC.
+    
+    WARNING: Anyone with the RFC can retrieve the token.
+    Consider implementing additional security (IP whitelist, rate limiting) if needed.
+    
+    Security features:
+    - Logs all retrieval attempts with timestamp
+    - Checks if token is active
+    - Checks if token is expired
+    
+    Query params:
+    - supplier_rfc: Supplier's RFC (e.g., IIA040805DZ4)
+    """
+    try:
+        # Normalize RFC
+        rfc = supplier_rfc.strip().upper()
+        
+        logger.info(f"🔍 Token retrieval attempt for RFC: {rfc}")
+        
+        # Find active token by RFC
+        supplier_token = db.query(SupplierToken).filter(
+            SupplierToken.supplier_rfc == rfc,
+            SupplierToken.is_active == True
+        ).first()
+        
+        if not supplier_token:
+            logger.warning(f"❌ No active token found for RFC: {rfc}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No active token found for this RFC. Please contact administrator."
+            )
+        
+        # Check if token is expired
+        if supplier_token.expires_at and supplier_token.expires_at < datetime.utcnow():
+            logger.warning(f"❌ Expired token for RFC: {rfc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Your token has expired. Please contact administrator for a new token."
+            )
+        
+        # Update last retrieval time (for monitoring)
+        supplier_token.last_used_at = datetime.utcnow()
+        db.commit()
+        
+        logger.info(f"✅ Token retrieved successfully for RFC: {rfc}")
+        
+        return {
+            "success": True,
+            "token": supplier_token.token,
+            "supplier_rfc": supplier_token.supplier_rfc,
+            "supplier_name": supplier_token.supplier_name,
+            "expires_at": supplier_token.expires_at.isoformat() if supplier_token.expires_at else None,
+            "message": "Token retrieved successfully. Keep this secure!"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Token retrieval error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving token. Please contact support."
+        )
