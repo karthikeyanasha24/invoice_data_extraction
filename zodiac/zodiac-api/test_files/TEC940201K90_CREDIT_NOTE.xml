@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd" Version="4.0" Serie="NC" Folio="002" Fecha="2026-02-22T10:30:00" FormaPago="99" SubTotal="850.00" Moneda="MXN" Total="986.00" TipoDeComprobante="E" MetodoPago="PUE" LugarExpedicion="54720" Exportacion="01">
+  <cfdi:Emisor Rfc="TEC940201K90" Nombre="TECNOLOGIA EMPRESARIAL CORPORATIVA SA" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="EDI101020E99" Nombre="EDIFACTMX" DomicilioFiscalReceptor="97133" RegimenFiscalReceptor="601" UsoCFDI="G02"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="01010101" Cantidad="1.5" ClaveUnidad="E48" Unidad="Servicio" Descripcion="Ajuste por descuento en implementacion" ValorUnitario="566.67" Importe="850.00" ObjetoImp="02">
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+          <cfdi:Traslado Base="850.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="136.00"/>
+        </cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+  </cfdi:Conceptos>
+  <cfdi:Impuestos TotalImpuestosTrasladados="136.00">
+    <cfdi:Traslados>
+      <cfdi:Traslado Base="850.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="136.00"/>
+    </cfdi:Traslados>
+  </cfdi:Impuestos>
+  <cfdi:CfdiRelacionados TipoRelacion="01">
+    <cfdi:CfdiRelacionado UUID="D4E5F6A7-B8C9-4012-D4E5-F6A7B8C9D004"/>
+  </cfdi:CfdiRelacionados>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="F6A7B8C9-D0E1-4234-F6A7-B8C9D0E1F006" FechaTimbrado="2026-02-22T10:35:00" RfcProvCertif="SPR190613R52" SelloCFD="CREDIT90MNO..." NoCertificadoSAT="30001000000500003456" SelloSAT="CREDIT90PQR..."/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

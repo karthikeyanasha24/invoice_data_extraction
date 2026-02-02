@@ -13,6 +13,7 @@ from ..api.auth import get_current_user
 from ..models.user import ZodiacUser
 from ..models.sat_document import SATDocument
 from ..models.sat_simple_merged import SATSimpleMerged
+from ..models.sat_supplier_account_mapping import SATSupplierAccountMapping
 
 logger = logging.getLogger("zodiac-api.sat_simple_merge")
 
@@ -58,6 +59,91 @@ class SimpleMergedDetailResponse(SimpleMergedResponse):
 # Endpoints
 # =====================
 
+@router.get("/check-merge-requirements/{supplier_rfc}")
+async def check_merge_requirements(
+    supplier_rfc: str,
+    fiscal_year: int,
+    fiscal_period: int,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Check if all requirements are met for merging:
+    1. All 3 document types exist (INVOICE, PAYMENT, CREDIT_NOTE)
+    2. Mapping data exists for this RFC
+    
+    Returns merge eligibility status and details about what's present/missing.
+    """
+    try:
+        logger.info(f"Checking merge requirements for RFC {supplier_rfc}, period {fiscal_year}-{fiscal_period}")
+        
+        # Query documents for this supplier and period
+        documents = db.query(SATDocument).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.supplier_rfc == supplier_rfc,
+            func.extract('year', SATDocument.fecha) == fiscal_year,
+            func.extract('month', SATDocument.fecha) == fiscal_period
+        ).all()
+        
+        if not documents:
+            return {
+                "can_merge": False,
+                "has_all_files": False,
+                "missing_types": ["INVOICE", "PAYMENT", "CREDIT_NOTE"],
+                "mapping_exists": False,
+                "mapping_data": None,
+                "document_count": 0
+            }
+        
+        # Check which document types are present
+        doc_types_present = set(doc.doc_type for doc in documents)
+        required_types = {'INVOICE', 'PAYMENT', 'CREDIT_NOTE'}
+        has_all_files = required_types.issubset(doc_types_present)
+        missing_types = list(required_types - doc_types_present)
+        
+        logger.info(f"  Documents found: {len(documents)}, Types: {doc_types_present}")
+        logger.info(f"  Has all files: {has_all_files}, Missing: {missing_types}")
+        
+        # Check if mapping exists for this RFC
+        mapping = db.query(SATSupplierAccountMapping).filter(
+            SATSupplierAccountMapping.supplier_rfc == supplier_rfc.upper(),
+            SATSupplierAccountMapping.is_active == True
+        ).first()
+        
+        mapping_exists = mapping is not None
+        logger.info(f"  Mapping exists: {mapping_exists}")
+        
+        # Build response
+        # Can only merge if BOTH all 3 files are present AND mapping data exists
+        can_merge = has_all_files and mapping_exists
+        logger.info(f"  Can merge: {can_merge} (files: {has_all_files}, mapping: {mapping_exists})")
+        
+        response = {
+            "can_merge": can_merge,  # Require both all 3 files AND mapping data
+            "has_all_files": has_all_files,
+            "missing_types": missing_types,
+            "document_types_present": list(doc_types_present),
+            "document_count": len(documents),
+            "mapping_exists": mapping_exists,
+            "mapping_data": {
+                "company_code": mapping.company_code or "",
+                "sap_gl_account": mapping.sap_gl_account or "",
+                "fiscal_year": mapping.fiscal_year or 0,
+                "currency": mapping.currency or "",
+                "account_description": mapping.account_description or ""
+            } if mapping else None
+        }
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking merge requirements: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check merge requirements: {str(e)}"
+        )
+
+
 @router.post("/merge", response_model=SimpleMergedResponse)
 async def merge_documents(
     request: SimpleMergeRequest,
@@ -84,6 +170,35 @@ async def merge_documents(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No documents found for supplier {request.supplier_rfc} in period {request.fiscal_year}-{request.fiscal_period}"
             )
+        
+        # Validate that all 3 required document types are present
+        doc_types_present = set(doc.doc_type for doc in documents)
+        required_types = {'INVOICE', 'PAYMENT', 'CREDIT_NOTE'}
+        
+        if not required_types.issubset(doc_types_present):
+            missing_types = list(required_types - doc_types_present)
+            logger.warning(f"Cannot merge: Missing required document types: {missing_types}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot merge: Missing required document types: {', '.join(missing_types)}. All 3 types (Invoice, Payment, Credit Note) are required for merging."
+            )
+        
+        logger.info(f"✅ All 3 required document types present: {doc_types_present}")
+        
+        # Validate that mapping data exists for this RFC
+        mapping = db.query(SATSupplierAccountMapping).filter(
+            SATSupplierAccountMapping.supplier_rfc == request.supplier_rfc.upper(),
+            SATSupplierAccountMapping.is_active == True
+        ).first()
+        
+        if not mapping:
+            logger.warning(f"Cannot merge: No mapping data found for RFC {request.supplier_rfc}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot merge: No mapping data found for RFC {request.supplier_rfc}. Please add mapping data in the supplier mapping table before merging."
+            )
+        
+        logger.info(f"✅ Mapping data exists for RFC {request.supplier_rfc}: GL Account {mapping.sap_gl_account}")
         
         # Check if a merge already exists
         existing_merge = db.query(SATSimpleMerged).filter(
@@ -405,21 +520,101 @@ async def preview_simple_merge_sap_json(
         )
 
 
-@router.post("/{merged_id}/send-to-sap")
-async def send_simple_merge_to_sap(
+@router.post("/{merged_id}/fetch-csrf-token")
+async def fetch_csrf_token_for_simple_merge(
     merged_id: str,
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Send a simple merged document to SAP.
-    Converts the XML to the format specified by client (singlefile/multiplefiles).
+    Fetch CSRF token from SAP for this document.
+    Returns the token to display in UI before sending.
     """
     try:
         from ..services.sap_api_client import sap_client
-        from lxml import etree
+        from ..services.sap_transformer import SAPTransformer
+        
+        # Fetch the document
+        document = db.query(SATSimpleMerged).filter(
+            SATSimpleMerged.id == merged_id,
+            SATSimpleMerged.user_id == current_user.id
+        ).first()
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Simple merged document {merged_id} not found"
+            )
+        
+        # Transform to get DS_UUID
+        transformer = SAPTransformer(db)
+        sap_payload = transformer.transform_simple_to_sap_format(document)
+        
+        # Extract first DS_UUID
+        ds_uuid = None
+        if sap_payload and len(sap_payload) > 0:
+            ds_uuid = sap_payload[0].get("DS_UUID")
+        
+        # Fetch CSRF token
+        csrf_token = await sap_client._fetch_csrf_token(ds_uuid)
+        
+        if not csrf_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to fetch CSRF token from SAP"
+            )
+        
+        logger.info(f"✅ CSRF token fetched for document {merged_id}: {csrf_token[:20]}...")
+        
+        return {
+            "success": True,
+            "csrf_token": csrf_token,
+            "ds_uuid": ds_uuid,
+            "message": "CSRF token fetched successfully. Ready to send to SAP."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch CSRF token: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch CSRF token: {str(e)}"
+        )
+
+
+class SendToSAPRequest(BaseModel):
+    csrf_token: Optional[str] = None  # CSRF token from frontend
+
+
+@router.post("/{merged_id}/send-to-sap")
+async def send_simple_merge_to_sap(
+    merged_id: str,
+    request_data: SendToSAPRequest = None,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Send a simple merged document to SAP.
+    Requires CSRF token to be fetched first and passed in request.
+    """
+    try:
+        from ..services.sap_api_client import sap_client
+        from ..services.sap_transformer import SAPTransformer
+        
+        # Extract CSRF token from request body
+        csrf_token = None
+        if request_data:
+            csrf_token = request_data.csrf_token
+        
+        if not csrf_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CSRF token is required. Please fetch CSRF token first."
+            )
         
         logger.info(f"📤 Sending simple merged document {merged_id} to SAP...")
+        logger.info(f"   Using CSRF token: {csrf_token[:20]}...")
         
         # Fetch the document
         document = db.query(SATSimpleMerged).filter(
@@ -510,8 +705,8 @@ async def send_simple_merge_to_sap(
         
         logger.info(f"   Prepared {len(sap_payload)} document(s) for SAP")
         
-        # Send to SAP using the new client
-        sap_response = await sap_client.send_json_to_sap(
+        # Send to SAP using session-based approach (handles CSRF + cookies)
+        sap_response = await sap_client.send_json_to_sap_with_session(
             payload=sap_payload,
             document_type="SIMPLE_MERGE",
             portal_reference=str(merged_id)

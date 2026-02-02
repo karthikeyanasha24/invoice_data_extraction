@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { satApi } from '@/lib/api';
 import {
@@ -11,7 +11,8 @@ import {
   DollarSign,
   CheckCircle,
   XCircle,
-  Eye
+  Eye,
+  Upload
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -32,6 +33,7 @@ interface SATDocument {
   status: string;
   fiscal_year: number;
   fiscal_period: number;
+  source: string;  // 'admin' or 'supplier'
   received_at: string;
 }
 
@@ -41,6 +43,9 @@ export default function SATDocumentsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
   const [docTypeFilter, setDocTypeFilter] = useState<string>('');
@@ -102,6 +107,33 @@ export default function SATDocumentsTab() {
     return styles[status as keyof typeof styles] || 'bg-gray-100 text-gray-800';
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    try {
+      setUploading(true);
+      setError(null);
+      setUploadSuccess(null);
+      
+      const result = await satApi.uploadFiles(files);
+      setUploadSuccess(`✅ Successfully uploaded ${result.successful_count} of ${result.total_files} file(s)!`);
+      await fetchDocuments(); // Refresh the list
+      
+      // Clear file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => setUploadSuccess(null), 5000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to upload files');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Filters */}
@@ -143,15 +175,66 @@ export default function SATDocumentsTab() {
         </div>
       )}
 
+      {/* Upload Success Message */}
+      {uploadSuccess && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <p className="text-green-800">{uploadSuccess}</p>
+        </div>
+      )}
+
       {/* Documents List */}
       <div className="bg-white rounded-lg shadow">
         <div className="p-6 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">
-            SAT Documents ({totalCount})
-          </h2>
-          <p className="text-sm text-gray-600 mt-1">
-            Individual CFDI documents received from suppliers
-          </p>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">
+                SAT Documents ({totalCount})
+              </h2>
+              <p className="text-sm text-gray-600 mt-1">
+                Individual CFDI documents from suppliers and admin uploads
+              </p>
+            </div>
+            
+            {/* Upload Buttons */}
+            <div className="flex gap-2">
+              {/* Bulk Upload Button - Primary Action */}
+              <button
+                onClick={() => router.push('/sat-documents/upload')}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium"
+              >
+                <Upload className="w-4 h-4" />
+                <span className="hidden sm:inline">Bulk Upload</span>
+                <span className="sm:hidden">Upload</span>
+              </button>
+              
+              {/* Quick Upload Button - Secondary Action */}
+              <label className="cursor-pointer flex-shrink-0">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xml"
+                  multiple
+                  onChange={handleFileUpload}
+                  disabled={uploading}
+                  className="hidden"
+                />
+                <div className={`px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  {uploading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span className="hidden sm:inline">Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span className="hidden sm:inline">Quick Upload</span>
+                    </>
+                  )}
+                </div>
+              </label>
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -189,6 +272,9 @@ export default function SATDocumentsTab() {
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Source
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
@@ -243,13 +329,26 @@ export default function SATDocumentsTab() {
                         {doc.status}
                       </span>
                     </td>
+                    <td className="px-6 py-4">
+                      {doc.source === 'supplier' ? (
+                        <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded-full text-xs font-medium flex items-center gap-1 w-fit">
+                          <Building2 className="w-3 h-3" />
+                          Supplier
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium flex items-center gap-1 w-fit">
+                          <FileText className="w-3 h-3" />
+                          Admin
+                        </span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-right">
                       <button
                         onClick={() => router.push(`/sat-documents/${doc.id}`)}
                         className="inline-flex items-center gap-1 px-3 py-1 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
                       >
                         <Eye className="w-4 h-4" />
-                        Details
+                        <span className="hidden sm:inline">Details</span>
                       </button>
                     </td>
                   </tr>

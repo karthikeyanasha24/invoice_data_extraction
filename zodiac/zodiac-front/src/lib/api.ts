@@ -1411,6 +1411,26 @@ export const satApi = {
             throw new Error(error.response?.data?.detail || 'Failed to fetch XML.');
         }
     },
+
+    // Upload multiple files (admin upload)
+    uploadFiles: async (files: FileList) => {
+        try {
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append('files', files[i]);
+            }
+
+            const response = await api.post('/api/v1/sat/upload-files', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to upload files:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to upload files.');
+        }
+    },
 };
 
 // SAT Simple Merge API
@@ -1485,14 +1505,45 @@ export const satSimpleMergeApi = {
         }
     },
 
-    // Send to SAP
-    sendToSAP: async (mergedId: string) => {
+    // Fetch CSRF token from SAP
+    fetchCsrfToken: async (mergedId: string) => {
         try {
-            const response = await api.post(`/api/v1/sat/simple-merge/${mergedId}/send-to-sap`);
+            const response = await api.post(`/api/v1/sat/simple-merge/${mergedId}/fetch-csrf-token`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch CSRF token:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch CSRF token from SAP.');
+        }
+    },
+
+    // Send to SAP with CSRF token
+    sendToSAP: async (mergedId: string, csrfToken: string) => {
+        try {
+            const response = await api.post(`/api/v1/sat/simple-merge/${mergedId}/send-to-sap`, {
+                csrf_token: csrfToken
+            });
             return response.data;
         } catch (error: any) {
             console.error('Failed to send to SAP:', error);
             throw new Error(error.response?.data?.detail || 'Failed to send to SAP.');
+        }
+    },
+
+    // Check merge requirements for RFC group
+    checkMergeRequirements: async (
+        supplier_rfc: string,
+        fiscal_year: number,
+        fiscal_period: number
+    ) => {
+        try {
+            const response = await api.get(
+                `/api/v1/sat/simple-merge/check-merge-requirements/${supplier_rfc}`,
+                { params: { fiscal_year, fiscal_period } }
+            );
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to check merge requirements:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to check requirements.');
         }
     },
 };

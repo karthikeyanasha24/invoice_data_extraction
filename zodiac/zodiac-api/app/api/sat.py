@@ -53,7 +53,8 @@ async def intake_cfdi_document(
         processor = SATDocumentProcessor(db)
         result = processor.process_cfdi_document(
             user_id=current_user.id,
-            xml_content=request.xml_content
+            xml_content=request.xml_content,
+            source='admin'  # Mark as admin upload
         )
         
         if not result['success']:
@@ -175,10 +176,11 @@ async def supplier_intake_files(
                 
                 logger.info(f"   Processing file: {uploaded_file.filename} ({len(xml_content)} bytes)")
                 
-                # Process document
+                # Process document (mark as supplier source)
                 result = processor.process_cfdi_document(
                     user_id=supplier_token.created_by,
-                    xml_content=xml_content
+                    xml_content=xml_content,
+                    source='supplier'  # Track as supplier upload
                 )
                 
                 # Validate RFC matches token (normalize for comparison)
@@ -238,12 +240,87 @@ async def supplier_intake_files(
         )
 
 
+@router.post("/upload-files")
+async def upload_sat_files(
+    files: List[UploadFile] = File(...),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload multiple CFDI XML files (admin upload).
+    Similar to supplier intake but for internal/admin use.
+    """
+    try:
+        logger.info(f"📤 Admin batch upload from user {current_user.id}, Files: {len(files)}")
+        
+        processor = SATDocumentProcessor(db)
+        results = []
+        
+        for uploaded_file in files:
+            try:
+                # Read file content
+                xml_content = await uploaded_file.read()
+                xml_content = xml_content.decode('utf-8')
+                
+                logger.info(f"   Processing file: {uploaded_file.filename} ({len(xml_content)} bytes)")
+                
+                # Process document (mark as admin upload)
+                result = processor.process_cfdi_document(
+                    user_id=current_user.id,
+                    xml_content=xml_content,
+                    source='admin'  # Mark as admin upload
+                )
+                
+                # Add filename to result
+                result['filename'] = uploaded_file.filename
+                results.append(result)
+                
+                if result['success']:
+                    logger.info(f"   ✅ {uploaded_file.filename}: UUID={result.get('cfdi_uuid')}")
+                else:
+                    logger.warning(f"   ❌ {uploaded_file.filename}: {result.get('error')}")
+                    
+            except Exception as e:
+                logger.error(f"   ❌ Error processing {uploaded_file.filename}: {e}")
+                results.append({
+                    'success': False,
+                    'status': 'ERROR',
+                    'error': str(e),
+                    'filename': uploaded_file.filename
+                })
+        
+        # Calculate summary
+        successful = len([r for r in results if r.get('success')])
+        failed = len(results) - successful
+        
+        logger.info(f"✅ Admin upload complete: {successful} successful, {failed} failed out of {len(results)} files")
+        
+        return {
+            'success': successful > 0,
+            'message': f'Processed {len(results)} files: {successful} successful, {failed} failed',
+            'total_files': len(results),
+            'successful_count': successful,
+            'failed_count': failed,
+            'results': results
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Admin batch upload failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="File upload error. Please try again."
+        )
+
+
 @router.get("/documents")
 async def list_sat_documents(
     fiscal_year: Optional[int] = None,
     fiscal_period: Optional[int] = None,
     doc_type: Optional[str] = None,
-status_filter: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    source_filter: Optional[str] = None,  # New: filter by source
     skip: int = 0,
     limit: int = 100,
     current_user: ZodiacUser = Depends(get_current_user),
@@ -251,6 +328,7 @@ status_filter: Optional[str] = None,
 ):
     """
     List SAT documents with optional filters.
+    Now includes source filter (admin/supplier).
     """
     try:
         processor = SATDocumentProcessor(db)

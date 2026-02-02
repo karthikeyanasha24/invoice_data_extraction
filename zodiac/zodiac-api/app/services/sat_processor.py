@@ -25,7 +25,8 @@ class SATDocumentProcessor:
     def process_cfdi_document(
         self,
         user_id: int,
-        xml_content: str
+        xml_content: str,
+        source: str = 'admin'  # Track source: 'admin' or 'supplier'
     ) -> Dict:
         """
         Process a CFDI document: validate, parse, store.

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:pago20="http://www.sat.gob.mx/Pagos20" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd http://www.sat.gob.mx/Pagos20 http://www.sat.gob.mx/sitio_internet/cfd/Pagos/Pagos20.xsd" Version="4.0" Serie="P" Folio="002" Fecha="2026-02-25T16:30:00" SubTotal="0" Moneda="XXX" Total="0" TipoDeComprobante="P" LugarExpedicion="54720" Exportacion="01">
+  <cfdi:Emisor Rfc="TEC940201K90" Nombre="TECNOLOGIA EMPRESARIAL CORPORATIVA SA" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="EDI101020E99" Nombre="EDIFACTMX" DomicilioFiscalReceptor="97133" RegimenFiscalReceptor="601" UsoCFDI="CP01"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111506" Cantidad="1" ClaveUnidad="ACT" Descripcion="Pago" ValorUnitario="0" Importe="0" ObjetoImp="01"/>
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <pago20:Pagos Version="2.0">
+      <pago20:Totales TotalRetencionesIVA="0.00" TotalRetencionesISR="0.00" TotalRetencionesIEPS="0.00" TotalTrasladosBaseIVA16="8500.00" TotalTrasladosImpuestoIVA16="1360.00" TotalTrasladosBaseIVA8="0.00" TotalTrasladosImpuestoIVA8="0.00" TotalTrasladosBaseIVA0="0.00" TotalTrasladosImpuestoIVA0="0.00" TotalTrasladosBaseIVAExento="0.00" MontoTotalPagos="9860.00"/>
+      <pago20:Pago FechaPago="2026-02-25T16:30:00" FormaDePagoP="03" MonedaP="MXN" Monto="9860.00">
+        <pago20:DoctoRelacionado IdDocumento="D4E5F6A7-B8C9-4012-D4E5-F6A7B8C9D004" Serie="A" Folio="002" MonedaDR="MXN" NumParcialidad="1" ImpSaldoAnt="9860.00" ImpPagado="9860.00" ImpSaldoInsoluto="0.00" ObjetoImpDR="02">
+          <pago20:ImpuestosDR>
+            <pago20:TrasladosDR>
+              <pago20:TrasladoDR BaseDR="8500.00" ImpuestoDR="002" TipoFactorDR="Tasa" TasaOCuotaDR="0.160000" ImporteDR="1360.00"/>
+            </pago20:TrasladosDR>
+          </pago20:ImpuestosDR>
+        </pago20:DoctoRelacionado>
+      </pago20:Pago>
+    </pago20:Pagos>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="E5F6A7B8-C9D0-4123-E5F6-A7B8C9D0E005" FechaTimbrado="2026-02-25T16:35:00" RfcProvCertif="SPR190613R52" SelloCFD="PAYMENT90GHI..." NoCertificadoSAT="30001000000500003456" SelloSAT="PAYMENT90JKL..."/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

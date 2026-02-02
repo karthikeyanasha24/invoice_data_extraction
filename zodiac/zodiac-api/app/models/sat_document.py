@@ -72,10 +72,13 @@ class SATDocument(Base):
     fiscal_year = Column(Integer)
     fiscal_period = Column(Integer)
     
+    # Source tracking
+    source = Column(String(20), default='admin')  # 'admin' or 'supplier'
+    
     # Timestamps
     received_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def __repr__(self):
-        return f"<SATDocument(id={self.id}, type={self.doc_type}, uuid={self.cfdi_uuid})>"
+        return f"<SATDocument(id={self.id}, type={self.doc_type}, uuid={self.cfdi_uuid}, source={self.source})>"
 

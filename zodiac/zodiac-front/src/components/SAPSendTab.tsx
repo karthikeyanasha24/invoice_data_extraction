@@ -60,6 +60,8 @@ export default function SAPSendTab() {
   const [sending, setSending] = useState<{ [key: string]: boolean }>({});
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [csrfTokens, setCsrfTokens] = useState<{ [key: string]: string }>({});  // Store CSRF tokens per document
+  const [fetchingCsrf, setFetchingCsrf] = useState<{ [key: string]: boolean }>({});
 
   // Filters
   const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear());
@@ -108,16 +110,48 @@ export default function SAPSendTab() {
     }
   };
 
+  const handleFetchCsrfToken = async (doc: SimpleMergedDocument) => {
+    const docKey = `simple-${doc.id}`;
+    setFetchingCsrf(prev => ({ ...prev, [docKey]: true }));
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const response = await satSimpleMergeApi.fetchCsrfToken(doc.id);
+      setCsrfTokens(prev => ({ ...prev, [docKey]: response.csrf_token }));
+      setSuccess(`✅ CSRF Token fetched! Token: ${response.csrf_token.substring(0, 20)}...`);
+    } catch (err: any) {
+      console.error('Error fetching CSRF token:', err);
+      setError(err.message || 'Failed to fetch CSRF token from SAP.');
+    } finally {
+      setFetchingCsrf(prev => ({ ...prev, [docKey]: false }));
+    }
+  };
+
   const handleSendSimpleToSAP = async (doc: SimpleMergedDocument) => {
     const docKey = `simple-${doc.id}`;
+    
+    // Check if CSRF token exists
+    if (!csrfTokens[docKey]) {
+      setError('Please fetch CSRF token first before sending to SAP.');
+      return;
+    }
+    
     setSending(prev => ({ ...prev, [docKey]: true }));
     setError(null);
     setSuccess(null);
 
     try {
-      const response = await satSimpleMergeApi.sendToSAP(doc.id);
+      // Send to SAP with the fetched CSRF token
+      const response = await satSimpleMergeApi.sendToSAP(doc.id, csrfTokens[docKey]);
       setSuccess(`✅ Simple merged document sent successfully! SAP Doc #: ${response.sap_document_number}`);
       await fetchData(); // Refresh to show updated status
+      // Clear CSRF token after successful send
+      setCsrfTokens(prev => {
+        const newTokens = { ...prev };
+        delete newTokens[docKey];
+        return newTokens;
+      });
     } catch (err: any) {
       console.error('Error sending simple merge to SAP:', err);
       setError(err.message || 'Failed to send simple merged document to SAP.');
@@ -451,6 +485,7 @@ export default function SAPSendTab() {
                     {pendingSimpleDocs.map((doc) => {
                       const docKey = `simple-${doc.id}`;
                       const isSending = sending[docKey];
+                      const isFetchingCsrf = fetchingCsrf[docKey];
 
                       return (
                         <div
@@ -502,31 +537,63 @@ export default function SAPSendTab() {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3">
-                            <button
-                              onClick={() => router.push(`/sat-documents/simple-merge/${doc.id}`)}
-                              className="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg transition-colors flex items-center gap-2"
-                            >
-                              <Eye className="w-4 h-4" />
-                              View Details
-                            </button>
-                            <button
-                              onClick={() => handleSendSimpleToSAP(doc)}
-                              disabled={isSending}
-                              className="flex-1 px-6 py-3 text-sm font-semibold text-white bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
-                            >
-                              {isSending ? (
-                                <>
-                                  <Loader2 className="w-5 h-5 animate-spin" />
-                                  Sending to SAP...
-                                </>
-                              ) : (
-                                <>
-                                  <Send className="w-5 h-5" />
-                                  Send to SAP
-                                </>
-                              )}
-                            </button>
+                          <div className="space-y-3">
+                            {/* CSRF Token Status */}
+                            {csrfTokens[docKey] && (
+                              <div className="bg-green-50 border border-green-200 rounded p-2">
+                                <div className="text-xs text-green-800 flex items-center gap-2">
+                                  <CheckCircle className="w-4 h-4" />
+                                  <span>CSRF Token Ready: {csrfTokens[docKey].substring(0, 15)}...</span>
+                                </div>
+                              </div>
+                            )}
+                            
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => router.push(`/sat-documents/simple-merge/${doc.id}`)}
+                                className="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg transition-colors flex items-center gap-2"
+                              >
+                                <Eye className="w-4 h-4" />
+                                View
+                              </button>
+                              
+                              <button
+                                onClick={() => handleFetchCsrfToken(doc)}
+                                disabled={isFetchingCsrf}
+                                className="px-4 py-2 text-sm font-medium text-green-600 bg-green-50 hover:bg-green-100 border border-green-200 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {isFetchingCsrf ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    Fetching...
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle className="w-4 h-4" />
+                                    {csrfTokens[docKey] ? 'Refresh Token' : 'Get CSRF Token'}
+                                  </>
+                                )}
+                              </button>
+                              
+                              <button
+                                onClick={() => handleSendSimpleToSAP(doc)}
+                                disabled={isSending || !csrfTokens[docKey]}
+                                className="flex-1 px-6 py-3 text-sm font-semibold text-white bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+                                title={!csrfTokens[docKey] ? 'Fetch CSRF token first' : ''}
+                              >
+                                {isSending ? (
+                                  <>
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                    Sending to SAP...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Send className="w-5 h-5" />
+                                    Send to SAP
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );

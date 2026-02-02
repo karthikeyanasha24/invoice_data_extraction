@@ -356,6 +356,16 @@ class SAPTransformer:
                         "DS_STAMP_DATETIME": self._datetime_to_int(),
                         "DS_SAT_CERT_NUMBER": "",
                         "DS_CFDI_SEAL": "",
+                        # Mapping fields from supplier account mapping
+                        "COMPANY_CODE": mapping.company_code if mapping else "",
+                        "GL_ACC": mapping.sap_gl_account if mapping else "",
+                        "FISC_YR": mapping.fiscal_year if mapping else 0,
+                        "CURR": mapping.currency if mapping else "",
+                        "OPEN_BALANCE": self._clean_numeric(mapping.opening_balance if mapping else 0),
+                        "CREDIT": self._clean_numeric(mapping.credit_amount if mapping else 0),
+                        "DEBIT": self._clean_numeric(mapping.debit_amount if mapping else 0),
+                        "CLOS_BALANCE": self._clean_numeric(mapping.closing_balance if mapping else 0),
+                        "CODAGROUP": mapping.account_description if mapping else "",
                         "ITEMS": items
                     }
                     

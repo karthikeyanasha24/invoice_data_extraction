@@ -45,6 +45,8 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewJson, setPreviewJson] = useState<any | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  const [fetchingCsrf, setFetchingCsrf] = useState(false);
 
   useEffect(() => {
     if (user && resolvedParams.id) {
@@ -79,6 +81,22 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
       alert('Failed to load SAP JSON preview: ' + (err.message || 'Unknown error'));
     } finally {
       setLoadingPreview(false);
+    }
+  };
+
+  const handleFetchCsrfToken = async () => {
+    if (!document) return;
+    
+    try {
+      setFetchingCsrf(true);
+      const response = await satSimpleMergeApi.fetchCsrfToken(document.id);
+      setCsrfToken(response.csrf_token);
+      alert(`CSRF Token fetched successfully!\n\nToken: ${response.csrf_token}\n\nNow you can send to SAP.`);
+    } catch (err: any) {
+      console.error('Error fetching CSRF token:', err);
+      alert('Failed to fetch CSRF token: ' + (err.message || 'Unknown error'));
+    } finally {
+      setFetchingCsrf(false);
     }
   };
 
@@ -215,6 +233,23 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
                 )}
               </button>
               <button
+                onClick={handleFetchCsrfToken}
+                disabled={fetchingCsrf}
+                className="inline-flex items-center px-6 py-3 bg-white text-green-600 border-2 border-green-600 font-medium rounded-lg hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
+              >
+                {fetchingCsrf ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-600 mr-2"></div>
+                    Fetching...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-5 h-5 mr-2" />
+                    {csrfToken ? 'Refresh CSRF' : 'Fetch CSRF Token'}
+                  </>
+                )}
+              </button>
+              <button
                 onClick={handleDownloadXml}
                 disabled={downloading}
                 className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md"
@@ -283,6 +318,28 @@ export default function SimpleMergedDocumentDetailPage({ params }: { params: Pro
             <p className="text-sm text-gray-500 mt-1">{document.currency}</p>
           </div>
         </div>
+
+        {/* CSRF Token Display */}
+        {csrfToken && (
+          <div className="bg-green-50 border-2 border-green-400 rounded-lg p-6">
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-green-900 mb-2">
+                  CSRF Token Ready!
+                </h3>
+                <p className="text-green-800 text-sm mb-3">
+                  Token fetched from SAP. You can now send this document to SAP.
+                </p>
+                <div className="bg-white border border-green-300 rounded p-3">
+                  <code className="text-sm font-mono text-gray-900 break-all">
+                    {csrfToken}
+                  </code>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Document Information */}
         <div className="bg-white rounded-lg shadow">
