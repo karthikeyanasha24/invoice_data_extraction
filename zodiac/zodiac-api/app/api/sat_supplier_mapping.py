@@ -25,21 +25,33 @@ async def upload_excel_mapping(
     db: Session = Depends(get_db)
 ):
     """
-    Upload Excel file with supplier RFC to G/L account mappings.
+    Upload Excel or CSV file with supplier RFC to G/L account mappings.
+    
+    Supports: .xlsx, .xls, .csv
     
     Required columns: RFC, CTA (or GL_ACC)
     Optional columns: CTAS, COMPANY_CO, FISC_YR, CURR, OPEN_BAL, CRED, DEBE, CLOS_BAL, IS_ACTIVE
     
-    Example Excel format:
+    Example format:
     RFC | COMPANY_CO | GL_ACC | CTAS | FISC_YR | CURR | OPEN_BAL | CRED | DEBE | CLOS_BAL | IS_ACTIVE
     """
     try:
         # Read file content
         content = await file.read()
         
-        # Parse Excel
         mapping_service = SATSupplierMappingService(db)
-        mappings = mapping_service.parse_excel_mapping_file(content)
+        
+        # Detect file type and parse accordingly
+        filename = file.filename.lower()
+        
+        if filename.endswith('.csv'):
+            # CSV parsing (no dependencies, always works)
+            mappings = mapping_service.parse_csv_mapping_file(content)
+        elif filename.endswith(('.xlsx', '.xls')):
+            # Excel parsing (requires openpyxl)
+            mappings = mapping_service.parse_excel_mapping_file(content)
+        else:
+            raise ValueError("Unsupported file format. Please upload .xlsx, .xls, or .csv file")
         
         # Bulk upsert
         result = mapping_service.bulk_upsert_mappings(mappings)
@@ -53,7 +65,7 @@ async def upload_excel_mapping(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to parse Excel file: {str(e)}"
+            detail=f"Failed to parse file: {str(e)}"
         )
     except Exception as e:
         logger.error(f"❌ Failed to upload mappings: {e}")

@@ -24,6 +24,88 @@ class SATSupplierMappingService:
     def __init__(self, db: Session):
         self.db = db
     
+    def parse_csv_mapping_file(self, file_content: bytes) -> List[Dict]:
+        """
+        Parse CSV file containing supplier RFC to G/L account mappings.
+        CSV is lighter and works everywhere (no dependencies).
+        """
+        try:
+            import csv
+            from io import StringIO
+            
+            # Decode bytes to string
+            csv_string = file_content.decode('utf-8-sig')  # utf-8-sig handles BOM
+            csv_file = StringIO(csv_string)
+            
+            # Read CSV
+            reader = csv.DictReader(csv_file)
+            
+            # Get and normalize headers
+            if not reader.fieldnames:
+                raise ValueError("CSV file is empty or has no headers")
+            
+            normalized_headers = self._normalize_column_names(reader.fieldnames)
+            
+            logger.info(f"📊 CSV columns: {normalized_headers}")
+            
+            # Validate required columns
+            required = ['rfc', 'cta']
+            missing = [col for col in required if col not in normalized_headers]
+            if missing:
+                raise ValueError(f"Missing required columns: {missing}")
+            
+            # Create mapping from original headers to normalized
+            header_map = dict(zip(reader.fieldnames, normalized_headers))
+            
+            # Parse rows
+            mappings = []
+            for row_idx, row in enumerate(reader, start=2):
+                try:
+                    # Normalize the row keys
+                    normalized_row = {header_map[k]: v for k, v in row.items()}
+                    
+                    # Helper to get value safely
+                    def get_val(col_name, default=None):
+                        val = normalized_row.get(col_name, default)
+                        return val if val and val.strip() else default
+                    
+                    # Get RFC (required)
+                    rfc = str(get_val('rfc', '')).strip().upper()
+                    if not rfc or rfc in ['NONE', 'NAN', '']:
+                        continue
+                    
+                    # Get GL Account (required)
+                    gl_account = str(get_val('cta', '')).strip()
+                    if not gl_account:
+                        continue
+                    
+                    mapping = {
+                        'supplier_rfc': rfc,
+                        'sap_gl_account': gl_account,
+                        'account_description': str(get_val('ctas', '')) if get_val('ctas') else None,
+                        'is_active': self._parse_boolean(get_val('is_active', 'true')),
+                        'company_code': str(get_val('company_co', '')).strip() if get_val('company_co') else None,
+                        'fiscal_year': int(get_val('fisc_yr', 0)) if get_val('fisc_yr') else None,
+                        'currency': str(get_val('curr', 'MXN')).strip().upper(),
+                        'opening_balance': float(get_val('open_bal', 0.0)) if get_val('open_bal') else 0.0,
+                        'credit_amount': float(get_val('cred', 0.0)) if get_val('cred') else 0.0,
+                        'debit_amount': float(get_val('debe', 0.0)) if get_val('debe') else 0.0,
+                        'closing_balance': float(get_val('clos_bal', 0.0)) if get_val('clos_bal') else 0.0
+                    }
+                    
+                    mappings.append(mapping)
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Skipping row {row_idx} due to error: {e}")
+                    continue
+            
+            logger.info(f"✅ Parsed {len(mappings)} mappings from CSV")
+            return mappings
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to parse CSV file: {e}")
+            raise ValueError(f"Failed to parse CSV file: {str(e)}")
+    
     def parse_excel_mapping_file(self, file_content: bytes) -> List[Dict]:
         """
         Parse Excel file containing supplier RFC to G/L account mappings.

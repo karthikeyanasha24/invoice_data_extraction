@@ -188,7 +188,10 @@ export default function AccountMappingPage() {
             
             <div className="mb-4 p-4 bg-blue-50 rounded-lg">
               <p className="text-sm text-gray-700 mb-2 font-medium">
-                Excel file format (required: RFC, CTA; optional: other fields):
+                File format (Excel or CSV - required: RFC, CTA; optional: other fields):
+              </p>
+              <p className="text-xs text-gray-600 mb-2">
+                💡 <strong>Tip</strong>: CSV works everywhere! To convert Excel to CSV: File → Save As → CSV (UTF-8)
               </p>
               <div className="overflow-x-auto">
                 <div className="grid grid-cols-11 gap-2 text-xs font-mono bg-white p-2 rounded min-w-max">
@@ -222,7 +225,7 @@ export default function AccountMappingPage() {
               <label className="flex-1">
                 <input
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.csv"
                   onChange={handleFileUpload}
                   disabled={uploading}
                   className="hidden"
@@ -236,7 +239,7 @@ export default function AccountMappingPage() {
                   ) : (
                     <>
                       <Upload className="w-4 h-4" />
-                      Upload Excel File
+                      Upload File (Excel/CSV)
                     </>
                   )}
                 </div>

@@ -1,16 +1,19 @@
 {
+  "version": 2,
   "builds": [
     {
       "src": "app/server.py",
       "use": "@vercel/python",
-      "config": { "includeFiles": ["requirements.txt"] }
+      "config": {
+        "maxLambdaSize": "50mb",
+        "runtime": "python3.12"
+      }
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "app/server.py",
-      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+      "dest": "app/server.py"
     }
   ]
 }
