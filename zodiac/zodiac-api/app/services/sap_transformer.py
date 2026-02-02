@@ -40,11 +40,12 @@ class SAPTransformer:
         """Convert numeric value to clean float with specified precision"""
         return round(self._to_float(value), precision)
     
-    def _datetime_to_int(self, dt: datetime = None) -> int:
-        """Convert datetime to integer format: YYYYMMDDHHmmss"""
+    def _datetime_to_iso(self, dt: datetime = None) -> str:
+        """Convert datetime to ISO 8601 format: YYYY-MM-DDTHH:MM:SS"""
         if dt is None:
-            dt = datetime.now()
-        return int(dt.strftime("%Y%m%d%H%M%S"))
+            dt = datetime.utcnow()
+        # Return ISO format with 'Z' suffix for UTC
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     
     def _get_supplier_mapping(self, supplier_rfc: str):
         """Fetch supplier account mapping from database"""
@@ -208,7 +209,7 @@ class SAPTransformer:
                 "DOCUMENT_TYPE": "C",  # C for Canonical
                 "DOC_NUMBER": f"{canonical.fiscal_year}{canonical.fiscal_period:02d}",
                 "VERSION": "4.0",
-                "ISSUE_DATETIME": self._datetime_to_int(),  # Integer format
+                "ISSUE_DATETIME": self._datetime_to_iso(),  # ISO format
                 "DOC_SERIES": f"CANONICAL_{canonical.fiscal_year}",
                 "CURRENCY": canonical.currency or "MXN",
                 "EXCHANGE_RATE": 1.00000,  # 5 decimals like client's example
@@ -239,7 +240,7 @@ class SAPTransformer:
                 "TAX_AMOUNT": 0,
                 "TAX_RATE_TYPE": "RATE",
                 "CERT_PROVIDER_TAX": "",
-                "DS_STAMP_DATETIME": self._datetime_to_int(),  # Integer format
+                "DS_STAMP_DATETIME": self._datetime_to_iso(),  # ISO format
                 "DS_SAT_CERT_NUMBER": "",
                 "DS_CFDI_SEAL": "",
                 # New mapping fields
@@ -322,7 +323,7 @@ class SAPTransformer:
                         "DOCUMENT_TYPE": doc_type,
                         "DOC_NUMBER": sat_doc.folio or "",
                         "VERSION": "4.0",
-                        "ISSUE_DATETIME": self._datetime_to_int(sat_doc.fecha) if sat_doc.fecha else self._datetime_to_int(),
+                        "ISSUE_DATETIME": self._datetime_to_iso(sat_doc.fecha) if sat_doc.fecha else self._datetime_to_iso(),
                         "DOC_SERIES": sat_doc.serie or "",
                         "CURRENCY": sat_doc.moneda or "MXN",
                         "EXCHANGE_RATE": round(tipo_cambio_val, 5),  # 5 decimals: 19.48000
@@ -350,10 +351,10 @@ class SAPTransformer:
                         "TAX_CODE": "",
                         "TAX_RATE": 0.16,
                         "TAX_BASE_AMOUNT": self._clean_numeric(subtotal_val),
-                        "TAX_AMOUNT": 0,
+                        "TAX_AMOUNT": self._clean_numeric(tax_amount),
                         "TAX_RATE_TYPE": "RATE",
                         "CERT_PROVIDER_TAX": "",
-                        "DS_STAMP_DATETIME": self._datetime_to_int(),
+                        "DS_STAMP_DATETIME": self._datetime_to_iso(),
                         "DS_SAT_CERT_NUMBER": "",
                         "DS_CFDI_SEAL": "",
                         # Mapping fields from supplier account mapping
