@@ -11,14 +11,13 @@ from ..models.sat_supplier_account_mapping import SATSupplierAccountMapping
 
 logger = logging.getLogger("zodiac-api.sat_supplier_mapping")
 
-# Lazy import pandas to avoid import errors if not installed
+# Use openpyxl directly (lightweight, works on Vercel)
 try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
 except ImportError:
-    logger.warning("⚠️ pandas not available - Excel upload feature will be disabled")
-    PANDAS_AVAILABLE = False
-    pd = None
+    logger.warning("⚠️ openpyxl not available - Excel upload feature will be disabled")
+    OPENPYXL_AVAILABLE = False
 
 
 class SATSupplierMappingService:
@@ -30,53 +29,81 @@ class SATSupplierMappingService:
         Parse Excel file containing supplier RFC to G/L account mappings.
         Expected columns: RFC, CTA (G/L Account), CTAS (Description), IS_ACTIVE
         New columns: COMPANY_CO, FISC_YR, CURR, OPEN_BAL, CRED, DEBE, CLOS_BAL
+        
+        Uses openpyxl directly (lightweight, works on Vercel).
         """
-        if not PANDAS_AVAILABLE:
-            raise ImportError("pandas library is required for Excel file parsing but is not installed")
+        if not OPENPYXL_AVAILABLE:
+            raise ImportError("openpyxl library is required for Excel file parsing but is not installed")
         
         try:
-            # Read Excel file
-            df = pd.read_excel(file_content, engine='openpyxl')
+            from io import BytesIO
+            
+            # Load Excel file with openpyxl
+            workbook = load_workbook(filename=BytesIO(file_content), read_only=True)
+            sheet = workbook.active
+            
+            # Get headers from first row
+            headers = []
+            for cell in sheet[1]:
+                headers.append(str(cell.value).strip() if cell.value else "")
             
             # Normalize column names
-            df.columns = self._normalize_column_names(df.columns)
+            normalized_headers = self._normalize_column_names(headers)
             
-            logger.info(f"📊 Excel columns: {list(df.columns)}")
+            logger.info(f"📊 Excel columns: {normalized_headers}")
             
             # Validate required columns
             required = ['rfc', 'cta']
-            missing = [col for col in required if col not in df.columns]
+            missing = [col for col in required if col not in normalized_headers]
             if missing:
                 raise ValueError(f"Missing required columns: {missing}")
             
-            # Convert to list of dicts
+            # Create column index mapping
+            col_map = {norm: idx for idx, norm in enumerate(normalized_headers)}
+            
+            # Convert rows to list of dicts
             mappings = []
-            for _, row in df.iterrows():
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
                 try:
-                    mapping = {
-                        'supplier_rfc': str(row['rfc']).strip().upper(),
-                        'sap_gl_account': str(row['cta']).strip(),
-                        'account_description': str(row.get('ctas', '')) if pd.notna(row.get('ctas')) else None,
-                        'is_active': self._parse_boolean(row.get('is_active', True)),
-                        # New fields
-                        'company_code': str(row['company_co']).strip() if 'company_co' in row and pd.notna(row.get('company_co')) else None,
-                        'fiscal_year': int(row['fisc_yr']) if 'fisc_yr' in row and pd.notna(row.get('fisc_yr')) else None,
-                        'currency': str(row['curr']).strip().upper() if 'curr' in row and pd.notna(row.get('curr')) else 'MXN',
-                        'opening_balance': float(row['open_bal']) if 'open_bal' in row and pd.notna(row.get('open_bal')) else 0.0,
-                        'credit_amount': float(row['cred']) if 'cred' in row and pd.notna(row.get('cred')) else 0.0,
-                        'debit_amount': float(row['debe']) if 'debe' in row and pd.notna(row.get('debe')) else 0.0,
-                        'closing_balance': float(row['clos_bal']) if 'clos_bal' in row and pd.notna(row.get('clos_bal')) else 0.0
-                    }
+                    # Helper function to get cell value safely
+                    def get_val(col_name, default=None):
+                        if col_name in col_map:
+                            val = row[col_map[col_name]]
+                            return val if val is not None else default
+                        return default
                     
-                    # Skip empty rows
-                    if not mapping['supplier_rfc'] or mapping['supplier_rfc'] == 'NAN':
+                    # Get RFC (required)
+                    rfc = str(get_val('rfc', '')).strip().upper()
+                    if not rfc or rfc == 'NONE' or rfc == 'NAN':
                         continue
                     
+                    # Get GL Account (required)
+                    gl_account = str(get_val('cta', '')).strip()
+                    if not gl_account:
+                        continue
+                    
+                    mapping = {
+                        'supplier_rfc': rfc,
+                        'sap_gl_account': gl_account,
+                        'account_description': str(get_val('ctas', '')) if get_val('ctas') else None,
+                        'is_active': self._parse_boolean(get_val('is_active', True)),
+                        # New fields
+                        'company_code': str(get_val('company_co', '')).strip() if get_val('company_co') else None,
+                        'fiscal_year': int(get_val('fisc_yr', 0)) if get_val('fisc_yr') else None,
+                        'currency': str(get_val('curr', 'MXN')).strip().upper(),
+                        'opening_balance': float(get_val('open_bal', 0.0)) if get_val('open_bal') is not None else 0.0,
+                        'credit_amount': float(get_val('cred', 0.0)) if get_val('cred') is not None else 0.0,
+                        'debit_amount': float(get_val('debe', 0.0)) if get_val('debe') is not None else 0.0,
+                        'closing_balance': float(get_val('clos_bal', 0.0)) if get_val('clos_bal') is not None else 0.0
+                    }
+                    
                     mappings.append(mapping)
+                    
                 except Exception as e:
-                    logger.warning(f"⚠️ Skipping row due to error: {e}")
+                    logger.warning(f"⚠️ Skipping row {row_idx} due to error: {e}")
                     continue
             
+            workbook.close()
             logger.info(f"✅ Parsed {len(mappings)} mappings from Excel")
             return mappings
             
@@ -118,7 +145,7 @@ class SATSupplierMappingService:
     
     def _parse_boolean(self, value) -> bool:
         """Parse boolean from various formats."""
-        if pd.isna(value):
+        if value is None or value == '':
             return True
         if isinstance(value, bool):
             return value

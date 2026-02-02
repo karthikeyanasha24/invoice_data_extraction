@@ -19,6 +19,49 @@ logger = logging.getLogger("zodiac-api.sat_simple_merge")
 
 router = APIRouter(prefix="/sat/simple-merge", tags=["SAT Simple Merge"])
 
+
+# =====================
+# Helper Functions
+# =====================
+
+def safe_float_conversion(value, default=0.0):
+    """
+    Safely convert a value to float, handling comma separators.
+    
+    Args:
+        value: The value to convert (string, int, float, or None)
+        default: Default value if conversion fails (default: 0.0)
+    
+    Returns:
+        float: The converted value or default
+    
+    Examples:
+        safe_float_conversion("1,000") -> 1000.0
+        safe_float_conversion("1,000.50") -> 1000.5
+        safe_float_conversion("1000") -> 1000.0
+        safe_float_conversion(None) -> 0.0
+    """
+    if value is None:
+        return default
+    
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    if isinstance(value, str):
+        # Remove commas and whitespace
+        cleaned = value.replace(',', '').strip()
+        
+        if not cleaned or cleaned == '':
+            return default
+        
+        try:
+            return float(cleaned)
+        except ValueError:
+            logger.warning(f"Could not convert '{value}' to float, using default {default}")
+            return default
+    
+    return default
+
 # =====================
 # Request/Response Models
 # =====================
@@ -219,7 +262,7 @@ async def merge_documents(
                 document_count=existing_merge.document_count,
                 document_types=existing_merge.document_types,
                 cfdi_uuids=existing_merge.cfdi_uuids,
-                total_amount=float(existing_merge.total_amount) if existing_merge.total_amount else None,
+                total_amount=safe_float_conversion(existing_merge.total_amount, None),
                 currency=existing_merge.currency,
                 created_at=existing_merge.created_at
             )
@@ -272,7 +315,7 @@ async def merge_documents(
                 if doc.doc_type not in doc_types:
                     doc_types.append(doc.doc_type)
                 cfdi_uuids.append(doc.cfdi_uuid)
-                total_amount += float(doc.total or 0)
+                total_amount += safe_float_conversion(doc.total, 0.0)
                 
             except etree.XMLSyntaxError as e:
                 logger.error(f"Failed to parse XML for document {doc.id}: {e}")
@@ -319,7 +362,7 @@ async def merge_documents(
             document_count=simple_merged.document_count,
             document_types=simple_merged.document_types,
             cfdi_uuids=simple_merged.cfdi_uuids,
-            total_amount=float(simple_merged.total_amount) if simple_merged.total_amount else None,
+            total_amount=safe_float_conversion(simple_merged.total_amount, None),
             currency=simple_merged.currency,
             created_at=simple_merged.created_at
         )
@@ -376,7 +419,7 @@ async def list_simple_merged_documents(
                     document_count=doc.document_count,
                     document_types=doc.document_types,
                     cfdi_uuids=doc.cfdi_uuids,
-                    total_amount=float(doc.total_amount) if doc.total_amount else None,
+                    total_amount=safe_float_conversion(doc.total_amount, None),
                     currency=doc.currency,
                     sent_to_sap=doc.sent_to_sap if hasattr(doc, 'sent_to_sap') else False,
                     sap_document_number=doc.sap_document_number if hasattr(doc, 'sap_document_number') else None,
@@ -425,7 +468,7 @@ async def get_simple_merged_document(
             document_count=document.document_count,
             document_types=document.document_types,
             cfdi_uuids=document.cfdi_uuids,
-            total_amount=float(document.total_amount) if document.total_amount else None,
+            total_amount=safe_float_conversion(document.total_amount, None),
             currency=document.currency,
             created_at=document.created_at,
             merged_xml_content=document.merged_xml_content
@@ -684,7 +727,7 @@ async def send_simple_merge_to_sap(
                         "VERSION": "4.0",
                         "ISSUE_DATETIME": doc_date.replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] if doc_date else "",
                         "CURRENCY": currency,
-                        "TOTAL_AMOUNT": float(total),
+                        "TOTAL_AMOUNT": safe_float_conversion(total, 0.0),
                         "ISSUER_NAME": document.vendor_name or document.vendor_rfc,
                         "ISSUER_TAX_ID": document.vendor_rfc,
                         # Add more fields as needed

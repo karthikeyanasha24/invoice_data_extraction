@@ -22,9 +22,8 @@ lxml
 reportlab==4.0.9
 
 # Data Processing (for Excel upload)
-numpy>=1.24.0
-pandas>=2.0.0
-openpyxl>=3.0.0
+# Using openpyxl directly (lighter than pandas, works on Vercel)
+openpyxl>=3.1.0
 
 # Other
 python-dotenv==1.1.1

@@ -19,6 +19,49 @@ logger = logging.getLogger("zodiac-api.sat_canonical")
 router = APIRouter(prefix="/sat/canonical", tags=["SAT Canonical"])
 
 
+# =====================
+# Helper Functions
+# =====================
+
+def safe_float_conversion(value, default=0.0):
+    """
+    Safely convert a value to float, handling comma separators.
+    
+    Args:
+        value: The value to convert (string, int, float, or None)
+        default: Default value if conversion fails (default: 0.0)
+    
+    Returns:
+        float: The converted value or default
+    
+    Examples:
+        safe_float_conversion("1,000") -> 1000.0
+        safe_float_conversion("1,000.50") -> 1000.5
+        safe_float_conversion("1000") -> 1000.0
+        safe_float_conversion(None) -> 0.0
+    """
+    if value is None:
+        return default
+    
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    if isinstance(value, str):
+        # Remove commas and whitespace
+        cleaned = value.replace(',', '').strip()
+        
+        if not cleaned or cleaned == '':
+            return default
+        
+        try:
+            return float(cleaned)
+        except ValueError:
+            logger.warning(f"Could not convert '{value}' to float, using default {default}")
+            return default
+    
+    return default
+
+
 class MergeRequest(BaseModel):
     company_code: str = 'MX01'
     fiscal_year: int
@@ -113,10 +156,10 @@ async def get_canonical_document(
             "company_code": canonical.company_code,
             "fiscal_year": canonical.fiscal_year,
             "fiscal_period": canonical.fiscal_period,
-            "total_invoices": float(canonical.total_invoices or 0),
-            "total_credits": float(canonical.total_credits or 0),
-            "total_payments": float(canonical.total_payments or 0),
-            "net_amount": float(canonical.net_amount or 0),
+            "total_invoices": safe_float_conversion(canonical.total_invoices, 0.0),
+            "total_credits": safe_float_conversion(canonical.total_credits, 0.0),
+            "total_payments": safe_float_conversion(canonical.total_payments, 0.0),
+            "net_amount": safe_float_conversion(canonical.net_amount, 0.0),
             "currency": canonical.currency,
             "payment_method": canonical.payment_method,
             "cfdi_uuids": canonical.cfdi_uuids,
@@ -171,7 +214,7 @@ async def preview_sap_json(
                 cfdi_details.append({
                     "uuid": doc.cfdi_uuid,
                     "type": doc.doc_type,
-                    "total": float(doc.total) if doc.total else 0,
+                    "total": safe_float_conversion(doc.total, 0.0),
                     "currency": doc.moneda or 'MXN',
                     "date": doc.fecha.isoformat() if doc.fecha else None
                 })
@@ -184,10 +227,10 @@ async def preview_sap_json(
             "FISCAL_YEAR": canonical.fiscal_year,
             "FISCAL_PERIOD": canonical.fiscal_period,
             "CURRENCY": canonical.currency or 'MXN',
-            "TOTAL_INVOICES": float(canonical.total_invoices or 0),
-            "TOTAL_CREDITS": float(canonical.total_credits or 0),
-            "TOTAL_PAYMENTS": float(canonical.total_payments or 0),
-            "NET_AMOUNT": float(canonical.net_amount or 0),
+            "TOTAL_INVOICES": safe_float_conversion(canonical.total_invoices, 0.0),
+            "TOTAL_CREDITS": safe_float_conversion(canonical.total_credits, 0.0),
+            "TOTAL_PAYMENTS": safe_float_conversion(canonical.total_payments, 0.0),
+            "NET_AMOUNT": safe_float_conversion(canonical.net_amount, 0.0),
             "GL_ACCOUNT": canonical.sap_gl_account or 'NO MAPPING',
             "PAYMENT_METHOD": canonical.payment_method or 'PPD',
             "CFDI_UUIDS": canonical.cfdi_uuids or [],  # Keep for backward compatibility
@@ -261,7 +304,7 @@ async def send_canonical_to_sap(
                     'DS_UUID': doc.cfdi_uuid,
                     'DOCUMENT_TYPE': sap_doc_type,
                     'DOC_NUMBER': doc.folio or str(doc.id),
-                    'TOTAL_AMOUNT': float(doc.total) if doc.total else 0.00,
+                    'TOTAL_AMOUNT': safe_float_conversion(doc.total, 0.0),
                     'CURRENCY': doc.moneda or 'MXN',
                     'ISSUER_TAX_ID': doc.supplier_rfc,
                     'ISSUER_NAME': doc.supplier_name or doc.supplier_rfc,
@@ -278,14 +321,14 @@ async def send_canonical_to_sap(
             "FISCAL_YEAR": canonical.fiscal_year,
             "FISCAL_PERIOD": canonical.fiscal_period,
             "CURRENCY": canonical.currency or 'MXN',
-            "SUBTOTAL_AMOUNT": float(canonical.total_invoices or 0),
-            "TOTAL_AMOUNT": float(canonical.net_amount or 0),
+            "SUBTOTAL_AMOUNT": safe_float_conversion(canonical.total_invoices, 0.0),
+            "TOTAL_AMOUNT": safe_float_conversion(canonical.net_amount, 0.0),
             "ISSUER_NAME": canonical.vendor_name or canonical.vendor_rfc,
             "ISSUER_TAX_ID": canonical.vendor_rfc,
-            "TOTAL_INVOICES": float(canonical.total_invoices or 0),
-            "TOTAL_CREDITS": float(canonical.total_credits or 0),
-            "TOTAL_PAYMENTS": float(canonical.total_payments or 0),
-            "NET_AMOUNT": float(canonical.net_amount or 0),
+            "TOTAL_INVOICES": safe_float_conversion(canonical.total_invoices, 0.0),
+            "TOTAL_CREDITS": safe_float_conversion(canonical.total_credits, 0.0),
+            "TOTAL_PAYMENTS": safe_float_conversion(canonical.total_payments, 0.0),
+            "NET_AMOUNT": safe_float_conversion(canonical.net_amount, 0.0),
             "GL_ACCOUNT": canonical.sap_gl_account or "",
             "PAYMENT_METHOD": canonical.payment_method or "PPD",
             "ITEMS": cfdi_details  # Individual CFDIs
