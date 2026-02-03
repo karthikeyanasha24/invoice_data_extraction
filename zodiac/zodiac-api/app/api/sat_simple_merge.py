@@ -298,12 +298,21 @@ async def merge_documents(
                 # Parse the individual XML and append its root to the documents container
                 doc_xml_root = etree.fromstring(doc.xml_content.encode('utf-8'))
                 
+                # Extract total from XML if not in database
+                doc_total = doc.total
+                if not doc_total or doc_total == '0' or doc_total == '0.0':
+                    # Try to extract from XML root
+                    xml_total = doc_xml_root.get('Total')
+                    if xml_total:
+                        doc_total = xml_total
+                        logger.info(f"   📄 Document {doc.id}: Extracted total from XML: {xml_total}")
+                
                 # Wrap each document with metadata
                 doc_wrapper = etree.SubElement(documents_container, "Document")
                 etree.SubElement(doc_wrapper, "DocumentID").text = str(doc.id)
                 etree.SubElement(doc_wrapper, "DocumentType").text = doc.doc_type
                 etree.SubElement(doc_wrapper, "CFDI_UUID").text = doc.cfdi_uuid
-                etree.SubElement(doc_wrapper, "Total").text = str(doc.total)
+                etree.SubElement(doc_wrapper, "Total").text = str(doc_total)
                 etree.SubElement(doc_wrapper, "Currency").text = doc.moneda or 'MXN'
                 etree.SubElement(doc_wrapper, "Date").text = doc.fecha.isoformat() if doc.fecha else ""
                 
@@ -315,7 +324,9 @@ async def merge_documents(
                 if doc.doc_type not in doc_types:
                     doc_types.append(doc.doc_type)
                 cfdi_uuids.append(doc.cfdi_uuid)
-                total_amount += safe_float_conversion(doc.total, 0.0)
+                doc_total_value = safe_float_conversion(doc_total, 0.0)
+                logger.info(f"   📄 Document {doc.id}: type={doc.doc_type}, total={doc_total}, converted={doc_total_value}")
+                total_amount += doc_total_value
                 
             except etree.XMLSyntaxError as e:
                 logger.error(f"Failed to parse XML for document {doc.id}: {e}")
@@ -342,7 +353,7 @@ async def merge_documents(
             document_count=len(documents),
             document_types=doc_types,
             cfdi_uuids=cfdi_uuids,
-            total_amount=total_amount,
+            total_amount=round(total_amount, 2) if total_amount > 0 else None,
             currency=currency,
             merged_xml_content=merged_xml_string
         )
@@ -351,7 +362,7 @@ async def merge_documents(
         db.commit()
         db.refresh(simple_merged)
         
-        logger.info(f"Successfully merged {len(documents)} documents. Saved as {simple_merged.id}")
+        logger.info(f"✅ Successfully merged {len(documents)} documents. Total amount: {total_amount}, Saved as {simple_merged.id}")
         
         return SimpleMergedResponse(
             id=str(simple_merged.id),

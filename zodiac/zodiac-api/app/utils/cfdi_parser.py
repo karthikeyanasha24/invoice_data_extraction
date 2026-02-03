@@ -58,6 +58,12 @@ class CFDIParser:
                 'lugar_expedicion': root.get('LugarExpedicion'),
             }
             
+            # Debug logging for total extraction
+            if not data.get('total'):
+                import logging
+                logger = logging.getLogger('zodiac-api.cfdi_parser')
+                logger.warning(f"⚠️ Total not found in CFDI root. Root attributes: {root.attrib}")
+            
             # Extract Emisor (Supplier)
             emisor = root.find(f'{ns_prefix}:Emisor', NAMESPACES)
             if emisor is not None:

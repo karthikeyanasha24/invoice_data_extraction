@@ -13,7 +13,9 @@ import {
   CheckCircle,
   AlertCircle,
   Eye,
-  Loader2
+  Loader2,
+  X,
+  Copy
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -62,6 +64,8 @@ export default function SAPSendTab() {
   const [success, setSuccess] = useState<string | null>(null);
   const [csrfTokens, setCsrfTokens] = useState<{ [key: string]: string }>({});  // Store CSRF tokens per document
   const [fetchingCsrf, setFetchingCsrf] = useState<{ [key: string]: boolean }>({});
+  const [showSapModal, setShowSapModal] = useState(false);
+  const [sapResponseData, setSapResponseData] = useState<any>(null);
 
   // Filters
   const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear());
@@ -145,6 +149,11 @@ export default function SAPSendTab() {
       // Send to SAP with the fetched CSRF token
       const response = await satSimpleMergeApi.sendToSAP(doc.id, csrfTokens[docKey]);
       setSuccess(`✅ Simple merged document sent successfully! SAP Doc #: ${response.sap_document_number}`);
+      
+      // Store SAP response data for modal display
+      setSapResponseData(response);
+      setShowSapModal(true);
+      
       await fetchData(); // Refresh to show updated status
       // Clear CSRF token after successful send
       setCsrfTokens(prev => {
@@ -621,6 +630,122 @@ export default function SAPSendTab() {
           </div>
         </div>
       </div>
+
+      {/* SAP Response Modal */}
+      {showSapModal && sapResponseData && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="sticky top-0 bg-white px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-green-100 rounded-lg">
+                  <CheckCircle className="w-5 h-5 text-green-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Document Sent to SAP</h3>
+                  <p className="text-xs text-gray-500">SAP Doc #: {sapResponseData.sap_document_number}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowSapModal(false);
+                  setSapResponseData(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 sm:p-6 space-y-4">
+              {/* Summary Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Document Number</p>
+                  <p className="text-sm font-semibold text-gray-900">{sapResponseData.sap_document_number}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Sent At</p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {sapResponseData.sent_at ? new Date(sapResponseData.sent_at).toLocaleString() : 'N/A'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Message */}
+              {sapResponseData.message && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                  <p className="text-sm text-green-800">{sapResponseData.message}</p>
+                </div>
+              )}
+
+              {/* JSON Payload Section */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-3">JSON Payload Sent to SAP</h4>
+                <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+                    <span className="text-xs font-medium text-gray-600">Request Body</span>
+                    <button
+                      onClick={() => {
+                        if (sapResponseData.sap_response) {
+                          const payloadStr = typeof sapResponseData.sap_response === 'string' 
+                            ? sapResponseData.sap_response 
+                            : JSON.stringify(sapResponseData.sap_response, null, 2);
+                          navigator.clipboard.writeText(payloadStr);
+                          alert('Copied to clipboard!');
+                        }
+                      }}
+                      className="text-gray-600 hover:text-gray-900 flex items-center gap-1 text-xs"
+                      title="Copy to clipboard"
+                    >
+                      <Copy className="w-3 h-3" />
+                      Copy
+                    </button>
+                  </div>
+                  <pre className="p-4 text-xs overflow-x-auto text-gray-800 bg-gray-50" style={{ fontFamily: 'monospace', maxHeight: '300px' }}>
+                    {sapResponseData.sap_response 
+                      ? (typeof sapResponseData.sap_response === 'string' 
+                          ? sapResponseData.sap_response 
+                          : JSON.stringify(sapResponseData.sap_response, null, 2))
+                      : 'No response data available'}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Response Details if available */}
+              {sapResponseData.sap_response && typeof sapResponseData.sap_response === 'object' && (
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-900 mb-3">SAP Response Details</h4>
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2">
+                    {Object.entries(sapResponseData.sap_response as Record<string, any>).map(([key, value]) => (
+                      <div key={key} className="flex justify-between items-start border-b border-gray-200 pb-2 last:border-b-0">
+                        <span className="text-xs font-medium text-gray-600 capitalize">{key.replace(/_/g, ' ')}:</span>
+                        <span className="text-xs text-gray-900 text-right break-words max-w-[60%]">
+                          {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="sticky bottom-0 bg-white px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowSapModal(false);
+                  setSapResponseData(null);
+                }}
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

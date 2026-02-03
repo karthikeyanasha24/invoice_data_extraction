@@ -228,7 +228,10 @@ export default function SATSimpleMergeTab() {
       
       const group = groupMap.get(groupKey)!;
       group.documents.push(doc);
-      group.total_amount += parseFloat(doc.total || '0');
+      
+      // Use total from document, or 0 if not available
+      const docTotal = parseFloat(doc.total || '0');
+      group.total_amount += docTotal;
       
       // Track document types
       if (!group.document_types_present.includes(doc.doc_type)) {
@@ -474,9 +477,16 @@ export default function SATSimpleMergeTab() {
                   </div>
                   <div className="text-left sm:text-right w-full sm:w-auto">
                     <div className="text-xs sm:text-sm text-gray-600 mb-1">Total Amount</div>
-                    <div className="text-lg sm:text-xl font-bold text-gray-900">
-                      {formatCurrency(group.total_amount, group.currency)}
-                    </div>
+                    {group.total_amount === 0 ? (
+                      <div className="text-lg sm:text-xl font-bold text-gray-400">
+                        {formatCurrency(0, group.currency)}
+                        <div className="text-xs text-gray-500 mt-1">Data from XML when merged</div>
+                      </div>
+                    ) : (
+                      <div className="text-lg sm:text-xl font-bold text-gray-900">
+                        {formatCurrency(group.total_amount, group.currency)}
+                      </div>
+                    )}
                   </div>
                 </div>
 

@@ -452,6 +452,54 @@ async def get_document_xml(
         )
 
 
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a SAT document permanently.
+    Requires user authentication.
+    """
+    try:
+        from ..models.sat_document import SATDocument
+        
+        # Find and delete the document
+        document = db.query(SATDocument).filter(
+            SATDocument.id == document_id,
+            SATDocument.user_id == current_user.id
+        ).first()
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found"
+            )
+        
+        # Delete the document
+        db.delete(document)
+        db.commit()
+        
+        logger.info(f"✅ Document deleted: {document_id} (CFDI: {document.cfdi_uuid})")
+        
+        return {
+            "success": True,
+            "message": "Document deleted successfully",
+            "deleted_document_id": document_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ Failed to delete document: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete document: {str(e)}"
+        )
+
+
 @router.post("/send-all-to-sap")
 async def send_all_documents_to_sap(
     request: Request,

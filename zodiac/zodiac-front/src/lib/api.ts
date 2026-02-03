@@ -1431,6 +1431,17 @@ export const satApi = {
             throw new Error(error.response?.data?.detail || 'Failed to upload files.');
         }
     },
+
+    // Delete a document
+    deleteDocument: async (documentId: string) => {
+        try {
+            const response = await api.delete(`/api/v1/sat/documents/${documentId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete SAT document:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to delete document.');
+        }
+    },
 };
 
 // SAT Simple Merge API

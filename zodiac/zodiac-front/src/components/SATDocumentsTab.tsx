@@ -12,7 +12,9 @@ import {
   CheckCircle,
   XCircle,
   Eye,
-  Upload
+  Upload,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -45,6 +47,10 @@ export default function SATDocumentsTab() {
   const [totalCount, setTotalCount] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [selectedDocumentForDelete, setSelectedDocumentForDelete] = useState<SATDocument | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
@@ -131,6 +137,45 @@ export default function SATDocumentsTab() {
       setError(err.message || 'Failed to upload files');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDeleteClick = (doc: SATDocument) => {
+    setSelectedDocumentForDelete(doc);
+    setShowDeleteModal(true);
+    setDeleteError(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedDocumentForDelete) return;
+    
+    try {
+      setDeleting(true);
+      setDeleteError(null);
+      
+      await satApi.deleteDocument(selectedDocumentForDelete.id);
+      
+      // Remove from list and refresh
+      setDocuments(documents.filter(doc => doc.id !== selectedDocumentForDelete.id));
+      setTotalCount(totalCount - 1);
+      setShowDeleteModal(false);
+      setSelectedDocumentForDelete(null);
+      
+      // Show success message
+      setUploadSuccess(`✅ Document deleted successfully!`);
+      setTimeout(() => setUploadSuccess(null), 3000);
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete document');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleCloseDeleteModal = () => {
+    if (!deleting) {
+      setShowDeleteModal(false);
+      setSelectedDocumentForDelete(null);
+      setDeleteError(null);
     }
   };
 
@@ -343,13 +388,23 @@ export default function SATDocumentsTab() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => router.push(`/sat-documents/${doc.id}`)}
-                        className="inline-flex items-center gap-1 px-3 py-1 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-                      >
-                        <Eye className="w-4 h-4" />
-                        <span className="hidden sm:inline">Details</span>
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => router.push(`/sat-documents/${doc.id}`)}
+                          className="inline-flex items-center gap-1 px-3 py-1 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                        >
+                          <Eye className="w-4 h-4" />
+                          <span className="hidden sm:inline">Details</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClick(doc)}
+                          className="inline-flex items-center gap-1 px-3 py-1 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete document"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          <span className="hidden sm:inline">Delete</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -358,7 +413,101 @@ export default function SATDocumentsTab() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && selectedDocumentForDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 sm:space-x-3">
+                  <div className="flex-shrink-0">
+                    <AlertTriangle className="h-5 w-5 sm:h-6 sm:w-6 text-red-600" />
+                  </div>
+                  <h3 className="text-base sm:text-lg font-medium text-gray-900">Delete Document</h3>
+                </div>
+                <button
+                  onClick={handleCloseDeleteModal}
+                  disabled={deleting}
+                  className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                >
+                  <XCircle className="h-5 w-5 sm:h-6 sm:w-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 sm:px-6 py-3 sm:py-4">
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 mb-3">
+                  Are you sure you want to delete this document? This action cannot be undone.
+                </p>
+                
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <FileText className="h-4 w-4 text-gray-500" />
+                    <span className="font-medium text-gray-900">
+                      {selectedDocumentForDelete.serie}-{selectedDocumentForDelete.folio}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <div>Supplier: <span className="font-medium">{selectedDocumentForDelete.supplier_rfc}</span></div>
+                    <div>Amount: <span className="font-medium">{formatCurrency(selectedDocumentForDelete.total, selectedDocumentForDelete.moneda)}</span></div>
+                    <div>Type: <span className="font-medium">{selectedDocumentForDelete.doc_type}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              {deleteError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+                  <p className="text-sm text-red-700">{deleteError}</p>
+                </div>
+              )}
+
+              <div className="text-xs text-gray-500 space-y-1">
+                <p>⚠️ This document will be permanently deleted</p>
+                <p>• All associated data will be removed</p>
+              </div>
+            </div>
+
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-200">
+              <div className="flex flex-col-reverse sm:flex-row items-center justify-end space-y-reverse space-y-2 sm:space-y-0 sm:space-x-3 gap-2 sm:gap-0">
+                <button
+                  onClick={handleCloseDeleteModal}
+                  disabled={deleting}
+                  className={`w-full sm:w-auto px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    deleting 
+                      ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={deleting}
+                  className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    deleting
+                      ? "bg-red-300 text-red-100 cursor-not-allowed"
+                      : "bg-red-600 text-white hover:bg-red-700"
+                  }`}
+                >
+                  {deleting ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-red-100 border-t-red-300"></div>
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-4 w-4" />
+                      <span>Delete</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
