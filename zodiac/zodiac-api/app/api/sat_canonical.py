@@ -25,10 +25,10 @@ router = APIRouter(prefix="/sat/canonical", tags=["SAT Canonical"])
 
 def safe_float_conversion(value, default=0.0):
     """
-    Safely convert a value to float, handling comma separators.
+    Safely convert a value to float, handling comma separators and Decimal types.
     
     Args:
-        value: The value to convert (string, int, float, or None)
+        value: The value to convert (string, int, float, Decimal, or None)
         default: Default value if conversion fails (default: 0.0)
     
     Returns:
@@ -38,14 +38,25 @@ def safe_float_conversion(value, default=0.0):
         safe_float_conversion("1,000") -> 1000.0
         safe_float_conversion("1,000.50") -> 1000.5
         safe_float_conversion("1000") -> 1000.0
+        safe_float_conversion(Decimal("100.50")) -> 100.5
         safe_float_conversion(None) -> 0.0
     """
     if value is None:
         return default
     
+    # Handle numeric types (int, float, Decimal)
     if isinstance(value, (int, float)):
         return float(value)
     
+    # Handle Decimal from SQLAlchemy
+    try:
+        from decimal import Decimal
+        if isinstance(value, Decimal):
+            return float(value)
+    except ImportError:
+        pass
+    
+    # Handle string
     if isinstance(value, str):
         # Remove commas and whitespace
         cleaned = value.replace(',', '').strip()
@@ -59,7 +70,12 @@ def safe_float_conversion(value, default=0.0):
             logger.warning(f"Could not convert '{value}' to float, using default {default}")
             return default
     
-    return default
+    # Try to convert any other type
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        logger.warning(f"Could not convert '{value}' (type: {type(value)}) to float, using default {default}")
+        return default
 
 
 class MergeRequest(BaseModel):

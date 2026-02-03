@@ -26,10 +26,10 @@ router = APIRouter(prefix="/sat/simple-merge", tags=["SAT Simple Merge"])
 
 def safe_float_conversion(value, default=0.0):
     """
-    Safely convert a value to float, handling comma separators.
+    Safely convert a value to float, handling comma separators and Decimal types.
     
     Args:
-        value: The value to convert (string, int, float, or None)
+        value: The value to convert (string, int, float, Decimal, or None)
         default: Default value if conversion fails (default: 0.0)
     
     Returns:
@@ -39,14 +39,25 @@ def safe_float_conversion(value, default=0.0):
         safe_float_conversion("1,000") -> 1000.0
         safe_float_conversion("1,000.50") -> 1000.5
         safe_float_conversion("1000") -> 1000.0
+        safe_float_conversion(Decimal("100.50")) -> 100.5
         safe_float_conversion(None) -> 0.0
     """
     if value is None:
         return default
     
+    # Handle numeric types (int, float, Decimal)
     if isinstance(value, (int, float)):
         return float(value)
     
+    # Handle Decimal from SQLAlchemy
+    try:
+        from decimal import Decimal
+        if isinstance(value, Decimal):
+            return float(value)
+    except ImportError:
+        pass
+    
+    # Handle string
     if isinstance(value, str):
         # Remove commas and whitespace
         cleaned = value.replace(',', '').strip()
@@ -60,7 +71,12 @@ def safe_float_conversion(value, default=0.0):
             logger.warning(f"Could not convert '{value}' to float, using default {default}")
             return default
     
-    return default
+    # Try to convert any other type
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        logger.warning(f"Could not convert '{value}' (type: {type(value)}) to float, using default {default}")
+        return default
 
 # =====================
 # Request/Response Models
@@ -689,75 +705,17 @@ async def send_simple_merge_to_sap(
                 detail=f"Document already sent to SAP. SAP Doc #: {document.sap_document_number}"
             )
         
-        # Parse the merged XML to extract individual documents
-        try:
-            merged_root = etree.fromstring(document.merged_xml_content.encode('utf-8'))
-        except Exception as e:
-            logger.error(f"Failed to parse merged XML: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid merged XML content: {str(e)}"
-            )
-        
-        # Build JSON payload in client's format (array of documents)
-        sap_payload = []
-        
-        # Extract each document
-        for doc_wrapper in merged_root.findall('.//Document'):
-            try:
-                # Extract metadata from wrapper
-                doc_id = doc_wrapper.findtext('DocumentID', 'N/A')
-                doc_type = doc_wrapper.findtext('DocumentType', 'I')  # Default to INVOICE
-                cfdi_uuid = doc_wrapper.findtext('CFDI_UUID', '')
-                total = doc_wrapper.findtext('Total', '0')
-                currency = doc_wrapper.findtext('Currency', 'MXN')
-                doc_date = doc_wrapper.findtext('Date', '')
-                
-                # Map document type to SAP format
-                # INVOICE → I, CREDIT_NOTE → C, PAYMENT → P
-                sap_doc_type = {
-                    'INVOICE': 'I',
-                    'CREDIT_NOTE': 'C',
-                    'PAYMENT': 'P'
-                }.get(doc_type, 'I')
-                
-                # Extract CFDI content
-                cfdi_content = doc_wrapper.find('.//CFDIContent')
-                if cfdi_content is not None and len(cfdi_content) > 0:
-                    cfdi_root = cfdi_content[0]  # Get first child (the actual CFDI)
-                    
-                    # Extract more fields from CFDI if available
-                    # This is a simplified version - adjust based on actual CFDI structure
-                    comprobante_ns = cfdi_root.nsmap.get(None, '')
-                    
-                    # Build document payload matching client's format
-                    doc_payload = {
-                        "DS_UUID": cfdi_uuid,
-                        "DOCUMENT_TYPE": sap_doc_type,
-                        "DOC_NUMBER": doc_id,
-                        "VERSION": "4.0",
-                        "ISSUE_DATETIME": doc_date.replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] if doc_date else "",
-                        "CURRENCY": currency,
-                        "TOTAL_AMOUNT": safe_float_conversion(total, 0.0),
-                        "ISSUER_NAME": document.vendor_name or document.vendor_rfc,
-                        "ISSUER_TAX_ID": document.vendor_rfc,
-                        # Add more fields as needed
-                        "ITEMS": []  # Can be extracted from CFDI if needed
-                    }
-                    
-                    sap_payload.append(doc_payload)
-                    
-            except Exception as e:
-                logger.error(f"Error processing document {doc_id}: {e}")
-                continue
+        # Use SAPTransformer to build proper payload with all fields including mapping data
+        transformer = SAPTransformer(db)
+        sap_payload = transformer.transform_simple_to_sap_format(document)
         
         if not sap_payload:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No valid documents found in merged XML"
+                detail="Failed to generate SAP payload from document"
             )
         
-        logger.info(f"   Prepared {len(sap_payload)} document(s) for SAP")
+        logger.info(f"   Prepared {len(sap_payload)} document(s) for SAP with mapping data")
         
         # Send to SAP using session-based approach (handles CSRF + cookies)
         sap_response = await sap_client.send_json_to_sap_with_session(
