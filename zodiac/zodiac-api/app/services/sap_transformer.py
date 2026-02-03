@@ -60,6 +60,122 @@ class SAPTransformer:
             logger.warning(f"⚠️ Failed to fetch mapping for {supplier_rfc}: {e}")
             return None
     
+    def _extract_items_from_cfdi(self, sat_doc, doc_type: str, subtotal_val: float, tax_amount: float) -> List[Dict]:
+        """
+        Extract actual items/concepts from CFDI XML.
+        Returns a list of item dictionaries with proper product descriptions.
+        """
+        items = []
+        
+        try:
+            if not sat_doc.xml_content:
+                # Fallback to basic item if no XML
+                return self._create_fallback_item(sat_doc, doc_type, subtotal_val, tax_amount)
+            
+            from lxml import etree
+            
+            # Parse XML
+            root = etree.fromstring(sat_doc.xml_content.encode('utf-8'))
+            
+            # Get namespace
+            ns = root.nsmap.get(None, '')
+            namespace = {'cfdi': ns} if ns else {}
+            
+            # Find Conceptos node
+            conceptos_path = './/cfdi:Conceptos/cfdi:Concepto' if ns else './/Conceptos/Concepto'
+            conceptos = root.findall(conceptos_path, namespace)
+            
+            if not conceptos:
+                # Try without namespace
+                conceptos = root.findall('.//Concepto')
+            
+            if conceptos:
+                # Extract each concept
+                for idx, concepto in enumerate(conceptos, start=1):
+                    clave_prod_serv = concepto.get('ClaveProdServ', '')
+                    no_identificacion = concepto.get('NoIdentificacion', '')
+                    cantidad = self._to_float(concepto.get('Cantidad', '1'))
+                    clave_unidad = concepto.get('ClaveUnidad', '')
+                    unidad = concepto.get('Unidad', '')
+                    descripcion = concepto.get('Descripcion', 'Product')
+                    valor_unitario = self._to_float(concepto.get('ValorUnitario', '0'))
+                    importe = self._to_float(concepto.get('Importe', '0'))
+                    descuento = self._to_float(concepto.get('Descuento', '0'))
+                    
+                    # Extract tax info from this concept
+                    impuestos = concepto.find('.//cfdi:Impuestos' if ns else './/Impuestos', namespace)
+                    traslados = []
+                    if impuestos is not None:
+                        traslados_node = impuestos.find('.//cfdi:Traslados' if ns else './/Traslados', namespace)
+                        if traslados_node is not None:
+                            traslados = traslados_node.findall('.//cfdi:Traslado' if ns else './/Traslado', namespace)
+                    
+                    # Get first tax (usually IVA)
+                    tax_rate = 0.16
+                    tax_base = importe
+                    tax_amt = 0.0
+                    if traslados:
+                        first_tax = traslados[0]
+                        tax_rate = self._to_float(first_tax.get('TasaOCuota', '0.16'))
+                        tax_base = self._to_float(first_tax.get('Base', str(importe)))
+                        tax_amt = self._to_float(first_tax.get('Importe', '0'))
+                    
+                    item = {
+                        "DS_UUID": sat_doc.cfdi_uuid,
+                        "DOCUMENT_TYPE": doc_type,
+                        "DOC_NUMBER": sat_doc.folio or "",
+                        "DOC_ITEM_NO": str(idx),
+                        "AMOUNT": 0,
+                        "PRODUCTID": no_identificacion or clave_prod_serv,
+                        "DESCRIPTION": descripcion,  # ✅ Actual product description!
+                        "PRODUCTSERVICECODE": clave_prod_serv,
+                        "QUANTITY": round(cantidad, 3),
+                        "TAXOBJECT": "",
+                        "UNITCODE": clave_unidad,
+                        "UNITDESCRIPTION": unidad,
+                        "UNITPRICE": self._clean_numeric(valor_unitario),
+                        "LINEAMOUNT": self._clean_numeric(importe),
+                        "TAXTYPE": "",
+                        "TAXRATE": round(tax_rate, 2),
+                        "BASEAMOUNT": self._clean_numeric(tax_base),
+                        "TAXAMOUNT": self._clean_numeric(tax_amt)
+                    }
+                    items.append(item)
+            
+            if not items:
+                # No concepts found, use fallback
+                return self._create_fallback_item(sat_doc, doc_type, subtotal_val, tax_amount)
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to extract items from CFDI {sat_doc.cfdi_uuid}: {e}")
+            # Fallback to basic item
+            return self._create_fallback_item(sat_doc, doc_type, subtotal_val, tax_amount)
+        
+        return items
+    
+    def _create_fallback_item(self, sat_doc, doc_type: str, subtotal_val: float, tax_amount: float) -> List[Dict]:
+        """Create a single fallback item when XML parsing fails or no concepts found"""
+        return [{
+            "DS_UUID": sat_doc.cfdi_uuid,
+            "DOCUMENT_TYPE": doc_type,
+            "DOC_NUMBER": sat_doc.folio or "",
+            "DOC_ITEM_NO": "1",
+            "AMOUNT": 0,
+            "PRODUCTID": "",
+            "DESCRIPTION": f"Document {sat_doc.folio or sat_doc.cfdi_uuid[:8]}",
+            "PRODUCTSERVICECODE": "",
+            "QUANTITY": 1.000,
+            "TAXOBJECT": "",
+            "UNITCODE": "",
+            "UNITDESCRIPTION": "",
+            "UNITPRICE": self._clean_numeric(subtotal_val),
+            "LINEAMOUNT": self._clean_numeric(subtotal_val),
+            "TAXTYPE": "",
+            "TAXRATE": 0.16,
+            "BASEAMOUNT": self._clean_numeric(subtotal_val),
+            "TAXAMOUNT": self._clean_numeric(tax_amount)
+        }]
+    
     def transform_canonical_to_sap_xml(self, canonical: SATCanonicalMerged) -> str:
         """
         Transform a canonical merged document to SAP XML format.
@@ -280,13 +396,21 @@ class SAPTransformer:
                     # Fetch supplier mapping data for each document
                     mapping = self._get_supplier_mapping(sat_doc.supplier_rfc or "")
                     
-                    # Map doc_type to client's format
+                    # Map doc_type to client's format (handle both single letter and full names)
                     doc_type_map = {
+                        # Single letter codes from CFDI
                         'I': 'I',  # Invoice
                         'E': 'C',  # Credit Note (Egreso) -> C in client format
                         'P': 'P',  # Payment
                         'T': 'I',  # Traslado -> I
-                        'N': 'I'   # Nomina -> I
+                        'N': 'I',  # Nomina -> I
+                        # Full names from database
+                        'INVOICE': 'I',
+                        'CREDIT_NOTE': 'C',
+                        'PAYMENT': 'P',
+                        'TRANSFER': 'I',
+                        'PAYROLL': 'I',
+                        'UNKNOWN': 'I'
                     }
                     doc_type = doc_type_map.get(sat_doc.doc_type, 'I')
                     
@@ -296,27 +420,8 @@ class SAPTransformer:
                     tipo_cambio_val = self._to_float(sat_doc.tipo_cambio) if sat_doc.tipo_cambio else 1.0
                     tax_amount = total_val - subtotal_val
                     
-                    # Build items list
-                    items = [{
-                        "DS_UUID": sat_doc.cfdi_uuid,
-                        "DOCUMENT_TYPE": doc_type,
-                        "DOC_NUMBER": sat_doc.folio or "",
-                        "DOC_ITEM_NO": "1",
-                        "AMOUNT": 0,
-                        "PRODUCTID": "",
-                        "DESCRIPTION": sat_doc.supplier_name or "Document",
-                        "PRODUCTSERVICECODE": "",
-                        "QUANTITY": 1.000,
-                        "TAXOBJECT": "",
-                        "UNITCODE": "",
-                        "UNITDESCRIPTION": "",
-                        "UNITPRICE": self._clean_numeric(subtotal_val),
-                        "LINEAMOUNT": self._clean_numeric(subtotal_val),
-                        "TAXTYPE": "",
-                        "TAXRATE": 0.16,
-                        "BASEAMOUNT": self._clean_numeric(subtotal_val),
-                        "TAXAMOUNT": self._clean_numeric(tax_amount)
-                    }]
+                    # Extract items/concepts from CFDI XML
+                    items = self._extract_items_from_cfdi(sat_doc, doc_type, subtotal_val, tax_amount)
                     
                     doc = {
                         "DS_UUID": sat_doc.cfdi_uuid,
