@@ -1540,6 +1540,17 @@ export const satSimpleMergeApi = {
         }
     },
 
+    // Delete simple merged document
+    delete: async (mergedId: string) => {
+        try {
+            const response = await api.delete(`/api/v1/sat/simple-merge/${mergedId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete merged document:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to delete merged document.');
+        }
+    },
+
     // Check merge requirements for RFC group
     checkMergeRequirements: async (
         supplier_rfc: string,

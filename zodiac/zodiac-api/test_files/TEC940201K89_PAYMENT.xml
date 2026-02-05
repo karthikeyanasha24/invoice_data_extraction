@@ -9,7 +9,7 @@
     <pago20:Pagos Version="2.0">
       <pago20:Totales TotalRetencionesIVA="0.00" TotalRetencionesISR="0.00" TotalRetencionesIEPS="0.00" TotalTrasladosBaseIVA16="5000.00" TotalTrasladosImpuestoIVA16="800.00" TotalTrasladosBaseIVA8="0.00" TotalTrasladosImpuestoIVA8="0.00" TotalTrasladosBaseIVA0="0.00" TotalTrasladosImpuestoIVA0="0.00" TotalTrasladosBaseIVAExento="0.00" MontoTotalPagos="5800.00"/>
       <pago20:Pago FechaPago="2026-02-20T14:00:00" FormaDePagoP="03" MonedaP="MXN" Monto="5800.00">
-        <pago20:DoctoRelacionado IdDocumento="A1B2C3D4-E5F6-4789-A1B2-C3D4E5F6A001" Serie="A" Folio="001" MonedaDR="MXN" NumParcialidad="1" ImpSaldoAnt="5800.00" ImpPagado="5800.00" ImpSaldoInsoluto="0.00" ObjetoImpDR="02">
+        <pago20:DoctoRelacionado IdDocumento="TEST0001-0000-4000-A000-000000000001" Serie="A" Folio="001" MonedaDR="MXN" NumParcialidad="1" ImpSaldoAnt="5800.00" ImpPagado="5800.00" ImpSaldoInsoluto="0.00" ObjetoImpDR="02">
           <pago20:ImpuestosDR>
             <pago20:TrasladosDR>
               <pago20:TrasladoDR BaseDR="5000.00" ImpuestoDR="002" TipoFactorDR="Tasa" TasaOCuotaDR="0.160000" ImporteDR="800.00"/>
@@ -18,6 +18,6 @@
         </pago20:DoctoRelacionado>
       </pago20:Pago>
     </pago20:Pagos>
-    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="B2C3D4E5-F6A7-4890-B2C3-D4E5F6A7B002" FechaTimbrado="2026-02-20T14:05:00" RfcProvCertif="SPR190613R52" SelloCFD="PAYMENT12345..." NoCertificadoSAT="30001000000500003456" SelloSAT="PAYMENT67890..."/>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="TEST0003-0000-4000-A000-000000000003" FechaTimbrado="2026-02-20T14:05:00" RfcProvCertif="SPR190613R52" SelloCFD="PAYMENT12345..." NoCertificadoSAT="30001000000500003456" SelloSAT="PAYMENT67890..."/>
   </cfdi:Complemento>
 </cfdi:Comprobante>

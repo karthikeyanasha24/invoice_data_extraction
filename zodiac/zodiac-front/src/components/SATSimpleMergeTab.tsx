@@ -16,7 +16,8 @@ import {
   DollarSign,
   Eye,
   XCircle,
-  AlertTriangle
+  AlertTriangle,
+  Trash2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -104,6 +105,9 @@ const FileStatusCard = ({
   
   const displayName = type === 'CREDIT_NOTE' ? 'Credit Note' : type.charAt(0) + type.slice(1).toLowerCase();
   
+  // Check for missing fields
+  const hasMissingFields = document && (!document.total || !document.moneda || !document.folio || !document.serie);
+  
   return (
     <div className={cn(
       "p-3 sm:p-4 rounded-lg border-2 transition-all",
@@ -123,6 +127,12 @@ const FileStatusCard = ({
         <div className="text-xs text-gray-600 space-y-1">
           <div className="truncate">Folio: {document.folio || 'N/A'}</div>
           <div className="font-medium">{formatCurrency(document.total, document.currency || document.moneda)}</div>
+          {hasMissingFields && (
+            <div className="flex items-center gap-1 text-yellow-700 bg-yellow-50 px-2 py-1 rounded mt-2">
+              <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+              <span className="text-xs">Missing data</span>
+            </div>
+          )}
         </div>
       )}
       {!present && (
@@ -143,6 +153,8 @@ export default function SATSimpleMergeTab() {
   const [loadingRequirements, setLoadingRequirements] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mergingGroup, setMergingGroup] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Filters
   const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear());
@@ -316,6 +328,32 @@ export default function SATSimpleMergeTab() {
     }
   };
 
+  const handleDelete = async (mergedId: string, vendorRfc: string) => {
+    if (!confirm(`Are you sure you want to delete the merge for ${vendorRfc}?\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setDeletingId(mergedId);
+      setError(null);
+      
+      await satSimpleMergeApi.delete(mergedId);
+      
+      // Refresh merged documents list
+      await fetchMergedDocuments();
+      
+      // Also refresh main documents to update "Already Merged" status
+      await fetchDocuments();
+      
+      alert('Merged document deleted successfully!');
+    } catch (err: any) {
+      console.error('Error deleting merged document:', err);
+      setError(err.message || 'Failed to delete merged document.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const formatCurrency = (amount: number | string, currency: string = 'MXN') => {
     const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
     return new Intl.NumberFormat('es-MX', {
@@ -421,7 +459,13 @@ export default function SATSimpleMergeTab() {
       {/* Error Message */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <p className="text-red-800">{error}</p>
+          <div className="flex items-start gap-3">
+            <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="text-sm font-semibold text-red-800 mb-1">Error</h4>
+              <div className="text-sm text-red-700 whitespace-pre-wrap">{error}</div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -676,13 +720,29 @@ export default function SATSimpleMergeTab() {
                       {formatCurrency(doc.total_amount, doc.currency)}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-right text-xs sm:text-sm font-medium">
-                      <button
-                        onClick={() => router.push(`/sat-documents/simple-merge/${doc.id}`)}
-                        className="text-blue-600 hover:text-blue-900 inline-flex items-center gap-1"
-                      >
-                        <Eye className="w-4 h-4" />
-                        <span className="hidden sm:inline">Details</span>
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => router.push(`/sat-documents/simple-merge/${doc.id}`)}
+                          className="text-blue-600 hover:text-blue-900 inline-flex items-center gap-1"
+                          title="View details"
+                        >
+                          <Eye className="w-4 h-4" />
+                          <span className="hidden sm:inline">Details</span>
+                        </button>
+                        <button
+                          onClick={() => handleDelete(doc.id, doc.vendor_rfc)}
+                          disabled={deletingId === doc.id}
+                          className="text-red-600 hover:text-red-900 inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Delete merge"
+                        >
+                          {deletingId === doc.id ? (
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                          <span className="hidden sm:inline">Delete</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

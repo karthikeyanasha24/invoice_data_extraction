@@ -121,6 +121,7 @@ class SAPTransformer:
                         tax_amt = self._to_float(first_tax.get('Importe', '0'))
                     
                     item = {
+                        "MANDT": "",
                         "DS_UUID": sat_doc.cfdi_uuid,
                         "DOCUMENT_TYPE": doc_type,
                         "DOC_NUMBER": sat_doc.folio or "",
@@ -156,6 +157,7 @@ class SAPTransformer:
     def _create_fallback_item(self, sat_doc, doc_type: str, subtotal_val: float, tax_amount: float) -> List[Dict]:
         """Create a single fallback item when XML parsing fails or no concepts found"""
         return [{
+            "MANDT": "",
             "DS_UUID": sat_doc.cfdi_uuid,
             "DOCUMENT_TYPE": doc_type,
             "DOC_NUMBER": sat_doc.folio or "",
@@ -423,7 +425,54 @@ class SAPTransformer:
                     # Extract items/concepts from CFDI XML
                     items = self._extract_items_from_cfdi(sat_doc, doc_type, subtotal_val, tax_amount)
                     
+                    # Extract additional fields from XML
+                    payment_condition = ""
+                    lugar_expedicion = ""
+                    exportacion = "01"
+                    uso_cfdi = "G03"
+                    domicilio_fiscal_receptor = ""
+                    payment_amount = 0
+                    payment_currency = ""
+                    
+                    try:
+                        if sat_doc.xml_content:
+                            from lxml import etree
+                            xml_root = etree.fromstring(sat_doc.xml_content.encode('utf-8'))
+                            
+                            # Extract from root attributes
+                            payment_condition = xml_root.get('CondicionesDePago', '')
+                            lugar_expedicion = xml_root.get('LugarExpedicion', '')
+                            exportacion = xml_root.get('Exportacion', '01')
+                            
+                            # Get namespace
+                            xml_ns = xml_root.nsmap.get(None, '')
+                            namespace = {'cfdi': xml_ns} if xml_ns else {}
+                            
+                            # Extract Receptor info
+                            receptor = xml_root.find('.//cfdi:Receptor' if xml_ns else './/Receptor', namespace)
+                            if receptor is not None:
+                                uso_cfdi = receptor.get('UsoCFDI', 'G03')
+                                domicilio_fiscal_receptor = receptor.get('DomicilioFiscalReceptor', '')
+                            
+                            # For payment documents, extract payment details
+                            if doc_type == 'P':
+                                pago_ns = xml_root.nsmap.get('pago20', '')
+                                if pago_ns:
+                                    pago_namespace = {'pago20': pago_ns}
+                                    pago = xml_root.find('.//pago20:Pago', pago_namespace)
+                                    if pago is not None:
+                                        payment_amount = self._to_float(pago.get('Monto', '0'))
+                                        payment_currency = pago.get('MonedaP', sat_doc.moneda or 'MXN')
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to extract additional XML fields: {e}")
+                    
+                    # Format date and time for SAP (separate fields)
+                    issue_date = sat_doc.fecha if sat_doc.fecha else datetime.utcnow()
+                    dates_str = issue_date.strftime("%Y-%m-%d")  # YYYY-MM-DD
+                    times_str = issue_date.strftime("%H:%M:%S")  # HH:MM:SS
+                    
                     doc = {
+                        "MANDT": "",
                         "DS_UUID": sat_doc.cfdi_uuid,
                         "DOCUMENT_TYPE": doc_type,
                         "DOC_NUMBER": sat_doc.folio or "",
@@ -436,9 +485,9 @@ class SAPTransformer:
                         "TOTAL_AMOUNT": self._clean_numeric(total_val),
                         "PAYMENT_METHOD_CODE": sat_doc.forma_pago or "99",
                         "PAYMENT_METHOD": sat_doc.metodo_pago or "PPD",
-                        "PAYMENT_CONDITION": "",
-                        "PLACE_OF_ISSUE_ZIP": "",
-                        "EXPORT_INDICATOR": "01",
+                        "PAYMENT_CONDITION": payment_condition,
+                        "PLACE_OF_ISSUE_ZIP": lugar_expedicion,
+                        "EXPORT_INDICATOR": exportacion,
                         "DIGITAL_CERTIFICATE": "",
                         "CERTIFICATE_NUMBER": "",
                         "ISSUER_NAME": sat_doc.supplier_name or "",
@@ -446,11 +495,11 @@ class SAPTransformer:
                         "ISSUER_TAX_REGION": "601",
                         "RECEIVER_NAME": sat_doc.receiver_name or "",
                         "RECEIVER_TAX_ID": sat_doc.receiver_rfc or "",
-                        "RECEIVER_CFDI_USER": "G03",
-                        "RECEIVER_TAX_ZIP": "",
+                        "RECEIVER_CFDI_USER": uso_cfdi,
+                        "RECEIVER_TAX_ZIP": domicilio_fiscal_receptor,
                         "RECEIVER_TAX_REGION": "601",
-                        "PAYMENT_AMOUNT": 0,
-                        "PAYMENT_CURRENCY": "",
+                        "PAYMENT_AMOUNT": self._clean_numeric(payment_amount),
+                        "PAYMENT_CURRENCY": payment_currency,
                         "TOTAL_TRANSFERRED": self._clean_numeric(0),
                         "TAX_TYPE": "VAT",
                         "TAX_CODE": "",
@@ -472,6 +521,8 @@ class SAPTransformer:
                         "DEBIT": self._clean_numeric(mapping.debit_amount if mapping else 0),
                         "CLOS_BALANCE": self._clean_numeric(mapping.closing_balance if mapping else 0),
                         "CODAGROUP": mapping.account_description if mapping else "",
+                        "DATES": dates_str,
+                        "TIMES": times_str,
                         "ITEMS": items
                     }
                     

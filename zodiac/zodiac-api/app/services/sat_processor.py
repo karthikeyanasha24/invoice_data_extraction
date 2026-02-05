@@ -74,8 +74,15 @@ class SATDocumentProcessor:
                 return {
                     "success": False,
                     "status": "DUPLICATE",
-                    "error": f"Document with UUID {cfdi_uuid} already exists",
-                    "existing_id": str(existing.id)
+                    "error": f"Document with UUID {cfdi_uuid} already exists in the system",
+                    "details": {
+                        "existing_id": str(existing.id),
+                        "existing_folio": existing.folio or "N/A",
+                        "existing_serie": existing.serie or "N/A",
+                        "existing_supplier_rfc": existing.supplier_rfc or "N/A",
+                        "uploaded_at": existing.received_at.isoformat() if existing.received_at else "N/A",
+                        "doc_type": existing.doc_type or "N/A"
+                    }
                 }
             
             # Step 4: Calculate XML hash for integrity

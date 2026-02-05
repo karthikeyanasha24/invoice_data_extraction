@@ -17,9 +17,9 @@
     </cfdi:Traslados>
   </cfdi:Impuestos>
   <cfdi:CfdiRelacionados TipoRelacion="01">
-    <cfdi:CfdiRelacionado UUID="A1B2C3D4-E5F6-4789-A1B2-C3D4E5F6A001"/>
+    <cfdi:CfdiRelacionado UUID="TEST0001-0000-4000-A000-000000000001"/>
   </cfdi:CfdiRelacionados>
   <cfdi:Complemento>
-    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="C3D4E5F6-A7B8-4901-C3D4-E5F6A7B8C003" FechaTimbrado="2026-02-18T09:05:00" RfcProvCertif="SPR190613R52" SelloCFD="CREDIT12345..." NoCertificadoSAT="30001000000500003456" SelloSAT="CREDIT67890..."/>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="TEST0002-0000-4000-A000-000000000002" FechaTimbrado="2026-02-18T09:05:00" RfcProvCertif="SPR190613R52" SelloCFD="CREDIT12345..." NoCertificadoSAT="30001000000500003456" SelloSAT="CREDIT67890..."/>
   </cfdi:Complemento>
 </cfdi:Comprobante>

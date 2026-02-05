@@ -259,29 +259,39 @@ async def merge_documents(
         
         logger.info(f"✅ Mapping data exists for RFC {request.supplier_rfc}: GL Account {mapping.sap_gl_account}")
         
-        # Check if a merge already exists
-        existing_merge = db.query(SATSimpleMerged).filter(
+        # Check if a merge already exists with the same UUIDs
+        # Get all existing merges for this period (allow multiple merges with different UUIDs)
+        existing_merges = db.query(SATSimpleMerged).filter(
             SATSimpleMerged.user_id == current_user.id,
             SATSimpleMerged.vendor_rfc == request.supplier_rfc,
             SATSimpleMerged.fiscal_year == request.fiscal_year,
             SATSimpleMerged.fiscal_period == request.fiscal_period
-        ).first()
+        ).all()
         
-        if existing_merge:
-            logger.info(f"Merge already exists for this period, returning existing: {existing_merge.id}")
-            return SimpleMergedResponse(
-                id=str(existing_merge.id),
-                vendor_rfc=existing_merge.vendor_rfc,
-                vendor_name=existing_merge.vendor_name,
-                fiscal_year=existing_merge.fiscal_year,
-                fiscal_period=existing_merge.fiscal_period,
-                document_count=existing_merge.document_count,
-                document_types=existing_merge.document_types,
-                cfdi_uuids=existing_merge.cfdi_uuids,
-                total_amount=safe_float_conversion(existing_merge.total_amount, None),
-                currency=existing_merge.currency,
-                created_at=existing_merge.created_at
-            )
+        # Build set of current document UUIDs
+        current_uuids = set(doc.cfdi_uuid for doc in documents)
+        
+        # Check if any existing merge has the exact same UUIDs
+        for existing_merge in existing_merges:
+            existing_uuids = set(existing_merge.cfdi_uuids) if existing_merge.cfdi_uuids else set()
+            if current_uuids == existing_uuids:
+                logger.info(f"Merge already exists with these exact UUIDs, returning existing: {existing_merge.id}")
+                return SimpleMergedResponse(
+                    id=str(existing_merge.id),
+                    vendor_rfc=existing_merge.vendor_rfc,
+                    vendor_name=existing_merge.vendor_name,
+                    fiscal_year=existing_merge.fiscal_year,
+                    fiscal_period=existing_merge.fiscal_period,
+                    document_count=existing_merge.document_count,
+                    document_types=existing_merge.document_types,
+                    cfdi_uuids=existing_merge.cfdi_uuids,
+                    total_amount=safe_float_conversion(existing_merge.total_amount, None),
+                    currency=existing_merge.currency,
+                    created_at=existing_merge.created_at
+                )
+        
+        # UUIDs are different - allow creating a new merge
+        logger.info(f"Creating new merge for RFC {request.supplier_rfc} with different UUIDs")
         
         # Build merged XML
         merged_root = etree.Element("MergedSATDocuments")
@@ -705,6 +715,50 @@ async def send_simple_merge_to_sap(
                 detail=f"Document already sent to SAP. SAP Doc #: {document.sap_document_number}"
             )
         
+        # Validate source documents have all required fields
+        logger.info(f"   Validating source documents...")
+        if document.cfdi_uuids:
+            linked_docs = db.query(SATDocument).filter(
+                SATDocument.cfdi_uuid.in_(document.cfdi_uuids)
+            ).all()
+            
+            validation_errors = []
+            for sat_doc in linked_docs:
+                doc_errors = []
+                if not sat_doc.cfdi_uuid:
+                    doc_errors.append("Missing CFDI UUID")
+                if not sat_doc.total:
+                    doc_errors.append("Missing total amount")
+                if not sat_doc.moneda:
+                    doc_errors.append("Missing currency")
+                if not sat_doc.folio:
+                    doc_errors.append("Missing folio")
+                if not sat_doc.serie:
+                    doc_errors.append("Missing serie")
+                if not sat_doc.subtotal:
+                    doc_errors.append("Missing subtotal")
+                
+                if doc_errors:
+                    validation_errors.append({
+                        "document_id": str(sat_doc.id),
+                        "folio": sat_doc.folio or "N/A",
+                        "doc_type": sat_doc.doc_type or "N/A",
+                        "errors": doc_errors
+                    })
+            
+            if validation_errors:
+                error_details = "\n".join([
+                    f"- Document {err['doc_type']} (Folio: {err['folio']}): {', '.join(err['errors'])}"
+                    for err in validation_errors
+                ])
+                logger.error(f"❌ Source documents have missing data:\n{error_details}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot send to SAP: Source documents have missing data. Please run the data integrity verification script to fix.\n\nIssues found:\n{error_details}"
+                )
+        
+        logger.info(f"   ✅ All source documents validated successfully")
+        
         # Use SAPTransformer to build proper payload with all fields including mapping data
         transformer = SAPTransformer(db)
         sap_payload = transformer.transform_simple_to_sap_format(document)
@@ -769,4 +823,66 @@ async def send_simple_merge_to_sap(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to send to SAP: {str(e)}"
+        )
+
+
+@router.delete("/{merged_id}")
+async def delete_simple_merge(
+    merged_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a simple merged document.
+    Cannot delete if the document has already been sent to SAP.
+    """
+    try:
+        logger.info(f"🗑️ Attempting to delete simple merge {merged_id}")
+        
+        # Find the merge document
+        merge = db.query(SATSimpleMerged).filter(
+            SATSimpleMerged.id == merged_id,
+            SATSimpleMerged.user_id == current_user.id
+        ).first()
+        
+        if not merge:
+            logger.warning(f"Merge {merged_id} not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Simple merged document {merged_id} not found"
+            )
+        
+        # Prevent deletion if already sent to SAP
+        if merge.sent_to_sap:
+            logger.warning(f"Cannot delete merge {merged_id}: already sent to SAP")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot delete merge that has been sent to SAP. SAP Document #: {merge.sap_document_number}"
+            )
+        
+        # Delete the merge
+        vendor_rfc = merge.vendor_rfc
+        fiscal_period = f"{merge.fiscal_year}-{merge.fiscal_period}"
+        
+        db.delete(merge)
+        db.commit()
+        
+        logger.info(f"✅ Successfully deleted simple merge {merged_id} for RFC {vendor_rfc}, period {fiscal_period}")
+        
+        return {
+            "success": True,
+            "message": f"Simple merged document deleted successfully",
+            "deleted_id": merged_id,
+            "vendor_rfc": vendor_rfc,
+            "fiscal_period": fiscal_period
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting simple merge {merged_id}: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete simple merged document: {str(e)}"
         )
