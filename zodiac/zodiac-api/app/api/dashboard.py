@@ -14,6 +14,7 @@ from ..models.user import ZodiacUser
 from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
 from ..models.correction_cache import CorrectionCache
 from ..models.invoice_business_data import InvoiceBusinessData
+from ..models.sat_simple_merged import SATSimpleMerged
 from ..api.auth import get_current_user
 from ..config.config import OPENAI_API_KEY
 from ..services.database import extract_supplier_info_from_string
@@ -55,7 +56,7 @@ async def get_dashboard_statistics(
         start_date = end_date - timedelta(days=days)
         
         # ============================================================
-        # 1. OVERVIEW STATISTICS
+        # 1. OVERVIEW STATISTICS (Outbound Invoices)
         # ============================================================
         successful_count = db.query(SuccessModel).filter(
             SuccessModel.user_id == current_user.id,
@@ -69,6 +70,35 @@ async def get_dashboard_statistics(
         
         total_count = successful_count + failed_count
         success_rate = (successful_count / total_count * 100) if total_count > 0 else 0
+        
+        # ============================================================
+        # 1b. SAT DOCUMENT STATISTICS (Inbound)
+        # ============================================================
+        try:
+            # Use SATSimpleMerged which tracks sent_to_sap status
+            # Total SAT merged documents (each represents a batch sent to SAP)
+            sat_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id
+            ).scalar() or 0
+            
+            # SAT documents successfully sent to SAP
+            sat_sent_count = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.sent_to_sap == True
+            ).scalar() or 0
+            
+            # SAT documents pending (not yet sent)
+            sat_pending_count = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.sent_to_sap == False
+            ).scalar() or 0
+            
+            logger.info(f"📄 SAT Stats: {sat_total} total, {sat_sent_count} sent to SAP, {sat_pending_count} pending")
+        except Exception as sat_err:
+            logger.warning(f"⚠️ Could not fetch SAT statistics: {sat_err}")
+            sat_total = 0
+            sat_sent_count = 0
+            sat_pending_count = 0
         
         # ============================================================
         # 2. TIMELINE DATA (Invoices per day)
@@ -380,16 +410,22 @@ async def get_dashboard_statistics(
                 "failed": failed_count,
                 "success_rate": round(success_rate, 2)
             },
-            "timeline": timeline_data,
-            "format_distribution": format_distribution,
+            "sat_overview": {
+                "total": sat_total,
+                "sent_to_sap": sat_sent_count,
+                "pending": sat_pending_count
+            },
+            "timeline": timeline_data if timeline_data else [],
+            "format_distribution": format_distribution if format_distribution else [],
             "customer_distribution": customer_distribution,
-            "request_type_distribution": request_type_distribution,
+            "request_type_distribution": request_type_distribution if request_type_distribution else [],
             "recent_activity": recent_activity,
             "date_range": {
                 "start": start_date.isoformat(),
                 "end": end_date.isoformat(),
                 "days": days
-            }
+            },
+            "has_data": total_count > 0 or sat_total > 0
         }
         
     except Exception as e:
@@ -612,22 +648,39 @@ async def get_operations_statistics(
         # ============================================================
         # 1. INBOUND/OUTBOUND MESSAGES
         # ============================================================
-        # Inbound: Messages received from external systems (API pushes)
-        # Outbound: Messages pushed to external systems (web uploads + processing)
+        # INBOUND: SAT Documents uploaded to send TO SAP
+        # OUTBOUND: Invoices received FROM SAP and processed
         
-        inbound_successful = db.query(func.count(SuccessModel.id)).filter(
-            SuccessModel.user_id == current_user.id,
-            SuccessModel.uploaded_at >= cutoff_date,
-            SuccessModel.request_type == 'api'
-        ).scalar() or 0
+        try:
+            # Inbound: SAT Documents (files going TO SAP)
+            # Use SATSimpleMerged which tracks sent_to_sap status
+            inbound_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date
+            ).scalar() or 0
+            
+            # Count how many were successfully sent to SAP (sent_to_sap = True)
+            inbound_successful = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True
+            ).scalar() or 0
+            
+            # Failed/pending inbound (not yet sent to SAP)
+            inbound_failed = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False
+            ).scalar() or 0
+            
+            logger.info(f"📥 Inbound (SAT): {inbound_total} total, {inbound_successful} sent to SAP, {inbound_failed} pending")
+        except Exception as sat_err:
+            logger.warning(f"⚠️ Could not fetch SAT inbound stats: {sat_err}")
+            inbound_total = 0
+            inbound_successful = 0
+            inbound_failed = 0
         
-        inbound_failed = db.query(func.count(FailedModel.id)).filter(
-            FailedModel.user_id == current_user.id,
-            FailedModel.uploaded_at >= cutoff_date,
-            FailedModel.request_type == 'api'
-        ).scalar() or 0
-        
-        # Outbound: All messages (both web and api) that we tried to send out
+        # Outbound: Invoices (files FROM SAP being processed)
         outbound_successful = db.query(func.count(SuccessModel.id)).filter(
             SuccessModel.user_id == current_user.id,
             SuccessModel.uploaded_at >= cutoff_date
@@ -769,6 +822,11 @@ async def get_operations_statistics(
         # ============================================================
         # RETURN RESPONSE
         # ============================================================
+        has_operations_data = (
+            (inbound_successful + inbound_failed) > 0 or 
+            (outbound_successful + outbound_failed) > 0
+        )
+        
         return {
             "inbound": {
                 "successful": inbound_successful,
@@ -783,10 +841,10 @@ async def get_operations_statistics(
             "autoFix": {
                 "total": total_auto_fixes,
                 "successful": total_auto_fixes,  # Assume all cached corrections were successful
-                "breakdown": auto_fix_list
+                "breakdown": auto_fix_list if auto_fix_list else []
             },
             "processingTime": {
-                "hourly": processing_time_data,
+                "hourly": processing_time_data if processing_time_data else [],
                 "average": round(
                     sum(pt['avgTime'] for pt in processing_time_data) / len(processing_time_data), 2
                 ) if processing_time_data else 0
@@ -796,7 +854,8 @@ async def get_operations_statistics(
                 "failed": external_failed,
                 "pending": external_pending,
                 "total": external_success + external_failed + external_pending
-            }
+            },
+            "has_data": has_operations_data
         }
         
     except Exception as e:
@@ -1146,8 +1205,9 @@ async def get_business_analytics(
             
             # Return empty structure with helpful message
             return {
-                "message": "No business intelligence data available. Please upload invoices to see analytics.",
-                "needs_backfill": True,
+                "message": "No business data available yet. Upload invoices or SAT documents to see business analytics." if total_invoices == 0 else "Processing your invoices... Please refresh in a moment.",
+                "needs_backfill": total_invoices > 0,
+                "has_data": False,
                 "lifecycle_funnel": {
                     'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
                     'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
@@ -1432,11 +1492,25 @@ async def get_industry_intelligence(
         ).all()
         
         if not bi_records:
+            logger.warning(f"⚠️ No product data found for user {current_user.id}")
             return {
-                "message": "No product data available yet",
+                "message": "No product data available yet. Upload invoices with product information to see industry intelligence.",
+                "has_data": False,
+                "summary": {
+                    "total_products": 0,
+                    "underperforming": 0,
+                    "optimal": 0,
+                    "outperforming": 0,
+                    "total_revenue": 0
+                },
                 "products": [],
                 "industry_benchmarks": {},
-                "overall_insights": []
+                "ai_insights": None,
+                "date_range": {
+                    "start": cutoff_date.isoformat(),
+                    "end": datetime.utcnow().isoformat(),
+                    "days": days
+                }
             }
         
         # ============================================================

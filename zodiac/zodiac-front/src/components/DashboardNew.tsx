@@ -17,7 +17,8 @@ import {
   Activity,
   Lightbulb,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  Share2
 } from 'lucide-react';
 import {
   LineChart,
@@ -219,46 +220,56 @@ export default function DashboardNew() {
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Invoice Processing Timeline</h2>
           <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={timeline}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey="date"
-                  stroke="#6b7280"
-                  tick={{ fill: '#6b7280', fontSize: 12 }}
-                />
-                <YAxis
-                  stroke="#6b7280"
-                  tick={{ fill: '#6b7280', fontSize: 12 }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#fff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '0.5rem',
-                  }}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="successful"
-                  stroke={COLORS.success}
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
-                  activeDot={{ r: 6 }}
-                  name="Successful"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="failed"
-                  stroke={COLORS.failed}
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
-                  activeDot={{ r: 6 }}
-                  name="Failed"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {timeline && timeline.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={timeline}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#6b7280"
+                    tick={{ fill: '#6b7280', fontSize: 12 }}
+                  />
+                  <YAxis
+                    stroke="#6b7280"
+                    tick={{ fill: '#6b7280', fontSize: 12 }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#fff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '0.5rem',
+                    }}
+                  />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="successful"
+                    stroke={COLORS.success}
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    activeDot={{ r: 6 }}
+                    name="Successful"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="failed"
+                    stroke={COLORS.failed}
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    activeDot={{ r: 6 }}
+                    name="Failed"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <Activity className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                  <p className="text-lg font-medium text-gray-700 mb-2">No Timeline Data Yet</p>
+                  <p className="text-sm text-gray-500">Upload invoices or SAT documents to see your processing timeline</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -268,25 +279,35 @@ export default function DashboardNew() {
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Format Distribution</h2>
             <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={format_distribution}
-                    dataKey="count"
-                    nameKey="format"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={100}
-                    label={({ format, count }) => `${format}: ${count}`}
-                  >
-                    {format_distribution.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              {format_distribution && format_distribution.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={format_distribution}
+                      dataKey="count"
+                      nameKey="format"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={100}
+                      label={({ format, count }) => `${format}: ${count}`}
+                    >
+                      {format_distribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <FileText className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                    <p className="text-lg font-medium text-gray-700 mb-2">No Format Data</p>
+                    <p className="text-sm text-gray-500">Process some invoices to see format distribution</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -294,32 +315,42 @@ export default function DashboardNew() {
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Request Source</h2>
             <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={request_type_distribution}
-                    dataKey="count"
-                    nameKey="type"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={100}
-                    label={({ type, count }) => `${type === 'api' ? 'API/ERP' : 'Web'}: ${count}`}
-                  >
-                    {request_type_distribution.map((entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={entry.type === 'api' ? COLORS.warning : COLORS.primary}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    formatter={(value: any, name: string) => [value, name === 'api' ? 'API/ERP' : 'Web Upload']}
-                  />
-                  <Legend 
-                    formatter={(value: string) => value === 'api' ? 'API/ERP' : 'Web Upload'}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              {request_type_distribution && request_type_distribution.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={request_type_distribution}
+                      dataKey="count"
+                      nameKey="type"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={100}
+                      label={({ type, count }) => `${type === 'api' ? 'API/ERP' : 'Web'}: ${count}`}
+                    >
+                      {request_type_distribution.map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={entry.type === 'api' ? COLORS.warning : COLORS.primary}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: any, name: string) => [value, name === 'api' ? 'API/ERP' : 'Web Upload']}
+                    />
+                    <Legend 
+                      formatter={(value: string) => value === 'api' ? 'API/ERP' : 'Web Upload'}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <Share2 className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                    <p className="text-lg font-medium text-gray-700 mb-2">No Source Data</p>
+                    <p className="text-sm text-gray-500">Data will appear as invoices are uploaded</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

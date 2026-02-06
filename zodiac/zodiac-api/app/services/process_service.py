@@ -122,6 +122,7 @@ async def process_invoice_internal(
     logger.info(f"🚀 ===== INVOICE PROCESSING STARTED =====")
     # logger.info(f"👤 User ID: {current_user.id}")
     logger.info(f"📋 Request Type: {request_type}")
+    logger.info(f"🔍 Request Type Value: '{request_type}' (type: {type(request_type).__name__})")
     logger.info(
         f"📁 File details: filename={file.filename}, content_type={file.content_type}, size={file.size}")
     logger.info(f"🔍 Strict validation mode: {strict_validation}")
@@ -386,7 +387,7 @@ async def process_invoice_internal(
         except Exception as e:
             logger.error(f"❌ Error determining customer format: {e}")
             logger.exception(e)  # Log full exception for debugging
-            customer_format = 'EDIFACT'  # Default to EDIFACT processing
+            customer_format = 'XML'  # Default to XML processing
             customer_validation_rules = None
             logger.info(f"🎯 Using default format: {customer_format}")
         
@@ -1739,6 +1740,24 @@ async def process_invoice_internal(
                 processing_steps=processing_steps_data
             )
             try:
+                # Check if invoice with this tracking_id already exists (reprocessing case)
+                existing_failed = db.query(FailedModel).filter(
+                    FailedModel.tracking_id == tracking_id
+                ).first()
+                existing_success = db.query(SuccessModel).filter(
+                    SuccessModel.tracking_id == tracking_id
+                ).first()
+                
+                # Delete existing records to avoid unique constraint violation
+                if existing_failed:
+                    logger.info(f"🔄 Deleting existing failed record for tracking_id {tracking_id} (reprocessing)")
+                    db.delete(existing_failed)
+                    db.flush()  # Flush to ensure delete is processed before add
+                if existing_success:
+                    logger.info(f"🔄 Deleting existing success record for tracking_id {tracking_id} (reprocessing)")
+                    db.delete(existing_success)
+                    db.flush()  # Flush to ensure delete is processed before add
+                
                 db.add(failed_invoice)
                 db.commit()
                 db.refresh(failed_invoice)
@@ -1801,6 +1820,7 @@ async def process_invoice_internal(
                 processing_steps_data.append(step_dict)
             
             # Save to SUCCESS table
+            logger.info(f"💾 Creating SuccessModel with request_type='{request_type}'")
             success_invoice = SuccessModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
@@ -1818,7 +1838,26 @@ async def process_invoice_internal(
                 target_file_format=format_type,
                 processing_steps=processing_steps_data
             )
+            logger.info(f"💾 SuccessModel created with request_type: {success_invoice.request_type}")
             try:
+                # Check if invoice with this tracking_id already exists (reprocessing case)
+                existing_failed = db.query(FailedModel).filter(
+                    FailedModel.tracking_id == tracking_id
+                ).first()
+                existing_success = db.query(SuccessModel).filter(
+                    SuccessModel.tracking_id == tracking_id
+                ).first()
+                
+                # Delete existing records to avoid unique constraint violation
+                if existing_failed:
+                    logger.info(f"🔄 Deleting existing failed record for tracking_id {tracking_id} (reprocessing)")
+                    db.delete(existing_failed)
+                    db.flush()  # Flush to ensure delete is processed before add
+                if existing_success:
+                    logger.info(f"🔄 Deleting existing success record for tracking_id {tracking_id} (reprocessing)")
+                    db.delete(existing_success)
+                    db.flush()  # Flush to ensure delete is processed before add
+                
                 db.add(success_invoice)
                 db.commit()
                 db.refresh(success_invoice)

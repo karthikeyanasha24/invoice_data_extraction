@@ -70,6 +70,8 @@ class InvoiceResponse(BaseModel):
     tracking_id: Optional[str] = None
     uploaded_at: Optional[str] = None
     deleted_at: Optional[str] = None
+    # Source tracking: 'web' for manual upload, 'api' for SAP API
+    request_type: Optional[str] = 'web'
 
 class ZodiacInvoiceSuccessEdi(BaseModel):
     id: int

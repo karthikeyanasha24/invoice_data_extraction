@@ -436,10 +436,11 @@ export const fileApi = {
         try {
             console.log('📁 File API - Making API calls to success and failed endpoints...');
 
-            // Get both successful and failed invoices
+            // Get both successful and failed invoices with pagination
+            // Fetch first 50 of each for faster initial load
             const [successResponse, failedResponse] = await Promise.all([
-                api.get('/api/v1/invoices/success'),
-                api.get('/api/v1/invoices/failed')
+                api.get('/api/v1/invoices/success', { params: { skip: 0, limit: 50 } }),
+                api.get('/api/v1/invoices/failed', { params: { skip: 0, limit: 50 } })
             ]);
 
             console.log('📁 File API - API responses received:', {
@@ -500,6 +501,7 @@ export const fileApi = {
                         external_status: invoice?.external_status,
                         external_message: invoice?.external_message,
                         target_file_format: invoice.target_file_format,
+                        request_type: invoice.request_type || 'web', // Add request_type for source tracking
                     };
                 }),
                 ...failedInvoices.map((invoice: any) => {
@@ -541,7 +543,8 @@ export const fileApi = {
                         use_blob_storage: invoice.use_blob_storage,
                         xml_content: invoice.xml_content,
                         edi_content: invoice.edi_content,
-                        processing_steps_error: invoice.processing_steps_error
+                        processing_steps_error: invoice.processing_steps_error,
+                        request_type: invoice.request_type || 'web', // Add request_type for source tracking
                     };
                 })
             ];
@@ -689,7 +692,8 @@ export const fileApi = {
     getDeletedFiles: async (): Promise<Invoice[]> => {
         console.log('📁 File API - Get deleted files attempt');
         try {
-            const response = await api.get('/api/v1/invoices/deleted');
+            // Fetch first 50 deleted invoices for faster load
+            const response = await api.get('/api/v1/invoices/deleted', { params: { skip: 0, limit: 50 } });
             const deletedInvoices = response.data || [];
 
             // Format the deleted invoices

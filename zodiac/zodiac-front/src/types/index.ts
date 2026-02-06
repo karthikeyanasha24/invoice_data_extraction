@@ -140,6 +140,8 @@ export interface Invoice {
   xml_path?: string;
   edi_path?: string;
   blob_xml_path?: string;
+  // Source tracking: 'web' for manual upload, 'api' for SAP API
+  request_type?: 'web' | 'api';
   blob_edi_path?: string;
   use_blob_storage?: boolean;
   xml_content?: string;
@@ -147,6 +149,7 @@ export interface Invoice {
   external_status?: string;
   external_message?: string;
   target_file_format?: string;
+  request_type?: 'web' | 'api'; // Source of invoice: 'web' for manual upload, 'api' for SAP/system push
 }
 
 export interface FailedInvoiceDetails {
@@ -180,6 +183,7 @@ export interface FailedInvoiceDetails {
   blob_xml_path?: string;
   blob_edi_path?: string;
   use_blob_storage?: boolean;
+  request_type?: 'web' | 'api'; // Source of invoice: 'web' for manual upload, 'api' for SAP/system push
 }
 
 export interface LLMMessage {

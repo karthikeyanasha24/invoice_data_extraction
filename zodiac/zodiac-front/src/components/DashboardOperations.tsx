@@ -236,78 +236,98 @@ export default function DashboardOperations() {
         {/* Auto-Fix Breakdown */}
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Auto-Fix Breakdown</h3>
-          <div className="space-y-3">
-            {autoFixBreakdown.map((item, index) => (
-              <button
-                key={index}
-                onClick={() => handleFixTypeClick(item.type)}
-                className="w-full flex items-center justify-between hover:bg-gray-50 p-2 rounded-lg transition-colors group cursor-pointer"
-              >
-                <div className="flex-1">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600 transition-colors">
-                        {item.type}
-                      </span>
-                      <ChevronRight className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
+          {autoFixBreakdown && autoFixBreakdown.length > 0 ? (
+            <>
+              <div className="space-y-3">
+                {autoFixBreakdown.map((item, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleFixTypeClick(item.type)}
+                    className="w-full flex items-center justify-between hover:bg-gray-50 p-2 rounded-lg transition-colors group cursor-pointer"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600 transition-colors">
+                            {item.type}
+                          </span>
+                          <ChevronRight className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
+                        </div>
+                        <span className="text-sm text-gray-500">{item.count} fixes</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-orange-600 h-2 rounded-full transition-all group-hover:bg-orange-700"
+                          style={{ width: `${(item.count / data.autoFix.total) * 100}%` }}
+                        />
+                      </div>
                     </div>
-                    <span className="text-sm text-gray-500">{item.count} fixes</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-orange-600 h-2 rounded-full transition-all group-hover:bg-orange-700"
-                      style={{ width: `${(item.count / data.autoFix.total) * 100}%` }}
-                    />
-                  </div>
+                    <div className="ml-4 text-xs text-green-600 font-medium">
+                      {item.saved}m saved
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">Total Time Saved</span>
+                  <span className="font-bold text-green-600">{data.autoFix.timeSaved} minutes</span>
                 </div>
-                <div className="ml-4 text-xs text-green-600 font-medium">
-                  {item.saved}m saved
-                </div>
-              </button>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Total Time Saved</span>
-              <span className="font-bold text-green-600">{data.autoFix.timeSaved} minutes</span>
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-8">
+              <Zap className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+              <p className="text-gray-500">No auto-fix data available yet</p>
+              <p className="text-sm text-gray-400 mt-1">Auto-fixes will appear as invoices are processed</p>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Processing Time Trend */}
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Processing Time Trend</h3>
           <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={processingTimeData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis
-                  dataKey="hour"
-                  stroke="#6b7280"
-                  tick={{ fill: '#6b7280', fontSize: 12 }}
-                />
-                <YAxis
-                  stroke="#6b7280"
-                  tick={{ fill: '#6b7280', fontSize: 12 }}
-                  label={{ value: 'Seconds', angle: -90, position: 'insideLeft' }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#fff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '0.5rem',
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="avgTime"
-                  stroke="#8b5cf6"
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
-                  name="Avg Time (s)"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {processingTimeData && processingTimeData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={processingTimeData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="hour"
+                    stroke="#6b7280"
+                    tick={{ fill: '#6b7280', fontSize: 12 }}
+                  />
+                  <YAxis
+                    stroke="#6b7280"
+                    tick={{ fill: '#6b7280', fontSize: 12 }}
+                    label={{ value: 'Seconds', angle: -90, position: 'insideLeft' }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#fff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '0.5rem',
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="avgTime"
+                    stroke="#8b5cf6"
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    name="Avg Time (s)"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <Clock className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+                  <p className="text-gray-500">No processing time data yet</p>
+                  <p className="text-sm text-gray-400 mt-1">Data will appear as invoices are processed</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

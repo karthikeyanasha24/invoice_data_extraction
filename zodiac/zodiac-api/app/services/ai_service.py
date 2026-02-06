@@ -1,47 +1,160 @@
 import logging
 import traceback
+import asyncio
+import time
 from openai import OpenAI
 from ..config.config import OPENAI_API_KEY
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 logger = logging.getLogger("zodiac-api.ai_service")
+
+async def _call_openai_with_retry(
+    messages: list,
+    model: str = "gpt-4o-mini",
+    temperature: float = 0.3,
+    max_retries: int = 3,
+    timeout: int = 30
+) -> str:
+    """
+    Call OpenAI API with retry logic and timeout
+    
+    Args:
+        messages: List of chat messages
+        model: OpenAI model to use
+        temperature: Temperature parameter
+        max_retries: Maximum number of retry attempts
+        timeout: Timeout in seconds per attempt
+    
+    Returns:
+        str: AI response content
+    
+    Raises:
+        Exception: If all retries fail
+    """
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"🤖 AI request attempt {attempt + 1}/{max_retries}")
+            start_time = time.time()
+            
+            # Call OpenAI API (synchronous, but we'll handle timeout)
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                timeout=timeout
+            )
+            
+            elapsed = time.time() - start_time
+            logger.info(f"✅ AI response received in {elapsed:.2f}s")
+            
+            content = completion.choices[0].message.content.strip()
+            
+            # Validate response
+            if not content:
+                raise ValueError("Empty response from AI")
+            
+            return content
+            
+        except Exception as e:
+            last_error = e
+            elapsed = time.time() - start_time
+            logger.warning(f"⚠️ AI request attempt {attempt + 1} failed after {elapsed:.2f}s: {e}")
+            
+            # Don't retry on last attempt
+            if attempt < max_retries - 1:
+                # Exponential backoff: 2^attempt seconds (2s, 4s, 8s)
+                backoff = 2 ** attempt
+                logger.info(f"⏳ Retrying in {backoff}s...")
+                await asyncio.sleep(backoff)
+            else:
+                logger.error(f"❌ All {max_retries} AI request attempts failed")
+    
+    # All retries failed
+    raise Exception(f"AI request failed after {max_retries} attempts: {last_error}")
+
+
 async def auto_correct_xml_with_ai(xml_content: str, strict_validation: bool) -> tuple[bool, str]:
     """
     Use AI (GPT) to analyze and correct XML structure or content issues.
     Returns (was_corrected, corrected_xml)
     """
     try:
+        logger.info("🧠 Starting AI-powered XML correction...")
+        logger.debug(f"   XML length: {len(xml_content)} chars")
+        logger.debug(f"   Strict validation: {strict_validation}")
+        
+        # Enhanced prompt with common error patterns
         prompt = f"""
-        You are an XML data correction assistant for e-invoices.
-        Given the XML below, correct any syntax, structure, or schema-related issues
-        that could cause validation or EDI conversion to fail.
-        Keep the same business data and structure; only fix formatting, tag mismatches, or missing required elements.
-        Respond ONLY with corrected XML, no explanations.should always start with < and end with xml format, no extra text such as ``` or ```xml or anything else please.
+You are an XML data correction assistant for e-invoices (UBL and SAT CFDI formats).
 
-        Strict validation: {strict_validation}
-        ---
-        {xml_content}
-        """
+COMMON ISSUES TO FIX:
+1. Missing or invalid EndpointID elements (supplier/customer)
+2. Invalid date formats (should be YYYY-MM-DD)
+3. Missing required namespaces
+4. Malformed XML tags or attributes
+5. Missing mandatory elements (ID, IssueDate, etc.)
+6. Incorrect decimal formatting for amounts
 
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",  # or gpt-5 if available
-            messages=[{"role": "user", "content": prompt}],
+INSTRUCTIONS:
+- Correct any syntax, structure, or schema-related issues
+- Keep the same business data and structure
+- Only fix formatting, tag mismatches, or missing required elements
+- If EndpointID is missing, use supplier/customer tax ID or name
+- Respond ONLY with corrected XML
+- Output must start with '<' and be valid XML
+- NO markdown formatting (no ```, no ```xml, no explanations)
+
+Strict validation mode: {strict_validation}
+
+XML TO CORRECT:
+{xml_content}
+"""
+
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Call with retry logic
+        corrected_xml = await _call_openai_with_retry(
+            messages=messages,
+            model="gpt-4o-mini",
             temperature=0.3,
+            max_retries=3,
+            timeout=30
         )
-
-        corrected_xml = completion.choices[0].message.content.strip()
-        try:
-            corrected_xml = corrected_xml.replace("```xml", "")
-            corrected_xml = corrected_xml.replace("```", "")
-        except:
-            traceback.print_exc()
-        if corrected_xml and corrected_xml != xml_content:
-            return True, corrected_xml
-        else:
+        
+        # Clean up any remaining markdown artifacts
+        corrected_xml = corrected_xml.strip()
+        for marker in ["```xml", "```", "``"]:
+            corrected_xml = corrected_xml.replace(marker, "")
+        corrected_xml = corrected_xml.strip()
+        
+        # Validate that the result is XML
+        if not corrected_xml.startswith("<"):
+            logger.error(f"❌ AI output doesn't start with '<': {corrected_xml[:100]}")
             return False, xml_content
+        
+        # Check if anything was actually changed
+        if corrected_xml == xml_content:
+            logger.info("ℹ️ AI correction produced no changes")
+            return False, xml_content
+        
+        # Try to parse to ensure valid XML
+        try:
+            from lxml import etree
+            etree.fromstring(corrected_xml.encode('utf-8'))
+            logger.info("✅ AI-corrected XML is valid and parseable")
+        except Exception as parse_err:
+            logger.error(f"❌ AI-corrected XML is not valid: {parse_err}")
+            return False, xml_content
+        
+        logger.info("✅ XML correction successful")
+        return True, corrected_xml
 
     except Exception as e:
-        logger.warning(f"⚠️ AI correction failed: {e}")
+        logger.error(f"❌ AI XML correction failed: {e}")
+        logger.error(f"   Error type: {type(e).__name__}")
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         return False, xml_content
 
 async def auto_fix_edi_with_ai(
@@ -112,19 +225,26 @@ ERRORS TO FIX:
 {formatted_errors}
 """
 
-        logger.info("🤖 Sending EDI correction request to AI model...")
+        logger.info("🧠 Starting AI-powered EDI correction...")
+        logger.debug(f"   EDI length: {len(edi_content)} chars")
+        logger.debug(f"   Number of errors: {len(edi_errors) if isinstance(edi_errors, list) else 1}")
 
-        completion = client.chat.completions.create(
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Call with retry logic
+        corrected_edi = await _call_openai_with_retry(
+            messages=messages,
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
+            max_retries=3,
+            timeout=30
         )
 
-        corrected_edi = completion.choices[0].message.content.strip()
-
         # Remove potential markdown fences (safety)
+        corrected_edi = corrected_edi.strip()
         for marker in ("```edi", "```", "``"):
             corrected_edi = corrected_edi.replace(marker, "")
+        corrected_edi = corrected_edi.strip()
 
         # ✅ Auto-format ISA and N1 fixes as safety net (post-AI)
         lines = corrected_edi.split("~")
@@ -144,14 +264,21 @@ ERRORS TO FIX:
             fixed_lines.append(line)
         corrected_edi = "~".join(fixed_lines)
 
+        # Validate that the result starts with ISA (EDI header)
+        if not corrected_edi.startswith("ISA"):
+            logger.error(f"❌ AI output doesn't start with 'ISA': {corrected_edi[:100]}")
+            return False, edi_content
+        
         if corrected_edi and corrected_edi != edi_content:
-            logger.info(
-                "✅ AI corrected EDI successfully based on validation rules.")
+            logger.info("✅ AI corrected EDI successfully based on validation rules")
+            logger.debug(f"   Original length: {len(edi_content)}, Corrected length: {len(corrected_edi)}")
             return True, corrected_edi
         else:
-            logger.warning("⚠️ AI correction produced no significant changes.")
+            logger.info("ℹ️ AI EDI correction produced no changes")
             return False, edi_content
 
     except Exception as e:
-        logger.warning(f"⚠️ AI EDI correction failed: {e}")
+        logger.error(f"❌ AI EDI correction failed: {e}")
+        logger.error(f"   Error type: {type(e).__name__}")
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         return False, edi_content

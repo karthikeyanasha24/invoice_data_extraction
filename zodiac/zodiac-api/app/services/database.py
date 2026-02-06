@@ -27,21 +27,21 @@ def check_customer_table(cust_id, cust_name, db: Session = None):
             logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
                         f"Found format '{customer.format}' with "
                         f"{'custom validation rules' if customer.validation_rules else 'default validation'}")
-            return customer.format or 'edifact', customer.validation_rules
+            return customer.format or 'xml', customer.validation_rules
         else:
             logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
-                        f"Not found, defaulting to edifact with no custom rules")
-            return 'edifact', None
+                        f"Not found, defaulting to XML with no custom rules")
+            return 'xml', None
             
     except (ProgrammingError, OperationalError) as e:
         # Handle table doesn't exist or other DB structure errors
         logger.warning(f"⚠️ check_customer_table lookup failed (table may not exist): {e}")
         db.rollback()  # Rollback to clear the failed transaction
-        return 'edifact', None
+        return 'xml', None
     except Exception as e:
         logger.warning(f"⚠️ check_customer_table lookup failed: {e}")
         db.rollback()  # Rollback for any other errors
-        return 'edifact', None
+        return 'xml', None
     finally:
         if close_after:
             db.close()

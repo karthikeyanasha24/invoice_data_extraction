@@ -19,7 +19,10 @@ import {
   Trash,
   Upload,
   Clock,
-  X
+  X,
+  Cloud,
+  MousePointer,
+  Filter
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Pagination from '@/components/Pagination';
@@ -33,10 +36,12 @@ export default function InvoicesLanding() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [deletedInvoices, setDeletedInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'api' | 'web'>('all'); // Filter by source
 
   // Delete confirmation modal state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -54,13 +59,15 @@ export default function InvoicesLanding() {
   useEffect(() => {
     if (isAuthenticated) {
       fetchInvoices();
-      fetchDeletedInvoices();
+      // Don't fetch deleted invoices until user opens recycle bin
+      // fetchDeletedInvoices(); 
     } else {
       setLoading(false);
     }
   }, [isAuthenticated]);
 
   const fetchInvoices = async () => {
+    setLoading(true); // Ensure loading state is set
     try {
       const data = await fileApi.getFiles();
       console.log("📊 TOTAL INVOICES RECEIVED:", data.length);
@@ -74,6 +81,9 @@ export default function InvoicesLanding() {
       }
       
       setInvoices(data);
+      
+      // Ensure loading screen is visible for at least 500ms for better UX
+      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error: any) {
       console.error('Failed to fetch invoices:', error);
       if (error.message?.includes('Session expired') || error.message?.includes('log in again')) {
@@ -81,6 +91,7 @@ export default function InvoicesLanding() {
       }
     } finally {
       setLoading(false);
+      setInitialLoadComplete(true);
     }
   };
 
@@ -113,7 +124,13 @@ export default function InvoicesLanding() {
       // Exclude deleted invoices
       if (invoice.status === 'deleted') return false;
       
-      // Check if search term is empty - show all active invoices
+      // Filter by source type
+      if (sourceFilter !== 'all') {
+        const invoiceSource = invoice.request_type || 'web'; // Default to 'web' if not set
+        if (invoiceSource !== sourceFilter) return false;
+      }
+      
+      // Check if search term is empty - show all active invoices matching source filter
       if (!searchTerm) return true;
       
       const searchLower = searchTerm.toLowerCase();
@@ -136,6 +153,14 @@ export default function InvoicesLanding() {
   const completedCount = activeInvoices.filter(inv => inv.status === 'successful' || inv.status === 'completed').length;
   const failedCount = activeInvoices.filter(inv => inv.status === 'failed' || inv.status === 'error').length;
   const deletedCount = deletedInvoices.length;
+  
+  // Calculate source-based counts
+  const sapInvoicesCount = activeInvoices.filter(inv => inv.request_type === 'api').length;
+  const manualInvoicesCount = activeInvoices.filter(inv => !inv.request_type || inv.request_type === 'web').length;
+  const sapSuccessCount = activeInvoices.filter(inv => inv.request_type === 'api' && (inv.status === 'successful' || inv.status === 'completed')).length;
+  const sapFailedCount = activeInvoices.filter(inv => inv.request_type === 'api' && (inv.status === 'failed' || inv.status === 'error')).length;
+  const manualSuccessCount = activeInvoices.filter(inv => (!inv.request_type || inv.request_type === 'web') && (inv.status === 'successful' || inv.status === 'completed')).length;
+  const manualFailedCount = activeInvoices.filter(inv => (!inv.request_type || inv.request_type === 'web') && (inv.status === 'failed' || inv.status === 'error')).length;
 
   const handleDeleteInvoice = async (invoice: Invoice) => {
     console.log('🗑️ InvoicesLanding - Requesting to delete invoice:', invoice.id);
@@ -350,6 +375,26 @@ export default function InvoicesLanding() {
     }
   };
 
+  const getSourceBadge = (requestType?: 'web' | 'api') => {
+    const source = requestType || 'web';
+    
+    if (source === 'api') {
+      return (
+        <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
+          <Cloud className="h-3 w-3 mr-1" />
+          From SAP
+        </span>
+      );
+    }
+    
+    return (
+      <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+        <MousePointer className="h-3 w-3 mr-1" />
+        Manual
+      </span>
+    );
+  };
+
   if (!isAuthenticated) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -361,10 +406,76 @@ export default function InvoicesLanding() {
     );
   }
 
-  if (loading) {
+  // Show loading screen during initial load or when explicitly loading
+  if (loading || (isAuthenticated && !initialLoadComplete)) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <LoadingSpinner size="lg" text="Loading invoices..." />
+      <div className="space-y-4 sm:space-y-6 animate-pulse">
+        {/* Header Skeleton */}
+        <div className="flex justify-between items-center">
+          <div className="h-8 bg-gray-200 rounded w-48"></div>
+          <div className="h-10 bg-gray-200 rounded w-32"></div>
+        </div>
+
+        {/* Filter Tabs Skeleton */}
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="h-4 bg-gray-200 rounded w-32 mb-3"></div>
+          <div className="flex gap-2">
+            <div className="h-10 bg-gray-200 rounded w-24"></div>
+            <div className="h-10 bg-gray-200 rounded w-24"></div>
+            <div className="h-10 bg-gray-200 rounded w-24"></div>
+          </div>
+        </div>
+
+        {/* Stat Cards Skeleton */}
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="bg-white rounded-lg shadow p-4">
+              <div className="flex items-start space-x-3">
+                <div className="h-8 w-8 bg-gray-200 rounded-full"></div>
+                <div className="flex-1">
+                  <div className="h-6 bg-gray-200 rounded w-12 mb-2"></div>
+                  <div className="h-4 bg-gray-200 rounded w-16"></div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Search Bar Skeleton */}
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="h-10 bg-gray-200 rounded w-full"></div>
+        </div>
+
+        {/* Table Skeleton */}
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          {/* Table Header */}
+          <div className="border-b border-gray-200 bg-gray-50 p-4">
+            <div className="grid grid-cols-5 gap-4">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="h-4 bg-gray-200 rounded"></div>
+              ))}
+            </div>
+          </div>
+          
+          {/* Table Rows */}
+          {[...Array(8)].map((_, i) => (
+            <div key={i} className="border-b border-gray-200 p-4">
+              <div className="grid grid-cols-5 gap-4">
+                {[...Array(5)].map((_, j) => (
+                  <div key={j} className="h-4 bg-gray-100 rounded"></div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Loading Text with Icon */}
+        <div className="fixed bottom-8 right-8 bg-white rounded-full shadow-lg px-6 py-3 flex items-center space-x-3">
+          <div className="relative">
+            <div className="h-5 w-5 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+          </div>
+          <span className="text-sm font-medium text-gray-700">Loading invoices...</span>
+        </div>
       </div>
     );
   }
@@ -400,6 +511,81 @@ export default function InvoicesLanding() {
   return (
     <div className="space-y-4 sm:space-y-6">
 
+      {/* Source Filter Tabs */}
+      {!showRecycleBin && (
+        <div className="bg-white rounded-lg shadow p-3 sm:p-4">
+          <div className="flex items-center space-x-2 mb-3">
+            <Filter className="h-4 w-4 text-gray-600" />
+            <span className="text-sm font-medium text-gray-700">Filter by Source:</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => {
+                setSourceFilter('all');
+                setCurrentPage(1);
+              }}
+              className={cn(
+                "flex items-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors",
+                sourceFilter === 'all'
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              )}
+            >
+              <FileText className="h-4 w-4" />
+              <span>All Invoices</span>
+              <span className={cn(
+                "ml-1 px-2 py-0.5 rounded-full text-xs font-semibold",
+                sourceFilter === 'all' ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-700"
+              )}>
+                {totalInvoicesCount}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setSourceFilter('api');
+                setCurrentPage(1);
+              }}
+              className={cn(
+                "flex items-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors",
+                sourceFilter === 'api'
+                  ? "bg-purple-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              )}
+            >
+              <Cloud className="h-4 w-4" />
+              <span>From SAP</span>
+              <span className={cn(
+                "ml-1 px-2 py-0.5 rounded-full text-xs font-semibold",
+                sourceFilter === 'api' ? "bg-purple-500 text-white" : "bg-gray-200 text-gray-700"
+              )}>
+                {sapInvoicesCount}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setSourceFilter('web');
+                setCurrentPage(1);
+              }}
+              className={cn(
+                "flex items-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors",
+                sourceFilter === 'web'
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              )}
+            >
+              <MousePointer className="h-4 w-4" />
+              <span>Manual Upload</span>
+              <span className={cn(
+                "ml-1 px-2 py-0.5 rounded-full text-xs font-semibold",
+                sourceFilter === 'web' ? "bg-green-500 text-white" : "bg-gray-200 text-gray-700"
+              )}>
+                {manualInvoicesCount}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {!showRecycleBin ? (
@@ -407,8 +593,8 @@ export default function InvoicesLanding() {
             <StatCard
               icon={FileText}
               iconColor="text-blue-500"
-              count={totalInvoicesCount}
-              label="Total Invoices"
+              count={sourceFilter === 'api' ? sapInvoicesCount : sourceFilter === 'web' ? manualInvoicesCount : totalInvoicesCount}
+              label={sourceFilter === 'api' ? 'From SAP' : sourceFilter === 'web' ? 'Manual Upload' : 'Total Invoices'}
               onClick={() => {
                 console.log('📊 Total invoices card clicked');
                 setSearchTerm('');
@@ -417,17 +603,17 @@ export default function InvoicesLanding() {
             <StatCard
               icon={CheckCircle}
               iconColor="text-green-500"
-              count={completedCount}
-              label="Completed"
+              count={sourceFilter === 'api' ? sapSuccessCount : sourceFilter === 'web' ? manualSuccessCount : completedCount}
+              label="Successful"
               onClick={() => {
-                console.log('📊 Completed invoices card clicked');
+                console.log('📊 Successful invoices card clicked');
                 setSearchTerm('successful completed');
               }}
             />
             <StatCard
               icon={XCircle}
               iconColor="text-red-500"
-              count={failedCount}
+              count={sourceFilter === 'api' ? sapFailedCount : sourceFilter === 'web' ? manualFailedCount : failedCount}
               label="Failed"
               onClick={() => {
                 console.log('📊 Failed invoices card clicked');
@@ -443,6 +629,10 @@ export default function InvoicesLanding() {
                 console.log('📊 Deleted invoices card clicked - showing recycle bin');
                 setShowRecycleBin(true);
                 setSearchTerm('');
+                // Fetch deleted invoices only when user opens recycle bin
+                if (deletedInvoices.length === 0) {
+                  fetchDeletedInvoices();
+                }
               }}
             />
           </>
@@ -522,7 +712,13 @@ export default function InvoicesLanding() {
               <span>Export</span>
             </button>
             <button
-              onClick={() => setShowRecycleBin(!showRecycleBin)}
+              onClick={() => {
+                setShowRecycleBin(!showRecycleBin);
+                if (!showRecycleBin) {
+                  // Reset source filter when entering recycle bin
+                  setSourceFilter('all');
+                }
+              }}
               className={cn(
                 "flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer w-full sm:w-auto justify-center",
                 showRecycleBin
@@ -563,6 +759,7 @@ export default function InvoicesLanding() {
                   <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice ID</th>
                   <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
                   <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
                   <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Format</th>
                   <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                     {showRecycleBin ? 'Deleted' : 'Uploaded'}
@@ -585,8 +782,11 @@ export default function InvoicesLanding() {
                         <span className="ml-1">{invoice.status || 'Unknown'}</span>
                       </span>
                     </td>
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+                      {getSourceBadge(invoice.request_type)}
+                    </td>
                     <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
-                      {invoice.formate || 'N/A'}
+                      {(invoice.target_file_format || invoice.formate || 'XML').toUpperCase()}
                     </td>
                     <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
                       {showRecycleBin

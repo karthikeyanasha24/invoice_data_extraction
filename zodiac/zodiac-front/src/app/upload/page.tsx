@@ -147,6 +147,7 @@ export default function UploadPage() {
                 } else {
                     // Handle actual upload failures
                     let errorMessage = result.error || 'Upload failed. Please try again.';
+                    let isDuplicateError = false;
 
                     // If we have structured error data, provide more specific feedback
                     if (result.data) {
@@ -173,8 +174,19 @@ export default function UploadPage() {
                                 errorMessage += `\n\nRecommended actions:\n${result.suggestedActions.map((action: string, index: number) => `${index + 1}. ${action}`).join('\n')}`;
                             }
                         } else {
+                            // Check for simple detail message (e.g., duplicate invoice error)
+                            if (errorData.detail && typeof errorData.detail === 'string') {
+                                errorMessage = errorData.detail;
+                                
+                                // Check if this is a duplicate error
+                                if (errorData.detail.includes('already been') || 
+                                    errorData.detail.includes('already processed') ||
+                                    errorData.detail.includes('cannot be resent')) {
+                                    isDuplicateError = true;
+                                }
+                            }
                             // Fallback to basic error data parsing
-                            if (!errorData.file_upload_pass) {
+                            else if (!errorData.file_upload_pass) {
                                 errorMessage = `File upload failed: ${errorData.file_upload_message || 'Unknown error'}`;
                             } else if (!errorData.xml_validation_pass) {
                                 errorMessage = `XML validation failed: ${errorData.xml_convert_message || 'Invalid XML format'}`;
@@ -189,8 +201,21 @@ export default function UploadPage() {
                     }
 
                     console.log('📤 Upload Page - Final error message:', errorMessage);
+                    console.log('📤 Upload Page - Is duplicate error:', isDuplicateError);
+                    
                     setUploadError(errorMessage);
-                    setTimeout(() => setUploadError(''), 15000); // Show error for 15 seconds
+                    
+                    // If duplicate error, redirect to invoices page after 5 seconds
+                    if (isDuplicateError) {
+                        console.log('🔄 Upload Page - Duplicate detected, redirecting to invoices page in 5 seconds...');
+                        setTimeout(() => {
+                            console.log('🔄 Upload Page - Redirecting to invoices page now');
+                            router.push('/invoices');
+                        }, 5000); // 5 seconds
+                    } else {
+                        // For other errors, clear after 15 seconds
+                        setTimeout(() => setUploadError(''), 15000);
+                    }
                 }
             }
         } catch (error: any) {

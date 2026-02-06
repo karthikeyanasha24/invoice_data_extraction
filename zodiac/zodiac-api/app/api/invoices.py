@@ -33,6 +33,195 @@ logger = logging.getLogger("zodiac-api.invoices")
 # Error tracker instance
 error_tracker = ErrorTracker()
 
+
+def extract_invoice_number_from_xml(xml_content: str) -> Optional[str]:
+    """Extract invoice number from XML content (supports both UBL and SAT CFDI formats)"""
+    try:
+        root = etree.fromstring(xml_content.encode('utf-8'))
+        
+        # Try UBL format first (cbc:ID element)
+        ubl_namespaces = {
+            'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+        }
+        invoice_id_elem = root.find('.//cbc:ID', ubl_namespaces)
+        if invoice_id_elem is not None and invoice_id_elem.text:
+            invoice_number = invoice_id_elem.text.strip().upper()
+            logger.debug(f"   Extracted UBL invoice ID: {invoice_number}")
+            return invoice_number
+        
+        # Try SAT CFDI format (Serie + Folio attributes)
+        cfdi_namespaces = {
+            'cfdi': 'http://www.sat.gob.mx/cfd/4',
+            'cfdi3': 'http://www.sat.gob.mx/cfd/3',
+        }
+        
+        # Try CFDI 4.0
+        comprobante = root if root.tag.endswith('Comprobante') else root.find('.//cfdi:Comprobante', cfdi_namespaces)
+        
+        # Try CFDI 3.3 if 4.0 not found
+        if comprobante is None:
+            comprobante = root.find('.//cfdi3:Comprobante', cfdi_namespaces)
+        
+        if comprobante is not None:
+            serie = comprobante.get('Serie', '')
+            folio = comprobante.get('Folio', '')
+            
+            if serie and folio:
+                invoice_number = f"{serie}-{folio}".upper()
+                logger.debug(f"   Extracted SAT CFDI invoice ID: {invoice_number}")
+                return invoice_number
+            elif folio:
+                invoice_number = folio.upper()
+                logger.debug(f"   Extracted SAT CFDI folio: {invoice_number}")
+                return invoice_number
+        
+        # Try to find any ID element without namespace
+        any_id = root.find('.//{*}ID')
+        if any_id is not None and any_id.text:
+            invoice_number = any_id.text.strip().upper()
+            logger.debug(f"   Extracted generic ID: {invoice_number}")
+            return invoice_number
+        
+        logger.warning(f"⚠️ Could not extract invoice number from XML (no UBL ID or SAT Serie/Folio found)")
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to extract invoice number: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return None
+
+
+# In-memory cache for duplicate checks (TTL: 5 minutes)
+_duplicate_check_cache = {}
+_cache_ttl = 300  # 5 minutes in seconds
+
+async def check_invoice_already_processed(
+    db: Session, 
+    invoice_number: str, 
+    user_id: int,
+    check_failed: bool = False,
+    source: str = "manual"
+) -> tuple[bool, Optional[int]]:
+    """
+    Check if invoice with this number has already been processed
+    
+    Args:
+        db: Database session
+        invoice_number: Invoice number to check
+        user_id: User ID to scope the check
+        check_failed: If True, also check failed invoices (for SAP API uploads)
+        source: Upload source ('manual' or 'api')
+    
+    Returns:
+        (already_exists, invoice_id) tuple
+    """
+    if not invoice_number:
+        return False, None
+    
+    try:
+        import time
+        
+        # Check in-memory cache first
+        cache_key = f"{user_id}:{invoice_number.upper()}:{check_failed}"
+        current_time = time.time()
+        
+        if cache_key in _duplicate_check_cache:
+            cached_result, cached_time = _duplicate_check_cache[cache_key]
+            if current_time - cached_time < _cache_ttl:
+                logger.debug(f"   Cache hit for invoice #{invoice_number}")
+                return cached_result
+            else:
+                # Cache expired, remove it
+                del _duplicate_check_cache[cache_key]
+        
+        logger.info(f"🔍 Checking for duplicate invoice number: {invoice_number}")
+        logger.info(f"   User: {user_id}, Source: {source}, Check failed: {check_failed}")
+        
+        # Get all successful invoices for this user (limit to recent 500 for performance)
+        success_invoices = db.query(SuccessModel).filter(
+            SuccessModel.user_id == user_id,
+            SuccessModel.deleted_at.is_(None)
+        ).order_by(SuccessModel.uploaded_at.desc()).limit(500).all()
+        
+        logger.info(f"   Found {len(success_invoices)} successful invoices to check")
+        
+        # Check each successful invoice's XML content for matching invoice number
+        for invoice in success_invoices:
+            try:
+                # Get XML path (blob or local)
+                xml_path = invoice.blob_xml_path or invoice.xml_path
+                
+                if xml_path:
+                    # Read XML content (async)
+                    xml_content_bytes = await read_file_from_storage(xml_path, None, None)
+                    
+                    if xml_content_bytes:
+                        xml_content = xml_content_bytes.decode('utf-8')
+                        # Extract invoice number from this invoice
+                        existing_invoice_number = extract_invoice_number_from_xml(xml_content)
+                        
+                        if existing_invoice_number and existing_invoice_number.upper() == invoice_number.upper():
+                            logger.warning(f"🚫 DUPLICATE in SUCCESS table - Invoice #{invoice_number} already exists!")
+                            logger.warning(f"   Existing tracking_id: {invoice.tracking_id}")
+                            logger.warning(f"   Source: {invoice.request_type or 'web'}")
+                            result = (True, invoice.id)
+                            # Cache the result
+                            _duplicate_check_cache[cache_key] = (result, current_time)
+                            return result
+            except Exception as read_err:
+                logger.debug(f"   Could not read invoice {invoice.id}: {read_err}")
+                continue
+        
+        # If check_failed is True (for SAP API), also check failed invoices
+        if check_failed:
+            failed_invoices = db.query(FailedModel).filter(
+                FailedModel.user_id == user_id,
+                FailedModel.deleted_at.is_(None)
+            ).order_by(FailedModel.uploaded_at.desc()).limit(500).all()
+            
+            logger.info(f"   Found {len(failed_invoices)} failed invoices to check")
+            
+            for invoice in failed_invoices:
+                try:
+                    # Get XML path (blob or local)
+                    xml_path = invoice.blob_xml_path or invoice.xml_path
+                    
+                    if xml_path:
+                        # Read XML content (async)
+                        xml_content_bytes = await read_file_from_storage(xml_path, None, None)
+                        
+                        if xml_content_bytes:
+                            xml_content = xml_content_bytes.decode('utf-8')
+                            # Extract invoice number from this invoice
+                            existing_invoice_number = extract_invoice_number_from_xml(xml_content)
+                            
+                            if existing_invoice_number and existing_invoice_number.upper() == invoice_number.upper():
+                                logger.warning(f"🚫 DUPLICATE in FAILED table - Invoice #{invoice_number} already exists!")
+                                logger.warning(f"   Existing tracking_id: {invoice.tracking_id}")
+                                logger.warning(f"   Source: {invoice.request_type or 'web'}")
+                                logger.warning(f"   This prevents duplicate processing from SAP API")
+                                result = (True, invoice.id)
+                                # Cache the result
+                                _duplicate_check_cache[cache_key] = (result, current_time)
+                                return result
+                except Exception as read_err:
+                    logger.debug(f"   Could not read failed invoice {invoice.id}: {read_err}")
+                    continue
+        
+        logger.info(f"✅ No duplicate found for invoice #{invoice_number}")
+        result = (False, None)
+        # Cache the negative result
+        _duplicate_check_cache[cache_key] = (result, current_time)
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking invoice duplication: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        # If check fails, allow upload to proceed (fail open for safety)
+        return False, None
+
 class FormatEnum(str, Enum):
     xml = "xml"
     x12 = "x12"
@@ -172,6 +361,36 @@ async def process_invoice(
     file_content = await file.read()
     original_filename = file.filename
     
+    # Check for duplicate invoice number before processing
+    try:
+        invoice_number = extract_invoice_number_from_xml(file_content.decode('utf-8'))
+        logger.info(f"📄 Extracted invoice number from upload: {invoice_number}")
+        
+        if invoice_number:
+            # For manual uploads, only check successful invoices (allow retrying failed ones)
+            already_exists, existing_id = await check_invoice_already_processed(
+                db, 
+                invoice_number, 
+                current_user.id,
+                check_failed=False,
+                source="manual"
+            )
+            if already_exists:
+                logger.error(f"🚫 DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invoice #{invoice_number} has already been successfully processed and cannot be resent. Please check your existing invoices."
+                )
+            logger.info(f"✅ Invoice #{invoice_number} is new, proceeding with processing")
+        else:
+            logger.warning(f"⚠️ Could not extract invoice number from XML - duplicate check skipped")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check for duplicate invoice: {e} - proceeding anyway")
+        import traceback
+        logger.warning(traceback.format_exc())
+    
     # Generate tracking ID and initialize status tracker immediately
     tracking_id = uuid.uuid4()
     status_tracker.initialize_status(tracking_id)
@@ -266,6 +485,49 @@ async def process_invoice_api(
     # api_user:str = "DEMO"
 ):
     """Process uploaded invoice file with XML validation and EDI conversion (API Key)"""
+    logger.info(f"🔑 API ENDPOINT CALLED - request_type will be set to: 'api'")
+    logger.info(f"👤 API User: {api_user.id if api_user else 'None'}")
+    
+    # Check for duplicate invoice number before processing
+    try:
+        file_content = await file.read()
+        invoice_number = extract_invoice_number_from_xml(file_content.decode('utf-8'))
+        logger.info(f"📄 [API] Extracted invoice number from upload: {invoice_number}")
+        
+        if invoice_number:
+            # For SAP API, check both successful AND failed invoices to prevent duplicate processing
+            already_exists, existing_id = await check_invoice_already_processed(
+                db, 
+                invoice_number, 
+                api_user.id,
+                check_failed=True,
+                source="api"
+            )
+            if already_exists:
+                logger.error(f"🚫 [API] DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invoice #{invoice_number} has already been processed (successful or failed) and cannot be resent."
+                )
+            logger.info(f"✅ [API] Invoice #{invoice_number} is new, proceeding with processing")
+        else:
+            logger.warning(f"⚠️ [API] Could not extract invoice number from XML - duplicate check skipped")
+        
+        # Reset file pointer for processing
+        from io import BytesIO
+        from starlette.datastructures import Headers
+        file = UploadFile(
+            filename=file.filename,
+            file=BytesIO(file_content),
+            headers=Headers({"content-type": file.content_type})
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"⚠️ [API] Could not check for duplicate invoice: {e} - proceeding anyway")
+        import traceback
+        logger.warning(traceback.format_exc())
+    
     return await process_invoice_internal(file, strict_validation, db, request, api_user, "api")
 
 @router.get("/api-key")
@@ -856,21 +1118,32 @@ def test_endpoint(
 @router.get("/success")
 def get_successful_invoices(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,  # Reduced default limit for better performance
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get successfully processed invoices for current user"""
     try:
-        # Use raw SQL to avoid schema issues
-        inspector = inspect(db.bind)
-        columns = [col["name"]
-                   for col in inspector.get_columns("zodiac_invoice_success_edi")]
-
-        # Determine if columns exist
-        has_external_status = "external_status" in columns
-        has_external_message = "external_message" in columns
-        has_target_file_format = "target_file_format" in columns
+        # Cache column inspection results for better performance
+        if not hasattr(get_successful_invoices, '_column_cache'):
+            inspector = inspect(db.bind)
+            columns = [col["name"]
+                       for col in inspector.get_columns("zodiac_invoice_success_edi")]
+            
+            # Cache the results
+            get_successful_invoices._column_cache = {
+                'has_external_status': "external_status" in columns,
+                'has_external_message': "external_message" in columns,
+                'has_target_file_format': "target_file_format" in columns,
+                'has_request_type': "request_type" in columns
+            }
+        
+        # Use cached values
+        cache = get_successful_invoices._column_cache
+        has_external_status = cache['has_external_status']
+        has_external_message = cache['has_external_message']
+        has_target_file_format = cache['has_target_file_format']
+        has_request_type = cache['has_request_type']
 
         # Build query dynamically
         query = f"""
@@ -880,7 +1153,8 @@ def get_successful_invoices(
                 blob_xml_path, blob_edi_path,
                 {"external_status" if has_external_status else "'False' AS external_status"},
                 {"external_message" if has_external_message else "'No msg' AS external_message"},
-                {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"}
+                {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"},
+                {"request_type" if has_request_type else "'web' AS request_type"}
             FROM zodiac_invoice_success_edi 
             WHERE user_id = :user_id AND deleted_at IS NULL
             ORDER BY uploaded_at DESC 
@@ -1017,6 +1291,9 @@ def get_successful_invoices(
             # Set the format from target_file_format or default to X12
             data['formate'] = getattr(row, 'target_file_format', 'X12') or 'X12'
             
+            # Set source type (web or api/SAP)
+            data['request_type'] = getattr(row, 'request_type', 'web') or 'web'
+            
             # Set status for frontend
             data['status'] = 'successful'
             
@@ -1024,7 +1301,12 @@ def get_successful_invoices(
             
         logger.info(f"✅ Returning {len(invoices)} successful invoices")
         if invoices:
-            logger.info(f"📊 Sample invoice: customerId={invoices[0].get('customerId')}, customerName={invoices[0].get('customerName')}, formate={invoices[0].get('formate')}")
+            logger.info(f"📊 Sample invoice: customerId={invoices[0].get('customerId')}, customerName={invoices[0].get('customerName')}, formate={invoices[0].get('formate')}, request_type={invoices[0].get('request_type')}")
+            
+            # Log how many are api vs web
+            api_count = sum(1 for inv in invoices if inv.get('request_type') == 'api')
+            web_count = sum(1 for inv in invoices if inv.get('request_type') == 'web' or not inv.get('request_type'))
+            logger.info(f"📊 Source breakdown: {api_count} from API/SAP, {web_count} from Web/Manual")
         
         return invoices
         
@@ -1038,18 +1320,30 @@ def get_successful_invoices(
 @router.get("/failed")
 async def get_failed_invoices(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,  # Reduced default limit for better performance
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get failed invoices for current user"""
     try:
+        # Cache column inspection results for better performance
+        if not hasattr(get_failed_invoices, '_column_cache'):
+            inspector = inspect(db.bind)
+            columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_failed_edi")]
+            get_failed_invoices._column_cache = {
+                'has_request_type': "request_type" in columns
+            }
+        
+        # Use cached value
+        has_request_type = get_failed_invoices._column_cache['has_request_type']
+        
         # Use raw SQL to avoid schema issues
-        query = """
+        query = f"""
         SELECT id, tracking_id, user_id, uploaded_at, xml_path, 
                xml_validation_pass, xml_convert_message, edi_path, 
                edi_convert_pass, edi_convert_message, processing_steps,
-               blob_xml_path, blob_edi_path, target_file_format
+               blob_xml_path, blob_edi_path, target_file_format,
+               {"request_type" if has_request_type else "'web' AS request_type"}
         FROM zodiac_invoice_failed_edi 
         WHERE user_id = :user_id AND deleted_at IS NULL
         ORDER BY uploaded_at DESC 
@@ -1211,16 +1505,19 @@ async def get_failed_invoices(
                                 
                                 logger.info(f"✅ Extracted from XML - customerId: {data['customerId']}, customerName: {data['customerName']}")
                             else:
-                                data['customerId'] = None
-                                data['customerName'] = None
+                                # Fallback: use tracking_id
+                                data['customerId'] = str(row.tracking_id)[:8]
+                                data['customerName'] = 'Unknown'
                         except Exception as xml_err:
                             logger.error(f"❌ Error reading/parsing XML: {xml_err}")
-                            data['customerId'] = None
-                            data['customerName'] = None
+                            # Fallback: use tracking_id
+                            data['customerId'] = str(row.tracking_id)[:8]
+                            data['customerName'] = 'Unknown'
                     else:
                         logger.warning(f"⚠️ No XML path for failed invoice {row.tracking_id}")
-                        data['customerId'] = None
-                        data['customerName'] = None
+                        # Fallback: use tracking_id
+                        data['customerId'] = str(row.tracking_id)[:8]
+                        data['customerName'] = 'Unknown'
                 
                 # For EDI formats, extract from EDI file
                 else:
@@ -1237,30 +1534,43 @@ async def get_failed_invoices(
                             data['customerName'] = info.get('customer_name')
                             logger.info(f"✅ customerId: {data['customerId']}, customerName: {data['customerName']}")
                         else:
-                            data['customerId'] = None
-                            data['customerName'] = None
+                            # Fallback: use tracking_id
+                            data['customerId'] = str(row.tracking_id)[:8]
+                            data['customerName'] = 'Unknown'
                     else:
                         logger.info(f"⚠️ No EDI path for failed invoice {row.tracking_id}")
-                        data['customerId'] = None
-                        data['customerName'] = None
+                        # Fallback: use tracking_id
+                        data['customerId'] = str(row.tracking_id)[:8]
+                        data['customerName'] = 'Unknown'
             except Exception as info_err:
                 logger.error(f"❌ Failed to extract invoice info: {info_err}")
-                data['customerId'] = None
-                data['customerName'] = None
+                # Fallback: use tracking_id
+                data['customerId'] = str(row.tracking_id)[:8]
+                data['customerName'] = 'Unknown'
             
             # Set format
             data['formate'] = getattr(row, 'target_file_format', 'X12') or 'X12'
+            
+            # Set source type (web or api/SAP)
+            data['request_type'] = getattr(row, 'request_type', 'web') or 'web'
             
             # Set status for frontend
             data['status'] = 'failed'
             
             invoices.append(data)
 
+        logger.info(f"✅ Returning {len(invoices)} failed invoices")
+        if invoices:
+            logger.info(f"📊 Sample failed invoice: customerId={invoices[0].get('customerId')}, customerName={invoices[0].get('customerName')}, formate={invoices[0].get('formate')}, request_type={invoices[0].get('request_type')}")
+        
         return invoices
     except Exception as e:
         logger.error(f"❌ Error getting failed invoices: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error getting failed invoices: {str(e)}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        # Return empty list instead of throwing error to ensure page loads
+        logger.warning("⚠️ Returning empty list due to error - page will still load")
+        return []
 
 
 @router.get("/failed/{tracking_id}", response_model=ZodiacInvoiceFailedEdi)
@@ -1490,7 +1800,7 @@ async def get_failed_invoice_by_tracking_id(
 @router.get("/deleted", response_model=list[InvoiceResponse])
 async def get_deleted_invoices(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,  # Reduced default limit for better performance
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1498,15 +1808,26 @@ async def get_deleted_invoices(
     logger.info(f"🗑️ Getting deleted invoices for user: {current_user.id}")
 
     try:
-        # Get deleted successful invoices with raw SQL to get target_file_format
-        inspector = inspect(db.bind)
-        success_columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_success_edi")]
-        has_target_file_format = "target_file_format" in success_columns
+        # Cache column inspection results for better performance
+        if not hasattr(get_deleted_invoices, '_column_cache'):
+            inspector = inspect(db.bind)
+            success_columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_success_edi")]
+            failed_columns = [col["name"] for col in inspector.get_columns("zodiac_invoice_failed_edi")]
+            get_deleted_invoices._column_cache = {
+                'success_has_target_file_format': "target_file_format" in success_columns,
+                'success_has_request_type': "request_type" in success_columns,
+                'failed_has_target_file_format': "target_file_format" in failed_columns,
+                'failed_has_request_type': "request_type" in failed_columns
+            }
+        
+        # Use cached values
+        cache = get_deleted_invoices._column_cache
         
         success_query = f"""
         SELECT id, tracking_id, user_id, uploaded_at, deleted_at,
                blob_xml_path, blob_edi_path, xml_path, edi_path,
-               {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"}
+               {"target_file_format" if cache['success_has_target_file_format'] else "'X12' AS target_file_format"},
+               {"request_type" if cache['success_has_request_type'] else "'web' AS request_type"}
         FROM zodiac_invoice_success_edi
         WHERE user_id = :user_id AND deleted_at IS NOT NULL
         ORDER BY deleted_at DESC
@@ -1523,7 +1844,8 @@ async def get_deleted_invoices(
         failed_query = f"""
         SELECT id, tracking_id, user_id, uploaded_at, deleted_at,
                blob_xml_path, blob_edi_path, xml_path, edi_path,
-               {"target_file_format" if has_target_file_format else "'X12' AS target_file_format"}
+               {"target_file_format" if cache['failed_has_target_file_format'] else "'X12' AS target_file_format"},
+               {"request_type" if cache['failed_has_request_type'] else "'web' AS request_type"}
         FROM zodiac_invoice_failed_edi
         WHERE user_id = :user_id AND deleted_at IS NOT NULL
         ORDER BY deleted_at DESC
@@ -1605,7 +1927,8 @@ async def get_deleted_invoices(
                 export=False,
                 uploaded_at=row.uploaded_at.isoformat() if row.uploaded_at else None,
                 tracking_id=str(row.tracking_id),
-                deleted_at=row.deleted_at.isoformat() if row.deleted_at else None
+                deleted_at=row.deleted_at.isoformat() if row.deleted_at else None,
+                request_type=getattr(row, 'request_type', 'web') or 'web'
             ))
 
         # Process failed invoices
@@ -1675,7 +1998,8 @@ async def get_deleted_invoices(
                 export=False,
                 uploaded_at=row.uploaded_at.isoformat() if row.uploaded_at else None,
                 tracking_id=str(row.tracking_id),
-                deleted_at=row.deleted_at.isoformat() if row.deleted_at else None
+                deleted_at=row.deleted_at.isoformat() if row.deleted_at else None,
+                request_type=getattr(row, 'request_type', 'web') or 'web'
             ))
 
         # Sort by deleted_at descending
@@ -1947,7 +2271,101 @@ async def save_edited_xml(
             logger.error(f"❌ Failed to update database: {db_err}")
             # Don't fail the whole operation if just the timestamp update fails
         
-        logger.info(f"✅ XML file saved successfully, now triggering reprocessing...")
+        logger.info(f"✅ XML file saved successfully")
+        
+        # 🧠 LEARN FROM MANUAL FIX - Compare original vs edited and save to cache
+        logger.info(f"🧠 ===== LEARNING FROM MANUAL FIX =====")
+        try:
+            # Read the original XML from the failed invoice
+            original_xml_path = failed_invoice.blob_xml_path or failed_invoice.xml_path
+            if original_xml_path:
+                logger.info(f"📄 Reading original XML to compare with edited version...")
+                try:
+                    # Read original XML content
+                    original_xml_bytes = await read_file_from_storage(original_xml_path, None, None)
+                    original_xml_content = original_xml_bytes.decode('utf-8')
+                    logger.info(f"✅ Original XML read successfully ({len(original_xml_content)} bytes)")
+                    
+                    # Use XML diff service to analyze changes
+                    from ..services.xml_diff_service import XMLDiffService
+                    diff_service = XMLDiffService()
+                    
+                    diff_result = diff_service.compare_xml(original_xml_content, xml_content)
+                    changes = diff_result.get("changes", [])
+                    change_summary = diff_result.get("change_summary", "")
+                    transformation_rules = diff_result.get("transformation_rules", [])
+                    
+                    logger.info(f"📊 Manual fix analysis:")
+                    logger.info(f"   Changes detected: {len(changes)}")
+                    logger.info(f"   Summary: {change_summary}")
+                    
+                    if changes and transformation_rules:
+                        # Extract customer ID from XML
+                        customer_id = diff_service.extract_customer_id(xml_content) or "UNKNOWN"
+                        
+                        # Extract customer name if available
+                        customer_name = None
+                        try:
+                            from ..services.database import extract_supplier_info_from_string
+                            cust_id, cust_name = extract_supplier_info_from_string(xml_content)
+                            customer_name = cust_name
+                        except Exception as name_err:
+                            logger.debug(f"Could not extract customer name: {name_err}")
+                        
+                        # Get error type from original failure
+                        error_type = "MANUAL_FIX"
+                        if failed_invoice.xml_convert_message:
+                            if "EndpointID" in failed_invoice.xml_convert_message:
+                                error_type = "MISSING_ENDPOINT_ID"
+                            elif "validation" in failed_invoice.xml_convert_message.lower():
+                                error_type = "XML_VALIDATION"
+                            elif "schema" in failed_invoice.xml_convert_message.lower():
+                                error_type = "XML_SCHEMA"
+                        
+                        # Generate error signature
+                        error_signature = diff_service.generate_error_signature(changes, error_type)
+                        
+                        logger.info(f"💾 Saving manual fix to correction cache...")
+                        logger.info(f"   Customer: {customer_id}")
+                        logger.info(f"   Error type: {error_type}")
+                        logger.info(f"   Error signature: {error_signature}")
+                        
+                        # Save to correction cache
+                        from ..services.correction_cache_service import CorrectionCacheService
+                        cache_service = CorrectionCacheService(db)
+                        
+                        saved_correction = cache_service.save_correction_from_ai(
+                            customer_id=customer_id,
+                            customer_name=customer_name,
+                            error_type=error_type,
+                            error_signature=error_signature,
+                            correction_type="XML",
+                            original_content=original_xml_content[:2000],
+                            corrected_content=xml_content[:2000],
+                            ai_model="manual_fix",  # Mark as manual fix
+                            user_id=current_user.id
+                        )
+                        
+                        if saved_correction:
+                            logger.info(f"✅ Manual fix saved to correction cache (ID: {saved_correction.id})")
+                            logger.info(f"🎓 Future invoices with similar errors will be auto-fixed!")
+                        else:
+                            logger.warning(f"⚠️ Failed to save manual fix to correction cache")
+                    else:
+                        logger.info(f"ℹ️ No significant changes detected or unable to generate rules")
+                
+                except Exception as read_err:
+                    logger.warning(f"⚠️ Could not read original XML for comparison: {read_err}")
+            else:
+                logger.warning(f"⚠️ No original XML path available for comparison")
+        
+        except Exception as learn_err:
+            logger.warning(f"⚠️ Failed to learn from manual fix: {learn_err}")
+            import traceback
+            logger.warning(f"   Traceback: {traceback.format_exc()}")
+            # Don't fail the whole operation if learning fails
+        
+        logger.info(f"🔄 Now triggering reprocessing...")
         
         # 🔄 Automatically trigger reprocessing after saving
         try:
