@@ -200,6 +200,13 @@ export default function UploadPage() {
                         }
                     }
 
+                    // Check if this is a duplicate error (from new API response format)
+                    if ((result as any).isDuplicate) {
+                        isDuplicateError = true;
+                        const invoiceNum = (result as any).invoiceNumber;
+                        errorMessage = `This invoice (${invoiceNum}) has already been successfully uploaded and cannot be uploaded again.\n\nRedirecting to invoices page in 5 seconds...`;
+                    }
+                    
                     console.log('📤 Upload Page - Final error message:', errorMessage);
                     console.log('📤 Upload Page - Is duplicate error:', isDuplicateError);
                     

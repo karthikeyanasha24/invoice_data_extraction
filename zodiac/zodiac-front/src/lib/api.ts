@@ -229,16 +229,56 @@ export const fileApi = {
                 console.error('📁 File API - Axios error type:', typeof axiosError);
                 console.error('📁 File API - Axios error constructor:', axiosError?.constructor?.name);
 
-                // Handle 400 Bad Request - should only be for actual upload failures now
+                // Handle 400 Bad Request - can be duplicate, validation, or upload failures
                 if (axiosError.response?.status === 400) {
-                    console.log('📁 File API - Handling 400 Bad Request (should be upload failure only)');
+                    console.log('📁 File API - Handling 400 Bad Request');
                     const errorData = axiosError.response.data;
+                    console.log('📁 File API - Error data:', errorData);
 
-                    // 400 should only occur for actual upload failures (file_upload_pass: false)
-                    console.log('📁 File API - File upload failed');
+                    // Check if this is a duplicate invoice error (new structured format)
+                    if (errorData.detail && typeof errorData.detail === 'object') {
+                        if (errorData.detail.error === 'Duplicate invoice detected') {
+                            console.log('📁 File API - Duplicate invoice detected!');
+                            const detail = errorData.detail;
+                            return {
+                                success: false,
+                                error: detail.message || `Invoice #${detail.invoice_number} has already been uploaded.`,
+                                isDuplicate: true,
+                                invoiceNumber: detail.invoice_number,
+                                existingInvoiceId: detail.existing_invoice_id,
+                                data: errorData
+                            };
+                        }
+                        
+                        // Check if this is invoice number extraction failure
+                        if (errorData.detail.error === 'Invoice number extraction failed') {
+                            console.log('📁 File API - Invoice number extraction failed');
+                            const detail = errorData.detail;
+                            return {
+                                success: false,
+                                error: detail.message || 'Could not extract invoice number from XML file.',
+                                isExtractionError: true,
+                                supportedFormats: detail.supported_formats || [],
+                                data: errorData
+                            };
+                        }
+                        
+                        // Generic structured error
+                        if (errorData.detail.message) {
+                            return {
+                                success: false,
+                                error: errorData.detail.message,
+                                data: errorData
+                            };
+                        }
+                    }
+
+                    // Legacy: Handle old format (file_upload_pass: false) or simple string detail
                     let errorMessage = 'File upload failed.';
                     if (errorData.file_upload_message) {
                         errorMessage = `File upload failed: ${errorData.file_upload_message}`;
+                    } else if (errorData.detail && typeof errorData.detail === 'string') {
+                        errorMessage = errorData.detail;
                     }
 
                     // Include enhanced error information if available

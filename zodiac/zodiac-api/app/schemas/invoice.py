@@ -78,6 +78,7 @@ class ZodiacInvoiceSuccessEdi(BaseModel):
     tracking_id: uuid.UUID
     user_id: int
     uploaded_at: datetime
+    invoice_number: Optional[str] = None  # Invoice number from XML for duplicate checking
     xml_path: Optional[str] = None
     xml_validation_pass: bool
     xml_convert_message: Optional[str] = None
@@ -99,6 +100,7 @@ class ZodiacInvoiceFailedEdi(BaseModel):
     tracking_id: uuid.UUID
     user_id: int
     uploaded_at: datetime
+    invoice_number: Optional[str] = None  # Invoice number from XML for duplicate checking
     xml_path: Optional[str] = None
     xml_validation_pass: bool
     xml_convert_message: Optional[str] = None

@@ -1,5 +1,6 @@
 from .utils import extract_invoice_info
 import re
+import time
 from ..api.auth import get_current_user
 from ..api.api_key_auth import get_api_user
 from ..schemas.invoice import InvoiceProcessingResponse, ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi, InvoiceResponse, ProcessingStepResult, StepStatus, DetailedErrorInfo
@@ -96,6 +97,9 @@ def extract_invoice_number_from_xml(xml_content: str) -> Optional[str]:
 _duplicate_check_cache = {}
 _cache_ttl = 300  # 5 minutes in seconds
 
+# In-memory tracking of invoices currently being processed (prevents race condition)
+_processing_invoices = {}  # Format: {(user_id, invoice_number): timestamp}
+
 async def check_invoice_already_processed(
     db: Session, 
     invoice_number: str, 
@@ -120,8 +124,6 @@ async def check_invoice_already_processed(
         return False, None
     
     try:
-        import time
-        
         # Check in-memory cache first
         cache_key = f"{user_id}:{invoice_number.upper()}:{check_failed}"
         current_time = time.time()
@@ -129,10 +131,16 @@ async def check_invoice_already_processed(
         if cache_key in _duplicate_check_cache:
             cached_result, cached_time = _duplicate_check_cache[cache_key]
             if current_time - cached_time < _cache_ttl:
-                logger.debug(f"   Cache hit for invoice #{invoice_number}")
+                logger.info(f"🔍 ============ DUPLICATE CHECK (CACHE HIT) ============")
+                logger.info(f"   Invoice Number: {invoice_number}")
+                logger.info(f"   User ID: {user_id}")
+                logger.info(f"   Cached result: {'DUPLICATE' if cached_result[0] else 'NOT DUPLICATE'}")
+                logger.info(f"   Cache age: {int(current_time - cached_time)}s (TTL: {_cache_ttl}s)")
+                logger.info(f"🔍 ============ RETURNING CACHED RESULT ============")
                 return cached_result
             else:
                 # Cache expired, remove it
+                logger.info(f"   Cache expired for invoice #{invoice_number} (age: {int(current_time - cached_time)}s)")
                 del _duplicate_check_cache[cache_key]
         
         logger.info(f"🔍 ============ DUPLICATE CHECK START ============")
@@ -141,18 +149,66 @@ async def check_invoice_already_processed(
         logger.info(f"   Source: {source}")
         logger.info(f"   Check Failed Invoices: {check_failed}")
         
-        # Get all successful invoices for this user (limit to recent 500 for performance)
+        # RACE CONDITION CHECK: Check if invoice is currently being processed
+        processing_key = (user_id, invoice_number.upper())
+        if processing_key in _processing_invoices:
+            processing_time = _processing_invoices[processing_key]
+            elapsed = current_time - processing_time
+            
+            # Clean up stuck items (processing for more than 5 minutes = likely crashed)
+            if elapsed > 300:  # 5 minutes
+                logger.warning(f"⚠️ Invoice #{invoice_number} has been processing for {elapsed:.1f}s (>5 min) - removing from queue")
+                del _processing_invoices[processing_key]
+            else:
+                # Still actively processing - block the duplicate
+                logger.warning(f"🚫🚫🚫 DUPLICATE - INVOICE CURRENTLY BEING PROCESSED! 🚫🚫🚫")
+                logger.warning(f"   Invoice Number: {invoice_number}")
+                logger.warning(f"   User ID: {user_id}")
+                logger.warning(f"   Currently processing for: {elapsed:.1f} seconds")
+                logger.warning(f"   BLOCKING this duplicate upload attempt!")
+                result = (True, None)
+                _duplicate_check_cache[cache_key] = (result, current_time)
+                return result
+        
+        logger.info(f"   ✅ Invoice not currently being processed")
+        
+        # FAST PATH: Check database column first (much faster than reading files)
+        logger.info(f"   🚀 FAST PATH: Checking invoice_number column in database...")
+        duplicate_in_db = db.query(SuccessModel).filter(
+            SuccessModel.user_id == user_id,
+            SuccessModel.deleted_at.is_(None),
+            SuccessModel.invoice_number == invoice_number.upper()
+        ).first()
+        
+        if duplicate_in_db:
+            logger.warning(f"🚫🚫🚫 DUPLICATE FOUND IN DATABASE (FAST PATH)! 🚫🚫🚫")
+            logger.warning(f"   Invoice Number: {invoice_number}")
+            logger.warning(f"   Existing Invoice ID: {duplicate_in_db.id}")
+            logger.warning(f"   Existing Tracking ID: {duplicate_in_db.tracking_id}")
+            logger.warning(f"   Existing Upload Date: {duplicate_in_db.uploaded_at}")
+            logger.warning(f"   USER ATTEMPTED TO UPLOAD DUPLICATE - BLOCKING!")
+            result = (True, duplicate_in_db.id)
+            _duplicate_check_cache[cache_key] = (result, current_time)
+            return result
+        
+        logger.info(f"   ✅ No duplicate found in database (fast path)")
+        
+        # SLOW PATH: For backwards compatibility, also check invoices without invoice_number column
+        # (This handles old records that were created before we added the column)
+        logger.info(f"   🐢 SLOW PATH: Checking legacy invoices without invoice_number column...")
         success_invoices = db.query(SuccessModel).filter(
             SuccessModel.user_id == user_id,
-            SuccessModel.deleted_at.is_(None)
+            SuccessModel.deleted_at.is_(None),
+            SuccessModel.invoice_number.is_(None)  # Only check records without invoice_number
         ).order_by(SuccessModel.uploaded_at.desc()).limit(500).all()
         
-        logger.info(f"   Found {len(success_invoices)} successful invoices to check against")
+        logger.info(f"   Found {len(success_invoices)} legacy successful invoices to check against")
         if len(success_invoices) == 0:
-            logger.info(f"   No successful invoices found - this is the first successful upload for user")
+            logger.info(f"   No legacy invoices found - all invoices have invoice_number column!")
         
         # Check each successful invoice's XML content for matching invoice number
         checked_count = 0
+        errors_count = 0
         for invoice in success_invoices:
             try:
                 checked_count += 1
@@ -160,14 +216,16 @@ async def check_invoice_already_processed(
                 xml_path = invoice.blob_xml_path or invoice.xml_path
                 
                 if not xml_path:
-                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} has no XML path - skipping")
+                    logger.warning(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} has no XML path - this shouldn't happen!")
+                    errors_count += 1
                     continue
                 
                 # Read XML content (async)
                 xml_content_bytes = await read_file_from_storage(xml_path, None, None)
                 
                 if not xml_content_bytes:
-                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} XML file could not be read - skipping")
+                    logger.warning(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} XML file could not be read from {xml_path}")
+                    errors_count += 1
                     continue
                 
                 xml_content = xml_content_bytes.decode('utf-8')
@@ -175,7 +233,8 @@ async def check_invoice_already_processed(
                 existing_invoice_number = extract_invoice_number_from_xml(xml_content)
                 
                 if not existing_invoice_number:
-                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} has no extractable invoice number - skipping")
+                    logger.warning(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} has no extractable invoice number - this shouldn't happen!")
+                    errors_count += 1
                     continue
                 
                 # Compare invoice numbers (case-insensitive)
@@ -196,10 +255,16 @@ async def check_invoice_already_processed(
                     logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} #{existing_invoice_number} - not a match")
                     
             except Exception as read_err:
-                logger.warning(f"   [{checked_count}/{len(success_invoices)}] Error checking invoice {invoice.id}: {read_err}")
+                logger.error(f"   [{checked_count}/{len(success_invoices)}] ERROR checking invoice {invoice.id}: {read_err}")
+                import traceback
+                logger.error(traceback.format_exc())
+                errors_count += 1
                 continue
         
         logger.info(f"   Checked {checked_count} successful invoices - no duplicates found")
+        if errors_count > 0:
+            logger.error(f"   ⚠️  WARNING: {errors_count} invoices could not be checked due to errors!")
+            logger.error(f"   This means duplicate detection may not be reliable!")
         
         # If check_failed is True (for SAP API), also check failed invoices
         if check_failed:
@@ -265,8 +330,9 @@ async def check_invoice_already_processed(
         logger.info(f"   Total invoices checked: {checked_count} successful" + (f" + {failed_checked_count} failed" if check_failed else ""))
         logger.info(f"🔍 ============ DUPLICATE CHECK END ============")
         result = (False, None)
-        # Cache the negative result
-        _duplicate_check_cache[cache_key] = (result, current_time)
+        # 🚫 DO NOT cache negative results! The state can change - an invoice that's not a duplicate now
+        # will become a duplicate after it's successfully uploaded. Only cache positive (duplicate found) results.
+        # _duplicate_check_cache[cache_key] = (result, current_time)  # REMOVED - don't cache negatives
         return result
         
     except Exception as e:
@@ -463,6 +529,12 @@ async def process_invoice(
             )
         logger.info(f"✅ Invoice #{invoice_number} is new, proceeding with processing")
         
+        # CRITICAL: Mark this invoice as being processed to prevent race conditions
+        processing_key = (current_user.id, invoice_number.upper())
+        _processing_invoices[processing_key] = time.time()
+        logger.info(f"🔒 Marked invoice #{invoice_number} as PROCESSING (prevents concurrent duplicates)")
+        logger.info(f"   Current processing queue size: {len(_processing_invoices)}")
+        
     except HTTPException:
         # Re-raise HTTP exceptions (duplicate or extraction failure)
         raise
@@ -484,6 +556,9 @@ async def process_invoice(
     tracking_id = uuid.uuid4()
     status_tracker.initialize_status(tracking_id)
     logger.info(f"🆔 Generated tracking ID: {tracking_id} (returning immediately for real-time tracking)")
+    
+    # Store invoice_number with tracking_id for cleanup later
+    stored_invoice_number = invoice_number
     
     # Create a new file-like object from the content for background processing
     from io import BytesIO
@@ -542,6 +617,12 @@ async def process_invoice(
             )
             status_tracker.update_step(tracking_id, error_step)
         finally:
+            # CRITICAL: Remove from processing queue after completion/failure
+            processing_key = (current_user.id, stored_invoice_number.upper())
+            if processing_key in _processing_invoices:
+                del _processing_invoices[processing_key]
+                logger.info(f"🔓 Removed invoice #{stored_invoice_number} from processing queue")
+            
             logger.info(f"🔚 Background task finished for tracking_id {tracking_id}")
             db_session.close()
     

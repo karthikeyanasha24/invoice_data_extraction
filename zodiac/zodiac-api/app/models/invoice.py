@@ -13,6 +13,7 @@ class ZodiacInvoiceSuccessEdi(Base):
     tracking_id = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
     user_id = Column(Integer, ForeignKey("zodiac_users.id"), nullable=False)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    invoice_number = Column(String, nullable=True, index=True)  # Store for fast duplicate checking
     xml_path = Column(Text, nullable=True)
     xml_validation_pass = Column(Boolean, default=False)
     xml_convert_message = Column(Text, nullable=True)
@@ -43,6 +44,7 @@ class ZodiacInvoiceFailedEdi(Base):
     user_id = Column(Integer, ForeignKey("zodiac_users.id"), nullable=False)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=True)  # Track updates for reprocessing
+    invoice_number = Column(String, nullable=True, index=True)  # Store for fast duplicate checking
     xml_path = Column(Text, nullable=True)
     xml_validation_pass = Column(Boolean, default=False)
     xml_convert_message = Column(Text, nullable=True)

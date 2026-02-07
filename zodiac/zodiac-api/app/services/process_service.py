@@ -372,6 +372,20 @@ async def process_invoice_internal(
         customer_validation_rules = None
         xml_content = xml_content_str  # Use already loaded content from early validation
         
+        # Extract invoice number for duplicate checking (do this early)
+        invoice_number = None
+        try:
+            from ..api.invoices import extract_invoice_number_from_xml
+            logger.info(f"🔍 Extracting invoice number for duplicate checking...")
+            invoice_number = extract_invoice_number_from_xml(xml_content)
+            if invoice_number:
+                logger.info(f"✅ Invoice number extracted: {invoice_number}")
+            else:
+                logger.warning(f"⚠️ Could not extract invoice number (will skip duplicate check on this)")
+        except Exception as e:
+            logger.error(f"❌ Error extracting invoice number: {e}")
+            invoice_number = None
+        
         try:
             logger.info(f"🔍 Attempting to extract customer info from XML...")
             # Extract customer info from already-loaded XML content
@@ -809,6 +823,7 @@ async def process_invoice_internal(
                     failed_invoice = FailedModel(
                         tracking_id=tracking_id,
                         user_id=current_user.id,
+                        invoice_number=invoice_number.upper() if invoice_number else None,  # Store for duplicate checking
                         xml_path=str(xml_path) if isinstance(xml_path, str) else (xml_path.get('pathname', str(
                             xml_path)) if xml_path and isinstance(xml_path, dict) else str(xml_path)),
                         xml_validation_pass=False,
@@ -1727,6 +1742,7 @@ async def process_invoice_internal(
             failed_invoice = FailedModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
+                invoice_number=invoice_number.upper() if invoice_number else None,  # Store for duplicate checking
                 xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=xml_validation_pass,
                 xml_convert_message=xml_convert_message,
@@ -1820,10 +1836,11 @@ async def process_invoice_internal(
                 processing_steps_data.append(step_dict)
             
             # Save to SUCCESS table
-            logger.info(f"💾 Creating SuccessModel with request_type='{request_type}'")
+            logger.info(f"💾 Creating SuccessModel with request_type='{request_type}' and invoice_number='{invoice_number}'")
             success_invoice = SuccessModel(
                 tracking_id=tracking_id,
                 user_id=current_user.id,
+                invoice_number=invoice_number.upper() if invoice_number else None,  # Store for fast duplicate checking
                 xml_path=str(xml_path) if isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
                 xml_validation_pass=xml_validation_pass,
                 xml_convert_message=xml_convert_message,
