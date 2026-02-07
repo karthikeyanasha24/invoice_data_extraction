@@ -645,6 +645,185 @@ async def process_invoice(
     )
 
 
+@router.post("/sap/process", response_model=InvoiceProcessingResponse)
+async def process_invoice_sap(
+    file: UploadFile = File(...),
+    strict_validation: bool = False,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    current_user: ZodiacUser = Depends(get_current_user)
+):
+    """Process uploaded invoice file from SAP (uses JWT auth like web, but marks source as 'api')
+    Returns tracking_id immediately for real-time status tracking, then processes in background"""
+    logger.info(f"🔷 ===== SAP ENDPOINT CALLED (JWT Auth) =====")
+    logger.info(f"👤 User: {current_user.username} (ID: {current_user.id})")
+    
+    # Read file content first (needed before processing)
+    file_content = await file.read()
+    original_filename = file.filename
+    
+    # Check for duplicate invoice number before processing
+    try:
+        invoice_number = extract_invoice_number_from_xml(file_content.decode('utf-8'))
+        logger.info(f"📄 Extracted invoice number from SAP upload: {invoice_number}")
+        
+        if not invoice_number:
+            logger.error(f"❌ INVOICE NUMBER EXTRACTION FAILED - Cannot validate for duplicates")
+            logger.error(f"   File: {original_filename}")
+            logger.error(f"   User: {current_user.id}")
+            logger.error(f"   This upload is REJECTED to prevent duplicate invoices")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "Invoice number extraction failed",
+                    "message": "Could not extract invoice number from XML. The file may be in an unsupported format or missing required invoice number fields (cbc:ID for UBL, Serie/Folio for SAT CFDI).",
+                    "supported_formats": ["UBL 2.1 (cbc:ID)", "SAT CFDI (Serie-Folio)"],
+                    "action": "Check that your XML file contains a valid invoice number field"
+                }
+            )
+        
+        # For SAP uploads, only check successful invoices (allow retrying failed ones)
+        already_exists, existing_id = await check_invoice_already_processed(
+            db, 
+            invoice_number, 
+            current_user.id,
+            check_failed=False,
+            source="sap"
+        )
+        if already_exists:
+            logger.error(f"🚫 DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
+            logger.error(f"   Existing invoice ID: {existing_id}")
+            logger.error(f"   User: {current_user.id}")
+            logger.error(f"   This upload is REJECTED")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "Duplicate invoice detected",
+                    "invoice_number": invoice_number,
+                    "existing_invoice_id": existing_id,
+                    "message": f"Invoice #{invoice_number} has already been successfully processed and cannot be uploaded again.",
+                    "action": "view_existing",
+                    "suggestion": "View the existing invoice in your invoices list, or retry only if the previous upload failed."
+                }
+            )
+        logger.info(f"✅ Invoice #{invoice_number} is new, proceeding with processing")
+        
+        # CRITICAL: Mark this invoice as being processed to prevent race conditions
+        processing_key = (current_user.id, invoice_number.upper())
+        _processing_invoices[processing_key] = time.time()
+        logger.info(f"🔒 Marked invoice #{invoice_number} as PROCESSING (prevents concurrent duplicates)")
+        logger.info(f"   Current processing queue size: {len(_processing_invoices)}")
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (duplicate or extraction failure)
+        raise
+    except Exception as e:
+        # Unexpected errors should also block upload for safety
+        logger.error(f"❌ UNEXPECTED ERROR during duplicate check: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Duplicate check failed",
+                "message": "An unexpected error occurred while checking for duplicate invoices. Upload blocked for safety.",
+                "technical_details": str(e)
+            }
+        )
+    
+    # Generate tracking ID and initialize status tracker immediately
+    tracking_id = uuid.uuid4()
+    status_tracker.initialize_status(tracking_id)
+    logger.info(f"🆔 Generated tracking ID: {tracking_id} (returning immediately for real-time tracking)")
+    
+    # Store invoice_number with tracking_id for cleanup later
+    stored_invoice_number = invoice_number
+    
+    # Create a new file-like object from the content for background processing
+    from io import BytesIO
+    import asyncio
+    
+    # Process in background - create new DB session for background task
+    async def process_background():
+        db_session = SessionLocal()
+        try:
+            logger.info(f"🔄 ===== BACKGROUND PROCESSING STARTED (SAP) =====")
+            logger.info(f"🆔 Background task for tracking_id: {tracking_id}")
+            
+            # Create new UploadFile for background task with proper headers
+            from starlette.datastructures import Headers
+            content_type = file.content_type if file.content_type else "application/xml"
+            headers = Headers({"content-type": content_type})
+            background_file = UploadFile(
+                filename=original_filename,
+                file=BytesIO(file_content),
+                headers=headers
+            )
+            
+            logger.info(f"📄 Background task - calling process_invoice_internal with request_type='api'...")
+            
+            # Pass the tracking_id and request_type='api' to mark as SAP source
+            result = await process_invoice_internal(background_file, strict_validation, db_session, request, current_user, "api", tracking_id)
+            
+            logger.info(f"✅ Background processing completed for tracking_id {tracking_id}")
+            
+        except ImportError as import_err:
+            logger.error(f"❌❌❌ IMPORT ERROR in background task: {str(import_err)}")
+            import traceback
+            logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+            # Update status tracker with error
+            from ..schemas.invoice import ProcessingStepResult
+            error_step = ProcessingStepResult(
+                step_name="Import Error",
+                step_number=2,
+                success=False,
+                duration_seconds=0,
+                message=f"Module import failed: {str(import_err)}"
+            )
+            status_tracker.update_step(tracking_id, error_step)
+        except Exception as e:
+            logger.error(f"❌❌❌ BACKGROUND PROCESSING ERROR for tracking_id {tracking_id}: {str(e)}")
+            import traceback
+            logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+            # Update status tracker with error
+            from ..schemas.invoice import ProcessingStepResult
+            error_step = ProcessingStepResult(
+                step_name="Processing Error",
+                step_number=2,
+                success=False,
+                duration_seconds=0,
+                message=f"Error: {str(e)}"
+            )
+            status_tracker.update_step(tracking_id, error_step)
+        finally:
+            # CRITICAL: Remove from processing queue after completion/failure
+            processing_key = (current_user.id, stored_invoice_number.upper())
+            if processing_key in _processing_invoices:
+                del _processing_invoices[processing_key]
+                logger.info(f"🔓 Removed invoice #{stored_invoice_number} from processing queue")
+            
+            logger.info(f"🔚 Background task finished for tracking_id {tracking_id}")
+            db_session.close()
+    
+    # Start background processing (non-blocking)
+    logger.info(f"🚀 Starting background task for tracking_id {tracking_id}")
+    asyncio.create_task(process_background())
+    logger.info(f"✅ Background task created, returning 202 to frontend")
+    
+    # Return immediately with tracking_id so frontend can start polling
+    initial_response = InvoiceProcessingResponse(
+        tracking_id=tracking_id,
+        processing_steps=[]
+    )
+    response_dict = initial_response.dict()
+    response_dict['tracking_id'] = str(response_dict['tracking_id'])
+    # Return dict directly - JSONResponse will handle serialization
+    return JSONResponse(
+        content=response_dict,
+        status_code=status.HTTP_202_ACCEPTED  # 202 Accepted - processing started
+    )
+
+
 @router.get("/api/health-check")
 async def sap_health_check(
     db: Session = Depends(get_db),
