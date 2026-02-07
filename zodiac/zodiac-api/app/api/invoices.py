@@ -135,8 +135,11 @@ async def check_invoice_already_processed(
                 # Cache expired, remove it
                 del _duplicate_check_cache[cache_key]
         
-        logger.info(f"🔍 Checking for duplicate invoice number: {invoice_number}")
-        logger.info(f"   User: {user_id}, Source: {source}, Check failed: {check_failed}")
+        logger.info(f"🔍 ============ DUPLICATE CHECK START ============")
+        logger.info(f"   Invoice Number: {invoice_number}")
+        logger.info(f"   User ID: {user_id}")
+        logger.info(f"   Source: {source}")
+        logger.info(f"   Check Failed Invoices: {check_failed}")
         
         # Get all successful invoices for this user (limit to recent 500 for performance)
         success_invoices = db.query(SuccessModel).filter(
@@ -144,34 +147,59 @@ async def check_invoice_already_processed(
             SuccessModel.deleted_at.is_(None)
         ).order_by(SuccessModel.uploaded_at.desc()).limit(500).all()
         
-        logger.info(f"   Found {len(success_invoices)} successful invoices to check")
+        logger.info(f"   Found {len(success_invoices)} successful invoices to check against")
+        if len(success_invoices) == 0:
+            logger.info(f"   No successful invoices found - this is the first successful upload for user")
         
         # Check each successful invoice's XML content for matching invoice number
+        checked_count = 0
         for invoice in success_invoices:
             try:
+                checked_count += 1
                 # Get XML path (blob or local)
                 xml_path = invoice.blob_xml_path or invoice.xml_path
                 
-                if xml_path:
-                    # Read XML content (async)
-                    xml_content_bytes = await read_file_from_storage(xml_path, None, None)
+                if not xml_path:
+                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} has no XML path - skipping")
+                    continue
+                
+                # Read XML content (async)
+                xml_content_bytes = await read_file_from_storage(xml_path, None, None)
+                
+                if not xml_content_bytes:
+                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} XML file could not be read - skipping")
+                    continue
+                
+                xml_content = xml_content_bytes.decode('utf-8')
+                # Extract invoice number from this invoice
+                existing_invoice_number = extract_invoice_number_from_xml(xml_content)
+                
+                if not existing_invoice_number:
+                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} has no extractable invoice number - skipping")
+                    continue
+                
+                # Compare invoice numbers (case-insensitive)
+                if existing_invoice_number.upper() == invoice_number.upper():
+                    logger.warning(f"🚫🚫🚫 DUPLICATE FOUND IN SUCCESS TABLE! 🚫🚫🚫")
+                    logger.warning(f"   New Invoice Number: {invoice_number}")
+                    logger.warning(f"   Existing Invoice Number: {existing_invoice_number}")
+                    logger.warning(f"   Existing Invoice ID: {invoice.id}")
+                    logger.warning(f"   Existing Tracking ID: {invoice.tracking_id}")
+                    logger.warning(f"   Existing Upload Date: {invoice.uploaded_at}")
+                    logger.warning(f"   Existing Source: {invoice.request_type or 'web'}")
+                    logger.warning(f"   USER ATTEMPTED TO UPLOAD DUPLICATE - BLOCKING!")
+                    result = (True, invoice.id)
+                    # Cache the result
+                    _duplicate_check_cache[cache_key] = (result, current_time)
+                    return result
+                else:
+                    logger.debug(f"   [{checked_count}/{len(success_invoices)}] Invoice {invoice.id} #{existing_invoice_number} - not a match")
                     
-                    if xml_content_bytes:
-                        xml_content = xml_content_bytes.decode('utf-8')
-                        # Extract invoice number from this invoice
-                        existing_invoice_number = extract_invoice_number_from_xml(xml_content)
-                        
-                        if existing_invoice_number and existing_invoice_number.upper() == invoice_number.upper():
-                            logger.warning(f"🚫 DUPLICATE in SUCCESS table - Invoice #{invoice_number} already exists!")
-                            logger.warning(f"   Existing tracking_id: {invoice.tracking_id}")
-                            logger.warning(f"   Source: {invoice.request_type or 'web'}")
-                            result = (True, invoice.id)
-                            # Cache the result
-                            _duplicate_check_cache[cache_key] = (result, current_time)
-                            return result
             except Exception as read_err:
-                logger.debug(f"   Could not read invoice {invoice.id}: {read_err}")
+                logger.warning(f"   [{checked_count}/{len(success_invoices)}] Error checking invoice {invoice.id}: {read_err}")
                 continue
+        
+        logger.info(f"   Checked {checked_count} successful invoices - no duplicates found")
         
         # If check_failed is True (for SAP API), also check failed invoices
         if check_failed:
@@ -180,36 +208,62 @@ async def check_invoice_already_processed(
                 FailedModel.deleted_at.is_(None)
             ).order_by(FailedModel.uploaded_at.desc()).limit(500).all()
             
-            logger.info(f"   Found {len(failed_invoices)} failed invoices to check")
+            logger.info(f"   Found {len(failed_invoices)} failed invoices to check against")
+            if len(failed_invoices) == 0:
+                logger.info(f"   No failed invoices found")
             
+            failed_checked_count = 0
             for invoice in failed_invoices:
+                failed_checked_count += 1
                 try:
                     # Get XML path (blob or local)
                     xml_path = invoice.blob_xml_path or invoice.xml_path
                     
-                    if xml_path:
-                        # Read XML content (async)
-                        xml_content_bytes = await read_file_from_storage(xml_path, None, None)
+                    if not xml_path:
+                        logger.debug(f"   [FAILED {failed_checked_count}/{len(failed_invoices)}] Invoice {invoice.id} has no XML path - skipping")
+                        continue
+                    
+                    # Read XML content (async)
+                    xml_content_bytes = await read_file_from_storage(xml_path, None, None)
+                    
+                    if not xml_content_bytes:
+                        logger.debug(f"   [FAILED {failed_checked_count}/{len(failed_invoices)}] Invoice {invoice.id} XML file could not be read - skipping")
+                        continue
+                    
+                    xml_content = xml_content_bytes.decode('utf-8')
+                    # Extract invoice number from this invoice
+                    existing_invoice_number = extract_invoice_number_from_xml(xml_content)
+                    
+                    if not existing_invoice_number:
+                        logger.debug(f"   [FAILED {failed_checked_count}/{len(failed_invoices)}] Invoice {invoice.id} has no extractable invoice number - skipping")
+                        continue
+                    
+                    # Compare invoice numbers (case-insensitive)
+                    if existing_invoice_number.upper() == invoice_number.upper():
+                        logger.warning(f"🚫🚫🚫 DUPLICATE FOUND IN FAILED TABLE! 🚫🚫🚫")
+                        logger.warning(f"   New Invoice Number: {invoice_number}")
+                        logger.warning(f"   Existing Invoice Number: {existing_invoice_number}")
+                        logger.warning(f"   Existing Invoice ID: {invoice.id}")
+                        logger.warning(f"   Existing Tracking ID: {invoice.tracking_id}")
+                        logger.warning(f"   Existing Upload Date: {invoice.uploaded_at}")
+                        logger.warning(f"   Existing Source: {invoice.request_type or 'web'}")
+                        logger.warning(f"   This prevents duplicate processing (from SAP API)")
+                        result = (True, invoice.id)
+                        # Cache the result
+                        _duplicate_check_cache[cache_key] = (result, current_time)
+                        return result
+                    else:
+                        logger.debug(f"   [FAILED {failed_checked_count}/{len(failed_invoices)}] Invoice {invoice.id} #{existing_invoice_number} - not a match")
                         
-                        if xml_content_bytes:
-                            xml_content = xml_content_bytes.decode('utf-8')
-                            # Extract invoice number from this invoice
-                            existing_invoice_number = extract_invoice_number_from_xml(xml_content)
-                            
-                            if existing_invoice_number and existing_invoice_number.upper() == invoice_number.upper():
-                                logger.warning(f"🚫 DUPLICATE in FAILED table - Invoice #{invoice_number} already exists!")
-                                logger.warning(f"   Existing tracking_id: {invoice.tracking_id}")
-                                logger.warning(f"   Source: {invoice.request_type or 'web'}")
-                                logger.warning(f"   This prevents duplicate processing from SAP API")
-                                result = (True, invoice.id)
-                                # Cache the result
-                                _duplicate_check_cache[cache_key] = (result, current_time)
-                                return result
                 except Exception as read_err:
-                    logger.debug(f"   Could not read failed invoice {invoice.id}: {read_err}")
+                    logger.warning(f"   [FAILED {failed_checked_count}/{len(failed_invoices)}] Error checking invoice {invoice.id}: {read_err}")
                     continue
+            
+            logger.info(f"   Checked {failed_checked_count} failed invoices - no duplicates found")
         
-        logger.info(f"✅ No duplicate found for invoice #{invoice_number}")
+        logger.info(f"✅✅✅ NO DUPLICATE FOUND - Invoice #{invoice_number} is UNIQUE!")
+        logger.info(f"   Total invoices checked: {checked_count} successful" + (f" + {failed_checked_count} failed" if check_failed else ""))
+        logger.info(f"🔍 ============ DUPLICATE CHECK END ============")
         result = (False, None)
         # Cache the negative result
         _duplicate_check_cache[cache_key] = (result, current_time)
@@ -366,30 +420,65 @@ async def process_invoice(
         invoice_number = extract_invoice_number_from_xml(file_content.decode('utf-8'))
         logger.info(f"📄 Extracted invoice number from upload: {invoice_number}")
         
-        if invoice_number:
-            # For manual uploads, only check successful invoices (allow retrying failed ones)
-            already_exists, existing_id = await check_invoice_already_processed(
-                db, 
-                invoice_number, 
-                current_user.id,
-                check_failed=False,
-                source="manual"
+        if not invoice_number:
+            # CRITICAL FIX: Require invoice number extraction to succeed
+            # This prevents duplicates from slipping through when extraction fails
+            logger.error(f"❌ INVOICE NUMBER EXTRACTION FAILED - Cannot validate for duplicates")
+            logger.error(f"   File: {original_filename}")
+            logger.error(f"   User: {current_user.id}")
+            logger.error(f"   This upload is REJECTED to prevent duplicate invoices")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "Invoice number extraction failed",
+                    "message": "Could not extract invoice number from XML. The file may be in an unsupported format or missing required invoice number fields (cbc:ID for UBL, Serie/Folio for SAT CFDI).",
+                    "supported_formats": ["UBL 2.1 (cbc:ID)", "SAT CFDI (Serie-Folio)"],
+                    "action": "Check that your XML file contains a valid invoice number field"
+                }
             )
-            if already_exists:
-                logger.error(f"🚫 DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invoice #{invoice_number} has already been successfully processed and cannot be resent. Please check your existing invoices."
-                )
-            logger.info(f"✅ Invoice #{invoice_number} is new, proceeding with processing")
-        else:
-            logger.warning(f"⚠️ Could not extract invoice number from XML - duplicate check skipped")
+        
+        # For manual uploads, only check successful invoices (allow retrying failed ones)
+        already_exists, existing_id = await check_invoice_already_processed(
+            db, 
+            invoice_number, 
+            current_user.id,
+            check_failed=False,
+            source="manual"
+        )
+        if already_exists:
+            logger.error(f"🚫 DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
+            logger.error(f"   Existing invoice ID: {existing_id}")
+            logger.error(f"   User: {current_user.id}")
+            logger.error(f"   This upload is REJECTED")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "Duplicate invoice detected",
+                    "invoice_number": invoice_number,
+                    "existing_invoice_id": existing_id,
+                    "message": f"Invoice #{invoice_number} has already been successfully processed and cannot be uploaded again.",
+                    "action": "view_existing",
+                    "suggestion": "View the existing invoice in your invoices list, or retry only if the previous upload failed."
+                }
+            )
+        logger.info(f"✅ Invoice #{invoice_number} is new, proceeding with processing")
+        
     except HTTPException:
+        # Re-raise HTTP exceptions (duplicate or extraction failure)
         raise
     except Exception as e:
-        logger.warning(f"⚠️ Could not check for duplicate invoice: {e} - proceeding anyway")
+        # Unexpected errors should also block upload for safety
+        logger.error(f"❌ UNEXPECTED ERROR during duplicate check: {e}")
         import traceback
-        logger.warning(traceback.format_exc())
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Duplicate check failed",
+                "message": "An unexpected error occurred while checking for duplicate invoices. Upload blocked for safety.",
+                "technical_details": str(e)
+            }
+        )
     
     # Generate tracking ID and initialize status tracker immediately
     tracking_id = uuid.uuid4()
@@ -475,6 +564,53 @@ async def process_invoice(
     )
 
 
+@router.get("/api/health-check")
+async def sap_health_check(
+    db: Session = Depends(get_db),
+    api_user: ZodiacUser = Depends(get_api_user)
+):
+    """
+    Health check endpoint for SAP integration - tests authentication and connectivity.
+    
+    This endpoint allows SAP to verify:
+    - API key authentication is working
+    - Network connectivity is established
+    - User account is active
+    - System is ready to receive invoices
+    
+    Returns:
+        - status: "ok" if healthy
+        - authenticated: True if API key is valid
+        - user_id: ID of the authenticated user
+        - username: Username of the authenticated user
+        - timestamp: Current server time
+        - version: API version
+    """
+    logger.info(f"🏥 ===== SAP HEALTH CHECK =====")
+    logger.info(f"   User ID: {api_user.id}")
+    logger.info(f"   Username: {api_user.username}")
+    logger.info(f"   Email: {api_user.email}")
+    logger.info(f"   Account Active: {api_user.is_active}")
+    logger.info(f"   Health check SUCCESSFUL")
+    
+    return {
+        "status": "ok",
+        "authenticated": True,
+        "user_id": api_user.id,
+        "username": api_user.username,
+        "email": api_user.email,
+        "is_active": api_user.is_active,
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "message": "SAP integration is ready to receive invoices",
+        "endpoints": {
+            "health_check": "/api/v1/invoices/api/health-check",
+            "upload_invoice": "/api/v1/invoices/api/process",
+            "check_status": "/api/v1/invoices/status/{tracking_id}"
+        }
+    }
+
+
 @router.post("/api/process", response_model=InvoiceProcessingResponse)
 async def process_invoice_api(
     file: UploadFile = File(...),
@@ -484,51 +620,124 @@ async def process_invoice_api(
     api_user: ZodiacUser = Depends(get_api_user)
     # api_user:str = "DEMO"
 ):
-    """Process uploaded invoice file with XML validation and EDI conversion (API Key)"""
-    logger.info(f"🔑 API ENDPOINT CALLED - request_type will be set to: 'api'")
-    logger.info(f"👤 API User: {api_user.id if api_user else 'None'}")
+    """
+    Process uploaded invoice file with XML validation and EDI conversion (SAP API Key endpoint).
     
-    # Check for duplicate invoice number before processing
+    This endpoint is for SAP and other external systems using API key authentication.
+    Returns processing results synchronously (unlike web endpoint which returns tracking_id immediately).
+    """
+    logger.info(f"🔑 ===== SAP API ENDPOINT CALLED =====")
+    logger.info(f"👤 API User ID: {api_user.id}")
+    logger.info(f"👤 API Username: {api_user.username}")
+    logger.info(f"📄 Filename: {file.filename}")
+    logger.info(f"📄 Content Type: {file.content_type}")
+    logger.info(f"   request_type will be set to: 'api'")
+    
+    # Wrap entire processing in try-catch to ensure SAP always gets a response
     try:
-        file_content = await file.read()
-        invoice_number = extract_invoice_number_from_xml(file_content.decode('utf-8'))
-        logger.info(f"📄 [API] Extracted invoice number from upload: {invoice_number}")
-        
-        if invoice_number:
-            # For SAP API, check both successful AND failed invoices to prevent duplicate processing
+        # Check for duplicate invoice number before processing
+        try:
+            file_content = await file.read()
+            invoice_number = extract_invoice_number_from_xml(file_content.decode('utf-8'))
+            logger.info(f"📄 [SAP] Extracted invoice number from upload: {invoice_number}")
+            
+            if not invoice_number:
+                # For SAP API, require invoice number extraction (prevents duplicates)
+                logger.error(f"❌ [SAP] INVOICE NUMBER EXTRACTION FAILED")
+                logger.error(f"   Filename: {file.filename}")
+                logger.error(f"   User: {api_user.id}")
+                logger.error(f"   This upload is REJECTED to prevent duplicate invoices")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "Invoice number extraction failed",
+                        "message": "Could not extract invoice number from XML. The file may be in an unsupported format or missing required invoice number fields.",
+                        "supported_formats": ["UBL 2.1 (cbc:ID)", "SAT CFDI (Serie-Folio)"],
+                        "filename": file.filename,
+                        "source": "sap_api"
+                    }
+                )
+            
+            # For SAP API, only check successful invoices (allow retrying failed ones)
+            # This matches web UI behavior: successful invoices blocked, failed invoices can be retried
             already_exists, existing_id = await check_invoice_already_processed(
                 db, 
                 invoice_number, 
                 api_user.id,
-                check_failed=True,
+                check_failed=False,  # Only check successful, allow retry of failed
                 source="api"
             )
             if already_exists:
-                logger.error(f"🚫 [API] DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
+                logger.error(f"🚫 [SAP] DUPLICATE DETECTED - Invoice #{invoice_number} already exists!")
+                logger.error(f"   Existing invoice ID: {existing_id}")
+                logger.error(f"   This upload is REJECTED")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invoice #{invoice_number} has already been processed (successful or failed) and cannot be resent."
+                    detail={
+                        "error": "Duplicate invoice detected",
+                        "invoice_number": invoice_number,
+                        "existing_invoice_id": existing_id,
+                        "message": f"Invoice #{invoice_number} has already been successfully processed and cannot be uploaded again.",
+                        "source": "sap_api",
+                        "action": "This invoice was previously uploaded and processed successfully. You can only retry failed invoices."
+                    }
                 )
-            logger.info(f"✅ [API] Invoice #{invoice_number} is new, proceeding with processing")
-        else:
-            logger.warning(f"⚠️ [API] Could not extract invoice number from XML - duplicate check skipped")
+            logger.info(f"✅ [SAP] Invoice #{invoice_number} is new, proceeding with processing")
+            
+            # Reset file pointer for processing
+            from io import BytesIO
+            from starlette.datastructures import Headers
+            file = UploadFile(
+                filename=file.filename,
+                file=BytesIO(file_content),
+                headers=Headers({"content-type": file.content_type})
+            )
+        except HTTPException:
+            # Re-raise HTTP exceptions (duplicate or extraction failure)
+            raise
+        except Exception as e:
+            # Unexpected errors during duplicate check - block upload for safety
+            logger.error(f"❌ [SAP] UNEXPECTED ERROR during duplicate check: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "Duplicate check failed",
+                    "message": "An unexpected error occurred while checking for duplicate invoices. Upload blocked for safety.",
+                    "technical_details": str(e),
+                    "source": "sap_api"
+                }
+            )
         
-        # Reset file pointer for processing
-        from io import BytesIO
-        from starlette.datastructures import Headers
-        file = UploadFile(
-            filename=file.filename,
-            file=BytesIO(file_content),
-            headers=Headers({"content-type": file.content_type})
-        )
-    except HTTPException:
+        # Process the invoice
+        logger.info(f"🔄 [SAP] Calling process_invoice_internal...")
+        result = await process_invoice_internal(file, strict_validation, db, request, api_user, "api")
+        logger.info(f"✅ [SAP] Processing completed successfully")
+        logger.info(f"🔑 ===== SAP API ENDPOINT FINISHED =====")
+        return result
+        
+    except HTTPException as http_err:
+        # Log and re-raise HTTP exceptions
+        logger.error(f"❌ [SAP] HTTP Exception: {http_err.status_code} - {http_err.detail}")
+        logger.error(f"🔑 ===== SAP API ENDPOINT FAILED (HTTP {http_err.status_code}) =====")
         raise
     except Exception as e:
-        logger.warning(f"⚠️ [API] Could not check for duplicate invoice: {e} - proceeding anyway")
+        # Catch any unexpected errors and return structured response to SAP
+        logger.error(f"❌❌❌ [SAP] UNEXPECTED ERROR: {e}")
         import traceback
-        logger.warning(traceback.format_exc())
-    
-    return await process_invoice_internal(file, strict_validation, db, request, api_user, "api")
+        logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+        logger.error(f"🔑 ===== SAP API ENDPOINT FAILED (UNEXPECTED ERROR) =====")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Processing failed",
+                "message": "An unexpected error occurred while processing the invoice.",
+                "technical_details": str(e),
+                "source": "sap_api",
+                "action": "Please contact support with this error message."
+            }
+        )
 
 @router.get("/api-key")
 async def get_api_key(

@@ -53,21 +53,41 @@ async def get_api_user(
     This function validates the API key and returns the authenticated user
     """
     try:
+        logger.info(f"🔑 ===== API KEY AUTHENTICATION START =====")
+        
         # Extract API key from Authorization header
         api_key_encoded = credentials.credentials
+        logger.info(f"   Encoded API key length: {len(api_key_encoded)} characters")
+        logger.info(f"   Encoded API key (first 20 chars): {api_key_encoded[:20]}...")
         
         # Decode the API key
         api_key = decode_api_key_from_transport(api_key_encoded)
         if not api_key:
-            logger.warning("❌ Invalid API key format")
+            logger.error("❌ API KEY DECODE FAILED")
+            logger.error(f"   Invalid API key format - could not decode")
+            logger.error(f"   This typically means the API key is not properly base64 encoded")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API key format"
+                detail={
+                    "error": "Invalid API key format",
+                    "message": "API key could not be decoded. Ensure it is properly base64 encoded.",
+                    "hint": "Check that you're using the exact API key from the generation response"
+                }
             )
+        
+        logger.info(f"   ✅ API key decoded successfully")
         
         # Get client IP
         client_ip = get_client_ip(request) if request else "unknown"
-        logger.info(f"🔑 API key authentication attempt from IP: {client_ip}")
+        logger.info(f"   Client IP: {client_ip}")
+        
+        # Log request headers for debugging
+        if request:
+            logger.info(f"   X-Forwarded-For: {request.headers.get('X-Forwarded-For', 'not set')}")
+            logger.info(f"   X-Real-IP: {request.headers.get('X-Real-IP', 'not set')}")
+            logger.info(f"   User-Agent: {request.headers.get('User-Agent', 'not set')}")
+        
+        logger.info(f"🔍 Searching for matching API key in database...")
         
         # Find user by API key hash
         # We need to check all users since we can't reverse the hash
@@ -76,44 +96,95 @@ async def get_api_user(
             ZodiacUser.api_user_allowed == True
         ).all()
         
+        logger.info(f"   Found {len(users)} users with API keys to check")
+        
         authenticated_user = None
         for user in users:
             if verify_api_key(api_key, user.api_key_hashed):
                 authenticated_user = user
+                logger.info(f"   ✅ API key matched for user ID: {user.id}")
                 break
         
         if not authenticated_user:
-            logger.warning(f"❌ Invalid API key from IP: {client_ip}")
+            logger.error(f"❌ API KEY NOT FOUND IN DATABASE")
+            logger.error(f"   IP: {client_ip}")
+            logger.error(f"   Checked {len(users)} users with API keys")
+            logger.error(f"   No matching API key found")
+            logger.error(f"   Possible causes:")
+            logger.error(f"     1. API key was regenerated and old key is being used")
+            logger.error(f"     2. API key was never generated for this user")
+            logger.error(f"     3. API key format is incorrect")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API key"
+                detail={
+                    "error": "Invalid API key",
+                    "message": "API key not found or invalid",
+                    "hint": "Verify you're using the latest API key. If recently regenerated, use the new key."
+                }
             )
         
         # Check if API key is deactivated
+        logger.info(f"🔍 Checking if API key is active...")
         if authenticated_user.api_key_deactivated_at:
-            logger.warning(f"❌ Deactivated API key used from IP: {client_ip}")
+            logger.error(f"❌ API KEY IS DEACTIVATED")
+            logger.error(f"   User ID: {authenticated_user.id}")
+            logger.error(f"   IP: {client_ip}")
+            logger.error(f"   Deactivated at: {authenticated_user.api_key_deactivated_at}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API key is deactivated"
+                detail={
+                    "error": "API key is deactivated",
+                    "message": "This API key has been deactivated and can no longer be used",
+                    "deactivated_at": authenticated_user.api_key_deactivated_at.isoformat(),
+                    "action": "Contact administrator to reactivate or generate a new API key"
+                }
             )
+        logger.info(f"   ✅ API key is active")
         
         # Check IP whitelist
-        if not validate_ip_whitelist(client_ip, authenticated_user.api_key_allow_list):
-            logger.warning(f"❌ IP {client_ip} not in allow list for user {authenticated_user.id}")
+        logger.info(f"🔍 Checking IP whitelist...")
+        allow_list = authenticated_user.api_key_allow_list
+        logger.info(f"   Configured allow list: {allow_list if allow_list else 'None (all IPs allowed)'}")
+        logger.info(f"   Client IP: {client_ip}")
+        
+        if not validate_ip_whitelist(client_ip, allow_list):
+            logger.error(f"❌ IP ADDRESS NOT IN WHITELIST")
+            logger.error(f"   User ID: {authenticated_user.id}")
+            logger.error(f"   Client IP: {client_ip}")
+            logger.error(f"   Allowed IPs: {allow_list}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="IP address not allowed"
+                detail={
+                    "error": "IP address not allowed",
+                    "message": f"IP address {client_ip} is not in the whitelist for this API key",
+                    "client_ip": client_ip,
+                    "action": "Add this IP to the API key whitelist or remove whitelist restrictions"
+                }
             )
+        logger.info(f"   ✅ IP address is allowed")
         
         # Check if user is active
+        logger.info(f"🔍 Checking user account status...")
         if not authenticated_user.is_active:
-            logger.warning(f"❌ Inactive user attempted API access: {authenticated_user.id}")
+            logger.error(f"❌ USER ACCOUNT IS INACTIVE")
+            logger.error(f"   User ID: {authenticated_user.id}")
+            logger.error(f"   IP: {client_ip}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User account is inactive"
+                detail={
+                    "error": "User account is inactive",
+                    "message": "This user account has been deactivated",
+                    "action": "Contact administrator to reactivate account"
+                }
             )
+        logger.info(f"   ✅ User account is active")
         
-        logger.info(f"✅ API key authentication successful for user {authenticated_user.id} from IP: {client_ip}")
+        logger.info(f"✅✅✅ API KEY AUTHENTICATION SUCCESSFUL!")
+        logger.info(f"   User ID: {authenticated_user.id}")
+        logger.info(f"   Username: {authenticated_user.username}")
+        logger.info(f"   Email: {authenticated_user.email}")
+        logger.info(f"   IP: {client_ip}")
+        logger.info(f"🔑 ===== API KEY AUTHENTICATION END =====")
         
         return authenticated_user
         
