@@ -2687,12 +2687,25 @@ async def save_edited_xml(
         if USE_BLOB_STORAGE and failed_invoice.blob_xml_path:
             logger.info(f"💾 Saving to blob storage: {failed_invoice.blob_xml_path}")
             try:
-                # Save to blob storage
-                await save_file_to_storage(None, xml_content, failed_invoice.blob_xml_path)
-                save_path = failed_invoice.blob_xml_path
-                logger.info(f"✅ Successfully saved to blob storage")
+                # Extract filename from blob path
+                import os
+                filename = os.path.basename(failed_invoice.blob_xml_path)
+                logger.info(f"📝 Extracted filename: {filename}")
+                
+                # Correctly pass: file_content (bytes), filename, subdirectory
+                updated_blob_path = await save_file_to_storage(
+                    xml_content.encode('utf-8'),  # Convert string to bytes
+                    filename,                       # Just the filename
+                    "uploads"                       # Subdirectory
+                )
+                
+                # Handle the response from save_file_to_storage
+                save_path = updated_blob_path if isinstance(updated_blob_path, str) else updated_blob_path.get('url', str(updated_blob_path))
+                logger.info(f"✅ Successfully saved to blob storage: {save_path}")
             except Exception as blob_err:
                 logger.error(f"❌ Failed to save to blob storage: {blob_err}")
+                import traceback
+                logger.error(f"   Traceback: {traceback.format_exc()}")
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to save to blob storage: {str(blob_err)}"
@@ -2850,13 +2863,18 @@ async def save_edited_xml(
             
             # Call process_invoice_internal for reprocessing
             logger.info(f"🔄 Calling process_invoice_internal for full reprocessing...")
+            
+            # Preserve original source type (web/api) from failed invoice
+            original_request_type = failed_invoice.request_type if failed_invoice.request_type in ['web', 'api'] else 'web'
+            logger.info(f"📊 Preserving original request_type: {original_request_type}")
+            
             result = await process_invoice_internal(
                 xml_file,           # file
                 False,              # strict_validation
                 db,                 # db session
                 None,               # request
                 current_user,       # current_user
-                "reprocess",        # source
+                original_request_type,  # source - use original source ('web' or 'api')
                 uuid.UUID(tracking_id)  # tracking_id (reuse existing)
             )
             

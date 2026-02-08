@@ -386,6 +386,11 @@ async def process_invoice_internal(
             logger.error(f"❌ Error extracting invoice number: {e}")
             invoice_number = None
         
+        # Skip duplicate check if reprocessing (tracking_id already exists)
+        if tracking_id:
+            logger.info(f"ℹ️ Reprocessing existing invoice {tracking_id}, skipping duplicate check")
+            logger.info(f"   Invoice number: {invoice_number if invoice_number else 'Not extracted'}")
+        
         try:
             logger.info(f"🔍 Attempting to extract customer info from XML...")
             # Extract customer info from already-loaded XML content
