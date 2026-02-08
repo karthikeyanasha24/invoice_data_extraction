@@ -8,14 +8,22 @@ from typing import Union
 
 logger=logging.getLogger("zodiac.file_service")
 
-async def save_file_to_storage(file_content: bytes, filename: str, subdirectory: str = "uploads") -> str:
-    """Save file content to appropriate storage (local or Vercel Blob)"""
+async def save_file_to_storage(file_content: bytes, filename: str, subdirectory: str = "uploads", allow_overwrite: bool = False) -> str:
+    """Save file content to appropriate storage (local or Vercel Blob)
+    
+    Args:
+        file_content: File content as bytes
+        filename: Name of the file
+        subdirectory: Subdirectory to save in (default: "uploads")
+        allow_overwrite: Whether to overwrite existing files (default: False)
+    """
     logger.info("=" * 50)
     logger.info("💾 FILE SAVE OPERATION")
     logger.info("=" * 50)
     logger.info(f"📁 Filename: {filename}")
     logger.info(f"📂 Subdirectory: {subdirectory}")
     logger.info(f"📊 File size: {len(file_content)} bytes")
+    logger.info(f"🔄 Allow overwrite: {allow_overwrite}")
     logger.info(
         f"🎯 Storage mode: {'Vercel Blob' if USE_BLOB_STORAGE else 'Local'}")
     logger.info(f"🚨 Mandatory blob storage: {MUST_USE_BLOB_STORAGE}")
@@ -39,8 +47,20 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             logger.info(
                 f"🔧 Using vercel_blob module: {vercel_blob is not None}")
 
+            # Prepare options for blob storage
+            blob_options = {
+                "access": "public",
+                "addRandomSuffix": False
+            }
+            
+            # Add overwrite option if requested
+            if allow_overwrite:
+                blob_options["allowOverwrite"] = True  # Allow overwriting existing blobs
+                logger.info(f"⚠️ Overwrite mode enabled - will replace existing blob if present")
+            
             # Use vercel_blob.put to upload file
-            blob_response = vercel_blob.put(blob_path, file_content)
+            logger.info(f"🔧 Blob options: {blob_options}")
+            blob_response = vercel_blob.put(blob_path, file_content, options=blob_options)
             logger.info(f"✅ File saved to Vercel Blob successfully!")
             logger.info(f"🌐 Blob Response: {blob_response}")
             logger.info(f"📊 Uploaded {len(file_content)} bytes")

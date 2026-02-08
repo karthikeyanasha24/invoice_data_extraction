@@ -2672,12 +2672,23 @@ async def save_edited_xml(
         # Decode the content
         try:
             xml_content = file_content.decode('utf-8')
-            logger.info(f"✅ Successfully decoded XML content")
+            logger.info(f"✅ Successfully decoded XML content ({len(xml_content)} characters)")
         except UnicodeDecodeError as e:
             logger.error(f"❌ Failed to decode file as UTF-8: {e}")
             raise HTTPException(
                 status_code=400,
                 detail="File must be valid UTF-8 encoded XML"
+            )
+        
+        # Validate XML structure
+        try:
+            ET.fromstring(xml_content.encode('utf-8'))
+            logger.info(f"✅ XML structure is valid")
+        except ET.ParseError as e:
+            logger.error(f"❌ Invalid XML structure: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid XML structure: {str(e)}"
             )
         
         # Determine where to save the file
@@ -2687,16 +2698,16 @@ async def save_edited_xml(
         if USE_BLOB_STORAGE and failed_invoice.blob_xml_path:
             logger.info(f"💾 Saving to blob storage: {failed_invoice.blob_xml_path}")
             try:
-                # Extract filename from blob path
-                import os
+                # Extract filename from blob path (os already imported at top of file)
                 filename = os.path.basename(failed_invoice.blob_xml_path)
                 logger.info(f"📝 Extracted filename: {filename}")
                 
-                # Correctly pass: file_content (bytes), filename, subdirectory
+                # Save to blob storage with overwrite enabled
                 updated_blob_path = await save_file_to_storage(
                     xml_content.encode('utf-8'),  # Convert string to bytes
                     filename,                       # Just the filename
-                    "uploads"                       # Subdirectory
+                    "uploads",                      # Subdirectory
+                    allow_overwrite=True            # Allow overwriting existing blob
                 )
                 
                 # Handle the response from save_file_to_storage
