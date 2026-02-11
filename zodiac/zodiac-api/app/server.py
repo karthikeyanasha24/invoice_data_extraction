@@ -85,6 +85,13 @@ except Exception as e:
     logger.error(f"❌ Failed to load invoices router: {e}")
 
 try:
+    from .api.invoices_v2 import router as invoices_v2_router
+    app.include_router(invoices_v2_router, prefix="/api/v1")
+    logger.info("✅ Invoices V2 router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load invoices V2 router: {e}")
+
+try:
     from .api.customers import router as customers_router
     app.include_router(customers_router, prefix="/api/v1")
     logger.info("✅ Customers router loaded")

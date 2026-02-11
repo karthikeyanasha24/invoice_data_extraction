@@ -6,11 +6,24 @@ from lxml import etree
 
 logger = logging.getLogger("zodiac-api.database")
 
+# Define valid customer formats
+VALID_FORMATS = [
+    'XML', 
+    'X12', 
+    'EDIFACT', 
+    'XML_EMBED_PDF', 
+    'XML_EMBED_X12', 
+    'XML_EMBED_EDIFACT', 
+    'XML_EMBED_PDF_LOCAL'
+]
+
 def check_customer_table(cust_id, cust_name, db: Session = None):
     """Lookup customer format and validation rules from zodiac_customers table.
     
+    Always returns normalized (uppercase) format strings with validation.
+    
     Returns:
-        tuple: (format, validation_rules) where format is the target format string
+        tuple: (format, validation_rules) where format is the target format string (uppercase)
                and validation_rules is the JSON string with required fields
     """
     close_after = db is None
@@ -24,24 +37,36 @@ def check_customer_table(cust_id, cust_name, db: Session = None):
         ).first()
         
         if customer:
+            # Get format from customer record
+            format_raw = customer.format or 'XML'
+            # Normalize to uppercase and strip whitespace
+            format_normalized = format_raw.upper().strip()
+            
+            # Validate format against known formats
+            if format_normalized not in VALID_FORMATS:
+                logger.warning(f"⚠️ Invalid format '{format_raw}' for customer {cust_id}, defaulting to XML")
+                logger.warning(f"   Valid formats are: {', '.join(VALID_FORMATS)}")
+                format_normalized = 'XML'
+            
             logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
-                        f"Found format '{customer.format}' with "
+                        f"Found format '{format_normalized}' (from '{format_raw}') with "
                         f"{'custom validation rules' if customer.validation_rules else 'default validation'}")
-            return customer.format or 'xml', customer.validation_rules
+            
+            return format_normalized, customer.validation_rules
         else:
             logger.info(f"🔍 Customer lookup for ID '{cust_id}' or Name '{cust_name}': "
                         f"Not found, defaulting to XML with no custom rules")
-            return 'xml', None
+            return 'XML', None  # Always return uppercase XML
             
     except (ProgrammingError, OperationalError) as e:
         # Handle table doesn't exist or other DB structure errors
         logger.warning(f"⚠️ check_customer_table lookup failed (table may not exist): {e}")
         db.rollback()  # Rollback to clear the failed transaction
-        return 'xml', None
+        return 'XML', None  # Always return uppercase XML
     except Exception as e:
         logger.warning(f"⚠️ check_customer_table lookup failed: {e}")
         db.rollback()  # Rollback for any other errors
-        return 'xml', None
+        return 'XML', None  # Always return uppercase XML
     finally:
         if close_after:
             db.close()

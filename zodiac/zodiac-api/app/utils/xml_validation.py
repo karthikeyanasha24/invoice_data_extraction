@@ -2,8 +2,156 @@ import xml.etree.ElementTree as ET
 from typing import Optional, Union
 from ..services.file_service import read_file_from_storage
 import logging
+import asyncio
+from lxml import etree
 
 logger = logging.getLogger("zodiac.xml_utils")
+
+
+def validate_xml_structure_early(xml_content: str) -> tuple[bool, str, list[str]]:
+    """Quick structural validation before full processing.
+    
+    Fast-fail validation that checks for required fields without deep validation.
+    This prevents invoices from hanging during processing by catching structural
+    issues early.
+    
+    Args:
+        xml_content: Raw XML content as string
+    
+    Returns:
+        Tuple of (is_valid, error_message, missing_fields)
+        - is_valid: True if structure is valid, False otherwise
+        - error_message: Descriptive error message if validation fails
+        - missing_fields: List of missing required fields
+    """
+    missing_fields = []
+    
+    try:
+        logger.info("🔍 ===== EARLY STRUCTURE VALIDATION =====")
+        logger.info(f"📊 XML content length: {len(xml_content)} bytes")
+        
+        # Parse XML with timeout protection (already handled by caller)
+        try:
+            parser = etree.XMLParser(recover=False, resolve_entities=False, no_network=True)
+            root = etree.fromstring(xml_content.encode('utf-8'), parser)
+            logger.info("✅ XML is well-formed")
+        except etree.XMLSyntaxError as e:
+            error_msg = f"XML is not well-formed: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            return False, error_msg, ["well-formed XML"]
+        except Exception as e:
+            error_msg = f"XML parsing error: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            return False, error_msg, ["parseable XML"]
+        
+        # Define namespaces for UBL and CFDI
+        ubl_namespaces = {
+            'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+            'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
+        }
+        cfdi_namespaces = {
+            'cfdi': 'http://www.sat.gob.mx/cfd/4',
+            'cfdi3': 'http://www.sat.gob.mx/cfd/3',
+        }
+        
+        # Detect format (UBL or CFDI)
+        is_ubl = root.tag.endswith('Invoice') or root.find('.//cac:AccountingSupplierParty', ubl_namespaces) is not None
+        is_cfdi = root.tag.endswith('Comprobante') or root.find('.//cfdi:Comprobante', cfdi_namespaces) is not None
+        
+        if not is_cfdi:
+            is_cfdi = root.find('.//cfdi3:Comprobante', cfdi_namespaces) is not None
+        
+        logger.info(f"📋 Detected format: {'UBL' if is_ubl else 'CFDI' if is_cfdi else 'UNKNOWN'}")
+        
+        if is_ubl:
+            # Validate UBL structure
+            logger.info("🔍 Checking UBL required elements...")
+            
+            # Check for Invoice ID
+            invoice_id = root.find('.//cbc:ID', ubl_namespaces)
+            if invoice_id is None or not invoice_id.text or not invoice_id.text.strip():
+                missing_fields.append("Invoice ID (cbc:ID)")
+                logger.warning("⚠️ Missing Invoice ID")
+            
+            # Check for AccountingSupplierParty
+            supplier_party = root.find('.//cac:AccountingSupplierParty', ubl_namespaces)
+            if supplier_party is None:
+                missing_fields.append("AccountingSupplierParty")
+                logger.warning("⚠️ Missing AccountingSupplierParty")
+            else:
+                # Check for Supplier EndpointID or CompanyID
+                supplier_endpoint = supplier_party.find('.//cbc:EndpointID', ubl_namespaces)
+                supplier_company_id = supplier_party.find('.//cac:PartyLegalEntity/cbc:CompanyID', ubl_namespaces)
+                if (supplier_endpoint is None or not supplier_endpoint.text or not supplier_endpoint.text.strip()) and \
+                   (supplier_company_id is None or not supplier_company_id.text or not supplier_company_id.text.strip()):
+                    missing_fields.append("Supplier EndpointID or CompanyID")
+                    logger.warning("⚠️ Missing Supplier identifier")
+            
+            # Check for AccountingCustomerParty
+            customer_party = root.find('.//cac:AccountingCustomerParty', ubl_namespaces)
+            if customer_party is None:
+                missing_fields.append("AccountingCustomerParty")
+                logger.warning("⚠️ Missing AccountingCustomerParty")
+            else:
+                # Check for Customer EndpointID or CompanyID
+                customer_endpoint = customer_party.find('.//cbc:EndpointID', ubl_namespaces)
+                customer_company_id = customer_party.find('.//cac:PartyLegalEntity/cbc:CompanyID', ubl_namespaces)
+                if (customer_endpoint is None or not customer_endpoint.text or not customer_endpoint.text.strip()) and \
+                   (customer_company_id is None or not customer_company_id.text or not customer_company_id.text.strip()):
+                    missing_fields.append("Customer EndpointID or CompanyID")
+                    logger.warning("⚠️ Missing Customer identifier")
+            
+            # Check for IssueDate
+            issue_date = root.find('.//cbc:IssueDate', ubl_namespaces)
+            if issue_date is None or not issue_date.text or not issue_date.text.strip():
+                missing_fields.append("Issue Date (cbc:IssueDate)")
+                logger.warning("⚠️ Missing Issue Date")
+        
+        elif is_cfdi:
+            # Validate CFDI structure
+            logger.info("🔍 Checking CFDI required elements...")
+            
+            # Find Comprobante element (CFDI 4.0 or 3.3)
+            comprobante = root if root.tag.endswith('Comprobante') else root.find('.//cfdi:Comprobante', cfdi_namespaces)
+            if comprobante is None:
+                comprobante = root.find('.//cfdi3:Comprobante', cfdi_namespaces)
+            
+            if comprobante is None:
+                missing_fields.append("Comprobante root element")
+                logger.warning("⚠️ Missing Comprobante element")
+            else:
+                # Check for Folio (Invoice number)
+                folio = comprobante.get('Folio')
+                if not folio or not folio.strip():
+                    missing_fields.append("Folio (Invoice number)")
+                    logger.warning("⚠️ Missing Folio")
+                
+                # Check for Fecha (Issue date)
+                fecha = comprobante.get('Fecha')
+                if not fecha or not fecha.strip():
+                    missing_fields.append("Fecha (Issue date)")
+                    logger.warning("⚠️ Missing Fecha")
+        
+        else:
+            # Unknown format
+            logger.warning("⚠️ Could not detect UBL or CFDI format")
+            missing_fields.append("Recognized XML format (UBL or CFDI)")
+        
+        # Determine if validation passed
+        if missing_fields:
+            error_msg = f"XML structure validation failed. Missing required fields: {', '.join(missing_fields)}"
+            logger.error(f"❌ {error_msg}")
+            return False, error_msg, missing_fields
+        
+        logger.info("✅ XML structure validation passed - all required fields present")
+        return True, "XML structure is valid", []
+    
+    except Exception as e:
+        error_msg = f"Error during structure validation: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        logger.exception(e)
+        return False, error_msg, ["structure validation"]
+
 
 def validate_xml(file_path: Union[str, dict], strict_validation: bool = False) -> tuple[bool, Optional[str], list[str]]:
     """Validate XML file structure - core well-formed check + optional enhanced validation with warnings

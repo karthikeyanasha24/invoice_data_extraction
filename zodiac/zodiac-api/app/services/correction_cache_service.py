@@ -33,10 +33,11 @@ class CorrectionCacheService:
     @staticmethod
     def generate_error_signature(error_type: str, error_context: Dict[str, Any]) -> str:
         """
-        Generate a unique signature for an error based on type and context.
+        Generate a detailed signature for an error based on type and context.
+        More specific signatures lead to better cache matching.
         
         Args:
-            error_type: Type of error (e.g., "missing_sender_id")
+            error_type: Type of error (e.g., "missing_sender_id", "xml_validation_failed")
             error_context: Dictionary with error details
         
         Returns:
@@ -45,22 +46,52 @@ class CorrectionCacheService:
         # Create a deterministic signature from error details
         signature_parts = [error_type]
         
-        # Add relevant context based on error type
-        if "xpath" in error_context:
+        # Add customer context (optional - helps with customer-specific patterns)
+        if "customer_id" in error_context and error_context["customer_id"]:
+            signature_parts.append(f"cust:{error_context['customer_id']}")
+        
+        # Add missing field context (for structure validation errors)
+        if "missing_field" in error_context and error_context["missing_field"]:
+            signature_parts.append(f"field:{error_context['missing_field']}")
+        elif "missing_fields" in error_context and error_context["missing_fields"]:
+            # Handle list of missing fields
+            fields_str = ",".join(sorted(error_context["missing_fields"]))
+            signature_parts.append(f"fields:{fields_str}")
+        
+        # Add XML element/xpath context
+        if "xpath" in error_context and error_context["xpath"]:
             signature_parts.append(f"xpath:{error_context['xpath']}")
         
-        if "element" in error_context:
+        if "element" in error_context and error_context["element"]:
             signature_parts.append(f"element:{error_context['element']}")
         
-        if "field" in error_context:
+        # Add field context (general field identifier)
+        if "field" in error_context and error_context["field"]:
             signature_parts.append(f"field:{error_context['field']}")
         
-        if "segment" in error_context:
+        # Add EDI segment context
+        if "segment" in error_context and error_context["segment"]:
             signature_parts.append(f"segment:{error_context['segment']}")
         
+        # Add EDI segment position (if applicable)
+        if "segment_position" in error_context and error_context["segment_position"]:
+            signature_parts.append(f"pos:{error_context['segment_position']}")
+        
+        # Add error message pattern (extract key parts)
+        if "message" in error_context and error_context["message"]:
+            # Extract key patterns from error message
+            msg = error_context["message"].lower()
+            if "missing" in msg:
+                signature_parts.append("pattern:missing")
+            elif "invalid" in msg:
+                signature_parts.append("pattern:invalid")
+            elif "required" in msg:
+                signature_parts.append("pattern:required")
+        
+        # Join all parts
         signature = "|".join(signature_parts)
         
-        # For very long signatures, hash them
+        # For very long signatures, hash them but keep error_type visible
         if len(signature) > 400:
             signature_hash = hashlib.md5(signature.encode()).hexdigest()
             return f"{error_type}|hash:{signature_hash}"

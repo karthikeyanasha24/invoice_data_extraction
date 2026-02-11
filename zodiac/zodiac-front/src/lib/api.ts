@@ -1836,4 +1836,131 @@ export const satSupplierMappingApi = {
     },
 };
 
+// Invoices V2 API
+export const invoicesV2Api = {
+    // Documents endpoints
+    uploadManual: async (formData: FormData) => {
+        try {
+            const response = await api.post('/api/v1/invoices-v2/upload', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to upload invoice:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to upload invoice.');
+        }
+    },
+
+    getDocuments: async (source?: string, status?: string, includeDeleted: boolean = false) => {
+        try {
+            const response = await api.get('/api/v1/invoices-v2/documents', {
+                params: { source, validation_status: status, include_deleted: includeDeleted }
+            });
+            return response;
+        } catch (error: any) {
+            console.error('Failed to get documents:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch documents.');
+        }
+    },
+
+    deleteDocument: async (documentId: number) => {
+        try {
+            const response = await api.delete(`/api/v1/invoices-v2/documents/${documentId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete document:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to delete document.');
+        }
+    },
+
+    // Validation endpoints
+    getUnvalidated: async () => {
+        try {
+            const response = await api.get('/api/v1/invoices-v2/unvalidated');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get unvalidated invoices:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch unvalidated invoices.');
+        }
+    },
+
+    validateInvoices: async (documentIds: number[]) => {
+        try {
+            const response = await api.post('/api/v1/invoices-v2/validate', { document_ids: documentIds });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to validate invoices:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to validate invoices.');
+        }
+    },
+
+    getValidationProgress: async (documentIds: number[]) => {
+        try {
+            const idsStr = documentIds.join(',');
+            const response = await api.get('/api/v1/invoices-v2/validation-progress', {
+                params: { document_ids: idsStr }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get validation progress:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to get validation progress.');
+        }
+    },
+
+    // Validated invoices endpoints
+    getValidated: async (statusFilter?: string) => {
+        try {
+            const response = await api.get('/api/v1/invoices-v2/validated', {
+                params: { status_filter: statusFilter }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get validated invoices:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch validated invoices.');
+        }
+    },
+
+    getValidatedDetails: async (validatedId: number) => {
+        try {
+            const response = await api.get(`/api/v1/invoices-v2/validated/${validatedId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get validated invoice details:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch invoice details.');
+        }
+    },
+
+    manualFix: async (validatedId: number, corrections: Record<string, string>) => {
+        try {
+            const response = await api.put(`/api/v1/invoices-v2/validated/${validatedId}/manual-fix`, {
+                corrections
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to apply manual fix:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to apply manual fix.');
+        }
+    },
+
+    aiFix: async (validatedId: number) => {
+        try {
+            const response = await api.post(`/api/v1/invoices-v2/validated/${validatedId}/ai-fix`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to apply AI fix:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to apply AI fix.');
+        }
+    },
+
+    reprocessInvoice: async (validatedId: number) => {
+        try {
+            const response = await api.post(`/api/v1/invoices-v2/validated/${validatedId}/reprocess`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to reprocess invoice:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to reprocess invoice.');
+        }
+    },
+};
+
 export default api;

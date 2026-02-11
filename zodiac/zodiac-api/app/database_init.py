@@ -411,6 +411,142 @@ class DatabaseInitializer:
             logger.error(f"Error verifying tables: {e}")
             return False
     
+    def check_table_exists(self, table_name: str) -> bool:
+        """Check if a table exists"""
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_name = :table_name
+                """), {"table_name": table_name})
+                
+                return result.fetchone() is not None
+        except Exception as e:
+            logger.error(f"Error checking table existence: {e}")
+            return False
+    
+    def create_invoice_v2_tables(self):
+        """Create Invoice V2 tables for the new invoice management system"""
+        logger.info("Checking for Invoice V2 tables...")
+        
+        tables = [
+            {
+                "name": "v2_invoice_documents",
+                "sql": """
+                    CREATE TABLE IF NOT EXISTS v2_invoice_documents (
+                        id SERIAL PRIMARY KEY,
+                        tracking_id UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
+                        user_id INTEGER NOT NULL REFERENCES zodiac_users(id),
+                        source VARCHAR(50) NOT NULL,
+                        filename VARCHAR(500) NOT NULL,
+                        xml_path TEXT,
+                        blob_xml_path TEXT,
+                        validation_status VARCHAR(50) DEFAULT 'not_validated' NOT NULL,
+                        uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        deleted_at TIMESTAMP WITH TIME ZONE
+                    );
+                """
+            },
+            {
+                "name": "v2_validated_invoices",
+                "sql": """
+                    CREATE TABLE IF NOT EXISTS v2_validated_invoices (
+                        id SERIAL PRIMARY KEY,
+                        document_id INTEGER UNIQUE NOT NULL REFERENCES v2_invoice_documents(id),
+                        status VARCHAR(50) NOT NULL,
+                        invoice_data JSON NOT NULL,
+                        missing_fields JSON,
+                        validation_errors JSON,
+                        validation_notes TEXT,
+                        correction_applied BOOLEAN DEFAULT FALSE,
+                        correction_cache_id UUID,
+                        validated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE
+                    );
+                """
+            },
+            {
+                "name": "v2_correction_cache",
+                "sql": """
+                    CREATE TABLE IF NOT EXISTS v2_correction_cache (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        customer_id VARCHAR(255) NOT NULL,
+                        customer_name VARCHAR(500),
+                        field_name VARCHAR(100) NOT NULL,
+                        field_value TEXT NOT NULL,
+                        error_signature VARCHAR(500) NOT NULL,
+                        success_count INTEGER DEFAULT 1 NOT NULL,
+                        failure_count INTEGER DEFAULT 0 NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        last_used_at TIMESTAMP,
+                        last_success_at TIMESTAMP,
+                        last_failure_at TIMESTAMP,
+                        created_by_user_id INTEGER REFERENCES zodiac_users(id),
+                        notes TEXT
+                    );
+                """
+            }
+        ]
+        
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_v2_tracking_id ON v2_invoice_documents(tracking_id);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_user_source ON v2_invoice_documents(user_id, source);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_validation_status ON v2_invoice_documents(validation_status, deleted_at);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_validated_document_id ON v2_validated_invoices(document_id);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_validated_status ON v2_validated_invoices(status);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_correction_customer_id ON v2_correction_cache(customer_id);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_correction_field_name ON v2_correction_cache(field_name);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_customer_field ON v2_correction_cache(customer_id, field_name);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_error_signature ON v2_correction_cache(error_signature);",
+            "CREATE INDEX IF NOT EXISTS idx_v2_active_corrections ON v2_correction_cache(is_active, customer_id);",
+        ]
+        
+        # Add foreign key for correction_cache_id
+        fk_sql = """
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints 
+                    WHERE constraint_name = 'fk_v2_validated_correction_cache'
+                ) THEN
+                    ALTER TABLE v2_validated_invoices 
+                    ADD CONSTRAINT fk_v2_validated_correction_cache 
+                    FOREIGN KEY (correction_cache_id) REFERENCES v2_correction_cache(id);
+                END IF;
+            END $$;
+        """
+        
+        try:
+            with self.engine.connect() as conn:
+                # Create tables
+                for table in tables:
+                    if not self.check_table_exists(table["name"]):
+                        logger.info(f"Creating table {table['name']}...")
+                        conn.execute(text(table["sql"]))
+                    else:
+                        logger.info(f"Table {table['name']} already exists")
+                
+                # Create indexes
+                for index_sql in indexes:
+                    logger.info(f"Creating index...")
+                    conn.execute(text(index_sql))
+                
+                # Add foreign key
+                logger.info("Adding foreign key constraint...")
+                conn.execute(text(fk_sql))
+                
+                conn.commit()
+                logger.info("✅ Invoice V2 tables migration completed")
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error during Invoice V2 tables migration: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during Invoice V2 tables migration: {e}")
+            raise
+    
     def run_all_migrations(self):
         """Run all database migrations"""
         logger.info("🚀 Starting database initialization and migrations...")
@@ -427,6 +563,7 @@ class DatabaseInitializer:
             self.add_blob_path_columns()
             self.add_api_key_columns()
             self.add_request_type_columns()
+            self.create_invoice_v2_tables()
             
             logger.info("✅ All database migrations completed successfully!")
             return True

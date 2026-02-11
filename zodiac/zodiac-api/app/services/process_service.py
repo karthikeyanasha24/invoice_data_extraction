@@ -23,7 +23,7 @@ from ..services.database import check_customer_table, extract_supplier_info_from
 from ..services.external_api_service import send_to_third_party_endpoint
 from ..services.bi_database_service import save_business_intelligence_data
 from ..api.api_key_auth import get_client_ip
-from ..utils.xml_validation import validate_xml,validate_edi_format
+from ..utils.xml_validation import validate_xml, validate_edi_format, validate_xml_structure_early
 from ..utils.xml_to_x12 import convert_xml_to_x12
 from ..utils.xml_to_edifact import convert_xml_to_edifact
 from ..services.status_tracker import status_tracker
@@ -178,8 +178,11 @@ async def process_invoice_internal(
         logger.info(f"📊 File size: {file.size} bytes")
         logger.info(f"📋 Content type: {file.content_type}")
 
-        # Validate content type - accept both text/xml and application/xml
-        if file.content_type not in ["text/xml", "application/xml"]:
+        # Validate content type - accept XML and related types, or files with .xml extension
+        valid_content_types = ["text/xml", "application/xml", "text/plain", "application/octet-stream"]
+        is_xml_file = file.filename and file.filename.lower().endswith('.xml')
+        
+        if file.content_type not in valid_content_types and not is_xml_file:
             error_feedback = error_tracker.create_file_upload_error(
                 error_type="invalid_type",
                 file_name=file.filename,
@@ -188,9 +191,25 @@ async def process_invoice_internal(
                 user_id=current_user.id,
                 timestamp=datetime.now()
             )
+            
+            # Add failed step to processing steps
+            step1_failed = ProcessingStepResult(
+                step_name="File Upload",
+                step_number=1,
+                success=False,
+                duration_seconds=time.time() - step1_start,
+                message=f"Invalid content type: {file.content_type}. Expected text/xml or application/xml",
+                error_details=[convert_error_feedback_to_detail(error_feedback)]
+            )
+            processing_steps.append(step1_failed)
+            
+            # CRITICAL: Mark status as completed (failed) to prevent infinite loading
+            status_tracker.mark_completed(tracking_id, success=False)
+            
             logger.info(
                 f"📤 Returning 400 Bad Request for tracking ID {tracking_id}")
             # Convert UUID to string for JSON serialization
+            response.processing_steps = processing_steps
             response_dict = response.dict()
             response_dict['tracking_id'] = str(response_dict['tracking_id'])
             raise HTTPException(
@@ -206,10 +225,26 @@ async def process_invoice_internal(
                 user_id=current_user.id,
                 timestamp=datetime.now()
             )
+            
+            # Add failed step to processing steps
+            step1_failed = ProcessingStepResult(
+                step_name="File Upload",
+                step_number=1,
+                success=False,
+                duration_seconds=time.time() - step1_start,
+                message="No filename provided",
+                error_details=[convert_error_feedback_to_detail(error_feedback)]
+            )
+            processing_steps.append(step1_failed)
+            
+            # CRITICAL: Mark status as completed (failed) to prevent infinite loading
+            status_tracker.mark_completed(tracking_id, success=False)
+            
             logger.error(
                 f"❌ STEP 1 FAILED: No filename provided for tracking ID {tracking_id}")
             logger.info(
                 f"📤 Returning 400 Bad Request for tracking ID {tracking_id}")
+            response.processing_steps = processing_steps
             response_dict = response.dict()
             response_dict['tracking_id'] = str(response_dict['tracking_id'])
             response_dict['detailed_error'] = error_feedback.to_dict()
@@ -254,11 +289,11 @@ async def process_invoice_internal(
         logger.info(f"🔄 ===== CONTINUING PROCESSING =====")
         logger.info(f"📁 XML file saved at: {xml_path}")
 
-        # Step 2: Early XML Parsing Check (Fast Fail for Bad XML)
-        logger.info(f"🔍 ===== STEP 2: EARLY XML VALIDATION (PARSING CHECK) =====")
-        early_check_start = time.time()
+        # Step 2: Structure Validation (NEW - Quick field check)
+        logger.info(f"🔍 ===== STEP 2: STRUCTURE VALIDATION (QUICK FIELD CHECK) =====")
+        structure_check_start = time.time()
         
-        # Read XML content for validation
+        # Read XML content for structure validation
         try:
             # Handle both local paths and blob storage
             if isinstance(xml_path, dict):
@@ -268,7 +303,7 @@ async def process_invoice_internal(
                 # Local path - pass as string
                 xml_content_bytes = await read_file_from_storage(xml_path, None, None)
             xml_content_str = xml_content_bytes.decode('utf-8')
-            logger.info(f"✅ Successfully read XML file ({len(xml_content_str)} bytes)")
+            logger.info(f"✅ Successfully read XML file for structure check ({len(xml_content_str)} bytes)")
         except Exception as read_err:
             logger.error(f"❌ Failed to read uploaded XML file: {read_err}")
             logger.exception(read_err)  # Log full stack trace
@@ -281,10 +316,10 @@ async def process_invoice_internal(
                 timestamp=time.time()
             )
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
-                step_name="Early XML Check",
+                step_name="Structure Validation",
                 step_number=2,
                 success=False,
-                duration_seconds=time.time() - early_check_start,
+                duration_seconds=time.time() - structure_check_start,
                 message=f"Failed to read XML file: {str(read_err)}",
                 error_details=[convert_error_feedback_to_detail(error_feedback)]
             ))
@@ -297,6 +332,86 @@ async def process_invoice_internal(
                 status_code=status.HTTP_200_OK,
                 media_type="application/json"
             )
+        
+        # Perform quick structure validation
+        logger.info(f"🔍 Performing structure validation (checking required fields)...")
+        structure_valid, structure_error_msg, missing_fields = validate_xml_structure_early(xml_content_str)
+        structure_check_duration = time.time() - structure_check_start
+        
+        if not structure_valid:
+            logger.error(f"❌ STRUCTURE VALIDATION FAILED: {structure_error_msg}")
+            logger.error(f"💥 Missing required fields: {', '.join(missing_fields)}")
+            
+            # Create detailed error
+            error_feedback = error_tracker.create_xml_validation_error(
+                error_type="missing_fields",
+                error_message=structure_error_msg,
+                file_name=file.filename,
+                tracking_id=str(tracking_id),
+                user_id=current_user.id,
+                timestamp=time.time()
+            )
+            
+            # Record failed step
+            add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
+                step_name="Structure Validation",
+                step_number=2,
+                success=False,
+                duration_seconds=structure_check_duration,
+                message=f"Structure validation failed: {structure_error_msg}",
+                error_details=[convert_error_feedback_to_detail(error_feedback)]
+            ))
+            
+            # Mark as completed (failed) and save to failed table
+            status_tracker.mark_completed(tracking_id, success=False)
+            logger.info(f"🚫 Processing cancelled due to missing required fields")
+            logger.info(f"⏱️ Total processing time: {time.time() - start_time:.3f}s")
+            
+            # Save to failed table
+            try:
+                step6_start = time.time()
+                failed_invoice = FailedModel(
+                    tracking_id=tracking_id,
+                    user_id=current_user.id,
+                    xml_path=str(xml_path) if not USE_BLOB_STORAGE or isinstance(xml_path, str) else xml_path.get('pathname', str(xml_path)),
+                    xml_validation_pass=False,
+                    xml_convert_message=structure_error_msg,
+                    processing_steps=[step.dict() for step in processing_steps],
+                    blob_xml_path=xml_path.get('url') if isinstance(xml_path, dict) else None,
+                    request_type=request_type
+                )
+                db.add(failed_invoice)
+                db.commit()
+                db.refresh(failed_invoice)
+                logger.info(f"💾 Invoice saved to failed table due to structure validation failure")
+            except Exception as db_err:
+                logger.error(f"❌ Failed to save to failed table: {db_err}")
+                db.rollback()
+            
+            response.processing_steps = processing_steps
+            response_dict = response.dict()
+            response_dict['tracking_id'] = str(response_dict['tracking_id'])
+            return Response(
+                content=json.dumps(response_dict),
+                status_code=status.HTTP_200_OK,
+                media_type="application/json"
+            )
+        
+        logger.info(f"✅ Structure validation passed (took {structure_check_duration:.3f}s)")
+        add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
+            step_name="Structure Validation",
+            step_number=2,
+            success=True,
+            duration_seconds=structure_check_duration,
+            message="All required fields present"
+        ))
+
+        # Step 3: Early XML Parsing Check (Fast Fail for Bad XML)
+        logger.info(f"🔍 ===== STEP 3: EARLY XML VALIDATION (PARSING CHECK) =====")
+        early_check_start = time.time()
+        
+        # Use already-loaded XML content from structure validation
+        xml_content_str = xml_content_str  # Already loaded in Step 2
         
         # Validate XML parsing with timeout
         logger.info(f"🔍 Performing early XML parsing check (5 second timeout)...")
@@ -321,7 +436,7 @@ async def process_invoice_internal(
             # Record failed step
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="Early XML Check",
-                step_number=2,
+                step_number=3,
                 success=False,
                 duration_seconds=early_check_duration,
                 message=f"XML parsing failed: {parse_error_msg}",
@@ -345,21 +460,21 @@ async def process_invoice_internal(
         logger.info(f"✅ Early XML parsing check passed (took {early_check_duration:.3f}s)")
         
         try:
-            logger.info(f"📊 About to add Step 2 to processing steps...")
+            logger.info(f"📊 About to add Step 3 to processing steps...")
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="Early XML Check",
-                step_number=2,
+                step_number=3,
                 success=True,
                 duration_seconds=early_check_duration,
                 message="XML file is parseable"
             ))
-            logger.info(f"✅ Step 2 added successfully to processing steps")
-        except Exception as step2_error:
-            logger.error(f"❌ ERROR adding Step 2 to processing steps: {step2_error}")
-            logger.exception(step2_error)
+            logger.info(f"✅ Step 3 added successfully to processing steps")
+        except Exception as step3_error:
+            logger.error(f"❌ ERROR adding Step 3 to processing steps: {step3_error}")
+            logger.exception(step3_error)
             raise
 
-        logger.info(f"🎯 CONTINUING AFTER STEP 2 - About to determine processing path")
+        logger.info(f"🎯 CONTINUING AFTER STEP 3 - About to determine processing path")
 
         # Determine customer format to decide processing path
         logger.info(f"🔍 ===== DETERMINING PROCESSING PATH =====")
@@ -437,7 +552,91 @@ async def process_invoice_internal(
             logger.exception(path_error)
             raise
 
-        # Step 3: XML Validation (based on processing path)
+        # Proactive Cache Application (before validation)
+        # Try to apply known corrections for this customer before validation runs
+        if customer_id:
+            try:
+                logger.info(f"🔍 ===== PROACTIVE CORRECTION CHECK =====")
+                logger.info(f"📋 Checking for cached corrections for customer: {customer_id}")
+                
+                cache_service = CorrectionCacheService(db)
+                customer_corrections = cache_service.get_customer_corrections(customer_id)
+                
+                if customer_corrections:
+                    logger.info(f"✅ Found {len(customer_corrections)} cached corrections for customer {customer_id}")
+                    
+                    # Track if any corrections were applied
+                    corrections_applied = 0
+                    xml_modified = False
+                    current_xml_content = xml_content
+                    
+                    # Try to apply high-confidence corrections (success rate > 70%)
+                    for correction in customer_corrections:
+                        success_rate = correction.get_success_rate()
+                        
+                        if success_rate > 70:
+                            logger.info(f"🔧 Attempting to apply high-confidence correction:")
+                            logger.info(f"   Error Type: {correction.error_type}")
+                            logger.info(f"   Success Rate: {success_rate:.1f}%")
+                            logger.info(f"   Used {correction.success_count} times successfully")
+                            
+                            try:
+                                if correction.correction_type == "XML":
+                                    success, corrected_xml, msg = cache_service.apply_xml_correction(
+                                        current_xml_content, correction.transformation_rule
+                                    )
+                                    
+                                    if success:
+                                        logger.info(f"✅ Proactive correction applied: {msg}")
+                                        current_xml_content = corrected_xml
+                                        xml_modified = True
+                                        corrections_applied += 1
+                                        
+                                        # Mark as used
+                                        correction.last_used_at = datetime.utcnow()
+                                        db.commit()
+                                    else:
+                                        logger.warning(f"⚠️ Proactive correction failed: {msg}")
+                                        
+                            except Exception as correction_err:
+                                logger.warning(f"⚠️ Error applying proactive correction: {correction_err}")
+                                continue
+                        else:
+                            logger.info(f"⏭️ Skipping low-confidence correction (success rate: {success_rate:.1f}%)")
+                    
+                    # If corrections were applied, save the corrected XML
+                    if xml_modified:
+                        logger.info(f"💾 Saving proactively corrected XML ({corrections_applied} corrections applied)...")
+                        
+                        try:
+                            # Save corrected XML
+                            corrected_filename = f"{tracking_id}_proactive_corrected.xml"
+                            corrected_xml_path = await save_file_to_storage(
+                                current_xml_content.encode('utf-8'),
+                                corrected_filename,
+                                "uploads",
+                                allow_overwrite=True
+                            )
+                            
+                            # Update xml_path and xml_content to use corrected version
+                            xml_path = corrected_xml_path
+                            xml_content = current_xml_content
+                            
+                            logger.info(f"✅ Proactively corrected XML saved and will be used for validation")
+                        except Exception as save_err:
+                            logger.error(f"❌ Failed to save proactively corrected XML: {save_err}")
+                            # Continue with original XML
+                    else:
+                        logger.info(f"ℹ️ No high-confidence corrections were applicable")
+                else:
+                    logger.info(f"ℹ️ No cached corrections found for customer {customer_id}")
+                    
+            except Exception as cache_err:
+                logger.warning(f"⚠️ Error during proactive correction check: {cache_err}")
+                logger.exception(cache_err)
+                # Continue processing even if cache check fails
+
+        # Step 4: XML Validation (based on processing path)
         if not processing_path.needs_xml_validation:
             logger.info(f"⏭️ SKIPPING STEP 3: XML Validation (not required for {processing_path.format_name})")
             xml_valid = True
@@ -803,7 +1002,7 @@ async def process_invoice_internal(
                     # Record failed step with detailed error information
                     processing_steps.append(ProcessingStepResult(
                         step_name="XML Validation",
-                        step_number=3,
+                        step_number=4,
                         success=False,
                         duration_seconds=step2_duration,
                         message=detailed_message,
@@ -909,7 +1108,7 @@ async def process_invoice_internal(
             
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="XML Validation",
-                step_number=3,
+                step_number=4,
                 success=True,
                 duration_seconds=step2_duration,
                 message=detailed_message,
@@ -962,7 +1161,7 @@ async def process_invoice_internal(
             # Record skipped steps
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="Format Conversion",
-                step_number=4,
+                step_number=5,
                 success=True,
                 duration_seconds=0.0,
                 message=f"Format conversion skipped for {processing_path.format_name}",
@@ -973,7 +1172,7 @@ async def process_invoice_internal(
             ))
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="Format Validation",
-                step_number=4,
+                step_number=5,
                 success=True,
                 duration_seconds=0.0,
                 message=f"Format validation skipped for {processing_path.format_name}",
@@ -1212,7 +1411,7 @@ async def process_invoice_internal(
                 
                 add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                     step_name="EDI Conversion",
-                    step_number=4,
+                    step_number=5,
                     success=False,
                     duration_seconds=step3_duration,
                     message=detailed_edi_message,
@@ -1378,7 +1577,7 @@ async def process_invoice_internal(
 
                     add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                         step_name="EDI Format Validation",
-                        step_number=5,
+                        step_number=6,
                         success=False,
                         duration_seconds=step4_duration,
                         message=edi_format_message,
@@ -1428,7 +1627,7 @@ async def process_invoice_internal(
                     logger.info(f"✅ EDINation validation passed")
                     add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                         step_name="EDINation X12 Validation",
-                        step_number=5,  # Same step number as format validation
+                        step_number=6,  # Same step number as format validation
                         success=True,
                         duration_seconds=step4a_duration,
                         message=edination_message
@@ -1449,7 +1648,7 @@ async def process_invoice_internal(
                 logger.warning(f"⚠️ Continuing processing despite EDINation error")
                 add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                     step_name="EDINation X12 Validation",
-                    step_number=4,
+                    step_number=5,
                     success=False,
                     duration_seconds=time.time() - step4a_start,
                     message=f"EDINation validation error: {str(e)}"
@@ -1493,7 +1692,7 @@ async def process_invoice_internal(
                     logger.info(f"📝 Database will store modified XML with embedded content")
                     add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                         step_name=f"{processing_path.embed_type} Embed",
-                        step_number=5,
+                        step_number=6,
                         success=True,
                         duration_seconds=step4b_duration,
                         message=embed_message
@@ -1502,7 +1701,7 @@ async def process_invoice_internal(
                     logger.error(f"❌ Embed workflow failed: {embed_message}")
                     add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                         step_name=f"{processing_path.embed_type} Embed",
-                        step_number=5,
+                        step_number=6,
                         success=False,
                         duration_seconds=step4b_duration,
                         message=embed_message
@@ -1512,7 +1711,7 @@ async def process_invoice_internal(
                 logger.error(f"❌ Embed workflow error: {str(e)}")
                 add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                     step_name=f"{processing_path.embed_type} Embed",
-                    step_number=4,
+                    step_number=5,
                     success=False,
                     duration_seconds=time.time() - step4b_start,
                     message=f"Embed workflow error: {str(e)}"
@@ -1615,7 +1814,7 @@ async def process_invoice_internal(
             # Record third party endpoint step with error details if applicable
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="3rd Party Endpoint",
-                step_number=6,
+                step_number=7,
                 success=third_party_success,
                 duration_seconds=step5_duration,
                 message=third_party_message,
@@ -1634,7 +1833,7 @@ async def process_invoice_internal(
             
             add_processing_step(tracking_id, processing_steps, ProcessingStepResult(
                 step_name="3rd Party Endpoint",
-                step_number=6,
+                step_number=7,
                 success=True,
                 duration_seconds=0.0,
                 message=f"Third party endpoint skipped for {processing_path.format_name} format"
@@ -1807,7 +2006,7 @@ async def process_invoice_internal(
                 # Add Step 6: Database Save
                 step6_result = ProcessingStepResult(
                     step_name="Database Save",
-                    step_number=7,
+                    step_number=8,
                     success=True,
                     duration_seconds=step6_duration,
                     message="Invoice saved to failed table"
@@ -1909,7 +2108,7 @@ async def process_invoice_internal(
                 # Add Step 6: Database Save
                 step6_result = ProcessingStepResult(
                     step_name="Database Save",
-                    step_number=7,
+                    step_number=8,
                     success=True,
                     duration_seconds=step6_duration,
                     message="Invoice saved to success table"

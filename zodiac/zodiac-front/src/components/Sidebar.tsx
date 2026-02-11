@@ -45,6 +45,13 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
       description: 'Manage invoice files'
     },
     {
+      id: 'invoices-v2',
+      label: 'Invoices V2',
+      icon: FileText,
+      path: '/invoices-v2',
+      description: 'New invoice validation system'
+    },
+    {
       id: 'quotations',
       label: 'Quotations',
       icon: Receipt,

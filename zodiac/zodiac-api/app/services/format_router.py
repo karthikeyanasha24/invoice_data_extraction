@@ -111,26 +111,40 @@ def get_processing_path(customer_format: str) -> ProcessingPath:
     Get the processing path for a given customer format
     
     Args:
-        customer_format: The format string from customer table
+        customer_format: The format string from customer table (should be uppercase)
         
     Returns:
         ProcessingPath object defining the workflow
     """
-    # Normalize format string (uppercase, handle legacy formats)
-    normalized_format = customer_format.upper().strip() if customer_format else "EDIFACT"
+    # Normalize format string (uppercase, strip whitespace)
+    # Default to XML if no format provided
+    if not customer_format or not customer_format.strip():
+        logger.warning(f"⚠️ No customer format provided, defaulting to XML")
+        normalized_format = "XML"
+    else:
+        normalized_format = customer_format.upper().strip()
     
     # Handle legacy format names
     legacy_mapping = {
         "XMLEMBED": "XML_EMBED_PDF",  # Default old XMLEMBED to PDF embed
         "X12_EMBED": "XML_EMBED_X12",
         "EDI": "EDIFACT",
-        "EDIFACT": "EDIFACT",
     }
     
-    normalized_format = legacy_mapping.get(normalized_format, normalized_format)
+    # Apply legacy mapping if applicable
+    if normalized_format in legacy_mapping:
+        original_format = normalized_format
+        normalized_format = legacy_mapping[normalized_format]
+        logger.info(f"🔄 Mapped legacy format '{original_format}' to '{normalized_format}'")
     
-    # Get processing path or default to EDIFACT
-    path = PROCESSING_PATHS.get(normalized_format, PROCESSING_PATHS["EDIFACT"])
+    # Validate format and get processing path
+    if normalized_format not in PROCESSING_PATHS:
+        logger.warning(f"⚠️ Unknown format '{customer_format}' (normalized: '{normalized_format}'), defaulting to XML")
+        logger.warning(f"   Valid formats are: {', '.join(PROCESSING_PATHS.keys())}")
+        normalized_format = "XML"
+    
+    # Get processing path (guaranteed to exist now)
+    path = PROCESSING_PATHS[normalized_format]
     
     logger.info(f"🎯 Processing path determined: {path.format_name}")
     logger.info(f"📋 Description: {path.description}")

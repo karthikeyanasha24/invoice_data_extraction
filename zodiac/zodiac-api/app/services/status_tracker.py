@@ -18,6 +18,8 @@ class StatusTracker:
         self._status_cache: Dict[str, InvoiceProcessingResponse] = {}
         # Store completion status: tracking_id -> bool
         self._completed: Dict[str, bool] = {}
+        # Store success/failure status: tracking_id -> bool
+        self._success: Dict[str, bool] = {}
         # Store timestamps: tracking_id -> datetime
         self._timestamps: Dict[str, datetime] = {}
     
@@ -73,11 +75,17 @@ class StatusTracker:
             processing_steps=current_status.processing_steps
         )
     
-    def mark_completed(self, tracking_id: uuid.UUID) -> None:
-        """Mark processing as completed"""
+    def mark_completed(self, tracking_id: uuid.UUID, success: bool = True) -> None:
+        """Mark processing as completed
+        
+        Args:
+            tracking_id: The tracking ID for the invoice processing
+            success: Whether the processing completed successfully (default: True)
+        """
         tracking_str = str(tracking_id)
         self._completed[tracking_str] = True
-        logger.info(f"✅ Marked processing as completed for tracking_id: {tracking_id}")
+        self._success[tracking_str] = success
+        logger.info(f"{'✅' if success else '❌'} Marked processing as {'completed successfully' if success else 'failed'} for tracking_id: {tracking_id}")
     
     def get_status(self, tracking_id: uuid.UUID) -> Optional[InvoiceProcessingResponse]:
         """Get current processing status"""
@@ -97,6 +105,17 @@ class StatusTracker:
         tracking_str = str(tracking_id)
         return self._completed.get(tracking_str, False)
     
+    def is_successful(self, tracking_id: uuid.UUID) -> Optional[bool]:
+        """Check if processing completed successfully
+        
+        Returns:
+            True if successful, False if failed, None if not completed
+        """
+        tracking_str = str(tracking_id)
+        if not self.is_completed(tracking_id):
+            return None
+        return self._success.get(tracking_str, True)
+    
     def cleanup_old_statuses(self, max_age_hours: int = 24) -> None:
         """Clean up old status entries (older than max_age_hours)"""
         now = datetime.utcnow()
@@ -110,6 +129,8 @@ class StatusTracker:
         for tracking_str in to_remove:
             del self._status_cache[tracking_str]
             del self._completed[tracking_str]
+            if tracking_str in self._success:
+                del self._success[tracking_str]
             del self._timestamps[tracking_str]
             logger.info(f"🧹 Cleaned up old status for tracking_id: {tracking_str}")
         
