@@ -62,23 +62,36 @@ async def upload_manual_invoice(
         
         # Save file to storage
         filename = f"{tracking_id}_{file.filename}"
-        storage_path = await save_file_to_storage(
+        storage_result = await save_file_to_storage(
             file_content=xml_content,
             filename=filename,
             subdirectory="invoices_v2"
         )
         
-        # Create document record
-        # Determine if it's a blob URL or local path
-        is_blob = storage_path.startswith('http')
+        # Handle storage result (can be string or dict)
+        if isinstance(storage_result, dict):
+            # Dict format: {"local_path": "...", "blob_url": "..."}
+            xml_path = storage_result.get('local_path')
+            blob_xml_path = storage_result.get('blob_url')
+        elif isinstance(storage_result, str):
+            # String format: either local path or blob URL
+            if storage_result.startswith('http'):
+                xml_path = None
+                blob_xml_path = storage_result
+            else:
+                xml_path = storage_result
+                blob_xml_path = None
+        else:
+            raise ValueError(f"Unexpected storage result type: {type(storage_result)}")
         
+        # Create document record
         document = InvoiceV2Document(
             tracking_id=tracking_id,
             user_id=current_user.id,
             source='manual',
             filename=file.filename,
-            xml_path=None if is_blob else storage_path,
-            blob_xml_path=storage_path if is_blob else None,
+            xml_path=xml_path,
+            blob_xml_path=blob_xml_path,
             validation_status='not_validated'
         )
         
@@ -153,23 +166,36 @@ async def receive_sap_invoice(
         filename = f"SAP_{tracking_id}.xml"
         
         # Save file to storage
-        storage_path = await save_file_to_storage(
+        storage_result = await save_file_to_storage(
             file_content=xml_content,
             filename=filename,
             subdirectory="invoices_v2_sap"
         )
         
-        # Create document record
-        # Determine if it's a blob URL or local path
-        is_blob = storage_path.startswith('http')
+        # Handle storage result (can be string or dict)
+        if isinstance(storage_result, dict):
+            # Dict format: {"local_path": "...", "blob_url": "..."}
+            xml_path = storage_result.get('local_path')
+            blob_xml_path = storage_result.get('blob_url')
+        elif isinstance(storage_result, str):
+            # String format: either local path or blob URL
+            if storage_result.startswith('http'):
+                xml_path = None
+                blob_xml_path = storage_result
+            else:
+                xml_path = storage_result
+                blob_xml_path = None
+        else:
+            raise ValueError(f"Unexpected storage result type: {type(storage_result)}")
         
+        # Create document record
         document = InvoiceV2Document(
             tracking_id=tracking_id,
             user_id=current_user.id,
             source='sap',
             filename=filename,
-            xml_path=None if is_blob else storage_path,
-            blob_xml_path=storage_path if is_blob else None,
+            xml_path=xml_path,
+            blob_xml_path=blob_xml_path,
             validation_status='not_validated'
         )
         
