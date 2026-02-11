@@ -68,13 +68,31 @@ async def upload_manual_invoice(
             subdirectory="invoices_v2"
         )
         
+        logger.info(f"   Storage result type: {type(storage_result)}")
+        logger.info(f"   Storage result: {storage_result}")
+        
         # Handle storage result (can be string or dict)
+        xml_path = None
+        blob_xml_path = None
+        
         if isinstance(storage_result, dict):
-            # Dict format: {"local_path": "...", "blob_url": "..."}
-            xml_path = storage_result.get('local_path')
-            blob_xml_path = storage_result.get('blob_url')
+            # Blob storage dict format: {"url": "https://...", "pathname": "...", ...}
+            logger.info(f"   Storage returned dict with keys: {list(storage_result.keys())}")
+            
+            if 'url' in storage_result:
+                blob_xml_path = storage_result['url']
+                xml_path = None
+                logger.info(f"   ✅ Using blob URL: {blob_xml_path}")
+            else:
+                # Try to find any URL-like value
+                for key, value in storage_result.items():
+                    if isinstance(value, str) and value.startswith('http'):
+                        blob_xml_path = value
+                        logger.info(f"   ✅ Found URL in key '{key}': {blob_xml_path}")
+                        break
         elif isinstance(storage_result, str):
             # String format: either local path or blob URL
+            logger.info(f"   Storage returned string: {storage_result}")
             if storage_result.startswith('http'):
                 xml_path = None
                 blob_xml_path = storage_result
@@ -83,6 +101,19 @@ async def upload_manual_invoice(
                 blob_xml_path = None
         else:
             raise ValueError(f"Unexpected storage result type: {type(storage_result)}")
+        
+        # Final check
+        if not xml_path and not blob_xml_path:
+            logger.error(f"   ❌ Both paths are None!")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save file - no storage path returned"
+            )
+        
+        # Log final paths before creating document
+        logger.info(f"   ✅ File saved successfully!")
+        logger.info(f"   Final xml_path: {xml_path}")
+        logger.info(f"   Final blob_xml_path: {blob_xml_path}")
         
         # Create document record
         document = InvoiceV2Document(
@@ -172,37 +203,97 @@ async def receive_sap_invoice(
         tracking_id = uuid.uuid4()
         
         # Generate filename (preserve original or use tracking ID)
-        filename = f"SAP_{tracking_id}_{file.filename}"
+        # Clean the filename to avoid issues with special characters
+        import re
+        clean_filename = re.sub(r'[^\w\s.-]', '_', file.filename)
+        clean_filename = clean_filename.replace(' ', '_')
+        filename = f"SAP_{tracking_id}_{clean_filename}"
         
         # Save file to storage
+        logger.info(f"   Original filename: {file.filename}")
+        logger.info(f"   Cleaned filename: {filename}")
+        logger.info(f"   Saving file to storage...")
+        logger.info(f"   Subdirectory: invoices_v2_sap")
+        logger.info(f"   File size: {len(xml_content)} bytes")
+        
         storage_result = await save_file_to_storage(
             file_content=xml_content,
             filename=filename,
             subdirectory="invoices_v2_sap"
         )
         
+        logger.info(f"   Storage result type: {type(storage_result)}")
+        logger.info(f"   Storage result: {storage_result}")
+        
+        # Check if storage_result is None or empty
+        if not storage_result:
+            logger.error(f"   ❌ Storage result is None or empty!")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save file to storage - storage function returned no result"
+            )
+        
         # Handle storage result (can be string or dict)
+        xml_path = None
+        blob_xml_path = None
+        
         if isinstance(storage_result, dict):
-            # Dict format: {"local_path": "...", "blob_url": "..."}
-            xml_path = storage_result.get('local_path')
-            blob_xml_path = storage_result.get('blob_url')
+            # Blob storage dict format: {"url": "https://...", "pathname": "...", ...}
+            logger.info(f"   Storage returned dict with keys: {list(storage_result.keys())}")
+            
+            # Vercel Blob returns 'url' key
+            if 'url' in storage_result:
+                blob_xml_path = storage_result['url']
+                xml_path = None
+                logger.info(f"   ✅ Using blob URL: {blob_xml_path}")
+            else:
+                # Fallback: check for other possible keys
+                logger.warning(f"   ⚠️ Dict doesn't have 'url' key, checking alternatives...")
+                logger.info(f"   Available keys: {list(storage_result.keys())}")
+                # Try to find any URL-like value
+                for key, value in storage_result.items():
+                    if isinstance(value, str) and value.startswith('http'):
+                        blob_xml_path = value
+                        logger.info(f"   ✅ Found URL in key '{key}': {blob_xml_path}")
+                        break
         elif isinstance(storage_result, str):
             # String format: either local path or blob URL
+            logger.info(f"   Storage returned string: {storage_result}")
             if storage_result.startswith('http'):
                 xml_path = None
                 blob_xml_path = storage_result
+                logger.info(f"   ✅ String is blob URL")
             else:
                 xml_path = storage_result
                 blob_xml_path = None
+                logger.info(f"   ✅ String is local path")
         else:
+            logger.error(f"   ❌ Unexpected storage result type: {type(storage_result)}")
             raise ValueError(f"Unexpected storage result type: {type(storage_result)}")
+        
+        # Final check - make sure we have at least one path
+        if not xml_path and not blob_xml_path:
+            logger.error(f"   ❌ Both paths are None after processing storage result!")
+            logger.error(f"   Storage result was: {storage_result}")
+            logger.error(f"   Storage result type: {type(storage_result)}")
+            if isinstance(storage_result, dict):
+                logger.error(f"   Dict contents: {storage_result}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save file - no storage path returned. Storage result: {storage_result}"
+            )
+        
+        # Log final paths before creating document
+        logger.info(f"   ✅ File saved successfully!")
+        logger.info(f"   Final xml_path: {xml_path}")
+        logger.info(f"   Final blob_xml_path: {blob_xml_path}")
         
         # Create document record
         document = InvoiceV2Document(
             tracking_id=tracking_id,
             user_id=current_user.id,
             source='sap',
-            filename=filename,
+            filename=file.filename,  # Use original filename, not cleaned one
             xml_path=xml_path,
             blob_xml_path=blob_xml_path,
             validation_status='not_validated'
