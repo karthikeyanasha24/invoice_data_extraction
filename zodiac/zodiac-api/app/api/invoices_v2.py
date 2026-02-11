@@ -13,7 +13,6 @@ from datetime import datetime
 
 from ..database import get_db
 from ..api.auth import get_current_user
-from ..api.api_key_auth import get_api_user
 from ..models.user import ZodiacUser
 from ..models.invoice_v2_document import InvoiceV2Document
 from ..models.invoice_v2_validated import InvoiceV2Validated
@@ -116,7 +115,7 @@ async def upload_manual_invoice(
 @router.post("/sap/receive")
 async def receive_sap_invoice(
     request: Request,
-    api_user: ZodiacUser = Depends(get_api_user),
+    current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -124,9 +123,9 @@ async def receive_sap_invoice(
     SAP sends XML content in request body.
     Source will be set to 'sap'.
     
-    Authentication: Use API Key in X-API-Key header or as Bearer token.
+    Authentication: Uses JWT authentication (same as /api/v1/invoices/sap/process)
     """
-    logger.info(f"📥 SAP invoice receive request from user {api_user.id}")
+    logger.info(f"📥 SAP invoice receive request from user {current_user.id}")
     
     try:
         # Read XML content from request body
@@ -166,7 +165,7 @@ async def receive_sap_invoice(
         
         document = InvoiceV2Document(
             tracking_id=tracking_id,
-            user_id=api_user.id,
+            user_id=current_user.id,
             source='sap',
             filename=filename,
             xml_path=None if is_blob else storage_path,
