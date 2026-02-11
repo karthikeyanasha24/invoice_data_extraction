@@ -140,13 +140,19 @@ class InvoiceV2ValidationService:
     async def _load_xml_content(self, document: InvoiceV2Document) -> str:
         """Load XML content from storage"""
         try:
-            # Determine the file path (blob or local)
-            file_path = document.blob_xml_path if document.blob_xml_path else document.xml_path
-            
-            xml_bytes = await read_file_from_storage(
-                file_path=file_path,
-                blob_xml_path=document.blob_xml_path
-            )
+            # For blob storage, pass the blob URL directly
+            if document.blob_xml_path:
+                xml_bytes = await read_file_from_storage(
+                    file_path=document.blob_xml_path,
+                    blob_xml_path=document.blob_xml_path
+                )
+            elif document.xml_path:
+                xml_bytes = await read_file_from_storage(
+                    file_path=document.xml_path,
+                    blob_xml_path=None
+                )
+            else:
+                raise ValueError("No file path available for this document")
             
             # Convert bytes to string
             xml_content = xml_bytes.decode('utf-8')

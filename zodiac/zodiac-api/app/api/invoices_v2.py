@@ -357,15 +357,29 @@ async def download_document(
         
         # Read XML content from storage
         try:
-            xml_content = await read_file_from_storage(
-                file_path=document.xml_path,
-                blob_xml_path=document.blob_xml_path
-            )
+            logger.info(f"   xml_path: {document.xml_path}")
+            logger.info(f"   blob_xml_path: {document.blob_xml_path}")
+            
+            # For blob storage, pass the blob URL directly
+            if document.blob_xml_path:
+                xml_content = await read_file_from_storage(
+                    file_path=document.blob_xml_path,
+                    blob_xml_path=document.blob_xml_path
+                )
+            elif document.xml_path:
+                xml_content = await read_file_from_storage(
+                    file_path=document.xml_path,
+                    blob_xml_path=None
+                )
+            else:
+                raise ValueError("No file path available for this document")
+                
         except Exception as e:
             logger.error(f"Failed to read file: {e}")
+            logger.exception(e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to read file from storage"
+                detail=f"Failed to read file from storage: {str(e)}"
             )
         
         # Return as downloadable file
