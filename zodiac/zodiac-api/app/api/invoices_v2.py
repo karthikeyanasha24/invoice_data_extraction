@@ -127,32 +127,41 @@ async def upload_manual_invoice(
 
 @router.post("/sap/receive")
 async def receive_sap_invoice(
-    request: Request,
+    file: UploadFile = File(...),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Receive invoice from SAP system.
-    SAP sends XML content in request body.
+    SAP sends XML as a file upload (multipart/form-data).
     Source will be set to 'sap'.
     
     Authentication: Uses JWT authentication (same as /api/v1/invoices/sap/process)
     """
     logger.info(f"📥 SAP invoice receive request from user {current_user.id}")
+    logger.info(f"   Original filename: {file.filename}")
     
     try:
-        # Read XML content from request body
-        xml_content = await request.body()
+        # Validate file extension
+        if not file.filename or not file.filename.lower().endswith('.xml'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only XML files are supported"
+            )
+        
+        # Read XML content from uploaded file
+        xml_content = await file.read()
         
         if not xml_content:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Empty request body"
+                detail="Empty file"
             )
         
         # Validate XML content
         try:
             xml_str = xml_content.decode('utf-8')
+            logger.info(f"   XML size: {len(xml_content)} bytes")
         except UnicodeDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -162,8 +171,8 @@ async def receive_sap_invoice(
         # Generate tracking ID
         tracking_id = uuid.uuid4()
         
-        # Generate filename from tracking ID
-        filename = f"SAP_{tracking_id}.xml"
+        # Generate filename (preserve original or use tracking ID)
+        filename = f"SAP_{tracking_id}_{file.filename}"
         
         # Save file to storage
         storage_result = await save_file_to_storage(
@@ -206,6 +215,8 @@ async def receive_sap_invoice(
         logger.info(f"✅ SAP invoice received successfully")
         logger.info(f"   Document ID: {document.id}")
         logger.info(f"   Tracking ID: {tracking_id}")
+        logger.info(f"   XML Path: {document.xml_path}")
+        logger.info(f"   Blob XML Path: {document.blob_xml_path}")
         
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
