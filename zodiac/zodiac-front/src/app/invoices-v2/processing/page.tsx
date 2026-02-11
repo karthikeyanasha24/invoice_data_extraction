@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { invoicesV2Api } from '@/lib/api';
 import { Loader2, CheckCircle, XCircle, ArrowLeft, FileText } from 'lucide-react';
@@ -24,7 +24,7 @@ interface ValidationProgress {
   all_done: boolean;
 }
 
-export default function ProcessingPage() {
+function ProcessingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const documentIdsParam = searchParams.get('ids');
@@ -261,5 +261,23 @@ export default function ProcessingPage() {
         </div>
       </div>
     </MainLayout>
+  );
+}
+
+export default function ProcessingPage() {
+  return (
+    <Suspense fallback={
+      <MainLayout>
+        <TopSection title="Validation Processing" subtitle="Processing invoice validation" />
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <Loader2 className="h-12 w-12 text-blue-500 animate-spin mx-auto mb-4" />
+            <p className="text-gray-600">Loading validation progress...</p>
+          </div>
+        </div>
+      </MainLayout>
+    }>
+      <ProcessingContent />
+    </Suspense>
   );
 }
