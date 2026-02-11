@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { invoicesV2Api } from '@/lib/api';
-import { Upload, Trash2, Eye, Filter, Cloud, MousePointer, FileText } from 'lucide-react';
+import { Upload, Trash2, Download, Filter, Cloud, MousePointer, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
@@ -86,9 +86,19 @@ export default function DocumentsTab() {
       setShowDeleteModal(false);
       setSelectedDocument(null);
       await fetchDocuments();
+      alert('Document deleted successfully!');
     } catch (error: any) {
       console.error('Delete failed:', error);
       alert(error.response?.data?.detail || 'Delete failed');
+    }
+  };
+
+  const handleDownload = async (doc: InvoiceV2Document) => {
+    try {
+      await invoicesV2Api.downloadDocument(doc.id, doc.filename);
+    } catch (error: any) {
+      console.error('Download failed:', error);
+      alert(error.response?.data?.detail || 'Download failed');
     }
   };
 
@@ -217,16 +227,25 @@ export default function DocumentsTab() {
                       {new Date(doc.uploaded_at).toLocaleString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <button
-                        onClick={() => {
-                          setSelectedDocument(doc);
-                          setShowDeleteModal(true);
-                        }}
-                        className="text-red-600 hover:text-red-900 transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-3">
+                        <button
+                          onClick={() => handleDownload(doc)}
+                          className="text-blue-600 hover:text-blue-900 transition-colors inline-flex items-center"
+                          title="Download XML"
+                        >
+                          <Download className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedDocument(doc);
+                            setShowDeleteModal(true);
+                          }}
+                          className="text-red-600 hover:text-red-900 transition-colors inline-flex items-center"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -239,13 +258,18 @@ export default function DocumentsTab() {
       {/* Delete Confirmation Modal */}
       {showDeleteModal && selectedDocument && (
         <DeleteConfirmationModal
+          invoice={{
+            id: selectedDocument.id,
+            filename: selectedDocument.filename,
+            status: selectedDocument.validation_status,
+            uploaded_at: selectedDocument.uploaded_at
+          } as any}
           isOpen={showDeleteModal}
           onClose={() => {
             setShowDeleteModal(false);
             setSelectedDocument(null);
           }}
           onConfirm={handleDelete}
-          itemName={selectedDocument.filename}
         />
       )}
     </div>

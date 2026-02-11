@@ -332,6 +332,65 @@ async def delete_document(
         )
 
 
+@router.get("/documents/{document_id}/download")
+async def download_document(
+    document_id: int,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Download the XML file for a document.
+    """
+    logger.info(f"📥 Download document request: {document_id}")
+    
+    try:
+        document = db.query(InvoiceV2Document).filter(
+            InvoiceV2Document.id == document_id,
+            InvoiceV2Document.user_id == current_user.id
+        ).first()
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found"
+            )
+        
+        # Read XML content from storage
+        try:
+            xml_content = await read_file_from_storage(
+                file_path=document.xml_path,
+                blob_xml_path=document.blob_xml_path
+            )
+        except Exception as e:
+            logger.error(f"Failed to read file: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to read file from storage"
+            )
+        
+        # Return as downloadable file
+        from fastapi.responses import Response
+        
+        logger.info(f"✅ Document {document_id} downloaded")
+        
+        return Response(
+            content=xml_content,
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{document.filename}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Download failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 # ==================== VALIDATION ENDPOINTS ====================
 
 @router.get("/unvalidated")
@@ -672,6 +731,10 @@ async def manual_fix_invoice(
         for field_name, field_value in corrections.items():
             validated.invoice_data[field_name] = field_value
         
+        # Mark as modified (important for SQLAlchemy to detect JSON changes)
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(validated, "invoice_data")
+        
         # Get customer ID from updated invoice data (after applying corrections)
         customer_id = validated.invoice_data.get("customer_id")
         customer_name = validated.invoice_data.get("customer_name")
@@ -690,22 +753,31 @@ async def manual_fix_invoice(
         else:
             logger.warning(f"⚠️ No customer_id available, skipping cache save for validated invoice {validated_id}")
         
-        # Remove corrected fields from missing_fields
-        if validated.missing_fields:
-            validated.missing_fields = [
-                f for f in validated.missing_fields 
-                if f not in corrections.keys()
-            ]
+        # Re-check for missing required fields after applying corrections
+        from ..services.invoice_v2_validation_service import InvoiceV2ValidationService
+        validation_service = InvoiceV2ValidationService(db)
         
-        # Update status if all fields are now present
-        if not validated.missing_fields or len(validated.missing_fields) == 0:
-            validated.status = 'success'
+        # Find missing fields
+        missing_fields = validation_service._find_missing_fields(validated.invoice_data)
         
+        # Validate field formats
+        validation_errors = validation_service.validate_field_formats(validated.invoice_data)
+        
+        # Update status based on new data
+        new_status = "success" if len(missing_fields) == 0 and len(validation_errors) == 0 else "failed"
+        
+        validated.missing_fields = missing_fields if missing_fields else None
+        validated.validation_errors = validation_errors if validation_errors else None
+        validated.status = new_status
         validated.correction_applied = True
         validated.updated_at = datetime.utcnow()
         
         db.commit()
         db.refresh(validated)
+        
+        logger.info(f"✅ Manual fix applied successfully")
+        logger.info(f"   New status: {new_status}")
+        logger.info(f"   Remaining missing fields: {len(missing_fields)}")
         
         logger.info(f"✅ Manual fix applied successfully")
         

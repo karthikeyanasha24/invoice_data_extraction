@@ -18,13 +18,12 @@ interface Props {
   invoice: ValidatedInvoice;
   onClose: () => void;
   onSuccess: () => void;
-  enableReprocess?: boolean;
+  enableReprocess?: boolean; // Kept for backwards compatibility but not used
 }
 
 export default function ManualEditModal({ invoice, onClose, onSuccess, enableReprocess = false }: Props) {
   const [editableFields, setEditableFields] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [reprocessing, setReprocessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const missingFields = invoice.missing_fields || [];
@@ -120,30 +119,16 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
         return;
       }
 
-      // Call API to save corrections
-      await invoicesV2Api.manualFix(invoice.id, corrections);
+      // Call API to save corrections (backend will auto-validate and update status)
+      const result = await invoicesV2Api.manualFix(invoice.id, corrections);
 
-      // If reprocessing is enabled, trigger revalidation
-      if (enableReprocess) {
-        setSaving(false);
-        setReprocessing(true);
-        
-        try {
-          // Trigger reprocessing using the new reprocess endpoint
-          await invoicesV2Api.reprocessInvoice(invoice.id);
-          
-          alert(`Successfully saved ${Object.keys(corrections).length} correction(s) and reprocessed the invoice! Check back in a moment for updated results.`);
-          onSuccess();
-        } catch (reprocessErr: any) {
-          console.error('Failed to reprocess invoice:', reprocessErr);
-          setError(`Corrections saved but reprocessing failed: ${reprocessErr.message || 'Unknown error'}`);
-          setReprocessing(false);
-        }
-      } else {
-        // Success without reprocessing
-        alert(`Successfully saved ${Object.keys(corrections).length} correction(s)!`);
-        onSuccess();
-      }
+      // Show success message with new status
+      const statusMessage = result.new_status === 'success' 
+        ? 'Invoice is now validated successfully!' 
+        : `${result.remaining_missing_fields?.length || 0} field(s) still missing.`;
+      
+      alert(`Successfully saved ${Object.keys(corrections).length} correction(s)! ${statusMessage}`);
+      onSuccess();
     } catch (err: any) {
       console.error('Failed to save corrections:', err);
       setError(err.message || 'Failed to save corrections');
@@ -186,11 +171,9 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
                     <p className="text-sm text-blue-700">
                       You can edit any field below. Corrections for <strong>{invoice.invoice_data.customer_name || 'this customer'}</strong> will be saved
                       to the cache and automatically applied to future invoices with the same customer ID.
-                      {enableReprocess && (
-                        <span className="block mt-2 font-semibold">
-                          ⚠️ After saving, the invoice will be automatically reprocessed to validate all fields.
-                        </span>
-                      )}
+                      <span className="block mt-2 font-semibold">
+                        ✨ After saving, the invoice will be automatically re-validated. If all required fields are present, it will move to the Successful tab!
+                      </span>
                     </p>
                   </div>
                 </div>
@@ -335,14 +318,14 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
           <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
             <button
               onClick={onClose}
-              disabled={saving || reprocessing}
+              disabled={saving}
               className="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               onClick={handleSave}
-              disabled={saving || reprocessing}
+              disabled={saving}
               className="inline-flex items-center px-4 py-2 bg-blue-600 border border-transparent rounded-md text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {saving ? (
@@ -351,20 +334,12 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Saving...
-                </>
-              ) : reprocessing ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Reprocessing...
+                  Saving & Validating...
                 </>
               ) : (
                 <>
                   <Save className="h-4 w-4 mr-2" />
-                  {enableReprocess ? 'Save & Reprocess' : 'Save to Cache'}
+                  Save & Validate
                 </>
               )}
             </button>
