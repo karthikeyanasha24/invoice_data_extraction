@@ -1873,11 +1873,29 @@ export const invoicesV2Api = {
         }
     },
 
+    getDocumentInfo: async (documentId: number) => {
+        try {
+            const response = await api.get(`/api/v1/invoices-v2/documents/${documentId}/info`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get document info:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to get document info.');
+        }
+    },
+
     downloadDocument: async (documentId: number, filename: string) => {
         try {
             const response = await api.get(`/api/v1/invoices-v2/documents/${documentId}/download`, {
                 responseType: 'blob'
             });
+            
+            // Check if response is actually an error (JSON blob)
+            if (response.data.type === 'application/json') {
+                // Read the JSON error from blob
+                const text = await response.data.text();
+                const errorData = JSON.parse(text);
+                throw new Error(errorData.detail || 'Failed to download document');
+            }
             
             // Create a download link
             const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -1890,7 +1908,17 @@ export const invoicesV2Api = {
             window.URL.revokeObjectURL(url);
         } catch (error: any) {
             console.error('Failed to download document:', error);
-            throw new Error(error.response?.data?.detail || 'Failed to download document.');
+            // Try to extract error detail from blob if available
+            if (error.response?.data instanceof Blob) {
+                try {
+                    const text = await error.response.data.text();
+                    const errorData = JSON.parse(text);
+                    throw new Error(errorData.detail || 'Failed to download document.');
+                } catch (e) {
+                    throw new Error('Failed to download document.');
+                }
+            }
+            throw new Error(error.message || error.response?.data?.detail || 'Failed to download document.');
         }
     },
 

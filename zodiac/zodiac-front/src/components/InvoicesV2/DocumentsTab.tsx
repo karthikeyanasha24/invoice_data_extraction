@@ -95,10 +95,19 @@ export default function DocumentsTab() {
 
   const handleDownload = async (doc: InvoiceV2Document) => {
     try {
+      // First check document info for debugging
+      const info = await invoicesV2Api.getDocumentInfo(doc.id);
+      console.log('Document info:', info);
+      
+      if (!info.has_xml_path && !info.has_blob_path) {
+        alert('Error: No file path found for this document. The file may not have been uploaded correctly.');
+        return;
+      }
+      
       await invoicesV2Api.downloadDocument(doc.id, doc.filename);
     } catch (error: any) {
       console.error('Download failed:', error);
-      alert(error.response?.data?.detail || 'Download failed');
+      alert(error.message || 'Download failed');
     }
   };
 

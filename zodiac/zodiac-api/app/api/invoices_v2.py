@@ -343,6 +343,37 @@ async def delete_document(
         )
 
 
+@router.get("/documents/{document_id}/info")
+async def get_document_info(
+    document_id: int,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get document storage information for debugging.
+    """
+    document = db.query(InvoiceV2Document).filter(
+        InvoiceV2Document.id == document_id,
+        InvoiceV2Document.user_id == current_user.id
+    ).first()
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found"
+        )
+    
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "xml_path": document.xml_path,
+        "blob_xml_path": document.blob_xml_path,
+        "has_xml_path": document.xml_path is not None,
+        "has_blob_path": document.blob_xml_path is not None,
+        "source": document.source
+    }
+
+
 @router.get("/documents/{document_id}/download")
 async def download_document(
     document_id: int,
@@ -361,32 +392,45 @@ async def download_document(
         ).first()
         
         if not document:
+            logger.error(f"Document {document_id} not found")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Document not found"
             )
         
+        logger.info(f"   Filename: {document.filename}")
+        logger.info(f"   XML Path: {document.xml_path}")
+        logger.info(f"   Blob XML Path: {document.blob_xml_path}")
+        logger.info(f"   Source: {document.source}")
+        
+        # Determine which path to use
+        if not document.blob_xml_path and not document.xml_path:
+            logger.error(f"No file path available for document {document_id}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="No file path available for this document"
+            )
+        
         # Read XML content from storage
         try:
-            logger.info(f"   xml_path: {document.xml_path}")
-            logger.info(f"   blob_xml_path: {document.blob_xml_path}")
-            
             # For blob storage, pass the blob URL directly
             if document.blob_xml_path:
+                logger.info(f"   Reading from blob storage: {document.blob_xml_path}")
                 xml_content = await read_file_from_storage(
                     file_path=document.blob_xml_path,
                     blob_xml_path=document.blob_xml_path
                 )
-            elif document.xml_path:
+            else:
+                logger.info(f"   Reading from local storage: {document.xml_path}")
                 xml_content = await read_file_from_storage(
                     file_path=document.xml_path,
                     blob_xml_path=None
                 )
-            else:
-                raise ValueError("No file path available for this document")
+            
+            logger.info(f"   Successfully read {len(xml_content)} bytes")
                 
         except Exception as e:
-            logger.error(f"Failed to read file: {e}")
+            logger.error(f"Failed to read file from storage: {e}")
             logger.exception(e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -396,7 +440,7 @@ async def download_document(
         # Return as downloadable file
         from fastapi.responses import Response
         
-        logger.info(f"✅ Document {document_id} downloaded")
+        logger.info(f"✅ Document {document_id} downloaded successfully")
         
         return Response(
             content=xml_content,
@@ -409,10 +453,11 @@ async def download_document(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Download failed: {e}")
+        logger.error(f"❌ Download failed with unexpected error: {e}")
+        logger.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Download failed: {str(e)}"
         )
 
 
