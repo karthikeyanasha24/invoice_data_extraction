@@ -113,6 +113,7 @@ class SATDocumentProcessor:
                 metodo_pago=cfdi_data.get('metodo_pago'),
                 related_cfdi_uuid=cfdi_data.get('related_cfdi_uuids', [None])[0] if cfdi_data.get('related_cfdi_uuids') else None,
                 status='VALIDATED',  # Set to VALIDATED after successful parsing
+                source=source,  # Track source: 'admin' or 'supplier'
                 xml_content=xml_content,
                 xml_hash=xml_hash,
                 file_size=len(xml_content.encode('utf-8')),

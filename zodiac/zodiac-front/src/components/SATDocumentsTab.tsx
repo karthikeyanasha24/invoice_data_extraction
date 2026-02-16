@@ -307,7 +307,10 @@ export default function SATDocumentsTab() {
                     Supplier
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Date
+                    Invoice Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Received At
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Amount
@@ -359,6 +362,16 @@ export default function SATDocumentsTab() {
                       <div className="flex items-center gap-1">
                         <Calendar className="w-4 h-4 text-gray-400" />
                         {doc.fecha ? format(new Date(doc.fecha), 'yyyy-MM-dd') : 'N/A'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-xs">
+                          {doc.received_at ? format(new Date(doc.received_at), 'yyyy-MM-dd') : 'N/A'}
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {doc.received_at ? format(new Date(doc.received_at), 'HH:mm:ss') : ''}
+                        </span>
                       </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-right font-medium text-gray-900">
