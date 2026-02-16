@@ -21,33 +21,96 @@ interface Props {
   enableReprocess?: boolean; // Kept for backwards compatibility but not used
 }
 
+interface LineItem {
+  line_id?: string;
+  item_name?: string;
+  item_description?: string;
+  quantity?: string;
+  unit_code?: string;
+  price?: string;
+  line_amount?: string;
+  seller_item_id?: string;
+  buyer_item_id?: string;
+  standard_item_id?: string;
+  tax_percentage?: string;
+  origin_country?: string;
+  commodity_code?: string;
+  line_note?: string;
+}
+
 export default function ManualEditModal({ invoice, onClose, onSuccess, enableReprocess = false }: Props) {
   const [editableFields, setEditableFields] = useState<Record<string, string>>({});
+  const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showLineItemsEditor, setShowLineItemsEditor] = useState(false);
 
   const missingFields = invoice.missing_fields || [];
 
   // Define which fields should be editable (exclude complex objects and arrays)
   const editableFieldNames = [
+    // Invoice Header & Metadata
     'invoice_number',
     'issue_date',
     'due_date',
     'currency',
     'invoice_type_code',
+    'customization_id',
+    'profile_id',
+    'note',
+    'accounting_cost',
+    'buyer_reference',
+    // Invoice Period
+    'invoice_period_start',
+    'invoice_period_end',
+    // References
+    'order_reference',
+    'sales_order_id',
+    'contract_reference',
+    'project_reference',
+    // Customer Information
     'customer_id',
+    'customer_id_scheme',
     'customer_name',
     'customer_tax_id',
     'customer_legal_name',
+    'customer_company_legal_form',
+    'customer_contact_name',
+    'customer_contact_telephone',
+    'customer_contact_email',
+    // Supplier Information
     'supplier_id',
+    'supplier_id_scheme',
     'supplier_name',
     'supplier_tax_id',
     'supplier_legal_name',
-    'subtotal',
+    'supplier_company_legal_form',
+    'supplier_contact_name',
+    'supplier_contact_telephone',
+    'supplier_contact_email',
+    // Payment Information
+    'payment_means_code',
+    'payment_means_name',
+    'payment_id',
+    'payment_terms',
+    // Tax Information
     'tax_amount',
-    'total',
+    'tax_percentage',
+    'taxable_amount',
+    'tax_category_id',
+    'tax_scheme',
+    // Monetary Totals
     'line_extension_amount',
-    'payable_amount'
+    'subtotal',
+    'total',
+    'payable_amount',
+    'allowance_total_amount',
+    'charge_total_amount',
+    'prepaid_amount',
+    // Delivery Information
+    'delivery_date',
+    'delivery_location_id',
+    'delivery_party_name'
   ];
 
   // Initialize with current values
@@ -62,6 +125,28 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
       }
     });
     setEditableFields(initial);
+
+    // Initialize line items
+    if (invoice.invoice_data.line_items && Array.isArray(invoice.invoice_data.line_items)) {
+      setLineItems(invoice.invoice_data.line_items.map((item: any) => ({
+        line_id: item.line_id || item.id || '',
+        item_name: item.item_name || '',
+        item_description: item.item_description || '',
+        quantity: item.quantity || '',
+        unit_code: item.unit_code || '',
+        price: item.price || '',
+        line_amount: item.line_amount || '',
+        seller_item_id: item.seller_item_id || '',
+        buyer_item_id: item.buyer_item_id || '',
+        standard_item_id: item.standard_item_id || '',
+        tax_percentage: item.tax_percentage || '',
+        origin_country: item.origin_country || '',
+        commodity_code: item.commodity_code || '',
+        line_note: item.line_note || '',
+      })));
+    } else {
+      setLineItems([]);
+    }
   }, [invoice]);
 
   const handleChange = (field: string, value: string) => {
@@ -80,16 +165,74 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
 
   const getFieldPlaceholder = (field: string): string => {
     const placeholders: Record<string, string> = {
+      // IDs
       supplier_id: 'e.g., 9429033821733',
       customer_id: 'e.g., 9429033591476',
+      customer_id_scheme: 'e.g., 0088',
+      supplier_id_scheme: 'e.g., 0088',
+      // Dates
       due_date: 'YYYY-MM-DD',
       issue_date: 'YYYY-MM-DD',
+      invoice_period_start: 'YYYY-MM-DD',
+      invoice_period_end: 'YYYY-MM-DD',
+      delivery_date: 'YYYY-MM-DD',
+      // Currency & Amounts
       currency: 'e.g., NZD',
       total: 'e.g., 1595.51',
       subtotal: 'e.g., 1387.40',
       tax_amount: 'e.g., 208.11',
+      taxable_amount: 'e.g., 1387.40',
+      payable_amount: 'e.g., 1595.51',
+      line_extension_amount: 'e.g., 1487.40',
+      allowance_total_amount: 'e.g., 100.00',
+      prepaid_amount: 'e.g., 0.00',
+      // Tax
+      tax_percentage: 'e.g., 15',
+      tax_category_id: 'e.g., S',
+      tax_scheme: 'e.g., GST',
+      // Contact
+      customer_contact_email: 'e.g., contact@customer.com',
+      supplier_contact_email: 'e.g., contact@supplier.com',
+      customer_contact_telephone: 'e.g., +64 21 123 4567',
+      supplier_contact_telephone: 'e.g., +64 21 890 1234',
+      // Payment
+      payment_means_code: 'e.g., 30',
+      payment_means_name: 'e.g., Credit transfer',
+      payment_id: 'e.g., INV-12345',
+      payment_terms: 'e.g., Payment within 30 days',
+      // References
+      order_reference: 'e.g., PO-12345',
+      sales_order_id: 'e.g., SO-67890',
+      contract_reference: 'e.g., CT-11111',
+      project_reference: 'e.g., PRJ-22222',
     };
     return placeholders[field] || `Enter ${formatFieldName(field).toLowerCase()}`;
+  };
+
+  const handleLineItemChange = (index: number, field: keyof LineItem, value: string) => {
+    setLineItems(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  const handleAddLineItem = () => {
+    setLineItems(prev => [
+      ...prev,
+      {
+        line_id: String(prev.length + 1),
+        item_name: '',
+        quantity: '1',
+        unit_code: 'C62',
+        price: '0',
+        line_amount: '0'
+      }
+    ]);
+  };
+
+  const handleRemoveLineItem = (index: number) => {
+    setLineItems(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSave = async () => {
@@ -98,7 +241,7 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
       setError(null);
 
       // Find fields that have been changed or filled (only send corrections)
-      const corrections: Record<string, string> = {};
+      const corrections: Record<string, any> = {};
       const originalData = invoice.invoice_data;
 
       editableFieldNames.forEach(field => {
@@ -112,6 +255,60 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
           }
         }
       });
+
+      // Add line items if they were edited
+      const originalLineItems = originalData.line_items || [];
+      
+      // Normalize line items for comparison (convert to same format)
+      const normalizeLineItem = (item: any) => ({
+        line_id: String(item.line_id || item.id || ''),
+        item_name: String(item.item_name || ''),
+        item_description: String(item.item_description || ''),
+        quantity: String(item.quantity || ''),
+        unit_code: String(item.unit_code || ''),
+        price: String(item.price || ''),
+        line_amount: String(item.line_amount || ''),
+        seller_item_id: String(item.seller_item_id || ''),
+        buyer_item_id: String(item.buyer_item_id || ''),
+        standard_item_id: String(item.standard_item_id || ''),
+        tax_percentage: String(item.tax_percentage || ''),
+        origin_country: String(item.origin_country || ''),
+        commodity_code: String(item.commodity_code || ''),
+        line_note: String(item.line_note || ''),
+      });
+      
+      const normalizedCurrent = lineItems.map(normalizeLineItem);
+      const normalizedOriginal = originalLineItems.map(normalizeLineItem);
+      
+      const lineItemsChanged = JSON.stringify(normalizedCurrent) !== JSON.stringify(normalizedOriginal);
+      
+      if (lineItemsChanged) {
+        // Send line items with proper structure (convert back to appropriate types)
+        corrections['line_items'] = lineItems.map(item => {
+          const cleaned: any = {
+            line_id: item.line_id || String(lineItems.indexOf(item) + 1),
+            item_name: item.item_name || '',
+            quantity: parseFloat(item.quantity) || 0,
+            unit_code: item.unit_code || 'C62',
+            price: parseFloat(item.price) || 0,
+            line_amount: parseFloat(item.line_amount) || 0,
+          };
+          
+          // Add optional fields if they have values
+          if (item.item_description) cleaned.item_description = item.item_description;
+          if (item.seller_item_id) cleaned.seller_item_id = item.seller_item_id;
+          if (item.buyer_item_id) cleaned.buyer_item_id = item.buyer_item_id;
+          if (item.standard_item_id) cleaned.standard_item_id = item.standard_item_id;
+          if (item.tax_percentage) cleaned.tax_percentage = parseFloat(item.tax_percentage);
+          if (item.origin_country) cleaned.origin_country = item.origin_country;
+          if (item.commodity_code) cleaned.commodity_code = item.commodity_code;
+          if (item.line_note) cleaned.line_note = item.line_note;
+          
+          return cleaned;
+        });
+        
+        console.log('✏️ Line items changed, sending to backend:', corrections['line_items']);
+      }
 
       if (Object.keys(corrections).length === 0) {
         setError('No changes detected. Please modify at least one field.');
@@ -309,6 +506,183 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
                         </div>
                       ))}
                   </div>
+                </div>
+
+                {/* Line Items (Products) Editor */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between border-b pb-2">
+                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                      Line Items / Products ({lineItems.length})
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowLineItemsEditor(!showLineItemsEditor)}
+                      className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                    >
+                      {showLineItemsEditor ? 'Hide' : 'Show'} Editor
+                    </button>
+                  </div>
+
+                  {showLineItemsEditor && (
+                    <div className="space-y-4">
+                      <button
+                        type="button"
+                        onClick={handleAddLineItem}
+                        className="w-full py-2 px-4 border border-dashed border-gray-300 rounded-md text-sm text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-colors"
+                      >
+                        + Add Product Line
+                      </button>
+
+                      {lineItems.map((item, index) => (
+                        <div key={index} className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <h5 className="text-sm font-medium text-gray-900">Product #{index + 1}</h5>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveLineItem(index)}
+                              className="text-xs text-red-600 hover:text-red-700 font-medium"
+                            >
+                              Remove
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* Item Name */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Item Name *
+                              </label>
+                              <input
+                                type="text"
+                                value={item.item_name || ''}
+                                onChange={(e) => handleLineItemChange(index, 'item_name', e.target.value)}
+                                placeholder="e.g., True-Widgets"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Quantity */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Quantity *
+                              </label>
+                              <input
+                                type="text"
+                                value={item.quantity || ''}
+                                onChange={(e) => handleLineItemChange(index, 'quantity', e.target.value)}
+                                placeholder="e.g., 10"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Unit Code */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Unit of Measure *
+                              </label>
+                              <input
+                                type="text"
+                                value={item.unit_code || ''}
+                                onChange={(e) => handleLineItemChange(index, 'unit_code', e.target.value)}
+                                placeholder="e.g., C62, DAY, M66"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Price */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Unit Price
+                              </label>
+                              <input
+                                type="text"
+                                value={item.price || ''}
+                                onChange={(e) => handleLineItemChange(index, 'price', e.target.value)}
+                                placeholder="e.g., 29.99"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Line Amount */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Line Amount
+                              </label>
+                              <input
+                                type="text"
+                                value={item.line_amount || ''}
+                                onChange={(e) => handleLineItemChange(index, 'line_amount', e.target.value)}
+                                placeholder="e.g., 299.90"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Seller Item ID */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Seller Item ID
+                              </label>
+                              <input
+                                type="text"
+                                value={item.seller_item_id || ''}
+                                onChange={(e) => handleLineItemChange(index, 'seller_item_id', e.target.value)}
+                                placeholder="e.g., WG546767"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Buyer Item ID */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Buyer Item ID
+                              </label>
+                              <input
+                                type="text"
+                                value={item.buyer_item_id || ''}
+                                onChange={(e) => handleLineItemChange(index, 'buyer_item_id', e.target.value)}
+                                placeholder="e.g., W659590"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Standard Item ID */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Standard Item ID
+                              </label>
+                              <input
+                                type="text"
+                                value={item.standard_item_id || ''}
+                                onChange={(e) => handleLineItemChange(index, 'standard_item_id', e.target.value)}
+                                placeholder="e.g., WG546767"
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+
+                            {/* Item Description */}
+                            <div className="md:col-span-2">
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Item Description
+                              </label>
+                              <textarea
+                                value={item.item_description || ''}
+                                onChange={(e) => handleLineItemChange(index, 'item_description', e.target.value)}
+                                placeholder="e.g., Widgets True and Fair"
+                                rows={2}
+                                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {lineItems.length === 0 && (
+                        <div className="text-center py-6 text-gray-500 text-sm">
+                          No line items. Click "Add Product Line" to create one.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

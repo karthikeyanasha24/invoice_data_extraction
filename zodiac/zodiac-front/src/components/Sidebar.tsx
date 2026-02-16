@@ -41,15 +41,8 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
       id: 'invoices',
       label: 'Invoices',
       icon: FileText,
-      path: '/invoices',
-      description: 'Manage invoice files'
-    },
-    {
-      id: 'invoices-v2',
-      label: 'Invoices V2',
-      icon: FileText,
       path: '/invoices-v2',
-      description: 'New invoice validation system'
+      description: 'Manage and validate invoices'
     },
     {
       id: 'quotations',

@@ -43,8 +43,10 @@ def create_customer(
         # Create new customer
         db_customer = Customer(
             customer_id=customer.customer_id,
-            format=customer.format,
-            validation_rules=customer.validation_rules,
+            target_format=customer.target_format,
+            tax_value=customer.tax_value,
+            tax_percentage=customer.tax_percentage,
+            validation_fields=customer.validation_fields,
         )
         db.add(db_customer)
         db.commit()
@@ -317,17 +319,18 @@ def delete_customer_by_db_id(
 def get_supported_formats(
     current_user: ZodiacUser = Depends(get_current_user),
 ):
-    """Get list of supported file formats"""
+    """Get list of supported target formats for invoice conversion"""
     logger.info("📋 Fetching supported formats")
     return {
-        "supported_formats": ["XML", "X12", "EDIFACT", "XML_EMBED_PDF", "XML_EMBED_X12", "XML_EMBED_EDIFACT"],
+        "supported_formats": ["X12", "EDIFACT", "PIDX", "PDF", "XML", "UBL", "CFDI"],
         "descriptions": {
-            "XML": "XML format with validation (pass-through)",
-            "X12": "ASC X12 EDI format with EDINation validation",
+            "X12": "ASC X12 EDI format",
             "EDIFACT": "UN/EDIFACT electronic data interchange format",
-            "XML_EMBED_PDF": "Generate PDF from XML and embed in XML for third-party API",
-            "XML_EMBED_X12": "Generate X12 from XML and embed in XML for third-party API",
-            "XML_EMBED_EDIFACT": "Generate EDIFACT from XML and embed in XML for third-party API",
+            "PIDX": "Petroleum Industry Data Exchange format",
+            "PDF": "Portable Document Format (human-readable invoice)",
+            "XML": "XML format (UBL 2.0 standard)",
+            "UBL": "Universal Business Language 2.0",
+            "CFDI": "Mexican CFDI (Comprobante Fiscal Digital por Internet)",
         },
     }
 
@@ -363,8 +366,10 @@ def bulk_create_customers(
                 # Create new customer
                 db_customer = Customer(
                     customer_id=customer_data.customer_id,
-                    format=customer_data.format,
-                    validation_rules=customer_data.validation_rules,
+                    target_format=customer_data.target_format,
+                    tax_value=customer_data.tax_value,
+                    tax_percentage=customer_data.tax_percentage,
+                    validation_fields=customer_data.validation_fields,
                 )
                 db.add(db_customer)
                 created_customers.append(customer_data.customer_id)

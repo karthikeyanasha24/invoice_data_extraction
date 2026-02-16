@@ -1,13 +1,16 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
+from decimal import Decimal
 
 
 class CustomerBase(BaseModel):
-    """Base customer schema with common fields"""
+    """Base customer schema with common fields (V2)"""
     customer_id: str = Field(..., description="Unique customer identifier")
-    format: str = Field(default="edifact", description="Target format for this customer (e.g., 'edifact', 'x12', 'xml')")
-    validation_rules: Optional[str] = Field(None, description="JSON string containing required XML fields (XPath notation)")
+    target_format: str = Field(..., description="Target format for conversion (x12, edifact, pidx, pdf, xml, ubl, cfdi)")
+    tax_value: Decimal = Field(..., description="Fixed tax amount for this customer", ge=0)
+    tax_percentage: Decimal = Field(..., description="Tax rate percentage", ge=0, le=100)
+    validation_fields: Optional[str] = Field(None, description="JSON string {field_name: expected_value} for validation")
 
 
 class CustomerCreate(CustomerBase):
@@ -18,8 +21,10 @@ class CustomerCreate(CustomerBase):
 class CustomerUpdate(BaseModel):
     """Schema for updating an existing customer"""
     customer_id: Optional[str] = None
-    format: Optional[str] = None
-    validation_rules: Optional[str] = None
+    target_format: Optional[str] = None
+    tax_value: Optional[Decimal] = None
+    tax_percentage: Optional[Decimal] = None
+    validation_fields: Optional[str] = None
 
 
 class CustomerResponse(CustomerBase):

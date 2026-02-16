@@ -8,10 +8,11 @@ import DocumentsTab from '@/components/InvoicesV2/DocumentsTab';
 import ValidationTab from '@/components/InvoicesV2/ValidationTab';
 import FailedInvoicesTab from '@/components/InvoicesV2/FailedInvoicesTab';
 import SuccessfulInvoicesTab from '@/components/InvoicesV2/SuccessfulInvoicesTab';
-import { FileText, CheckCircle, ClipboardList, XCircle } from 'lucide-react';
+import ConvertedInvoicesTab from '@/components/InvoicesV2/ConvertedInvoicesTab';
+import { FileText, CheckCircle, ClipboardList, XCircle, FileType } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-type TabType = 'documents' | 'validation' | 'failed' | 'successful';
+type TabType = 'documents' | 'validation' | 'failed' | 'successful' | 'converted';
 
 function InvoicesV2Content() {
   const searchParams = useSearchParams();
@@ -19,7 +20,7 @@ function InvoicesV2Content() {
   const [activeTab, setActiveTab] = useState<TabType>(tabParam || 'documents');
 
   useEffect(() => {
-    if (tabParam && ['documents', 'validation', 'failed', 'successful'].includes(tabParam)) {
+    if (tabParam && ['documents', 'validation', 'failed', 'successful', 'converted'].includes(tabParam)) {
       setActiveTab(tabParam);
     }
   }, [tabParam]);
@@ -108,6 +109,26 @@ function InvoicesV2Content() {
             />
             Successful Invoices
           </button>
+
+          <button
+            onClick={() => setActiveTab('converted')}
+            className={cn(
+              'group inline-flex items-center border-b-2 py-4 px-1 text-sm font-medium transition-colors whitespace-nowrap',
+              activeTab === 'converted'
+                ? 'border-purple-500 text-purple-600'
+                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+            )}
+          >
+            <FileType
+              className={cn(
+                'mr-2 h-5 w-5',
+                activeTab === 'converted'
+                  ? 'text-purple-500'
+                  : 'text-gray-400 group-hover:text-gray-500'
+              )}
+            />
+            Converted Invoices
+          </button>
         </nav>
       </div>
 
@@ -117,6 +138,7 @@ function InvoicesV2Content() {
         {activeTab === 'validation' && <ValidationTab />}
         {activeTab === 'failed' && <FailedInvoicesTab />}
         {activeTab === 'successful' && <SuccessfulInvoicesTab />}
+        {activeTab === 'converted' && <ConvertedInvoicesTab />}
       </div>
     </div>
   );

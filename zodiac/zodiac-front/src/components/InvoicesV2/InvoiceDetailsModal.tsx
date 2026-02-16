@@ -33,13 +33,45 @@ export default function InvoiceDetailsModal({ invoice, onClose }: Props) {
     return String(value);
   };
 
-  // Group fields by category
-  const headerFields = ['invoice_number', 'issue_date', 'due_date', 'currency', 'invoice_type_code'];
-  const customerFields = ['customer_id', 'customer_name', 'customer_tax_id', 'customer_legal_name'];
-  const supplierFields = ['supplier_id', 'supplier_name', 'supplier_tax_id', 'supplier_legal_name'];
-  const monetaryFields = ['subtotal', 'tax_amount', 'total', 'line_extension_amount', 'payable_amount'];
+  // Comprehensive field groupings (Hybrid Approach)
+  const fieldGroups = {
+    header: [
+      'invoice_number', 'issue_date', 'due_date', 'currency', 'invoice_type_code',
+      'customization_id', 'profile_id', 'note', 'accounting_cost', 'buyer_reference'
+    ],
+    period: ['invoice_period_start', 'invoice_period_end'],
+    references: ['order_reference', 'sales_order_id', 'contract_reference', 'project_reference'],
+    customer: [
+      'customer_id', 'customer_id_scheme', 'customer_name', 'customer_legal_name',
+      'customer_tax_id', 'customer_address', 'customer_contact_name',
+      'customer_contact_telephone', 'customer_contact_email', 'customer_company_legal_form'
+    ],
+    supplier: [
+      'supplier_id', 'supplier_id_scheme', 'supplier_name', 'supplier_legal_name',
+      'supplier_tax_id', 'supplier_address', 'supplier_contact_name',
+      'supplier_contact_telephone', 'supplier_contact_email', 'supplier_company_legal_form'
+    ],
+    payment: [
+      'payment_means_code', 'payment_means_name', 'payment_id',
+      'payment_terms', 'payee_financial_account'
+    ],
+    tax: [
+      'tax_amount', 'tax_percentage', 'tax_category_id',
+      'taxable_amount', 'tax_scheme'
+    ],
+    monetary: [
+      'line_extension_amount', 'subtotal', 'total', 'payable_amount',
+      'allowance_total_amount', 'charge_total_amount', 'prepaid_amount'
+    ],
+    delivery: [
+      'delivery_date', 'delivery_location_id', 'delivery_address', 'delivery_party_name'
+    ]
+  };
+
+  // Collect all defined fields
+  const allDefinedFields = Object.values(fieldGroups).flat();
   const otherFields = Object.keys(invoice.invoice_data).filter(
-    key => ![...headerFields, ...customerFields, ...supplierFields, ...monetaryFields, 'line_items'].includes(key)
+    key => ![...allDefinedFields, 'line_items', 'line_items_count', 'allowances_charges'].includes(key)
   );
 
   const FieldSection = ({ title, fields }: { title: string; fields: string[] }) => {
@@ -159,30 +191,120 @@ export default function InvoiceDetailsModal({ invoice, onClose }: Props) {
 
               {/* Invoice Data Sections */}
               <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-6">
-                <FieldSection title="Invoice Header" fields={headerFields} />
-                <FieldSection title="Customer Information" fields={customerFields} />
-                <FieldSection title="Supplier Information" fields={supplierFields} />
-                <FieldSection title="Monetary Details" fields={monetaryFields} />
+                <FieldSection title="Invoice Header" fields={fieldGroups.header} />
+                <FieldSection title="Invoice Period" fields={fieldGroups.period} />
+                <FieldSection title="References" fields={fieldGroups.references} />
+                <FieldSection title="Customer Information" fields={fieldGroups.customer} />
+                <FieldSection title="Supplier Information" fields={fieldGroups.supplier} />
+                <FieldSection title="Payment Details" fields={fieldGroups.payment} />
+                <FieldSection title="Tax Breakdown" fields={fieldGroups.tax} />
+                <FieldSection title="Monetary Summary" fields={fieldGroups.monetary} />
+                <FieldSection title="Delivery" fields={fieldGroups.delivery} />
+                
+                {/* Allowances & Charges */}
+                {invoice.invoice_data.allowances_charges && Array.isArray(invoice.invoice_data.allowances_charges) && invoice.invoice_data.allowances_charges.length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                      Allowances & Charges ({invoice.invoice_data.allowances_charges.length})
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reason</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Base Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {invoice.invoice_data.allowances_charges.map((ac: any, idx: number) => (
+                            <tr key={idx}>
+                              <td className="px-3 py-2 text-sm text-gray-900">
+                                {ac.charge_indicator === 'true' ? 'Charge' : 'Allowance'}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{ac.reason || ac.reason_code || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-900">{ac.amount || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{ac.base_amount || 'N/A'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                
                 {otherFields.length > 0 && <FieldSection title="Additional Information" fields={otherFields} />}
 
-                {/* Line Items */}
-                {invoice.invoice_data.line_items && Array.isArray(invoice.invoice_data.line_items) && (
+                {/* Enhanced Line Items */}
+                {invoice.invoice_data.line_items && Array.isArray(invoice.invoice_data.line_items) && invoice.invoice_data.line_items.length > 0 && (
                   <div className="space-y-3">
                     <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
                       Line Items ({invoice.invoice_data.line_items.length})
                     </h4>
-                    <div className="space-y-2">
-                      {invoice.invoice_data.line_items.map((item: any, idx: number) => (
-                        <div key={idx} className="bg-gray-50 rounded-md p-3 text-sm">
-                          <div className="font-medium text-gray-900">{item.item_name || `Item ${idx + 1}`}</div>
-                          <div className="text-gray-600 mt-1">
-                            {item.quantity && <span>Qty: {item.quantity} | </span>}
-                            {item.price && <span>Price: {item.price} | </span>}
-                            {item.line_amount && <span>Total: {item.line_amount}</span>}
-                          </div>
-                        </div>
-                      ))}
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product IDs</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Qty</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Tax %</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {invoice.invoice_data.line_items.map((item: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="px-3 py-2 text-sm text-gray-900">{item.id || idx + 1}</td>
+                              <td className="px-3 py-2 text-sm">
+                                <div className="font-medium text-gray-900">{item.item_name || 'N/A'}</div>
+                                {item.item_description && (
+                                  <div className="text-xs text-gray-500 mt-0.5">{item.item_description}</div>
+                                )}
+                                {item.line_note && (
+                                  <div className="text-xs text-blue-600 mt-0.5">Note: {item.line_note}</div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-600">
+                                <div className="space-y-0.5">
+                                  {item.buyer_item_id && <div className="text-xs">Buyer: {item.buyer_item_id}</div>}
+                                  {item.seller_item_id && <div className="text-xs">Seller: {item.seller_item_id}</div>}
+                                  {item.standard_item_id && <div className="text-xs">Standard: {item.standard_item_id}</div>}
+                                  {!item.buyer_item_id && !item.seller_item_id && !item.standard_item_id && 'N/A'}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-900">
+                                {item.quantity || 'N/A'}
+                                {item.unit_code && <span className="text-xs text-gray-500"> {item.unit_code}</span>}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-900">{item.price || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm font-medium text-gray-900">{item.line_amount || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-900">{item.tax_percent ? `${item.tax_percent}%` : 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{item.origin_country || 'N/A'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
+                    {/* Additional Line Item Info */}
+                    {invoice.invoice_data.line_items.some((item: any) => item.order_line_reference || item.accounting_cost) && (
+                      <div className="text-xs text-gray-500 mt-2 space-y-1">
+                        {invoice.invoice_data.line_items.map((item: any, idx: number) => (
+                          <div key={idx}>
+                            {item.order_line_reference && (
+                              <span>Line {item.id}: Order Ref - {item.order_line_reference} </span>
+                            )}
+                            {item.accounting_cost && (
+                              <span>Accounting Cost - {item.accounting_cost}</span>
+                            )}
+                          </div>
+                        )).filter(Boolean)}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

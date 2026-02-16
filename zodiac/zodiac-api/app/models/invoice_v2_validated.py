@@ -1,9 +1,9 @@
 """
 Invoice V2 Validated Model - Stores validation results with extracted fields
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -22,8 +22,8 @@ class InvoiceV2Validated(Base):
     status = Column(String(50), nullable=False, index=True)
     # Values: 'success' or 'failed'
     
-    # Extracted invoice fields (JSON for flexibility)
-    invoice_data = Column(JSON, nullable=False)
+    # Extracted invoice fields (JSONB for flexibility and performance)
+    invoice_data = Column(JSONB, nullable=False)
     # Structure: {
     #   "invoice_number": "...",
     #   "issue_date": "...",
@@ -42,11 +42,11 @@ class InvoiceV2Validated(Base):
     # }
     
     # Missing fields (for failed status)
-    missing_fields = Column(JSON, nullable=True)
+    missing_fields = Column(JSONB, nullable=True)
     # Array of field names: ["supplier_id", "customer_id"]
     
     # Validation details
-    validation_errors = Column(JSON, nullable=True)
+    validation_errors = Column(JSONB, nullable=True)
     # Array of error objects: [{"field": "...", "message": "..."}]
     
     validation_notes = Column(Text, nullable=True)

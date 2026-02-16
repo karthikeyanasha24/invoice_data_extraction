@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { dashboardApi } from '@/lib/api';
 import { DashboardStatistics, AIInsights } from '@/types';
@@ -8,6 +9,7 @@ import DashboardTabs from './DashboardTabs';
 import DashboardOperations from './DashboardOperations';
 import DashboardBusiness from './DashboardBusiness';
 import DashboardIndustry from './DashboardIndustry';
+import DashboardRevenue from './DashboardRevenue';
 import {
   TrendingUp,
   TrendingDown,
@@ -51,6 +53,7 @@ const CHART_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#0
 
 export default function DashboardNew() {
   const { user, handleAuthError } = useAuth();
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState('overview');
   const [statistics, setStatistics] = useState<DashboardStatistics | null>(null);
   const [aiInsights, setAIInsights] = useState<AIInsights | null>(null);
@@ -160,7 +163,10 @@ export default function DashboardNew() {
         {/* Overview Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
           {/* Total Invoices */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div 
+            onClick={() => router.push('/invoices-v2')}
+            className="bg-white rounded-lg shadow p-6 cursor-pointer hover:shadow-lg transition-shadow"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Invoices</p>
@@ -173,7 +179,10 @@ export default function DashboardNew() {
           </div>
 
           {/* Successful */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div 
+            onClick={() => router.push('/invoices-v2?tab=successful')}
+            className="bg-white rounded-lg shadow p-6 cursor-pointer hover:shadow-lg transition-shadow"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Successful</p>
@@ -186,7 +195,10 @@ export default function DashboardNew() {
           </div>
 
           {/* Failed */}
-          <div className="bg-white rounded-lg shadow p-6">
+          <div 
+            onClick={() => router.push('/invoices-v2?tab=failed')}
+            className="bg-white rounded-lg shadow p-6 cursor-pointer hover:shadow-lg transition-shadow"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Failed</p>
@@ -476,6 +488,10 @@ export default function DashboardNew() {
 
         {activeTab === 'analytics' && (
           <DashboardIndustry />
+        )}
+        
+        {activeTab === 'revenue' && (
+          <DashboardRevenue />
         )}
       </div>
     </div>

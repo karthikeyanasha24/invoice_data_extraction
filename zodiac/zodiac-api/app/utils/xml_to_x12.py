@@ -116,9 +116,14 @@ def create_ISA_segment(supplier, customer, control_numbers, current_time):
     ]
     return "*".join(isa_elements) + "~"
 
-def convert_xml_to_x12_content(xml_content: bytes) -> Optional[str]:
-    """Convert XML content to X12 format using exact same logic as old API"""
-    logger.info(f"🔧 _convert_xml_to_x12_content: Starting X12 conversion")
+def convert_xml_to_x12_content(xml_content: bytes, invoice_data: dict = None) -> Optional[str]:
+    """
+    Convert XML content to X12 format.
+    Note: Currently uses XML parsing. Future enhancement: use invoice_data for comprehensive coverage.
+    """
+    logger.info(f"🔧 Starting X12 conversion")
+    if invoice_data:
+        logger.info(f"📊 Invoice data available with {len(invoice_data)} fields (will be used in future enhancement)")
 
     try:
         # Parse XML using same approach as old API

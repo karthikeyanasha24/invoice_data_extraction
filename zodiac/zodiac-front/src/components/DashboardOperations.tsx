@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   ArrowUpCircle, 
   ArrowDownCircle, 
@@ -39,6 +40,7 @@ const COLORS = {
 };
 
 export default function DashboardOperations() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [autoFixBreakdown, setAutoFixBreakdown] = useState<any[]>([]);
@@ -175,7 +177,10 @@ export default function DashboardOperations() {
       {/* Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Inbound Messages */}
-        <div className="bg-white rounded-lg shadow p-6">
+        <div 
+          onClick={() => router.push('/invoices-v2?tab=documents')}
+          className="bg-white rounded-lg shadow p-6 cursor-pointer hover:shadow-lg transition-shadow"
+        >
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Inbound</p>
@@ -189,7 +194,10 @@ export default function DashboardOperations() {
         </div>
 
         {/* Outbound Messages */}
-        <div className="bg-white rounded-lg shadow p-6">
+        <div 
+          onClick={() => router.push('/invoices-v2?tab=converted')}
+          className="bg-white rounded-lg shadow p-6 cursor-pointer hover:shadow-lg transition-shadow"
+        >
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Outbound</p>
@@ -203,7 +211,10 @@ export default function DashboardOperations() {
         </div>
 
         {/* Auto-Fixed */}
-        <div className="bg-white rounded-lg shadow p-6">
+        <div 
+          onClick={() => router.push('/invoices-v2?tab=validation')}
+          className="bg-white rounded-lg shadow p-6 cursor-pointer hover:shadow-lg transition-shadow"
+        >
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Auto-Fixed</p>

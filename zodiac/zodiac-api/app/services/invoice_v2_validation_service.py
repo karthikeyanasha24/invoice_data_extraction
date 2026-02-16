@@ -31,7 +31,8 @@ class InvoiceV2ValidationService:
         "customer_name",
         "supplier_id",
         "supplier_name",
-        "total"
+        "total",
+        "tax_percentage"
     ]
     
     # UBL 2.0 Namespaces
@@ -163,12 +164,16 @@ class InvoiceV2ValidationService:
     
     def extract_invoice_fields(self, xml_content: str) -> Dict[str, Any]:
         """
-        Extract all fields from UBL XML:
-        - Invoice header (number, dates, currency)
-        - Customer details (ID, name, tax ID, address)
-        - Supplier details (ID, name, tax ID)
-        - Monetary totals (tax, subtotal, total)
-        - Line items
+        Extract all fields from UBL XML (Hybrid Approach):
+        - Invoice header (number, dates, currency, metadata)
+        - Customer details (ID, name, tax ID, address, contact)
+        - Supplier details (ID, name, tax ID, address, contact)
+        - Monetary totals (tax, subtotal, total, allowances, charges)
+        - Payment information (means, terms, account)
+        - Tax breakdown (amount, percentage, category)
+        - Delivery information
+        - Order and document references
+        - Line items (with product IDs, tax info, etc.)
         """
         logger.info("📋 Extracting invoice fields from XML...")
         
@@ -179,14 +184,34 @@ class InvoiceV2ValidationService:
             
             ns = self.UBL_NAMESPACES
             
-            # Extract invoice header
+            # Extract invoice header with metadata
             invoice_data = {
                 "invoice_number": self._get_text(root, './/cbc:ID', ns),
                 "issue_date": self._get_text(root, './/cbc:IssueDate', ns),
                 "due_date": self._get_text(root, './/cbc:DueDate', ns),
                 "currency": self._get_text(root, './/cbc:DocumentCurrencyCode', ns),
                 "invoice_type_code": self._get_text(root, './/cbc:InvoiceTypeCode', ns),
+                "customization_id": self._get_text(root, './/cbc:CustomizationID', ns),
+                "profile_id": self._get_text(root, './/cbc:ProfileID', ns),
+                "note": self._get_text(root, './/cbc:Note', ns),
+                "accounting_cost": self._get_text(root, './/cbc:AccountingCost', ns),
+                "buyer_reference": self._get_text(root, './/cbc:BuyerReference', ns),
             }
+            
+            # Extract invoice period
+            invoice_period = root.find('.//cac:InvoicePeriod', ns)
+            if invoice_period is not None:
+                invoice_data["invoice_period_start"] = self._get_text(invoice_period, './/cbc:StartDate', ns)
+                invoice_data["invoice_period_end"] = self._get_text(invoice_period, './/cbc:EndDate', ns)
+            
+            # Extract order and document references
+            order_ref = root.find('.//cac:OrderReference', ns)
+            if order_ref is not None:
+                invoice_data["order_reference"] = self._get_text(order_ref, './/cbc:ID', ns)
+                invoice_data["sales_order_id"] = self._get_text(order_ref, './/cbc:SalesOrderID', ns)
+            
+            invoice_data["contract_reference"] = self._get_text(root, './/cac:ContractDocumentReference/cbc:ID', ns)
+            invoice_data["project_reference"] = self._get_text(root, './/cac:ProjectReference/cbc:ID', ns)
             
             # Extract customer (AccountingCustomerParty)
             customer_party = root.find('.//cac:AccountingCustomerParty/cac:Party', ns)
@@ -197,8 +222,16 @@ class InvoiceV2ValidationService:
                     "customer_name": self._get_text(customer_party, './/cac:PartyName/cbc:Name', ns),
                     "customer_tax_id": self._get_text(customer_party, './/cac:PartyTaxScheme/cbc:CompanyID', ns),
                     "customer_legal_name": self._get_text(customer_party, './/cac:PartyLegalEntity/cbc:RegistrationName', ns),
+                    "customer_company_legal_form": self._get_text(customer_party, './/cac:PartyLegalEntity/cbc:CompanyLegalForm', ns),
                     "customer_address": self._extract_address(customer_party, ns),
                 })
+                
+                # Extract customer contact
+                customer_contact = self._extract_party_contact(customer_party, ns)
+                if customer_contact:
+                    invoice_data["customer_contact_name"] = customer_contact.get("name")
+                    invoice_data["customer_contact_telephone"] = customer_contact.get("telephone")
+                    invoice_data["customer_contact_email"] = customer_contact.get("email")
             
             # Extract supplier (AccountingSupplierParty)
             supplier_party = root.find('.//cac:AccountingSupplierParty/cac:Party', ns)
@@ -209,35 +242,67 @@ class InvoiceV2ValidationService:
                     "supplier_name": self._get_text(supplier_party, './/cac:PartyName/cbc:Name', ns),
                     "supplier_tax_id": self._get_text(supplier_party, './/cac:PartyTaxScheme/cbc:CompanyID', ns),
                     "supplier_legal_name": self._get_text(supplier_party, './/cac:PartyLegalEntity/cbc:RegistrationName', ns),
+                    "supplier_company_legal_form": self._get_text(supplier_party, './/cac:PartyLegalEntity/cbc:CompanyLegalForm', ns),
                     "supplier_address": self._extract_address(supplier_party, ns),
                 })
+                
+                # Extract supplier contact
+                supplier_contact = self._extract_party_contact(supplier_party, ns)
+                if supplier_contact:
+                    invoice_data["supplier_contact_name"] = supplier_contact.get("name")
+                    invoice_data["supplier_contact_telephone"] = supplier_contact.get("telephone")
+                    invoice_data["supplier_contact_email"] = supplier_contact.get("email")
             
-            # Extract monetary totals
+            # Extract monetary totals (enhanced)
             legal_monetary = root.find('.//cac:LegalMonetaryTotal', ns)
             if legal_monetary is not None:
                 invoice_data.update({
+                    "line_extension_amount": self._get_text(legal_monetary, './/cbc:LineExtensionAmount', ns),
                     "subtotal": self._get_text(legal_monetary, './/cbc:TaxExclusiveAmount', ns),
                     "total": self._get_text(legal_monetary, './/cbc:TaxInclusiveAmount', ns),
-                    "line_extension_amount": self._get_text(legal_monetary, './/cbc:LineExtensionAmount', ns),
                     "payable_amount": self._get_text(legal_monetary, './/cbc:PayableAmount', ns),
+                    "allowance_total_amount": self._get_text(legal_monetary, './/cbc:AllowanceTotalAmount', ns),
+                    "charge_total_amount": self._get_text(legal_monetary, './/cbc:ChargeTotalAmount', ns),
+                    "prepaid_amount": self._get_text(legal_monetary, './/cbc:PrepaidAmount', ns),
                 })
             
-            # Extract tax total
-            tax_total = root.find('.//cac:TaxTotal', ns)
-            if tax_total is not None:
-                invoice_data["tax_amount"] = self._get_text(tax_total, './/cbc:TaxAmount', ns)
+            # Extract tax breakdown (enhanced with percentage)
+            tax_breakdown = self._extract_tax_breakdown(root, ns)
+            invoice_data.update(tax_breakdown)
             
-            # Extract line items
+            # Extract payment information
+            payment_info = self._extract_payment_info(root, ns)
+            invoice_data.update(payment_info)
+            
+            # Extract delivery information
+            delivery_info = self._extract_delivery_info(root, ns)
+            invoice_data.update(delivery_info)
+            
+            # Extract allowances and charges
+            allowances_charges = self._extract_allowances_charges(root, ns)
+            if allowances_charges:
+                invoice_data["allowances_charges"] = allowances_charges
+            
+            # Extract line items (enhanced with product IDs and tax info)
             line_items = []
             invoice_lines = root.findall('.//cac:InvoiceLine', ns)
             for line in invoice_lines:
                 line_item = {
                     "id": self._get_text(line, './/cbc:ID', ns),
+                    "line_note": self._get_text(line, './/cbc:Note', ns),
                     "quantity": self._get_text(line, './/cbc:InvoicedQuantity', ns),
                     "unit_code": self._get_attribute(line, './/cbc:InvoicedQuantity', 'unitCode', ns),
                     "line_amount": self._get_text(line, './/cbc:LineExtensionAmount', ns),
+                    "accounting_cost": self._get_text(line, './/cbc:AccountingCost', ns),
+                    "order_line_reference": self._get_text(line, './/cac:OrderLineReference/cbc:LineID', ns),
                     "item_name": self._get_text(line, './/cac:Item/cbc:Name', ns),
                     "item_description": self._get_text(line, './/cac:Item/cbc:Description', ns),
+                    "buyer_item_id": self._get_text(line, './/cac:Item/cac:BuyersItemIdentification/cbc:ID', ns),
+                    "seller_item_id": self._get_text(line, './/cac:Item/cac:SellersItemIdentification/cbc:ID', ns),
+                    "standard_item_id": self._get_text(line, './/cac:Item/cac:StandardItemIdentification/cbc:ID', ns),
+                    "origin_country": self._get_text(line, './/cac:Item/cac:OriginCountry/cbc:IdentificationCode', ns),
+                    "tax_category": self._get_text(line, './/cac:Item/cac:ClassifiedTaxCategory/cbc:ID', ns),
+                    "tax_percent": self._get_text(line, './/cac:Item/cac:ClassifiedTaxCategory/cbc:Percent', ns),
                     "price": self._get_text(line, './/cac:Price/cbc:PriceAmount', ns),
                 }
                 line_items.append(line_item)
@@ -245,7 +310,7 @@ class InvoiceV2ValidationService:
             invoice_data["line_items"] = line_items
             invoice_data["line_items_count"] = len(line_items)
             
-            logger.info(f"✅ Extracted {len(invoice_data)} fields")
+            logger.info(f"✅ Extracted {len(invoice_data)} fields (hybrid approach)")
             
             return invoice_data
             
@@ -289,6 +354,131 @@ class InvoiceV2ValidationService:
         except Exception:
             pass
         return None
+    
+    def _extract_party_contact(self, party_element, namespaces: dict) -> Optional[Dict[str, str]]:
+        """Extract contact information from party element"""
+        try:
+            contact_elem = party_element.find('.//cac:Contact', namespaces)
+            if contact_elem is not None:
+                return {
+                    "name": self._get_text(contact_elem, './/cbc:Name', namespaces),
+                    "telephone": self._get_text(contact_elem, './/cbc:Telephone', namespaces),
+                    "email": self._get_text(contact_elem, './/cbc:ElectronicMail', namespaces),
+                }
+        except Exception:
+            pass
+        return None
+    
+    def _extract_payment_info(self, root, namespaces: dict) -> Dict[str, Any]:
+        """Extract payment means and terms"""
+        payment_info = {}
+        try:
+            payment_means = root.find('.//cac:PaymentMeans', namespaces)
+            if payment_means is not None:
+                payment_info["payment_means_code"] = self._get_text(payment_means, './/cbc:PaymentMeansCode', namespaces)
+                payment_info["payment_means_name"] = self._get_attribute(payment_means, './/cbc:PaymentMeansCode', 'name', namespaces)
+                payment_info["payment_id"] = self._get_text(payment_means, './/cbc:PaymentID', namespaces)
+                
+                # Extract financial account
+                financial_account = payment_means.find('.//cac:PayeeFinancialAccount', namespaces)
+                if financial_account is not None:
+                    payment_info["payee_financial_account"] = {
+                        "account_id": self._get_text(financial_account, './/cbc:ID', namespaces),
+                        "account_name": self._get_text(financial_account, './/cbc:Name', namespaces),
+                        "bank_id": self._get_text(financial_account, './/cac:FinancialInstitutionBranch/cbc:ID', namespaces),
+                    }
+            
+            # Extract payment terms
+            payment_terms = root.find('.//cac:PaymentTerms', namespaces)
+            if payment_terms is not None:
+                payment_info["payment_terms"] = self._get_text(payment_terms, './/cbc:Note', namespaces)
+                
+        except Exception as e:
+            logger.warning(f"Could not extract payment info: {e}")
+        
+        return payment_info
+    
+    def _extract_tax_breakdown(self, root, namespaces: dict) -> Dict[str, Any]:
+        """Extract full tax breakdown including percentage"""
+        tax_info = {}
+        try:
+            tax_total = root.find('.//cac:TaxTotal', namespaces)
+            if tax_total is not None:
+                tax_info["tax_amount"] = self._get_text(tax_total, './/cbc:TaxAmount', namespaces)
+                
+                # Extract tax subtotal details
+                tax_subtotal = tax_total.find('.//cac:TaxSubtotal', namespaces)
+                if tax_subtotal is not None:
+                    tax_info["taxable_amount"] = self._get_text(tax_subtotal, './/cbc:TaxableAmount', namespaces)
+                    
+                    # Extract tax category
+                    tax_category = tax_subtotal.find('.//cac:TaxCategory', namespaces)
+                    if tax_category is not None:
+                        tax_info["tax_category_id"] = self._get_text(tax_category, './/cbc:ID', namespaces)
+                        tax_info["tax_percentage"] = self._get_text(tax_category, './/cbc:Percent', namespaces)
+                        
+                        # Extract tax scheme
+                        tax_scheme = tax_category.find('.//cac:TaxScheme', namespaces)
+                        if tax_scheme is not None:
+                            tax_info["tax_scheme"] = self._get_text(tax_scheme, './/cbc:ID', namespaces)
+        except Exception as e:
+            logger.warning(f"Could not extract tax breakdown: {e}")
+        
+        return tax_info
+    
+    def _extract_allowances_charges(self, root, namespaces: dict) -> List[Dict[str, Any]]:
+        """Extract allowance/charge array"""
+        allowances_charges = []
+        try:
+            ac_elements = root.findall('.//cac:AllowanceCharge', namespaces)
+            for ac in ac_elements:
+                item = {
+                    "charge_indicator": self._get_text(ac, './/cbc:ChargeIndicator', namespaces),
+                    "reason_code": self._get_text(ac, './/cbc:AllowanceChargeReasonCode', namespaces),
+                    "reason": self._get_text(ac, './/cbc:AllowanceChargeReason', namespaces),
+                    "multiplier": self._get_text(ac, './/cbc:MultiplierFactorNumeric', namespaces),
+                    "amount": self._get_text(ac, './/cbc:Amount', namespaces),
+                    "base_amount": self._get_text(ac, './/cbc:BaseAmount', namespaces),
+                }
+                allowances_charges.append(item)
+        except Exception as e:
+            logger.warning(f"Could not extract allowances/charges: {e}")
+        
+        return allowances_charges
+    
+    def _extract_delivery_info(self, root, namespaces: dict) -> Dict[str, Any]:
+        """Extract delivery details"""
+        delivery_info = {}
+        try:
+            delivery = root.find('.//cac:Delivery', namespaces)
+            if delivery is not None:
+                delivery_info["delivery_date"] = self._get_text(delivery, './/cbc:ActualDeliveryDate', namespaces)
+                
+                # Extract delivery location
+                delivery_location = delivery.find('.//cac:DeliveryLocation', namespaces)
+                if delivery_location is not None:
+                    delivery_info["delivery_location_id"] = self._get_text(delivery_location, './/cbc:ID', namespaces)
+                    
+                    # Extract delivery address
+                    address_elem = delivery_location.find('.//cac:Address', namespaces)
+                    if address_elem is not None:
+                        delivery_info["delivery_address"] = {
+                            "street": self._get_text(address_elem, './/cbc:StreetName', namespaces),
+                            "additional_street": self._get_text(address_elem, './/cbc:AdditionalStreetName', namespaces),
+                            "city": self._get_text(address_elem, './/cbc:CityName', namespaces),
+                            "postal_zone": self._get_text(address_elem, './/cbc:PostalZone', namespaces),
+                            "country": self._get_text(address_elem, './/cac:Country/cbc:IdentificationCode', namespaces),
+                        }
+                
+                # Extract delivery party
+                delivery_party = delivery.find('.//cac:DeliveryParty', namespaces)
+                if delivery_party is not None:
+                    delivery_info["delivery_party_name"] = self._get_text(delivery_party, './/cac:PartyName/cbc:Name', namespaces)
+                    
+        except Exception as e:
+            logger.warning(f"Could not extract delivery info: {e}")
+        
+        return delivery_info
     
     def _find_missing_fields(self, invoice_data: Dict[str, Any]) -> List[str]:
         """Find missing required fields"""

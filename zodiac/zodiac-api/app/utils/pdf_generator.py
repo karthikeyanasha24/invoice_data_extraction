@@ -24,29 +24,34 @@ except ImportError:
     logger.warning("⚠️ ReportLab not available - PDF generation will use placeholder")
 
 
-async def generate_pdf_from_xml(xml_content: str) -> Optional[bytes]:
+async def generate_pdf_from_xml(xml_content: str, invoice_data: dict = None) -> Optional[bytes]:
     """
-    Generate professional PDF invoice from XML content
+    Generate professional PDF invoice from XML content or extracted invoice data
     
     Args:
         xml_content: The UBL XML invoice content
+        invoice_data: Optional pre-extracted invoice data (preferred for comprehensive coverage)
         
     Returns:
         PDF content as bytes, or None if generation fails
     """
-    logger.info("📄 Starting PDF generation from XML")
-    logger.info(f"📊 XML content length: {len(xml_content)} characters")
+    logger.info("📄 Starting PDF generation")
+    if invoice_data:
+        logger.info(f"📊 Using pre-extracted invoice data with {len(invoice_data)} fields")
+    else:
+        logger.info(f"📊 Parsing XML content ({len(xml_content)} characters)")
     
     if not REPORTLAB_AVAILABLE:
         logger.warning("⚠️ ReportLab not available - using placeholder PDF")
         return _generate_placeholder_pdf()
     
     try:
-        # Parse XML to extract invoice data
-        invoice_data = _parse_xml_invoice(xml_content)
+        # Use provided invoice_data if available, otherwise parse XML
+        if not invoice_data:
+            invoice_data = _parse_xml_invoice(xml_content)
         
         if not invoice_data:
-            logger.error("❌ Failed to parse invoice data from XML")
+            logger.error("❌ Failed to get invoice data")
             return _generate_placeholder_pdf()
         
         # Generate PDF using ReportLab

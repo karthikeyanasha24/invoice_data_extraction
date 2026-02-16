@@ -5,7 +5,7 @@ import logging
 import uuid
 import asyncio
 from typing import Optional, List, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -753,6 +753,7 @@ async def list_validated_invoices(
     status_filter: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
+    exclude_converted: Optional[bool] = Query(False, description="Exclude already converted invoices"),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -761,9 +762,10 @@ async def list_validated_invoices(
     
     Filters:
     - status_filter: 'success' or 'failed'
+    - exclude_converted: true to hide invoices that have been successfully converted
     """
     logger.info(f"📋 List validated invoices request from user {current_user.id}")
-    logger.info(f"   Filter: status={status_filter}")
+    logger.info(f"   Filter: status={status_filter}, exclude_converted={exclude_converted}")
     
     try:
         # Build query with join
@@ -778,6 +780,19 @@ async def list_validated_invoices(
         # Apply status filter
         if status_filter:
             query = query.filter(InvoiceV2Validated.status == status_filter)
+        
+        # Exclude already converted invoices if requested
+        if exclude_converted:
+            from ..models.converted_invoice import ConvertedInvoice
+            # Get all validated_invoice_ids that have been successfully converted
+            converted_ids = db.query(ConvertedInvoice.validated_invoice_id).filter(
+                ConvertedInvoice.conversion_status == "success"
+            ).distinct().all()
+            converted_ids_list = [row[0] for row in converted_ids]
+            
+            if converted_ids_list:
+                query = query.filter(InvoiceV2Validated.id.notin_(converted_ids_list))
+                logger.info(f"   🚫 Excluding {len(converted_ids_list)} already converted invoices")
         
         # Count total
         total = query.count()
@@ -888,13 +903,42 @@ async def manual_fix_invoice(
                 detail="Validated invoice not found"
             )
         
-        # Update invoice data with corrections first
-        for field_name, field_value in corrections.items():
-            validated.invoice_data[field_name] = field_value
+        # SIMPLE APPROACH: Use raw SQL to update JSON field
+        # This bypasses SQLAlchemy's JSON update issues
         
-        # Mark as modified (important for SQLAlchemy to detect JSON changes)
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(validated, "invoice_data")
+        # Get current invoice_data
+        current_data = validated.invoice_data.copy()
+        
+        # Apply corrections
+        for field_name, field_value in corrections.items():
+            if field_name == 'line_items':
+                logger.info(f"   📦 Updating line_items: {len(field_value)} products")
+                logger.debug(f"      Line items data: {field_value}")
+            current_data[field_name] = field_value
+        
+        logger.info(f"   ✅ Prepared {len(corrections)} corrections")
+        
+        # Update using raw SQL to ensure it works
+        import json
+        from sqlalchemy import text
+        
+        db.execute(
+            text("""
+                UPDATE v2_validated_invoices 
+                SET invoice_data = :invoice_data,
+                    updated_at = NOW()
+                WHERE id = :invoice_id
+            """),
+            {
+                "invoice_data": json.dumps(current_data),
+                "invoice_id": validated.id
+            }
+        )
+        
+        # Update the in-memory object
+        validated.invoice_data = current_data
+        
+        logger.info(f"   ✅ Updated invoice_data using raw SQL")
         
         # Get customer ID from updated invoice data (after applying corrections)
         customer_id = validated.invoice_data.get("customer_id")
@@ -934,13 +978,23 @@ async def manual_fix_invoice(
         validated.updated_at = datetime.utcnow()
         
         db.commit()
+        
+        # Verify by re-querying from database
+        db.expire(validated)  # Force reload from DB
         db.refresh(validated)
+        
+        # Verify the data was actually saved
+        if 'line_items' in corrections:
+            saved_line_items = validated.invoice_data.get('line_items', [])
+            logger.info(f"   ✅ VERIFIED: Database has {len(saved_line_items)} line items")
+            if saved_line_items and len(saved_line_items) > 0:
+                first_item = saved_line_items[0]
+                logger.info(f"      First item unit_code: {first_item.get('unit_code', 'N/A')}")
         
         logger.info(f"✅ Manual fix applied successfully")
         logger.info(f"   New status: {new_status}")
         logger.info(f"   Remaining missing fields: {len(missing_fields)}")
-        
-        logger.info(f"✅ Manual fix applied successfully")
+        logger.info(f"   Database updated with raw SQL - changes are permanent!")
         
         return {
             "message": "Manual fix applied successfully",
@@ -954,6 +1008,102 @@ async def manual_fix_invoice(
         raise
     except Exception as e:
         logger.error(f"❌ Manual fix failed: {e}")
+        logger.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.put("/validated/{validated_id}/update-successful")
+async def update_successful_invoice(
+    validated_id: int,
+    request: Dict,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Simple update endpoint for successful invoices.
+    No validation, no correction cache - just direct update.
+    """
+    logger.info(f"📝 Simple update request for successful invoice {validated_id}")
+    
+    try:
+        # Get validated invoice
+        validated = db.query(InvoiceV2Validated).join(
+            InvoiceV2Document,
+            InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Validated.id == validated_id,
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Validated.status == "success"  # Only allow for successful invoices
+        ).first()
+        
+        if not validated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Successful invoice not found"
+            )
+        
+        # Get the updates
+        updates = request
+        
+        # Get current invoice_data
+        current_data = validated.invoice_data.copy() if validated.invoice_data else {}
+        
+        # Apply updates
+        for field_name, field_value in updates.items():
+            if field_name == 'line_items':
+                logger.info(f"   📦 Updating {len(field_value)} line items")
+            current_data[field_name] = field_value
+        
+        # Direct SQL update to ensure it works
+        import json
+        from sqlalchemy import text
+        
+        # Convert to JSON string
+        json_data = json.dumps(current_data)
+        
+        db.execute(
+            text("""
+                UPDATE v2_validated_invoices 
+                SET invoice_data = CAST(:invoice_data AS jsonb),
+                    updated_at = NOW()
+                WHERE id = :invoice_id
+            """),
+            {
+                "invoice_data": json_data,
+                "invoice_id": validated.id
+            }
+        )
+        
+        db.commit()
+        
+        # Verify by querying back
+        result = db.execute(
+            text("SELECT invoice_data FROM v2_validated_invoices WHERE id = :id"),
+            {"id": validated.id}
+        ).fetchone()
+        
+        if result and 'line_items' in updates:
+            saved_data = result[0]
+            saved_line_items = saved_data.get('line_items', [])
+            logger.info(f"   ✅ VERIFIED: Saved {len(saved_line_items)} line items to database")
+            if saved_line_items:
+                logger.info(f"      First item unit_code: {saved_line_items[0].get('unit_code', 'N/A')}")
+        
+        logger.info(f"✅ Successfully updated successful invoice {validated_id}")
+        
+        return {
+            "message": "Invoice updated successfully",
+            "invoice_id": validated.id,
+            "updated_fields": list(updates.keys())
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Update failed: {e}")
         logger.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

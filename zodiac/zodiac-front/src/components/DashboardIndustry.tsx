@@ -49,6 +49,8 @@ export default function DashboardIndustry() {
   const [data, setData] = useState<IndustryIntelligence | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedProduct, setExpandedProduct] = useState<string | null>(null);
+  const [backfillLoading, setBackfillLoading] = useState(false);
+  const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchIndustryData();
@@ -65,6 +67,27 @@ export default function DashboardIndustry() {
       console.error('Failed to fetch industry intelligence:', err);
       setError(err.message || 'Failed to load industry intelligence');
       setLoading(false);
+    }
+  };
+
+  const handleBackfill = async () => {
+    try {
+      setBackfillLoading(true);
+      setBackfillMessage(null);
+      
+      const result = await dashboardApi.backfillInvoiceV2BI();
+      setBackfillMessage(`✅ ${result.message || `Processed ${result.processed} invoices`}`);
+      
+      // Auto-refresh after 3 seconds
+      setTimeout(() => {
+        fetchIndustryData();
+        setBackfillMessage(null);
+      }, 3000);
+      
+    } catch (err: any) {
+      setBackfillMessage(`❌ Error: ${err.message || 'Failed to backfill data'}`);
+    } finally {
+      setBackfillLoading(false);
     }
   };
 
@@ -139,14 +162,42 @@ export default function DashboardIndustry() {
             AI-powered insights, benchmarking, and recommendations
           </p>
         </div>
-        <button
-          onClick={fetchIndustryData}
-          className="p-2 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-          title="Refresh Data"
-        >
-          <RefreshCw className="h-5 w-5 text-gray-600" />
-        </button>
+        <div className="flex items-center gap-2">
+          {!data || data.products.length === 0 ? (
+            <button
+              onClick={handleBackfill}
+              disabled={backfillLoading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {backfillLoading ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Package className="h-4 w-4" />
+                  Backfill Invoice V2 Data
+                </>
+              )}
+            </button>
+          ) : null}
+          <button
+            onClick={fetchIndustryData}
+            className="p-2 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+            title="Refresh Data"
+          >
+            <RefreshCw className="h-5 w-5 text-gray-600" />
+          </button>
+        </div>
       </div>
+      
+      {/* Backfill Message */}
+      {backfillMessage && (
+        <div className={`p-4 rounded-lg ${backfillMessage.includes('❌') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+          {backfillMessage}
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">

@@ -64,10 +64,18 @@ export default function FailedInvoicesTab() {
     setShowEditModal(true);
   };
 
-  const handleEditSuccess = () => {
+  const handleEditSuccess = async () => {
     setShowEditModal(false);
+    const previousInvoiceId = selectedInvoice?.id;
     setSelectedInvoice(null);
-    fetchFailed();
+    
+    // Refresh the list
+    await fetchFailed();
+    
+    // Log success
+    if (previousInvoiceId) {
+      console.log('✅ Refreshed failed invoices list after edit');
+    }
   };
 
   if (loading) {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { BarChart3, Activity, TrendingUp, Brain } from 'lucide-react';
+import { BarChart3, Activity, TrendingUp, Brain, DollarSign } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Tab {
@@ -35,6 +35,12 @@ const tabs: Tab[] = [
     label: 'Industry',
     icon: <Brain className="h-4 w-4" />,
     description: 'Product performance and industry intelligence'
+  },
+  {
+    id: 'revenue',
+    label: 'Revenue',
+    icon: <DollarSign className="h-4 w-4" />,
+    description: 'Revenue analysis by country, season, and trends'
   },
 ];
 

@@ -14,11 +14,15 @@ from ..models.user import ZodiacUser
 from ..models.invoice import ZodiacInvoiceSuccessEdi as SuccessModel, ZodiacInvoiceFailedEdi as FailedModel
 from ..models.correction_cache import CorrectionCache
 from ..models.invoice_business_data import InvoiceBusinessData
+from ..models.invoice_v2_business_data import InvoiceV2BusinessData
+from ..models.invoice_v2_validated import InvoiceV2Validated
+from ..models.invoice_v2_document import InvoiceV2Document
 from ..models.sat_simple_merged import SATSimpleMerged
 from ..api.auth import get_current_user
 from ..config.config import OPENAI_API_KEY
 from ..services.database import extract_supplier_info_from_string
 from ..services.file_service import read_file_from_storage
+from ..services.invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
 from collections import defaultdict
 from decimal import Decimal
 
@@ -1222,12 +1226,19 @@ async def get_business_analytics(
                 "supplier_analysis": {"top_suppliers": []}
             }
         
-        logger.info(f"✅ Found {total_bi_records} business intelligence records")
+        logger.info(f"✅ Found {total_bi_records} legacy business intelligence records")
+        
+        # Check for Invoice V2 BI records
+        total_v2_bi_records = db.query(func.count(InvoiceV2BusinessData.id)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id
+        ).scalar() or 0
+        
+        logger.info(f"✅ Found {total_v2_bi_records} Invoice V2 business intelligence records")
         
         # ============================================================
         # 1. E2E LIFECYCLE FUNNEL
         # ============================================================
-        # Count invoices at each stage
+        # Count invoices at each stage (legacy)
         stage_counts = db.query(
             InvoiceBusinessData.current_stage,
             InvoiceBusinessData.stage_status,
@@ -1240,7 +1251,20 @@ async def get_business_analytics(
             InvoiceBusinessData.stage_status
         ).all()
         
-        # Build lifecycle funnel
+        # Count Invoice V2 invoices at each stage
+        v2_stage_counts = db.query(
+            InvoiceV2BusinessData.current_stage,
+            InvoiceV2BusinessData.stage_status,
+            func.count(InvoiceV2BusinessData.id).label('count')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date
+        ).group_by(
+            InvoiceV2BusinessData.current_stage,
+            InvoiceV2BusinessData.stage_status
+        ).all()
+        
+        # Build lifecycle funnel (combine legacy + V2)
         lifecycle_funnel = {
             'RECEIVED': {'total': 0, 'success': 0, 'failed': 0},
             'VALIDATED': {'total': 0, 'success': 0, 'failed': 0},
@@ -1249,7 +1273,17 @@ async def get_business_analytics(
             'ACKNOWLEDGED': {'total': 0, 'success': 0, 'failed': 0},
         }
         
+        # Add legacy data
         for stage, status, count in stage_counts:
+            if stage in lifecycle_funnel:
+                lifecycle_funnel[stage]['total'] += count
+                if status == 'SUCCESS':
+                    lifecycle_funnel[stage]['success'] += count
+                elif status == 'FAILED':
+                    lifecycle_funnel[stage]['failed'] += count
+        
+        # Add V2 data
+        for stage, status, count in v2_stage_counts:
             if stage in lifecycle_funnel:
                 lifecycle_funnel[stage]['total'] += count
                 if status == 'SUCCESS':
@@ -1260,7 +1294,7 @@ async def get_business_analytics(
         # ============================================================
         # 2. CUSTOMER ANALYSIS
         # ============================================================
-        # Top customers with success/failed counts
+        # Top customers with success/failed counts (legacy)
         customer_stats = db.query(
             InvoiceBusinessData.customer_id,
             InvoiceBusinessData.customer_name,
@@ -1279,9 +1313,51 @@ async def get_business_analytics(
             InvoiceBusinessData.stage_status
         ).all()
         
-        # Aggregate customer data
+        # Top customers (Invoice V2)
+        v2_customer_stats = db.query(
+            InvoiceV2BusinessData.customer_id,
+            InvoiceV2BusinessData.customer_name,
+            InvoiceV2BusinessData.customer_country,
+            InvoiceV2BusinessData.stage_status,
+            func.count(InvoiceV2BusinessData.id).label('count'),
+            func.sum(InvoiceV2BusinessData.total_amount).label('total_revenue')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.customer_name.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.customer_id,
+            InvoiceV2BusinessData.customer_name,
+            InvoiceV2BusinessData.customer_country,
+            InvoiceV2BusinessData.stage_status
+        ).all()
+        
+        # Aggregate customer data (legacy + V2)
         customer_map = {}
+        
+        # Add legacy data
         for cust_id, cust_name, country, status, count, revenue in customer_stats:
+            key = cust_id or cust_name
+            if key not in customer_map:
+                customer_map[key] = {
+                    'customer_id': cust_id,
+                    'customer_name': cust_name,
+                    'customer_country': country,
+                    'total_invoices': 0,
+                    'successful': 0,
+                    'failed': 0,
+                    'total_revenue': 0
+                }
+            
+            customer_map[key]['total_invoices'] += count
+            if status == 'SUCCESS':
+                customer_map[key]['successful'] += count
+            elif status == 'FAILED':
+                customer_map[key]['failed'] += count
+            customer_map[key]['total_revenue'] += float(revenue or 0)
+        
+        # Add V2 data
+        for cust_id, cust_name, country, status, count, revenue in v2_customer_stats:
             key = cust_id or cust_name
             if key not in customer_map:
                 customer_map[key] = {
@@ -1319,6 +1395,7 @@ async def get_business_analytics(
         # ============================================================
         # 3. COUNTRY DISTRIBUTION
         # ============================================================
+        # Legacy data
         country_stats = db.query(
             InvoiceBusinessData.customer_country,
             func.count(InvoiceBusinessData.id).label('count')
@@ -1328,21 +1405,37 @@ async def get_business_analytics(
             InvoiceBusinessData.customer_country.isnot(None)
         ).group_by(
             InvoiceBusinessData.customer_country
-        ).order_by(
-            func.count(InvoiceBusinessData.id).desc()
-        ).limit(15).all()
+        ).all()
         
+        # V2 data
+        v2_country_stats = db.query(
+            InvoiceV2BusinessData.customer_country,
+            func.count(InvoiceV2BusinessData.id).label('count')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.customer_country.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.customer_country
+        ).all()
+        
+        # Combine and aggregate
+        country_map = {}
+        for country, count in country_stats:
+            country_map[country] = country_map.get(country, 0) + count
+        for country, count in v2_country_stats:
+            country_map[country] = country_map.get(country, 0) + count
+        
+        # Sort and limit
         country_distribution = [
-            {
-                'country': country,
-                'count': count
-            }
-            for country, count in country_stats
+            {'country': country, 'count': count}
+            for country, count in sorted(country_map.items(), key=lambda x: x[1], reverse=True)[:15]
         ]
         
         # ============================================================
         # 4. INDUSTRY BREAKDOWN
         # ============================================================
+        # Legacy data
         industry_stats = db.query(
             InvoiceBusinessData.industry,
             func.count(InvoiceBusinessData.id).label('count'),
@@ -1353,17 +1446,43 @@ async def get_business_analytics(
             InvoiceBusinessData.industry.isnot(None)
         ).group_by(
             InvoiceBusinessData.industry
-        ).order_by(
-            func.count(InvoiceBusinessData.id).desc()
         ).all()
         
+        # V2 data
+        v2_industry_stats = db.query(
+            InvoiceV2BusinessData.industry,
+            func.count(InvoiceV2BusinessData.id).label('count'),
+            func.sum(InvoiceV2BusinessData.total_amount).label('total_revenue')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.industry.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.industry
+        ).all()
+        
+        # Combine and aggregate
+        industry_map = {}
+        for industry, count, revenue in industry_stats:
+            if industry not in industry_map:
+                industry_map[industry] = {'count': 0, 'total_revenue': 0}
+            industry_map[industry]['count'] += count
+            industry_map[industry]['total_revenue'] += float(revenue or 0)
+        
+        for industry, count, revenue in v2_industry_stats:
+            if industry not in industry_map:
+                industry_map[industry] = {'count': 0, 'total_revenue': 0}
+            industry_map[industry]['count'] += count
+            industry_map[industry]['total_revenue'] += float(revenue or 0)
+        
+        # Sort by count
         industry_breakdown = [
             {
                 'industry': industry,
-                'count': count,
-                'total_revenue': float(revenue or 0)
+                'count': data['count'],
+                'total_revenue': data['total_revenue']
             }
-            for industry, count, revenue in industry_stats
+            for industry, data in sorted(industry_map.items(), key=lambda x: x[1]['count'], reverse=True)
         ]
         
         # ============================================================
@@ -1371,6 +1490,8 @@ async def get_business_analytics(
         # ============================================================
         # This requires parsing the products JSONB field
         product_counts = {}
+        
+        # Legacy products
         bi_records_with_products = db.query(InvoiceBusinessData).filter(
             InvoiceBusinessData.user_id == current_user.id,
             InvoiceBusinessData.created_at >= cutoff_date,
@@ -1390,8 +1511,31 @@ async def get_business_analytics(
                             'total_revenue': 0
                         }
                     product_counts[product_name]['count'] += 1
-                    product_counts[product_name]['total_quantity'] += product.get('quantity', 0)
-                    product_counts[product_name]['total_revenue'] += product.get('line_total', 0)
+                    product_counts[product_name]['total_quantity'] += float(product.get('quantity', 0))
+                    product_counts[product_name]['total_revenue'] += float(product.get('line_total', 0))
+        
+        # V2 products
+        v2_bi_records_with_products = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None)
+        ).all()
+        
+        for record in v2_bi_records_with_products:
+            products = record.products
+            if products and isinstance(products, list):
+                for product in products:
+                    product_name = product.get('name', 'Unknown')
+                    if product_name not in product_counts:
+                        product_counts[product_name] = {
+                            'name': product_name,
+                            'count': 0,
+                            'total_quantity': 0,
+                            'total_revenue': 0
+                        }
+                    product_counts[product_name]['count'] += 1
+                    product_counts[product_name]['total_quantity'] += float(product.get('quantity', 0))
+                    product_counts[product_name]['total_revenue'] += float(product.get('revenue', 0))
         
         # Sort by count and get top 10
         top_products = sorted(product_counts.values(), key=lambda x: x['count'], reverse=True)[:10]
@@ -1399,6 +1543,7 @@ async def get_business_analytics(
         # ============================================================
         # 6. SUPPLIER ANALYSIS
         # ============================================================
+        # Legacy suppliers
         supplier_stats = db.query(
             InvoiceBusinessData.supplier_id,
             InvoiceBusinessData.supplier_name,
@@ -1410,18 +1555,46 @@ async def get_business_analytics(
         ).group_by(
             InvoiceBusinessData.supplier_id,
             InvoiceBusinessData.supplier_name
-        ).order_by(
-            func.count(InvoiceBusinessData.id).desc()
-        ).limit(10).all()
+        ).all()
         
-        top_suppliers = [
-            {
-                'supplier_id': supplier_id,
-                'supplier_name': supplier_name,
-                'count': count
-            }
-            for supplier_id, supplier_name, count in supplier_stats
-        ]
+        # V2 suppliers
+        v2_supplier_stats = db.query(
+            InvoiceV2BusinessData.supplier_id,
+            InvoiceV2BusinessData.supplier_name,
+            func.count(InvoiceV2BusinessData.id).label('count')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.supplier_name.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.supplier_id,
+            InvoiceV2BusinessData.supplier_name
+        ).all()
+        
+        # Combine and aggregate
+        supplier_map = {}
+        for supplier_id, supplier_name, count in supplier_stats:
+            key = supplier_id or supplier_name
+            if key not in supplier_map:
+                supplier_map[key] = {
+                    'supplier_id': supplier_id,
+                    'supplier_name': supplier_name,
+                    'count': 0
+                }
+            supplier_map[key]['count'] += count
+        
+        for supplier_id, supplier_name, count in v2_supplier_stats:
+            key = supplier_id or supplier_name
+            if key not in supplier_map:
+                supplier_map[key] = {
+                    'supplier_id': supplier_id,
+                    'supplier_name': supplier_name,
+                    'count': 0
+                }
+            supplier_map[key]['count'] += count
+        
+        # Sort and limit to top 10
+        top_suppliers = sorted(supplier_map.values(), key=lambda x: x['count'], reverse=True)[:10]
         
         # ============================================================
         # RETURN RESPONSE
@@ -1809,4 +1982,428 @@ def _analyze_trend(invoices, all_records):
         return 'declining'
     else:
         return 'stable'
+
+
+# ============================================================================
+# Invoice V2 Business Intelligence Endpoints
+# ============================================================================
+
+@router.get("/revenue-analysis")
+async def get_revenue_analysis(
+    days: int = Query(default=90, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get revenue analysis by country, season, and fiscal quarter.
+    Combines legacy and Invoice V2 data.
+    """
+    logger.info(f"📊 Fetching revenue analysis for last {days} days")
+    
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        
+        # ============================================================
+        # REVENUE BY COUNTRY
+        # ============================================================
+        # Legacy data
+        country_revenue_legacy = db.query(
+            InvoiceBusinessData.customer_country,
+            func.count(InvoiceBusinessData.id).label('invoice_count'),
+            func.sum(InvoiceBusinessData.total_amount).label('revenue')
+        ).filter(
+            InvoiceBusinessData.user_id == current_user.id,
+            InvoiceBusinessData.created_at >= cutoff_date,
+            InvoiceBusinessData.customer_country.isnot(None)
+        ).group_by(
+            InvoiceBusinessData.customer_country
+        ).all()
+        
+        # V2 data
+        country_revenue_v2 = db.query(
+            InvoiceV2BusinessData.customer_country,
+            func.count(InvoiceV2BusinessData.id).label('invoice_count'),
+            func.sum(InvoiceV2BusinessData.total_amount).label('revenue')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.customer_country.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.customer_country
+        ).all()
+        
+        # Combine
+        country_map = {}
+        for country, count, revenue in country_revenue_legacy:
+            country_map[country] = {
+                'country': country,
+                'revenue': float(revenue or 0),
+                'invoice_count': count
+            }
+        
+        for country, count, revenue in country_revenue_v2:
+            if country not in country_map:
+                country_map[country] = {
+                    'country': country,
+                    'revenue': 0,
+                    'invoice_count': 0
+                }
+            country_map[country]['revenue'] += float(revenue or 0)
+            country_map[country]['invoice_count'] += count
+        
+        by_country = sorted(country_map.values(), key=lambda x: x['revenue'], reverse=True)
+        
+        # ============================================================
+        # REVENUE BY SEASON
+        # ============================================================
+        # V2 data (has season field)
+        season_revenue = db.query(
+            InvoiceV2BusinessData.season,
+            func.sum(InvoiceV2BusinessData.total_amount).label('revenue'),
+            func.count(InvoiceV2BusinessData.id).label('invoice_count')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.season.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.season
+        ).all()
+        
+        by_season = [
+            {
+                'season': season,
+                'revenue': float(revenue or 0),
+                'invoice_count': count
+            }
+            for season, revenue, count in season_revenue
+        ]
+        
+        # ============================================================
+        # REVENUE BY FISCAL QUARTER
+        # ============================================================
+        # V2 data (has fiscal quarter field)
+        quarter_revenue = db.query(
+            InvoiceV2BusinessData.fiscal_quarter,
+            InvoiceV2BusinessData.fiscal_year,
+            func.sum(InvoiceV2BusinessData.total_amount).label('revenue'),
+            func.count(InvoiceV2BusinessData.id).label('invoice_count')
+        ).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.fiscal_quarter.isnot(None)
+        ).group_by(
+            InvoiceV2BusinessData.fiscal_quarter,
+            InvoiceV2BusinessData.fiscal_year
+        ).order_by(
+            InvoiceV2BusinessData.fiscal_year.desc(),
+            InvoiceV2BusinessData.fiscal_quarter.desc()
+        ).all()
+        
+        by_quarter = [
+            {
+                'quarter': quarter,
+                'year': year,
+                'revenue': float(revenue or 0),
+                'invoice_count': count
+            }
+            for quarter, year, revenue, count in quarter_revenue
+        ]
+        
+        return {
+            "by_country": by_country,
+            "by_season": by_season,
+            "by_quarter": by_quarter,
+            "period_days": days
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch revenue analysis: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Revenue analysis failed: {str(e)}"
+        )
+
+
+@router.get("/product-demand")
+async def get_product_demand_analysis(
+    days: int = Query(default=90, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get product demand analysis including:
+    - Trending products (increasing/stable/decreasing)
+    - Top customers per product
+    - Top countries per product
+    """
+    logger.info(f"📊 Fetching product demand analysis for last {days} days")
+    
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        
+        # Get all V2 BI records with products
+        v2_records = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None)
+        ).order_by(
+            InvoiceV2BusinessData.invoice_date.desc()
+        ).all()
+        
+        # Aggregate product data
+        product_data = {}
+        customer_product_map = {}  # Track which customers buy which products
+        country_product_map = {}   # Track which countries buy which products
+        
+        for record in v2_records:
+            products = record.products
+            if not products or not isinstance(products, list):
+                continue
+            
+            for product in products:
+                product_name = product.get('name', 'Unknown')
+                
+                # Initialize product data
+                if product_name not in product_data:
+                    product_data[product_name] = {
+                        'name': product_name,
+                        'total_quantity': 0,
+                        'total_revenue': 0,
+                        'order_count': 0,
+                        'customers': set(),
+                        'countries': set(),
+                        'monthly_counts': {}
+                    }
+                
+                # Aggregate metrics
+                product_data[product_name]['total_quantity'] += float(product.get('quantity', 0))
+                product_data[product_name]['total_revenue'] += float(product.get('revenue', 0))
+                product_data[product_name]['order_count'] += 1
+                
+                if record.customer_name:
+                    product_data[product_name]['customers'].add(record.customer_name)
+                    
+                    # Track customer-product relationship
+                    if record.customer_name not in customer_product_map:
+                        customer_product_map[record.customer_name] = {}
+                    if product_name not in customer_product_map[record.customer_name]:
+                        customer_product_map[record.customer_name][product_name] = 0
+                    customer_product_map[record.customer_name][product_name] += 1
+                
+                if record.customer_country:
+                    product_data[product_name]['countries'].add(record.customer_country)
+                    
+                    # Track country-product relationship
+                    if record.customer_country not in country_product_map:
+                        country_product_map[record.customer_country] = {}
+                    if product_name not in country_product_map[record.customer_country]:
+                        country_product_map[record.customer_country][product_name] = 0
+                    country_product_map[record.customer_country][product_name] += 1
+                
+                # Track monthly counts for trend analysis
+                if record.invoice_date:
+                    month_key = f"{record.invoice_date.year}-{record.invoice_date.month:02d}"
+                    if month_key not in product_data[product_name]['monthly_counts']:
+                        product_data[product_name]['monthly_counts'][month_key] = 0
+                    product_data[product_name]['monthly_counts'][month_key] += 1
+        
+        # Calculate trends for each product
+        trending_products = []
+        for product_name, data in product_data.items():
+            # Simple trend: compare first half vs second half of period
+            monthly_counts = sorted(data['monthly_counts'].items())
+            if len(monthly_counts) >= 2:
+                mid = len(monthly_counts) // 2
+                first_half_avg = sum(c for _, c in monthly_counts[:mid]) / mid
+                second_half_avg = sum(c for _, c in monthly_counts[mid:]) / (len(monthly_counts) - mid)
+                
+                if second_half_avg > first_half_avg * 1.2:
+                    trend = "increasing"
+                    growth = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+                elif second_half_avg < first_half_avg * 0.8:
+                    trend = "decreasing"
+                    growth = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+                else:
+                    trend = "stable"
+                    growth = 0
+            else:
+                trend = "insufficient_data"
+                growth = 0
+            
+            # Get top customers for this product
+            top_customers = sorted(
+                [(cust, count) for cust, products in customer_product_map.items() if product_name in products
+                 for count in [products[product_name]]],
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            # Get top countries for this product
+            top_countries = sorted(
+                [(country, count) for country, products in country_product_map.items() if product_name in products
+                 for count in [products[product_name]]],
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            trending_products.append({
+                'name': product_name,
+                'trend': trend,
+                'monthly_growth': round(growth, 1) if growth else 0,
+                'total_quantity': data['total_quantity'],
+                'total_revenue': data['total_revenue'],
+                'order_count': data['order_count'],
+                'customer_count': len(data['customers']),
+                'top_customers': [cust for cust, _ in top_customers],
+                'top_countries': [country for country, _ in top_countries]
+            })
+        
+        # Sort by order count (most popular first)
+        trending_products = sorted(trending_products, key=lambda x: x['order_count'], reverse=True)[:20]
+        
+        # Customer preferences (top products per customer)
+        customer_preferences = []
+        for customer_name, products in customer_product_map.items():
+            if not products:
+                continue
+            
+            # Get top 3 products for this customer
+            top_products = sorted(products.items(), key=lambda x: x[1], reverse=True)[:3]
+            
+            # Calculate purchase frequency (rough estimate)
+            total_purchases = sum(products.values())
+            if total_purchases >= 10:
+                frequency = "frequent"
+            elif total_purchases >= 5:
+                frequency = "monthly"
+            elif total_purchases >= 2:
+                frequency = "occasional"
+            else:
+                frequency = "rare"
+            
+            customer_preferences.append({
+                'customer_name': customer_name,
+                'favorite_products': [prod for prod, _ in top_products],
+                'purchase_frequency': frequency,
+                'total_purchases': total_purchases
+            })
+        
+        # Sort by total purchases
+        customer_preferences = sorted(customer_preferences, key=lambda x: x['total_purchases'], reverse=True)[:15]
+        
+        return {
+            "trending_products": trending_products,
+            "customer_preferences": customer_preferences,
+            "period_days": days
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch product demand analysis: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Product demand analysis failed: {str(e)}"
+        )
+
+
+@router.post("/backfill-invoice-v2-bi")
+async def backfill_invoice_v2_bi(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Backfill business intelligence data from existing Invoice V2 validated invoices.
+    This processes all validated invoices and creates InvoiceV2BusinessData records.
+    """
+    logger.info(f"🔄 Starting Invoice V2 BI backfill for user {current_user.id}")
+    
+    try:
+        bi_service = InvoiceV2BusinessIntelligence()
+        
+        # Get all validated invoices for this user through documents
+        validated_invoices = db.query(InvoiceV2Validated).join(
+            InvoiceV2Document,
+            InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id
+        ).all()
+        
+        logger.info(f"📊 Found {len(validated_invoices)} validated invoices to process")
+        
+        processed = 0
+        skipped = 0
+        errors = 0
+        
+        for validated_invoice in validated_invoices:
+            try:
+                # Check if BI data already exists
+                existing = db.query(InvoiceV2BusinessData).filter(
+                    InvoiceV2BusinessData.validated_invoice_id == validated_invoice.id
+                ).first()
+                
+                if existing:
+                    logger.debug(f"  ⏭️  Skipping invoice {validated_invoice.id} - BI data already exists")
+                    skipped += 1
+                    continue
+                
+                # Extract BI data
+                bi_data = bi_service.extract_bi_data(validated_invoice)
+                
+                # Create BI record
+                bi_record = InvoiceV2BusinessData(
+                    validated_invoice_id=bi_data['validated_invoice_id'],
+                    user_id=bi_data['user_id'],
+                    customer_id=bi_data['customer']['id'],
+                    customer_name=bi_data['customer']['name'],
+                    customer_country=bi_data['customer']['country'],
+                    supplier_id=bi_data['supplier']['id'],
+                    supplier_name=bi_data['supplier']['name'],
+                    products=bi_data['products'],
+                    total_products_count=bi_data['total_products_count'],
+                    total_amount=bi_data['financial']['total_amount'],
+                    tax_amount=bi_data['financial']['tax_amount'],
+                    currency=bi_data['financial']['currency'],
+                    industry=bi_data['industry'],
+                    industry_confidence=bi_data['industry_confidence'],
+                    industry_keywords_matched=bi_data['industry_keywords_matched'],
+                    invoice_date=bi_data['temporal']['invoice_date'],
+                    fiscal_quarter=bi_data['temporal']['fiscal_quarter'],
+                    fiscal_year=bi_data['temporal']['fiscal_year'],
+                    season=bi_data['temporal']['season'],
+                    current_stage=bi_data['lifecycle']['current_stage'],
+                    stage_status=bi_data['lifecycle']['stage_status']
+                )
+                
+                db.add(bi_record)
+                processed += 1
+                
+                # Commit in batches of 50
+                if processed % 50 == 0:
+                    db.commit()
+                    logger.info(f"  ✅ Processed {processed} invoices...")
+                
+            except Exception as e:
+                logger.error(f"  ❌ Error processing invoice {validated_invoice.id}: {e}")
+                errors += 1
+                continue
+        
+        # Final commit
+        db.commit()
+        
+        logger.info(f"✅ Backfill completed: {processed} processed, {skipped} skipped, {errors} errors")
+        
+        return {
+            "success": True,
+            "processed": processed,
+            "skipped": skipped,
+            "errors": errors,
+            "total": len(validated_invoices),
+            "message": f"Successfully backfilled BI data for {processed} invoices"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Backfill failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Backfill failed: {str(e)}"
+        )
 

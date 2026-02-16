@@ -72,26 +72,35 @@ export default function DashboardBusiness() {
       setBackfillLoading(true);
       setBackfillMessage(null);
       
-      const response = await fetch('/api/v1/admin/backfill-business-intelligence', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      // Run both legacy and V2 backfill
+      const [legacyResult, v2Result] = await Promise.allSettled([
+        fetch('/api/v1/admin/backfill-business-intelligence', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        }).then(r => r.json()),
+        dashboardApi.backfillInvoiceV2BI()
+      ]);
 
-      const result = await response.json();
-
-      if (response.ok) {
-        setBackfillMessage(result.message);
-        // Auto-refresh after estimated time
-        const refreshDelay = (result.estimated_time_minutes || 2) * 60 * 1000;
-        setTimeout(() => {
-          fetchBusinessData();
-        }, refreshDelay);
-      } else {
-        setBackfillMessage(`Error: ${result.detail || 'Failed to start backfill'}`);
+      const messages = [];
+      
+      if (legacyResult.status === 'fulfilled') {
+        messages.push(`Legacy: ${legacyResult.value.message || 'Completed'}`);
       }
+      
+      if (v2Result.status === 'fulfilled') {
+        messages.push(`Invoice V2: ${v2Result.value.message || `Processed ${v2Result.value.processed} invoices`}`);
+      }
+      
+      setBackfillMessage(messages.join(' | '));
+      
+      // Auto-refresh after 3 seconds
+      setTimeout(() => {
+        fetchBusinessData();
+      }, 3000);
+      
     } catch (err: any) {
       setBackfillMessage(`Error: ${err.message || 'Failed to start backfill'}`);
     } finally {

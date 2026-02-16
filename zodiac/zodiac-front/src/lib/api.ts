@@ -1362,6 +1362,36 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to load industry intelligence.');
         }
     },
+    
+    backfillInvoiceV2BI: async () => {
+        try {
+            const response = await api.post('/api/v1/dashboard/backfill-invoice-v2-bi');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to backfill Invoice V2 BI:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to backfill Invoice V2 business intelligence.');
+        }
+    },
+    
+    getRevenueAnalysis: async (days: number = 90) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/revenue-analysis?days=${days}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch revenue analysis:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to load revenue analysis.');
+        }
+    },
+    
+    getProductDemand: async (days: number = 90) => {
+        try {
+            const response = await api.get(`/api/v1/dashboard/product-demand?days=${days}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to fetch product demand:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to load product demand analysis.');
+        }
+    },
 };
 
 // Admin API
@@ -1957,10 +1987,13 @@ export const invoicesV2Api = {
     },
 
     // Validated invoices endpoints
-    getValidated: async (statusFilter?: string) => {
+    getValidated: async (statusFilter?: string, excludeConverted?: boolean) => {
         try {
             const response = await api.get('/api/v1/invoices-v2/validated', {
-                params: { status_filter: statusFilter }
+                params: { 
+                    status_filter: statusFilter,
+                    exclude_converted: excludeConverted
+                }
             });
             return response.data;
         } catch (error: any) {
@@ -1979,15 +2012,30 @@ export const invoicesV2Api = {
         }
     },
 
-    manualFix: async (validatedId: number, corrections: Record<string, string>) => {
+    manualFix: async (validatedId: number, corrections: Record<string, any>) => {
         try {
+            console.log('📝 Sending corrections to backend:', corrections);
             const response = await api.put(`/api/v1/invoices-v2/validated/${validatedId}/manual-fix`, {
                 corrections
             });
+            console.log('✅ Backend response:', response.data);
             return response.data;
         } catch (error: any) {
             console.error('Failed to apply manual fix:', error);
             throw new Error(error.response?.data?.detail || 'Failed to apply manual fix.');
+        }
+    },
+
+    // Simple update for successful invoices (no validation, just direct update)
+    updateSuccessfulInvoice: async (validatedId: number, updates: Record<string, any>) => {
+        try {
+            console.log('💾 Updating successful invoice:', validatedId, updates);
+            const response = await api.put(`/api/v1/invoices-v2/validated/${validatedId}/update-successful`, updates);
+            console.log('✅ Update response:', response.data);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to update successful invoice:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to update invoice.');
         }
     },
 
@@ -2008,6 +2056,109 @@ export const invoicesV2Api = {
         } catch (error: any) {
             console.error('Failed to reprocess invoice:', error);
             throw new Error(error.response?.data?.detail || 'Failed to reprocess invoice.');
+        }
+    },
+};
+
+/**
+ * Converted Invoices API (V2 Conversion System)
+ */
+export const convertedInvoicesApi = {
+    // Convert successful invoices to customer-specific formats
+    convertInvoices: async (validatedInvoiceIds: number[]) => {
+        try {
+            const response = await api.post('/api/v1/converted-invoices/convert', {
+                validated_invoice_ids: validatedInvoiceIds
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to convert invoices:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to convert invoices.');
+        }
+    },
+
+    // Override validation mismatch and force conversion
+    overrideValidation: async (validatedInvoiceId: number, updateCustomerFields: boolean = false) => {
+        try {
+            const response = await api.post(`/api/v1/converted-invoices/${validatedInvoiceId}/override`, {
+                update_customer_fields: updateCustomerFields
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to override validation:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to override validation.');
+        }
+    },
+
+    // List all converted invoices
+    getConverted: async (skip: number = 0, limit: number = 100, statusFilter?: string) => {
+        try {
+            const params: any = { skip, limit };
+            if (statusFilter) {
+                params.status_filter = statusFilter;
+            }
+            const response = await api.get('/api/v1/converted-invoices/list', { params });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get converted invoices:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch converted invoices.');
+        }
+    },
+
+    // Download a converted invoice file
+    downloadConverted: async (convertedId: number) => {
+        try {
+            const response = await api.get(`/api/v1/converted-invoices/${convertedId}/download`, {
+                responseType: 'blob',
+            });
+
+            // Extract filename from Content-Disposition header
+            const contentDisposition = response.headers['content-disposition'];
+            let filename = `converted_invoice_${convertedId}.bin`;
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/);
+                if (filenameMatch) {
+                    filename = filenameMatch[1];
+                }
+            }
+
+            // Create blob and download
+            const blob = new Blob([response.data]);
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+
+            return { success: true, filename };
+        } catch (error: any) {
+            console.error('Failed to download converted invoice:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to download converted invoice.');
+        }
+    },
+
+    // Get converted invoice info (debugging)
+    getConvertedInfo: async (convertedId: number) => {
+        try {
+            const response = await api.get(`/api/v1/converted-invoices/${convertedId}/info`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get converted invoice info:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to get converted invoice info.');
+        }
+    },
+
+    // Delete a converted invoice
+    deleteConverted: async (convertedId: number) => {
+        try {
+            const response = await api.delete(`/api/v1/converted-invoices/${convertedId}`);
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to delete converted invoice:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to delete converted invoice.');
         }
     },
 };
