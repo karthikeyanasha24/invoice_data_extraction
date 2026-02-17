@@ -98,7 +98,8 @@ async def supplier_intake_cfdi_document(
         # Process document linked to admin user who created the token
         result = processor.process_cfdi_document(
             user_id=supplier_token.created_by,
-            xml_content=request.xml_content
+            xml_content=request.xml_content,
+            source='supplier'  # Track as supplier upload
         )
         
         # Validate supplier RFC in XML matches the token's RFC
