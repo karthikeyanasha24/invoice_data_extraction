@@ -1,0 +1,33 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd" Version="4.0" Folio="Snippet1" Fecha="2019-07-29T12:00:00" FormaPago="03" SubTotal="1387.40" Total="1595.51" Moneda="MXN" TipoDeComprobante="I" MetodoPago="PUE" LugarExpedicion="NZ 123 EW" Exportacion="01">
+  <cfdi:Emisor Rfc="XAXX010101000" Nombre="SupplierOfficialName Ltd" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="XEXX010101000" Nombre="Buyer Official Name" DomicilioFiscalReceptor="A36577" RegimenFiscalReceptor="601" UsoCFDI="G03"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="WG546767" Cantidad="10.000000" ClaveUnidad="E48" Unidad="Unidad" Descripcion="Widgets True and Fair" ValorUnitario="29.990000" Importe="299.90" ObjetoImp="02">
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+          <cfdi:Traslado Base="299.90" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.150000" Importe="44.98"/>
+        </cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+    <cfdi:Concepto ClaveProdServ="2138218312" Cantidad="2.000000" ClaveUnidad="E48" Unidad="Unidad" Descripcion="Description 2" ValorUnitario="500.000000" Importe="1000.00" ObjetoImp="02">
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+          <cfdi:Traslado Base="1000.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.150000" Importe="150.00"/>
+        </cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+    <cfdi:Concepto ClaveProdServ="WG546767" Cantidad="25.000000" ClaveUnidad="E48" Unidad="Unidad" Descripcion="Widgets True and Fair" ValorUnitario="7.500000" Importe="187.50" ObjetoImp="02">
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+          <cfdi:Traslado Base="187.50" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.150000" Importe="28.12"/>
+        </cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+  </cfdi:Conceptos>
+  <cfdi:Impuestos TotalImpuestosTrasladados="208.11">
+    <cfdi:Traslados>
+      <cfdi:Traslado Base="1387.40" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.150000" Importe="208.11"/>
+    </cfdi:Traslados>
+  </cfdi:Impuestos>
+</cfdi:Comprobante>

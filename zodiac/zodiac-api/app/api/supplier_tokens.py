@@ -239,67 +239,66 @@ async def refresh_supplier_token(
 ):
     """
     Generate a new token for an existing supplier (Admin only).
-    Deactivates the old token and creates a new one.
+    Replaces the old token with a new one (in-place update).
     """
     try:
-        old_token = db.query(SupplierToken).filter(SupplierToken.id == token_id).first()
+        token_record = db.query(SupplierToken).filter(SupplierToken.id == token_id).first()
         
-        if not old_token:
+        if not token_record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Token not found"
             )
         
-        # Deactivate old token
-        old_token.is_active = False
+        # Store old values for logging
+        old_rfc = token_record.supplier_rfc
         
         # Generate new token
         new_token_value = generate_api_key()
         new_token_hash = hash_api_key(new_token_value)
         
-        # Calculate new expiration (same duration as original)
+        # Calculate new expiration (same duration as original or 365 days if no expiration)
         expires_at = None
-        if old_token.expires_at:
+        if token_record.expires_at:
             # Extend by same duration from now
-            original_duration = (old_token.expires_at - old_token.created_at).days
+            original_duration = (token_record.expires_at - token_record.created_at).days
             expires_at = datetime.utcnow() + timedelta(days=original_duration)
+        else:
+            # If no expiration set, default to 365 days
+            expires_at = datetime.utcnow() + timedelta(days=365)
         
-        # Create new token record
-        new_token = SupplierToken(
-            supplier_rfc=old_token.supplier_rfc,
-            supplier_name=old_token.supplier_name,
-            token=new_token_value,
-            token_hash=new_token_hash,
-            is_active=True,
-            expires_at=expires_at,
-            created_by=current_user.id,
-            ip_whitelist=old_token.ip_whitelist,
-            notes=old_token.notes
-        )
+        # Update the existing token record (in-place)
+        token_record.token = new_token_value
+        token_record.token_hash = new_token_hash
+        token_record.is_active = True  # Reactivate if it was inactive
+        token_record.expires_at = expires_at
+        token_record.created_at = datetime.utcnow()  # Reset creation time
+        token_record.last_used_at = None  # Reset last used
+        # Keep supplier_rfc, supplier_name, ip_whitelist, and notes unchanged
         
-        db.add(new_token)
         db.commit()
-        db.refresh(new_token)
+        db.refresh(token_record)
         
-        logger.info(f"✅ Refreshed supplier token for {old_token.supplier_rfc} by admin {current_user.id}")
+        logger.info(f"✅ Refreshed supplier token (ID: {token_id}) for {old_rfc} by admin {current_user.id}")
         
         return GenerateTokenResponse(
             success=True,
             token=new_token_value,  # Return new plain token (only time it's shown!)
-            supplier_rfc=new_token.supplier_rfc,
-            supplier_name=new_token.supplier_name,
-            expires_at=new_token.expires_at,
-            message="New token generated successfully. Save this token securely - it will not be shown again!"
+            supplier_rfc=token_record.supplier_rfc,
+            supplier_name=token_record.supplier_name,
+            expires_at=token_record.expires_at,
+            message="Token refreshed successfully. Save this token securely - it will not be shown again!"
         )
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ Failed to refresh token: {e}")
+        logger.exception(e)
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to refresh token"
+            detail=f"Failed to refresh token: {str(e)}"
         )
 
 

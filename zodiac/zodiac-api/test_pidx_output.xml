@@ -1,0 +1,124 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<pidx:Invoice xmlns:pidx="http://www.api.org/pidXML" transactionPurposeIndicator="Original" version="1.2">
+  <pidx:InvoiceProperties>
+    <pidx:InvoiceNumber>Snippet1</pidx:InvoiceNumber>
+    <pidx:InvoiceDate>2019-07-29</pidx:InvoiceDate>
+    <pidx:PartnerInformation>
+      <pidx:PartnerRoleCode>Seller</pidx:PartnerRoleCode>
+      <pidx:PartnerIdentifier>9429033821733</pidx:PartnerIdentifier>
+      <pidx:PartnerName>SupplierTradingName Ltd.</pidx:PartnerName>
+      <pidx:Address>
+        <pidx:AddressLine>Main street 1</pidx:AddressLine>
+        <pidx:CityName>Wellington</pidx:CityName>
+        <pidx:PostalCode>NZ 123 EW</pidx:PostalCode>
+        <pidx:CountryCode>NZ</pidx:CountryCode>
+      </pidx:Address>
+    </pidx:PartnerInformation>
+    <pidx:PartnerInformation>
+      <pidx:PartnerRoleCode>Buyer</pidx:PartnerRoleCode>
+      <pidx:PartnerIdentifier>9429033591476</pidx:PartnerIdentifier>
+      <pidx:PartnerName>Trotters Trading Co Ltd</pidx:PartnerName>
+      <pidx:Address>
+        <pidx:AddressLine>100 Queen Street</pidx:AddressLine>
+        <pidx:CityName>Auckland</pidx:CityName>
+        <pidx:PostalCode>A36577</pidx:PostalCode>
+        <pidx:CountryCode>NZ</pidx:CountryCode>
+      </pidx:Address>
+    </pidx:PartnerInformation>
+    <pidx:InvoiceTypeCode>Standard</pidx:InvoiceTypeCode>
+    <pidx:PurchaseOrderInformation>
+      <pidx:PurchaseOrderNumber>SOMEBLERB</pidx:PurchaseOrderNumber>
+    </pidx:PurchaseOrderInformation>
+    <pidx:PrimaryCurrency>
+      <pidx:CurrencyCode>NZD</pidx:CurrencyCode>
+    </pidx:PrimaryCurrency>
+    <pidx:LanguageCode>en</pidx:LanguageCode>
+    <pidx:ServiceDateTime>
+      <pidx:DateTimeQualifier>DueDate</pidx:DateTimeQualifier>
+      <pidx:DateTime>2019-08-30</pidx:DateTime>
+    </pidx:ServiceDateTime>
+  </pidx:InvoiceProperties>
+  <pidx:InvoiceDetails>
+    <pidx:InvoiceLineItem>
+      <pidx:LineItemNumber>1</pidx:LineItemNumber>
+      <pidx:InvoiceQuantity>
+        <pidx:Quantity>10.000000</pidx:Quantity>
+        <pidx:UnitOfMeasureCode>E99</pidx:UnitOfMeasureCode>
+      </pidx:InvoiceQuantity>
+      <pidx:LineItemInformation>
+        <pidx:ItemDescription>Widgets True and Fair</pidx:ItemDescription>
+        <pidx:BuyerItemNumber>WG546767</pidx:BuyerItemNumber>
+      </pidx:LineItemInformation>
+      <pidx:Pricing>
+        <pidx:UnitPrice>
+          <pidx:MonetaryAmount>29.99</pidx:MonetaryAmount>
+          <pidx:UnitOfMeasureCode>E99</pidx:UnitOfMeasureCode>
+        </pidx:UnitPrice>
+      </pidx:Pricing>
+      <pidx:Tax>
+        <pidx:TaxTypeCode>SalesTax</pidx:TaxTypeCode>
+        <pidx:TaxRate>15.00</pidx:TaxRate>
+        <pidx:TaxAmount>44.98</pidx:TaxAmount>
+      </pidx:Tax>
+      <pidx:LineItemTotal>299.90</pidx:LineItemTotal>
+    </pidx:InvoiceLineItem>
+    <pidx:InvoiceLineItem>
+      <pidx:LineItemNumber>2</pidx:LineItemNumber>
+      <pidx:InvoiceQuantity>
+        <pidx:Quantity>2.000000</pidx:Quantity>
+        <pidx:UnitOfMeasureCode>DAY</pidx:UnitOfMeasureCode>
+      </pidx:InvoiceQuantity>
+      <pidx:LineItemInformation>
+        <pidx:ItemDescription>Description 2</pidx:ItemDescription>
+        <pidx:BuyerItemNumber>21382183120983</pidx:BuyerItemNumber>
+      </pidx:LineItemInformation>
+      <pidx:Pricing>
+        <pidx:UnitPrice>
+          <pidx:MonetaryAmount>500.00</pidx:MonetaryAmount>
+          <pidx:UnitOfMeasureCode>DAY</pidx:UnitOfMeasureCode>
+        </pidx:UnitPrice>
+      </pidx:Pricing>
+      <pidx:Tax>
+        <pidx:TaxTypeCode>SalesTax</pidx:TaxTypeCode>
+        <pidx:TaxRate>15.00</pidx:TaxRate>
+        <pidx:TaxAmount>150.00</pidx:TaxAmount>
+      </pidx:Tax>
+      <pidx:LineItemTotal>1000.00</pidx:LineItemTotal>
+    </pidx:InvoiceLineItem>
+    <pidx:InvoiceLineItem>
+      <pidx:LineItemNumber>3</pidx:LineItemNumber>
+      <pidx:InvoiceQuantity>
+        <pidx:Quantity>25.000000</pidx:Quantity>
+        <pidx:UnitOfMeasureCode>M66</pidx:UnitOfMeasureCode>
+      </pidx:InvoiceQuantity>
+      <pidx:LineItemInformation>
+        <pidx:ItemDescription>Widgets True and Fair</pidx:ItemDescription>
+        <pidx:BuyerItemNumber>WG546767</pidx:BuyerItemNumber>
+      </pidx:LineItemInformation>
+      <pidx:Pricing>
+        <pidx:UnitPrice>
+          <pidx:MonetaryAmount>7.50</pidx:MonetaryAmount>
+          <pidx:UnitOfMeasureCode>M66</pidx:UnitOfMeasureCode>
+        </pidx:UnitPrice>
+      </pidx:Pricing>
+      <pidx:Tax>
+        <pidx:TaxTypeCode>SalesTax</pidx:TaxTypeCode>
+        <pidx:TaxRate>15.00</pidx:TaxRate>
+        <pidx:TaxAmount>28.12</pidx:TaxAmount>
+      </pidx:Tax>
+      <pidx:LineItemTotal>187.50</pidx:LineItemTotal>
+    </pidx:InvoiceLineItem>
+  </pidx:InvoiceDetails>
+  <pidx:InvoiceSummary>
+    <pidx:TotalLineItems>3</pidx:TotalLineItems>
+    <pidx:InvoiceTotal>1595.51</pidx:InvoiceTotal>
+    <pidx:SubTotalAmount>
+      <pidx:SubTotalAmountTypeCode>GoodsAndServices</pidx:SubTotalAmountTypeCode>
+      <pidx:MonetaryAmount>1387.40</pidx:MonetaryAmount>
+    </pidx:SubTotalAmount>
+    <pidx:Tax>
+      <pidx:TaxTypeCode>SalesTax</pidx:TaxTypeCode>
+      <pidx:TaxAmount>208.11</pidx:TaxAmount>
+    </pidx:Tax>
+  </pidx:InvoiceSummary>
+</pidx:Invoice>

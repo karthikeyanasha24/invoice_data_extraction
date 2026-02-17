@@ -15,6 +15,9 @@ from ..models.converted_invoice import ConvertedInvoice
 from ..utils.xml_to_x12 import convert_xml_to_x12_content
 from ..utils.xml_to_edifact_direct import convert_xml_to_edifact_direct
 from ..utils.pdf_generator import generate_pdf_from_xml
+from ..utils.xml_to_cfdi import convert_ubl_to_cfdi
+from ..utils.xml_to_pidx import convert_ubl_to_pidx
+from ..utils.ubl_formatter import format_ubl_invoice
 from .file_service import save_file_to_storage, read_file_from_storage
 
 logger = logging.getLogger("zodiac-api.conversion")
@@ -343,18 +346,13 @@ class InvoiceConversionService:
                 return await self._convert_to_pdf(xml_content, invoice_data)
             
             elif target_format in ["XML", "UBL"]:
-                # Return original XML
-                return xml_content.encode('utf-8'), "xml"
+                return await self._convert_to_ubl(xml_content, invoice_data)
             
             elif target_format == "CFDI":
-                # TODO: Implement CFDI conversion if needed
-                logger.warning(f"⚠️ CFDI conversion not yet implemented, returning XML")
-                return xml_content.encode('utf-8'), "xml"
+                return await self._convert_to_cfdi(xml_content, invoice_data)
             
             elif target_format == "PIDX":
-                # TODO: Implement PIDX conversion if needed
-                logger.warning(f"⚠️ PIDX conversion not yet implemented, returning XML")
-                return xml_content.encode('utf-8'), "xml"
+                return await self._convert_to_pidx(xml_content, invoice_data)
             
             else:
                 logger.error(f"❌ Unsupported format: {target_format}")
@@ -469,6 +467,66 @@ class InvoiceConversionService:
             
         except Exception as e:
             logger.error(f"❌ PDF conversion failed: {e}")
+            raise
+    
+    async def _convert_to_cfdi(self, xml_content: str, invoice_data: Dict) -> Tuple[bytes, str]:
+        """Convert to CFDI 4.0 format (Mexican electronic invoice format)"""
+        try:
+            logger.info("📄 Converting to CFDI 4.0 with all extracted data...")
+            # Convert string to bytes for the converter
+            xml_bytes = xml_content.encode('utf-8')
+            # Pass invoice_data to preserve all extracted fields
+            cfdi_content = convert_ubl_to_cfdi(xml_bytes, invoice_data=invoice_data)
+            
+            if not cfdi_content:
+                raise ValueError("CFDI conversion returned empty content")
+            
+            logger.info(f"✅ CFDI conversion successful: {len(cfdi_content)} bytes")
+            return cfdi_content, "xml"
+            
+        except Exception as e:
+            logger.error(f"❌ CFDI conversion failed: {e}")
+            raise
+    
+    async def _convert_to_pidx(self, xml_content: str, invoice_data: Dict) -> Tuple[bytes, str]:
+        """Convert to PIDX format (Petroleum Industry Data Exchange)"""
+        try:
+            logger.info("📄 Converting to PIDX with all extracted data...")
+            # Convert string to bytes for the converter
+            xml_bytes = xml_content.encode('utf-8')
+            # Pass invoice_data to preserve all extracted fields
+            pidx_content = convert_ubl_to_pidx(xml_bytes, invoice_data=invoice_data)
+            
+            if not pidx_content:
+                raise ValueError("PIDX conversion returned empty content")
+            
+            logger.info(f"✅ PIDX conversion successful: {len(pidx_content)} bytes")
+            return pidx_content, "xml"
+            
+        except Exception as e:
+            logger.error(f"❌ PIDX conversion failed: {e}")
+            raise
+    
+    async def _convert_to_ubl(self, xml_content: str, invoice_data: Dict) -> Tuple[bytes, str]:
+        """Format and validate UBL 2.1 XML"""
+        try:
+            logger.info("📄 Formatting UBL 2.1 Invoice...")
+            xml_bytes = xml_content.encode('utf-8')
+            
+            # Format and validate UBL
+            formatted_xml, is_valid, message = format_ubl_invoice(xml_bytes)
+            
+            if is_valid:
+                logger.info(f"✅ UBL validation passed: {message}")
+            else:
+                logger.warning(f"⚠️ UBL validation warning: {message}")
+            
+            logger.info(f"✅ UBL formatting successful: {len(formatted_xml)} bytes")
+            return formatted_xml, "xml"
+            
+        except Exception as e:
+            logger.error(f"❌ UBL formatting failed: {e}")
+            logger.exception(e)
             raise
     
     async def update_customer_validation_fields(

@@ -118,12 +118,24 @@ def create_ISA_segment(supplier, customer, control_numbers, current_time):
 
 def convert_xml_to_x12_content(xml_content: bytes, invoice_data: dict = None) -> Optional[str]:
     """
-    Convert XML content to X12 format.
-    Note: Currently uses XML parsing. Future enhancement: use invoice_data for comprehensive coverage.
+    Convert XML content to X12 810 (Invoice) format.
+    
+    Extracts comprehensive data from UBL XML including:
+    - Supplier and Customer info with full addresses
+    - Invoice dates, numbers, PO references
+    - Line items with product codes, descriptions, quantities, prices
+    - Totals and payment terms
+    
+    Args:
+        xml_content: UBL XML invoice content as bytes
+        invoice_data: Optional validated invoice data dict (for future enhancements)
+    
+    Returns:
+        X12 810 formatted string with segments separated by newlines
     """
-    logger.info(f"🔧 Starting X12 conversion")
+    logger.info(f"🔧 Starting X12 810 (Invoice) conversion")
     if invoice_data:
-        logger.info(f"📊 Invoice data available with {len(invoice_data)} fields (will be used in future enhancement)")
+        logger.info(f"📊 Invoice data available with {len(invoice_data)} fields")
 
     try:
         # Parse XML using same approach as old API
@@ -308,8 +320,14 @@ def convert_xml_to_x12_content(xml_content: bytes, invoice_data: dict = None) ->
         for idx, line in enumerate(invoice_lines, 1):
             quantity_elem = line.find("cbc:InvoicedQuantity", ns)
             price_elem = line.find(".//cac:Price/cbc:PriceAmount", ns)
-            product_elem = line.find(
-                ".//cac:Item/cac:SellersItemIdentification/cbc:ID", ns)
+            
+            # Try multiple product code sources (Seller > Standard > Buyer)
+            # Note: Can't use 'or' operator as Elements can be falsy
+            product_elem = line.find(".//cac:Item/cac:SellersItemIdentification/cbc:ID", ns)
+            if product_elem is None:
+                product_elem = line.find(".//cac:Item/cac:StandardItemIdentification/cbc:ID", ns)
+            if product_elem is None:
+                product_elem = line.find(".//cac:Item/cac:BuyersItemIdentification/cbc:ID", ns)
 
             quantity_val = quantity_elem.text.strip(
             ) if quantity_elem is not None and quantity_elem.text else "0"
@@ -317,12 +335,24 @@ def convert_xml_to_x12_content(xml_content: bytes, invoice_data: dict = None) ->
                 price_elem.text) if price_elem is not None and price_elem.text else "0"
             product_code = product_elem.text.strip(
             ) if product_elem is not None and product_elem.text else ""
+            
+            # Get item description for optional segment
+            description_elem = line.find(".//cac:Item/cbc:Description", ns)
+            if description_elem is None:
+                description_elem = line.find(".//cac:Item/cbc:Name", ns)
+            description = description_elem.text.strip() if description_elem is not None and description_elem.text else ""
 
             x12_segments.append(
                 f"IT1*{idx}*{quantity_val}*EA*{price_val}*CP*VP*{product_code}~")
+            
+            # Add optional PID segment for product description
+            if description:
+                # Truncate description to 80 chars for X12 compliance
+                desc_truncated = description[:80]
+                x12_segments.append(f"PID*F****{desc_truncated}~")
 
         logger.info(
-            f"✅ _convert_xml_to_x12_content: {len(invoice_lines)} IT1 segments added")
+            f"✅ _convert_xml_to_x12_content: {len(invoice_lines)} IT1 segments added (with PID descriptions)")
 
         # Total amount segment (exact same logic as old API)
         total_amount_elem = root.find(
