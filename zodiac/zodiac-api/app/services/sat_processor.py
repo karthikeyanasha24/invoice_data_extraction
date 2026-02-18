@@ -33,7 +33,7 @@ class SATDocumentProcessor:
         Returns processing result with document ID and status.
         """
         try:
-            logger.info(f"📨 Processing CFDI document for user {user_id}")
+            logger.info(f"📨 Processing CFDI document for user {user_id} with SOURCE='{source}' ⚠️")
             
             # Step 1: Validate XML structure
             is_valid, error_msg = self.parser.validate_cfdi_structure(xml_content)
@@ -92,6 +92,7 @@ class SATDocumentProcessor:
             portal_ref_id = f"SAT-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
             
             # Step 6: Create SAT document record
+            logger.info(f"⚠️ Creating SATDocument with SOURCE='{source}' parameter")
             sat_doc = SATDocument(
                 id=uuid.uuid4(),
                 user_id=user_id,
@@ -125,6 +126,8 @@ class SATDocumentProcessor:
             self.db.add(sat_doc)
             self.db.commit()
             self.db.refresh(sat_doc)
+            
+            logger.info(f"⚠️ Document saved to DB with source='{sat_doc.source}' (should be '{source}')")
             
             logger.info(f"✅ CFDI document stored: {sat_doc.id} | UUID: {cfdi_uuid} | Type: {sat_doc.doc_type}")
             

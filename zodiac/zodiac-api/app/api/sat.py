@@ -178,11 +178,13 @@ async def supplier_intake_files(
                 logger.info(f"   Processing file: {uploaded_file.filename} ({len(xml_content)} bytes)")
                 
                 # Process document (mark as supplier source)
+                logger.info(f"⚠️ CALLING process_cfdi_document with source='supplier' for file: {uploaded_file.filename}")
                 result = processor.process_cfdi_document(
                     user_id=supplier_token.created_by,
                     xml_content=xml_content,
                     source='supplier'  # Track as supplier upload
                 )
+                logger.info(f"⚠️ RESULT from process_cfdi_document: success={result.get('success')}, status={result.get('status')}")
                 
                 # Validate RFC matches token (normalize for comparison)
                 if result.get('success') and result.get('supplier_rfc'):
