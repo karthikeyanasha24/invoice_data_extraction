@@ -72,8 +72,8 @@ class SATDocument(Base):
     fiscal_year = Column(Integer)
     fiscal_period = Column(Integer)
     
-    # Source tracking
-    source = Column(String(20), default='admin')  # 'admin' or 'supplier'
+    # Source tracking (must be explicitly set - no default)
+    source = Column(String(20), nullable=False)  # 'admin' or 'supplier' - MUST be provided
     
     # Timestamps
     received_at = Column(DateTime, default=datetime.utcnow)
