@@ -395,6 +395,7 @@ async def get_sat_document(
             "status": document.status,
             "fiscal_year": document.fiscal_year,
             "fiscal_period": document.fiscal_period,
+            "source": document.source,
             "received_at": document.received_at.isoformat() if document.received_at else None,
             "sap_document_number": document.sap_document_number,
             "sent_to_sap_at": document.sent_to_sap_at.isoformat() if document.sent_to_sap_at else None,

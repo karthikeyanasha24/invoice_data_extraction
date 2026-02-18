@@ -218,6 +218,7 @@ class SATDocumentProcessor:
                     "status": doc.status,
                     "fiscal_year": doc.fiscal_year,
                     "fiscal_period": doc.fiscal_period,
+                    "source": doc.source,
                     "received_at": doc.received_at.isoformat() if doc.received_at else None,
                     "sap_document_number": doc.sap_document_number,
                     "sent_to_sap_at": doc.sent_to_sap_at.isoformat() if doc.sent_to_sap_at else None
