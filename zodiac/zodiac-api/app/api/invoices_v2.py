@@ -804,11 +804,26 @@ async def list_validated_invoices(
         
         logger.info(f"✅ Found {len(validated)} validated invoices (total: {total})")
         
-        # Build response with document info
+        # Get validated_invoice_ids that have been successfully converted (for this user)
+        from ..models.converted_invoice import ConvertedInvoice
+        converted_ids_query = db.query(ConvertedInvoice.validated_invoice_id).join(
+            InvoiceV2Validated,
+            ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id
+        ).join(
+            InvoiceV2Document,
+            InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            ConvertedInvoice.conversion_status == "success"
+        ).distinct().all()
+        converted_ids_set = {row[0] for row in converted_ids_query}
+        
+        # Build response with document info and is_converted
         results = []
         for v in validated:
             result = v.to_dict()
             result["document"] = v.document.to_dict() if v.document else None
+            result["is_converted"] = v.id in converted_ids_set
             results.append(result)
         
         return {

@@ -3,7 +3,7 @@ Dashboard API endpoints for statistics, analytics, and AI insights
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func, cast, Date, Numeric
 from datetime import datetime, timedelta
 from collections import defaultdict
 import logging
@@ -18,6 +18,9 @@ from ..models.invoice_v2_business_data import InvoiceV2BusinessData
 from ..models.invoice_v2_validated import InvoiceV2Validated
 from ..models.invoice_v2_document import InvoiceV2Document
 from ..models.sat_simple_merged import SATSimpleMerged
+from ..models.sat_document import SATDocument
+from ..models.supplier_token import SupplierToken
+from ..models.converted_invoice import ConvertedInvoice
 from ..api.auth import get_current_user
 from ..config.config import OPENAI_API_KEY
 from ..services.database import extract_supplier_info_from_string
@@ -868,6 +871,416 @@ async def get_operations_statistics(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch operations statistics: {str(e)}"
         )
+
+
+# ==================== Dashboard v2 endpoints ====================
+
+
+@router.get("/v2/inbound")
+async def get_dashboard_v2_inbound(
+    days: int = Query(default=30, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dashboard v2 - Inbound process stats (SAT documents, merges, suppliers by RFC, tokens)."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        total_documents = db.query(func.count(SATDocument.id)).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).scalar() or 0
+
+        doc_type_rows = db.query(
+            SATDocument.doc_type,
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).group_by(SATDocument.doc_type).all()
+        by_document_type = [{"doc_type": row.doc_type, "count": row.count} for row in doc_type_rows]
+
+        source_rows = db.query(
+            SATDocument.source,
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).group_by(SATDocument.source).all()
+        by_source = [{"source": row.source, "count": row.count} for row in source_rows]
+
+        period_rows = db.query(
+            SATDocument.fiscal_year,
+            SATDocument.fiscal_period,
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date,
+            SATDocument.fiscal_year.isnot(None),
+            SATDocument.fiscal_period.isnot(None)
+        ).group_by(SATDocument.fiscal_year, SATDocument.fiscal_period).order_by(
+            SATDocument.fiscal_year.desc(),
+            SATDocument.fiscal_period.desc()
+        ).limit(24).all()
+        by_period = [
+            {"fiscal_year": r.fiscal_year, "fiscal_period": r.fiscal_period, "count": r.count}
+            for r in period_rows
+        ]
+
+        supplier_rows = db.query(
+            SATDocument.supplier_rfc,
+            SATDocument.supplier_name,
+            func.count(SATDocument.id).label("count"),
+            func.coalesce(
+                func.sum(cast(func.nullif(func.trim(SATDocument.total), ""), Numeric(15, 2))),
+                0
+            ).label("total_amount")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).group_by(SATDocument.supplier_rfc, SATDocument.supplier_name).order_by(
+            func.count(SATDocument.id).desc()
+        ).limit(10).all()
+        top_suppliers = [
+            {
+                "supplier_rfc": r.supplier_rfc,
+                "supplier_name": r.supplier_name or r.supplier_rfc,
+                "count": r.count,
+                "total_amount": float(r.total_amount) if r.total_amount is not None else 0.0,
+            }
+            for r in supplier_rows
+        ]
+
+        merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
+            SATSimpleMerged.user_id == current_user.id,
+            SATSimpleMerged.created_at >= cutoff_date
+        ).scalar() or 0
+        merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+            SATSimpleMerged.user_id == current_user.id,
+            SATSimpleMerged.created_at >= cutoff_date,
+            SATSimpleMerged.sent_to_sap == True
+        ).scalar() or 0
+        merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+            SATSimpleMerged.user_id == current_user.id,
+            SATSimpleMerged.created_at >= cutoff_date,
+            SATSimpleMerged.sent_to_sap == False
+        ).scalar() or 0
+
+        token_total = db.query(func.count(SupplierToken.id)).scalar() or 0
+        token_active = db.query(func.count(SupplierToken.id)).filter(
+            SupplierToken.is_active == True,
+            (SupplierToken.expires_at.is_(None)) | (SupplierToken.expires_at >= datetime.utcnow())
+        ).scalar() or 0
+        token_expired = db.query(func.count(SupplierToken.id)).filter(
+            SupplierToken.expires_at < datetime.utcnow(),
+            SupplierToken.is_active == True
+        ).scalar() or 0
+        token_recently_used = db.query(func.count(SupplierToken.id)).filter(
+            SupplierToken.last_used_at >= (datetime.utcnow() - timedelta(days=7))
+        ).scalar() or 0
+
+        return {
+            "summary": {
+                "total_documents": total_documents,
+                "merges_total": merges_total,
+                "merges_sent_to_sap": merges_sent,
+                "merges_pending": merges_pending,
+            },
+            "by_document_type": by_document_type,
+            "by_source": by_source,
+            "by_period": by_period,
+            "top_suppliers": top_suppliers,
+            "tokens": {
+                "total": token_total,
+                "active": token_active,
+                "expired": token_expired,
+                "recently_used": token_recently_used,
+            },
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 inbound: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/outbound")
+async def get_dashboard_v2_outbound(
+    days: int = Query(default=30, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dashboard v2 - Outbound process stats (V2 documents, validated, converted)."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        documents_received = db.query(func.count(InvoiceV2Document.id)).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).scalar() or 0
+
+        validated_query = db.query(
+            InvoiceV2Validated.status,
+            func.count(InvoiceV2Validated.id).label("count")
+        ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).group_by(InvoiceV2Validated.status).all()
+        validated_success = sum(c for s, c in validated_query if s == "success")
+        validated_failed = sum(c for s, c in validated_query if s == "failed")
+
+        converted_query = db.query(
+            ConvertedInvoice.conversion_status,
+            func.count(ConvertedInvoice.id).label("count")
+        ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).group_by(ConvertedInvoice.conversion_status).all()
+        converted_success = sum(c for s, c in converted_query if s == "success")
+        converted_failed = sum(c for s, c in converted_query if s == "failed")
+        converted_pending = sum(c for s, c in converted_query if s == "pending")
+        converted_total = converted_success + converted_failed + converted_pending
+
+        format_rows = db.query(
+            ConvertedInvoice.target_format,
+            func.count(ConvertedInvoice.id).label("count")
+        ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date,
+            ConvertedInvoice.conversion_status == "success"
+        ).group_by(ConvertedInvoice.target_format).all()
+        by_format = [{"format": r.target_format, "count": r.count} for r in format_rows]
+
+        customer_rows = db.query(
+            ConvertedInvoice.customer_id,
+            func.count(ConvertedInvoice.id).label("count")
+        ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).filter(ConvertedInvoice.customer_id.isnot(None)).group_by(
+            ConvertedInvoice.customer_id
+        ).order_by(func.count(ConvertedInvoice.id).desc()).limit(10).all()
+        top_customers = [{"customer_id": r.customer_id, "count": r.count} for r in customer_rows]
+
+        timeline_docs = db.query(
+            cast(InvoiceV2Document.uploaded_at, Date).label("date"),
+            func.count(InvoiceV2Document.id).label("count")
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).group_by(cast(InvoiceV2Document.uploaded_at, Date)).order_by(
+            cast(InvoiceV2Document.uploaded_at, Date)
+        ).all()
+        timeline = [{"date": d.date.strftime("%Y-%m-%d") if d.date else None, "documents": d.count} for d in timeline_docs]
+
+        validation_rate = (validated_success / (validated_success + validated_failed) * 100) if (validated_success + validated_failed) > 0 else 0
+        conversion_rate = (converted_success / converted_total * 100) if converted_total > 0 else 0
+
+        return {
+            "funnel": {
+                "documents_received": documents_received,
+                "validated_success": validated_success,
+                "validated_failed": validated_failed,
+                "converted_success": converted_success,
+                "converted_failed": converted_failed,
+                "converted_pending": converted_pending,
+                "converted_total": converted_total,
+            },
+            "summary": {
+                "documents_received": documents_received,
+                "validated_total": validated_success + validated_failed,
+                "validated_success": validated_success,
+                "validated_failed": validated_failed,
+                "validation_success_rate_pct": round(validation_rate, 1),
+                "converted_total": converted_total,
+                "converted_success": converted_success,
+                "converted_failed": converted_failed,
+                "converted_pending": converted_pending,
+                "conversion_success_rate_pct": round(conversion_rate, 1),
+            },
+            "by_format": by_format,
+            "top_customers": top_customers,
+            "timeline": timeline,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 outbound: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/business")
+async def get_dashboard_v2_business(
+    days: int = Query(default=90, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dashboard v2 - Business: products by industry, industry breakdown, trend. Data comes from successful invoices' line_items."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        rows = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None),
+            InvoiceV2BusinessData.industry.isnot(None),
+        ).all()
+
+        # If no BI data yet but user has successful validated invoices, backfill from line_items
+        if not rows:
+            success_count = db.query(InvoiceV2Validated).join(
+                InvoiceV2Document,
+                InvoiceV2Validated.document_id == InvoiceV2Document.id
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Validated.status == "success"
+            ).count()
+            if success_count > 0:
+                _run_backfill_invoice_v2_bi(db, current_user, max_invoices=500)
+                rows = db.query(InvoiceV2BusinessData).filter(
+                    InvoiceV2BusinessData.user_id == current_user.id,
+                    InvoiceV2BusinessData.created_at >= cutoff_date,
+                    InvoiceV2BusinessData.products.isnot(None),
+                    InvoiceV2BusinessData.industry.isnot(None),
+                ).all()
+
+        product_industry = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        industry_totals = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+
+        for r in rows:
+            industry = r.industry or "General"
+            amount = (r.total_amount or Decimal("0"))
+            products = r.products if isinstance(r.products, list) else []
+            industry_totals[industry]["count"] += 1
+            industry_totals[industry]["revenue"] += amount
+            for p in products:
+                if not isinstance(p, dict):
+                    continue
+                name = (p.get("name") or p.get("item_name") or "Unknown").strip() or "Unknown"
+                key = (name, industry)
+                product_industry[key]["count"] += 1
+                line_revenue = p.get("revenue") or p.get("line_extension_amount")
+                if line_revenue is not None:
+                    try:
+                        product_industry[key]["revenue"] += Decimal(str(line_revenue))
+                    except Exception:
+                        product_industry[key]["revenue"] += amount / len(products) if products else amount
+                else:
+                    product_industry[key]["revenue"] += amount / len(products) if products else amount
+
+        products_by_industry = [
+            {
+                "product_name": name,
+                "industry": ind,
+                "invoice_count": data["count"],
+                "revenue": float(data["revenue"]),
+            }
+            for (name, ind), data in sorted(product_industry.items(), key=lambda x: -x[1]["revenue"])
+        ][:100]
+
+        industry_breakdown = [
+            {"industry": ind, "count": data["count"], "total_revenue": float(data["revenue"])}
+            for ind, data in sorted(industry_totals.items(), key=lambda x: -x[1]["revenue"])
+        ]
+
+        # Revenue by customer (customer_id = RFC from successful data)
+        customer_revenue = defaultdict(lambda: {"customer_name": None, "count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            cid = r.customer_id or "Unknown"
+            customer_revenue[cid]["customer_name"] = r.customer_name or cid
+            customer_revenue[cid]["count"] += 1
+            customer_revenue[cid]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_customer = [
+            {
+                "customer_id": cid,
+                "customer_name": data["customer_name"] or cid,
+                "invoice_count": data["count"],
+                "total_revenue": float(data["revenue"]),
+            }
+            for cid, data in sorted(customer_revenue.items(), key=lambda x: -x[1]["revenue"])
+        ][:50]
+
+        mid = cutoff_date + (datetime.utcnow() - cutoff_date) / 2
+        prev_cutoff = cutoff_date - (datetime.utcnow() - cutoff_date)
+        current_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= mid,
+        ).scalar() or 0
+        previous_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= prev_cutoff,
+            InvoiceV2BusinessData.created_at < mid,
+        ).scalar() or 0
+        try:
+            current_revenue = float(current_revenue)
+            previous_revenue = float(previous_revenue)
+        except Exception:
+            current_revenue = previous_revenue = 0.0
+        trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
+
+        trend = {
+            "current_period_revenue": current_revenue,
+            "previous_period_revenue": previous_revenue,
+            "revenue_change_pct": round(trend_pct, 1),
+        }
+
+        # AI insights about the whole business tab (using existing API key)
+        ai_insights = None
+        if OPENAI_API_KEY and openai_available and rows:
+            try:
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                prompt = f"""You are a business analyst. Based on the following dashboard data (from validated invoices), provide concise AI insights in JSON format.
+
+REVENUE TREND:
+- Current period revenue: {current_revenue}
+- Previous period revenue: {previous_revenue}
+- Change: {trend_pct:+.1f}%
+
+INDUSTRY BREAKDOWN (top 10):
+{json.dumps(industry_breakdown[:10], indent=2)}
+
+REVENUE BY CUSTOMER (top 10, customer_id is RFC):
+{json.dumps(revenue_by_customer[:10], indent=2)}
+
+PRODUCTS BY INDUSTRY (top 15):
+{json.dumps(products_by_industry[:15], indent=2)}
+
+Respond with a single JSON object with this structure (no markdown, only valid JSON):
+{{
+  "summary": "2-3 sentence overall summary of the business situation",
+  "revenue_insights": ["insight about revenue trend"],
+  "industry_insights": ["insight about industry mix"],
+  "customer_insights": ["insight about top customers / concentration"],
+  "product_insights": ["insight about product performance"],
+  "recommendations": ["1-3 actionable recommendations"]
+}}"""
+
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.5,
+                    response_format={"type": "json_object"},
+                )
+                ai_insights = json.loads(completion.choices[0].message.content)
+                logger.info("AI business insights generated for v2/business")
+            except Exception as ai_err:
+                logger.warning(f"AI insights for v2/business failed: {ai_err}")
+                ai_insights = None
+
+        return {
+            "products_by_industry": products_by_industry,
+            "industry_breakdown": industry_breakdown,
+            "revenue_by_customer": revenue_by_customer,
+            "trend": trend,
+            "ai_insights": ai_insights,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 business: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.get("/auto-fix-details")
@@ -2305,6 +2718,101 @@ async def get_product_demand_analysis(
         )
 
 
+@router.get("/dashboard-data-stats")
+async def get_dashboard_data_stats(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Counts for the Invoices "Dashboard data" tab: successful validated, converted, and BI records.
+    Used so users can see how much data is available and trigger extraction for the Business tab.
+    """
+    try:
+        validated_success = db.query(func.count(InvoiceV2Validated.id)).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Validated.status == "success"
+        ).scalar() or 0
+        converted_count = db.query(func.count(ConvertedInvoice.id)).join(
+            InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id
+        ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+            InvoiceV2Document.user_id == current_user.id
+        ).scalar() or 0
+        bi_count = db.query(func.count(InvoiceV2BusinessData.id)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id
+        ).scalar() or 0
+        return {
+            "validated_success_count": validated_success,
+            "converted_count": converted_count,
+            "bi_extracted_count": bi_count,
+        }
+    except Exception as e:
+        logger.error(f"Dashboard data stats: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+def _run_backfill_invoice_v2_bi(db: Session, current_user: ZodiacUser, max_invoices: int = 2000) -> tuple:
+    """
+    Backfill InvoiceV2BusinessData from successful validated invoices (line_items -> products).
+    Returns (processed, skipped, errors, total).
+    """
+    bi_service = InvoiceV2BusinessIntelligence()
+    validated_invoices = db.query(InvoiceV2Validated).join(
+        InvoiceV2Document,
+        InvoiceV2Validated.document_id == InvoiceV2Document.id
+    ).filter(
+        InvoiceV2Document.user_id == current_user.id,
+        InvoiceV2Validated.status == "success"
+    ).limit(max_invoices).all()
+
+    processed = skipped = errors = 0
+    for validated_invoice in validated_invoices:
+        try:
+            existing = db.query(InvoiceV2BusinessData).filter(
+                InvoiceV2BusinessData.validated_invoice_id == validated_invoice.id
+            ).first()
+            if existing:
+                skipped += 1
+                continue
+            bi_data = bi_service.extract_bi_data(validated_invoice)
+            user_id = bi_data.get("user_id") or current_user.id
+            bi_record = InvoiceV2BusinessData(
+                validated_invoice_id=bi_data["validated_invoice_id"],
+                user_id=user_id,
+                customer_id=bi_data["customer"].get("id"),
+                customer_name=bi_data["customer"].get("name"),
+                customer_country=bi_data["customer"].get("country"),
+                supplier_id=bi_data["supplier"].get("id"),
+                supplier_name=bi_data["supplier"].get("name"),
+                products=bi_data["products"],
+                total_products_count=bi_data["total_products_count"],
+                total_amount=bi_data["financial"].get("total_amount"),
+                tax_amount=bi_data["financial"].get("tax_amount"),
+                currency=bi_data["financial"].get("currency"),
+                industry=bi_data["industry"],
+                industry_confidence=bi_data["industry_confidence"],
+                industry_keywords_matched=bi_data["industry_keywords_matched"],
+                invoice_date=bi_data["temporal"].get("invoice_date"),
+                fiscal_quarter=bi_data["temporal"].get("fiscal_quarter"),
+                fiscal_year=bi_data["temporal"].get("fiscal_year"),
+                season=bi_data["temporal"].get("season"),
+                current_stage=bi_data["lifecycle"].get("current_stage"),
+                stage_status=bi_data["lifecycle"].get("stage_status"),
+            )
+            db.add(bi_record)
+            processed += 1
+            if processed % 50 == 0:
+                db.commit()
+        except Exception as e:
+            logger.warning(f"Backfill BI invoice {getattr(validated_invoice, 'id', '?')}: {e}")
+            errors += 1
+    if processed > 0 or errors > 0:
+        db.commit()
+    return (processed, skipped, errors, len(validated_invoices))
+
+
 @router.post("/backfill-invoice-v2-bi")
 async def backfill_invoice_v2_bi(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2312,94 +2820,20 @@ async def backfill_invoice_v2_bi(
 ):
     """
     Backfill business intelligence data from existing Invoice V2 validated invoices.
-    This processes all validated invoices and creates InvoiceV2BusinessData records.
+    Uses line_items from each successful validated invoice to populate products for the Business tab.
     """
     logger.info(f"🔄 Starting Invoice V2 BI backfill for user {current_user.id}")
-    
     try:
-        bi_service = InvoiceV2BusinessIntelligence()
-        
-        # Get all validated invoices for this user through documents
-        validated_invoices = db.query(InvoiceV2Validated).join(
-            InvoiceV2Document,
-            InvoiceV2Validated.document_id == InvoiceV2Document.id
-        ).filter(
-            InvoiceV2Document.user_id == current_user.id
-        ).all()
-        
-        logger.info(f"📊 Found {len(validated_invoices)} validated invoices to process")
-        
-        processed = 0
-        skipped = 0
-        errors = 0
-        
-        for validated_invoice in validated_invoices:
-            try:
-                # Check if BI data already exists
-                existing = db.query(InvoiceV2BusinessData).filter(
-                    InvoiceV2BusinessData.validated_invoice_id == validated_invoice.id
-                ).first()
-                
-                if existing:
-                    logger.debug(f"  ⏭️  Skipping invoice {validated_invoice.id} - BI data already exists")
-                    skipped += 1
-                    continue
-                
-                # Extract BI data
-                bi_data = bi_service.extract_bi_data(validated_invoice)
-                
-                # Create BI record
-                bi_record = InvoiceV2BusinessData(
-                    validated_invoice_id=bi_data['validated_invoice_id'],
-                    user_id=bi_data['user_id'],
-                    customer_id=bi_data['customer']['id'],
-                    customer_name=bi_data['customer']['name'],
-                    customer_country=bi_data['customer']['country'],
-                    supplier_id=bi_data['supplier']['id'],
-                    supplier_name=bi_data['supplier']['name'],
-                    products=bi_data['products'],
-                    total_products_count=bi_data['total_products_count'],
-                    total_amount=bi_data['financial']['total_amount'],
-                    tax_amount=bi_data['financial']['tax_amount'],
-                    currency=bi_data['financial']['currency'],
-                    industry=bi_data['industry'],
-                    industry_confidence=bi_data['industry_confidence'],
-                    industry_keywords_matched=bi_data['industry_keywords_matched'],
-                    invoice_date=bi_data['temporal']['invoice_date'],
-                    fiscal_quarter=bi_data['temporal']['fiscal_quarter'],
-                    fiscal_year=bi_data['temporal']['fiscal_year'],
-                    season=bi_data['temporal']['season'],
-                    current_stage=bi_data['lifecycle']['current_stage'],
-                    stage_status=bi_data['lifecycle']['stage_status']
-                )
-                
-                db.add(bi_record)
-                processed += 1
-                
-                # Commit in batches of 50
-                if processed % 50 == 0:
-                    db.commit()
-                    logger.info(f"  ✅ Processed {processed} invoices...")
-                
-            except Exception as e:
-                logger.error(f"  ❌ Error processing invoice {validated_invoice.id}: {e}")
-                errors += 1
-                continue
-        
-        # Final commit
-        db.commit()
-        
+        processed, skipped, errors, total = _run_backfill_invoice_v2_bi(db, current_user)
         logger.info(f"✅ Backfill completed: {processed} processed, {skipped} skipped, {errors} errors")
-        
         return {
             "success": True,
             "processed": processed,
             "skipped": skipped,
             "errors": errors,
-            "total": len(validated_invoices),
-            "message": f"Successfully backfilled BI data for {processed} invoices"
+            "total": total,
+            "message": f"Successfully backfilled BI data for {processed} invoices (products from line_items)",
         }
-        
     except Exception as e:
         logger.error(f"❌ Backfill failed: {e}", exc_info=True)
         raise HTTPException(
