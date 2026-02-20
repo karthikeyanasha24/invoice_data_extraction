@@ -203,39 +203,46 @@ class InvoiceV2BusinessIntelligence:
         return best_industry, confidence, matched_keywords_by_industry[best_industry]
     
     def _extract_products(self, invoice_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract and structure product information from line items"""
+        """Extract and structure product information from line_items (products)."""
         line_items = invoice_data.get('line_items', [])
-        
         if not line_items or not isinstance(line_items, list):
             return []
-        
+
         products = []
-        
         for item in line_items:
             if not isinstance(item, dict):
                 continue
-            
+            # Support both item_name and name (validation service uses item_name)
+            name = item.get('item_name') or item.get('name') or 'Unknown Product'
+            if isinstance(name, str):
+                name = name.strip() or 'Unknown Product'
+            # Revenue: line_amount or line_extension_amount
+            line_amount = item.get('line_amount') or item.get('line_extension_amount')
+            revenue = self._to_decimal(line_amount)
+            # Tax: tax_percentage or tax_percent (validation uses tax_percent)
+            tax_val = item.get('tax_percentage') or item.get('tax_percent')
+            tax_pct = self._to_decimal(tax_val)
+            quantity = self._to_decimal(item.get('quantity', 0))
+            price = self._to_decimal(item.get('price', 0))
+
             product = {
                 'id': item.get('line_id') or item.get('id'),
-                'name': item.get('item_name', 'Unknown Product'),
-                'description': item.get('item_description'),
-                'quantity': self._to_decimal(item.get('quantity', 0)),
+                'name': name,
+                'description': item.get('item_description') or item.get('description'),
+                'quantity': float(quantity) if quantity is not None else None,
                 'unit_code': item.get('unit_code'),
-                'price': self._to_decimal(item.get('price', 0)),
-                'revenue': self._to_decimal(item.get('line_amount', 0)),
+                'price': float(price) if price is not None else None,
+                'revenue': float(revenue) if revenue is not None else None,
                 'seller_item_id': item.get('seller_item_id'),
                 'buyer_item_id': item.get('buyer_item_id'),
                 'standard_item_id': item.get('standard_item_id'),
                 'origin_country': item.get('origin_country'),
                 'commodity_code': item.get('commodity_code'),
-                'tax_percentage': self._to_decimal(item.get('tax_percentage'))
+                'tax_percentage': float(tax_pct) if tax_pct is not None else None,
             }
-            
-            # Remove None values
             product = {k: v for k, v in product.items() if v is not None}
-            
             products.append(product)
-        
+
         return products
     
     def _extract_country(self, invoice_data: Dict[str, Any], party_type: str) -> Optional[str]:

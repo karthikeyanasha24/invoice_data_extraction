@@ -1372,6 +1372,10 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to backfill Invoice V2 business intelligence.');
         }
     },
+    getDashboardDataStats: async () => {
+        const response = await api.get('/api/v1/dashboard/dashboard-data-stats');
+        return response.data;
+    },
     
     getRevenueAnalysis: async (days: number = 90) => {
         try {
@@ -1391,6 +1395,19 @@ export const dashboardApi = {
             console.error('Failed to fetch product demand:', error);
             throw new Error(error.response?.data?.detail || 'Failed to load product demand analysis.');
         }
+    },
+
+    getV2Inbound: async (days: number = 30) => {
+        const response = await api.get(`/api/v1/dashboard/v2/inbound?days=${days}`);
+        return response.data;
+    },
+    getV2Outbound: async (days: number = 30) => {
+        const response = await api.get(`/api/v1/dashboard/v2/outbound?days=${days}`);
+        return response.data;
+    },
+    getV2Business: async (days: number = 90) => {
+        const response = await api.get(`/api/v1/dashboard/v2/business?days=${days}`);
+        return response.data;
     },
 };
 
