@@ -6,15 +6,17 @@ import TopSection from '@/components/TopSection';
 import DashboardV2Inbound from '@/components/DashboardV2Inbound';
 import DashboardV2Outbound from '@/components/DashboardV2Outbound';
 import DashboardV2Business from '@/components/DashboardV2Business';
-import { ArrowDownToLine, ArrowUpFromLine, TrendingUp } from 'lucide-react';
+import DashboardV2CustomerComparison from '@/components/DashboardV2CustomerComparison';
+import { ArrowDownToLine, ArrowUpFromLine, TrendingUp, GitCompare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-type TabId = 'inbound' | 'outbound' | 'business';
+type TabId = 'inbound' | 'outbound' | 'business' | 'comparison';
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'inbound', label: 'Inbound', icon: <ArrowDownToLine className="h-4 w-4" /> },
-  { id: 'outbound', label: 'Outbound', icon: <ArrowUpFromLine className="h-4 w-4" /> },
+  { id: 'inbound', label: 'To ERP', icon: <ArrowDownToLine className="h-4 w-4" /> },
+  { id: 'outbound', label: 'From ERP', icon: <ArrowUpFromLine className="h-4 w-4" /> },
   { id: 'business', label: 'Business', icon: <TrendingUp className="h-4 w-4" /> },
+  { id: 'comparison', label: 'Customer Comparison', icon: <GitCompare className="h-4 w-4" /> },
 ];
 
 export default function DashboardPage() {
@@ -61,6 +63,7 @@ export default function DashboardPage() {
           {activeTab === 'inbound' && <DashboardV2Inbound />}
           {activeTab === 'outbound' && <DashboardV2Outbound />}
           {activeTab === 'business' && <DashboardV2Business />}
+          {activeTab === 'comparison' && <DashboardV2CustomerComparison />}
         </div>
       </div>
     </MainLayout>

@@ -1405,8 +1405,29 @@ export const dashboardApi = {
         const response = await api.get(`/api/v1/dashboard/v2/outbound?days=${days}`);
         return response.data;
     },
-    getV2Business: async (days: number = 90) => {
-        const response = await api.get(`/api/v1/dashboard/v2/business?days=${days}`);
+    getV2Business: async (days: number = 90, currency?: string | null) => {
+        let url = `/api/v1/dashboard/v2/business?days=${days}`;
+        if (currency && currency !== '') {
+            url += `&currency=${encodeURIComponent(currency)}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    getV2CustomerComparison: async (days: number = 90, currency?: string | null) => {
+        let url = `/api/v1/dashboard/v2/customer-comparison?days=${days}`;
+        if (currency && currency !== '') {
+            url += `&currency=${encodeURIComponent(currency)}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    postCustomerComparisonChat: async (message: string, customerA: object, customerB: object, conversationHistory: { role: string; content: string }[] = []) => {
+        const response = await api.post('/api/v1/dashboard/v2/customer-comparison-chat', {
+            message,
+            customer_a: customerA,
+            customer_b: customerB,
+            conversation_history: conversationHistory,
+        });
         return response.data;
     },
 };
