@@ -10,6 +10,12 @@ import json
 
 logger = logging.getLogger("zodiac-api.v2_bi")
 
+try:
+    from openai import OpenAI
+    openai_available = True
+except ImportError:
+    openai_available = False
+
 
 class InvoiceV2BusinessIntelligence:
     """Service for extracting business intelligence from Invoice V2 validated invoices"""
@@ -246,17 +252,94 @@ class InvoiceV2BusinessIntelligence:
         return products
     
     def _extract_country(self, invoice_data: Dict[str, Any], party_type: str) -> Optional[str]:
-        """Extract country from party address"""
+        """Extract country from party address. Use AI fallback when country is missing but address hints exist."""
         # Try direct field
         country = invoice_data.get(f'{party_type}_country')
         if country:
-            return country
-        
+            return self._normalize_country_code(country)
+
         # Try address object
         address = invoice_data.get(f'{party_type}_address')
         if address and isinstance(address, dict):
-            return address.get('country')
-        
+            country = address.get('country')
+            if country:
+                return self._normalize_country_code(country)
+            # AI fallback: infer country from city, postal_zone, street
+            return self._ai_infer_country(
+                address.get('city'),
+                address.get('postal_zone'),
+                address.get('street'),
+                invoice_data.get('delivery_address') if party_type == 'customer' else None,
+            )
+
+        # Fallback: try delivery address for customer
+        if party_type == 'customer':
+            delivery = invoice_data.get('delivery_address')
+            if isinstance(delivery, dict):
+                country = delivery.get('country')
+                if country:
+                    return self._normalize_country_code(country)
+                return self._ai_infer_country(
+                    delivery.get('city'), delivery.get('postal_zone'), delivery.get('street'), None
+                )
+
+        return None
+
+    def _normalize_country_code(self, code: str) -> str:
+        """Normalize to uppercase ISO alpha-2 (e.g. UK -> GB handled separately if needed)."""
+        if not code or not isinstance(code, str):
+            return code or ""
+        return code.strip().upper()[:2]
+
+    def _ai_infer_country(
+        self,
+        city: Optional[str],
+        postal_zone: Optional[str],
+        street: Optional[str],
+        delivery_address: Optional[Dict],
+    ) -> Optional[str]:
+        """Use AI to infer ISO country code from address hints when country is missing."""
+        try:
+            from ..config.config import OPENAI_API_KEY
+        except ImportError:
+            return None
+        if not OPENAI_API_KEY or not openai_available:
+            return None
+
+        hints = []
+        if city:
+            hints.append(f"city: {city}")
+        if postal_zone:
+            hints.append(f"postal: {postal_zone}")
+        if street:
+            hints.append(f"street: {street}")
+        if delivery_address and isinstance(delivery_address, dict):
+            if delivery_address.get('city'):
+                hints.append(f"delivery city: {delivery_address['city']}")
+            if delivery_address.get('country'):
+                return self._normalize_country_code(delivery_address['country'])
+        if not hints:
+            return None
+
+        text = "; ".join(hints)
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": f"""Given this invoice address info (country missing), return ONLY the ISO 3166-1 alpha-2 country code (2 letters, e.g. NZ, AU, US). If unsure, return null.
+Address: {text}""",
+                }],
+                temperature=0,
+                max_tokens=5,
+            )
+            raw = (resp.choices[0].message.content or "").strip().upper()
+            if raw and len(raw) == 2 and raw.isalpha() and raw != "NULL":
+                logger.info(f"AI inferred country code: {raw} from hints: {text[:80]}...")
+                return raw
+        except Exception as e:
+            logger.debug(f"AI country inference failed: {e}")
         return None
     
     def _calculate_temporal_fields(self, invoice_date: Optional[date]) -> Dict[str, Any]:

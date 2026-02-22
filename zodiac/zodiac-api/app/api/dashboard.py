@@ -1,7 +1,7 @@
 """
 Dashboard API endpoints for statistics, analytics, and AI insights
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, Numeric
 from datetime import datetime, timedelta
@@ -1116,6 +1116,7 @@ async def get_dashboard_v2_outbound(
 @router.get("/v2/business")
 async def get_dashboard_v2_business(
     days: int = Query(default=90, ge=1, le=365),
+    currency: str = Query(default=None, description="Filter by currency code (e.g. NZD, USD). Omit for all."),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1148,7 +1149,27 @@ async def get_dashboard_v2_business(
                     InvoiceV2BusinessData.industry.isnot(None),
                 ).all()
 
-        product_industry = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        # Revenue by currency (from full dataset, before currency filter)
+        currency_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            curr = (r.currency or "Unknown").strip() or "Unknown"
+            currency_revenue[curr]["count"] += 1
+            currency_revenue[curr]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_currency = [
+            {
+                "currency": curr,
+                "invoice_count": int(data["count"]),
+                "total_revenue": float(data["revenue"]),
+            }
+            for curr, data in sorted(currency_revenue.items(), key=lambda x: -x[1]["revenue"])
+        ][:15]
+
+        # Currency filter (optional): restrict to selected currency
+        if currency and str(currency).strip():
+            curr_upper = str(currency).strip().upper()
+            rows = [r for r in rows if (r.currency or "").strip().upper() == curr_upper]
+
+        product_industry = defaultdict(lambda: {"count": 0, "revenue": Decimal("0"), "quantity": Decimal("0"), "unit_counts": defaultdict(int)})
         industry_totals = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
 
         for r in rows:
@@ -1163,6 +1184,15 @@ async def get_dashboard_v2_business(
                 name = (p.get("name") or p.get("item_name") or "Unknown").strip() or "Unknown"
                 key = (name, industry)
                 product_industry[key]["count"] += 1
+                unit = (p.get("unit_code") or "").strip() or None
+                if unit:
+                    product_industry[key]["unit_counts"][unit] += 1
+                qty = p.get("quantity")
+                if qty is not None:
+                    try:
+                        product_industry[key]["quantity"] += Decimal(str(qty))
+                    except Exception:
+                        pass
                 line_revenue = p.get("revenue") or p.get("line_extension_amount")
                 if line_revenue is not None:
                     try:
@@ -1172,15 +1202,40 @@ async def get_dashboard_v2_business(
                 else:
                     product_industry[key]["revenue"] += amount / len(products) if products else amount
 
+        def _most_common_unit(unit_counts):
+            if not unit_counts:
+                return None
+            return max(unit_counts.items(), key=lambda x: x[1])[0]
+
         products_by_industry = [
             {
                 "product_name": name,
                 "industry": ind,
+                "unit_of_measure": _most_common_unit(data["unit_counts"]) or "—",
                 "invoice_count": data["count"],
                 "revenue": float(data["revenue"]),
             }
             for (name, ind), data in sorted(product_industry.items(), key=lambda x: -x[1]["revenue"])
         ][:100]
+
+        # Quantity & price analysis: total units sold, avg price per product+industry (for scatter chart)
+        quantity_price_analysis = []
+        for (name, ind), data in product_industry.items():
+            total_qty = float(data["quantity"])
+            rev = float(data["revenue"])
+            avg_price = (rev / total_qty) if total_qty and total_qty > 0 else None
+            quantity_price_analysis.append({
+                "product_name": name,
+                "industry": ind,
+                "unit_of_measure": _most_common_unit(data["unit_counts"]) or "—",
+                "total_quantity": round(total_qty, 2),
+                "avg_price": round(avg_price, 2) if avg_price is not None else None,
+                "revenue": rev,
+            })
+        quantity_price_analysis = sorted(
+            [x for x in quantity_price_analysis if x["total_quantity"] > 0],
+            key=lambda x: -x["total_quantity"]
+        )[:50]
 
         industry_breakdown = [
             {"industry": ind, "count": data["count"], "total_revenue": float(data["revenue"])}
@@ -1203,6 +1258,37 @@ async def get_dashboard_v2_business(
             }
             for cid, data in sorted(customer_revenue.items(), key=lambda x: -x[1]["revenue"])
         ][:50]
+
+        # Revenue by country (customer_country from successful invoices)
+        country_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            country = r.customer_country or "Unknown"
+            country_revenue[country]["count"] += 1
+            country_revenue[country]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_country = [
+            {
+                "country": country,
+                "country_name": _country_code_to_name(country),
+                "invoice_count": int(data["count"]),
+                "total_revenue": float(data["revenue"]),
+            }
+            for country, data in sorted(country_revenue.items(), key=lambda x: -x[1]["revenue"])
+        ][:20]
+
+        # Customers by country (distinct customers per country - histogram)
+        country_customers = defaultdict(set)  # country -> set of customer_id
+        for r in rows:
+            country = r.customer_country or "Unknown"
+            cust_key = r.customer_id or r.customer_name or f"anon_{r.id}"
+            country_customers[country].add(cust_key)
+        customers_by_country = [
+            {
+                "country": country,
+                "country_name": _country_code_to_name(country),
+                "customer_count": len(cust_set),
+            }
+            for country, cust_set in sorted(country_customers.items(), key=lambda x: -len(x[1]))
+        ][:20]
 
         mid = cutoff_date + (datetime.utcnow() - cutoff_date) / 2
         prev_cutoff = cutoff_date - (datetime.utcnow() - cutoff_date)
@@ -1243,8 +1329,17 @@ REVENUE TREND:
 INDUSTRY BREAKDOWN (top 10):
 {json.dumps(industry_breakdown[:10], indent=2)}
 
-REVENUE BY CUSTOMER (top 10, customer_id is RFC):
+REVENUE BY CUSTOMER (top 10):
 {json.dumps(revenue_by_customer[:10], indent=2)}
+
+REVENUE BY COUNTRY (top 10):
+{json.dumps(revenue_by_country[:10], indent=2)}
+
+REVENUE BY CURRENCY:
+{json.dumps(revenue_by_currency, indent=2)}
+
+CUSTOMERS BY COUNTRY (top 10):
+{json.dumps(customers_by_country[:10], indent=2)}
 
 PRODUCTS BY INDUSTRY (top 15):
 {json.dumps(products_by_industry[:15], indent=2)}
@@ -1255,6 +1350,8 @@ Respond with a single JSON object with this structure (no markdown, only valid J
   "revenue_insights": ["insight about revenue trend"],
   "industry_insights": ["insight about industry mix"],
   "customer_insights": ["insight about top customers / concentration"],
+  "country_insights": ["insight about geographic distribution / top countries"],
+  "currency_insights": ["insight about revenue by currency / multi-currency mix"],
   "product_insights": ["insight about product performance"],
   "recommendations": ["1-3 actionable recommendations"]
 }}"""
@@ -1274,12 +1371,206 @@ Respond with a single JSON object with this structure (no markdown, only valid J
         return {
             "products_by_industry": products_by_industry,
             "industry_breakdown": industry_breakdown,
+            "quantity_price_analysis": quantity_price_analysis,
             "revenue_by_customer": revenue_by_customer,
+            "revenue_by_country": revenue_by_country,
+            "revenue_by_currency": revenue_by_currency,
+            "customers_by_country": customers_by_country,
             "trend": trend,
             "ai_insights": ai_insights,
         }
     except Exception as e:
         logger.error(f"❌ Dashboard v2 business: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/customer-comparison")
+async def get_dashboard_v2_customer_comparison(
+    days: int = Query(default=90, ge=1, le=365),
+    currency: str = Query(default=None, description="Filter by currency code. Omit for all."),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Customer comparison: per-customer product breakdown and revenue. For interactive customer vs customer analysis."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        rows = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None),
+        ).all()
+
+        if not rows:
+            success_count = db.query(InvoiceV2Validated).join(
+                InvoiceV2Document,
+                InvoiceV2Validated.document_id == InvoiceV2Document.id
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Validated.status == "success"
+            ).count()
+            if success_count > 0:
+                _run_backfill_invoice_v2_bi(db, current_user, max_invoices=500)
+                rows = db.query(InvoiceV2BusinessData).filter(
+                    InvoiceV2BusinessData.user_id == current_user.id,
+                    InvoiceV2BusinessData.created_at >= cutoff_date,
+                    InvoiceV2BusinessData.products.isnot(None),
+                ).all()
+
+        # Currency filter
+        if currency and str(currency).strip():
+            curr_upper = str(currency).strip().upper()
+            rows = [r for r in rows if (r.currency or "").strip().upper() == curr_upper]
+
+        # Revenue by currency (for filter dropdown, from full dataset)
+        all_rows = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None),
+        ).all()
+        curr_rev = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in all_rows:
+            c = (r.currency or "Unknown").strip() or "Unknown"
+            curr_rev[c]["count"] += 1
+            curr_rev[c]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_currency = [
+            {"currency": c, "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+            for c, d in sorted(curr_rev.items(), key=lambda x: -x[1]["revenue"])
+        ]
+
+        # Aggregate: customer -> { total_revenue, invoice_count, industry_counts, currency_revenue, products }
+        cust_data = defaultdict(lambda: {
+            "customer_id": None,
+            "customer_name": None,
+            "customer_country": None,
+            "invoice_count": 0,
+            "total_revenue": Decimal("0"),
+            "industry_counts": defaultdict(int),
+            "currency_revenue": defaultdict(lambda: Decimal("0")),
+            "products": defaultdict(lambda: {"revenue": Decimal("0"), "quantity": Decimal("0"), "unit": None}),
+        })
+        for r in rows:
+            cid = r.customer_id or r.customer_name or f"anon_{r.id}"
+            cust_data[cid]["customer_id"] = r.customer_id
+            cust_data[cid]["customer_name"] = r.customer_name or cid
+            cust_data[cid]["customer_country"] = r.customer_country
+            cust_data[cid]["invoice_count"] += 1
+            cust_data[cid]["total_revenue"] += (r.total_amount or Decimal("0"))
+            if r.industry:
+                cust_data[cid]["industry_counts"][r.industry] += 1
+            curr = (r.currency or "Unknown").strip() or "Unknown"
+            cust_data[cid]["currency_revenue"][curr] += (r.total_amount or Decimal("0"))
+            products = r.products if isinstance(r.products, list) else []
+            for p in products:
+                if not isinstance(p, dict):
+                    continue
+                name = (p.get("name") or p.get("item_name") or "Unknown").strip() or "Unknown"
+                rev = p.get("revenue") or p.get("line_extension_amount")
+                qty = p.get("quantity")
+                unit = (p.get("unit_code") or "").strip() or None
+                try:
+                    if rev is not None:
+                        cust_data[cid]["products"][name]["revenue"] += Decimal(str(rev))
+                    if qty is not None:
+                        cust_data[cid]["products"][name]["quantity"] += Decimal(str(qty))
+                    if unit:
+                        cust_data[cid]["products"][name]["unit"] = unit
+                except Exception:
+                    pass
+
+        # Revenue by country (for map)
+        country_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            c = (r.customer_country or "Unknown").strip() or "Unknown"
+            country_revenue[c]["count"] += 1
+            country_revenue[c]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_country = [
+            {"country": c, "country_name": _country_code_to_name(c), "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+            for c, d in sorted(country_revenue.items(), key=lambda x: -float(x[1]["revenue"]))
+        ][:30]
+
+        customers = []
+        for cid, data in sorted(cust_data.items(), key=lambda x: -float(x[1]["total_revenue"])):
+            products_list = [
+                {
+                    "product_name": pname,
+                    "revenue": round(float(pdata["revenue"]), 2),
+                    "quantity": round(float(pdata["quantity"]), 2),
+                    "unit": pdata["unit"] or "—",
+                }
+                for pname, pdata in sorted(data["products"].items(), key=lambda y: -float(y[1]["revenue"]))
+            ]
+            industry = max(data["industry_counts"].items(), key=lambda x: x[1])[0] if data["industry_counts"] else None
+            currencies = [{"currency": c, "revenue": round(float(rev), 2)} for c, rev in sorted(data["currency_revenue"].items(), key=lambda x: -float(x[1]))]
+            customers.append({
+                "customer_id": data["customer_id"],
+                "customer_name": data["customer_name"],
+                "customer_country": data["customer_country"],
+                "industry": industry,
+                "currencies": currencies,
+                "invoice_count": data["invoice_count"],
+                "total_revenue": round(float(data["total_revenue"]), 2),
+                "products": products_list,
+            })
+
+        return {
+            "customers": customers,
+            "revenue_by_currency": revenue_by_currency,
+            "revenue_by_country": revenue_by_country,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 customer-comparison: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/v2/customer-comparison-chat")
+async def post_customer_comparison_chat(
+    message: str = Body(..., embed=True),
+    customer_a: dict = Body(..., embed=True),
+    customer_b: dict = Body(..., embed=True),
+    conversation_history: list = Body(default=[], embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """AI chat for customer comparison: initial summary and follow-up Q&A about two customers."""
+    if not OPENAI_API_KEY or not openai_available:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI chat not available (OpenAI key missing)")
+    try:
+        sys_content = f"""You are a business analyst assistant. The user is comparing two customers. Use ONLY the data below to answer. Be concise and factual.
+
+CUSTOMER A:
+- Name: {customer_a.get('customer_name', 'N/A')}
+- Country: {customer_a.get('customer_country', 'N/A')}
+- Industry: {customer_a.get('industry', 'N/A')}
+- Total Revenue: {customer_a.get('total_revenue', 0)}
+- Invoices: {customer_a.get('invoice_count', 0)}
+- Currencies: {json.dumps(customer_a.get('currencies', []))}
+- Top products: {json.dumps((customer_a.get('products') or [])[:5])}
+
+CUSTOMER B:
+- Name: {customer_b.get('customer_name', 'N/A')}
+- Country: {customer_b.get('customer_country', 'N/A')}
+- Industry: {customer_b.get('industry', 'N/A')}
+- Total Revenue: {customer_b.get('total_revenue', 0)}
+- Invoices: {customer_b.get('invoice_count', 0)}
+- Currencies: {json.dumps(customer_b.get('currencies', []))}
+- Top products: {json.dumps((customer_b.get('products') or [])[:5])}
+
+Answer the user's question based only on this data. If asked for a summary first, provide 2-3 sentences comparing revenue, geography, industry, and product mix."""
+        messages = [{"role": "system", "content": sys_content}]
+        for h in conversation_history[-10:]:
+            if isinstance(h, dict) and h.get("role") and h.get("content"):
+                messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
+        messages.append({"role": "user", "content": message[:1500]})
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.4,
+            max_tokens=500,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        return {"reply": reply}
+    except Exception as e:
+        logger.warning(f"Customer comparison chat failed: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -2318,6 +2609,25 @@ Focus on: pricing strategy, demand patterns, competitive positioning, and revenu
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch industry intelligence: {str(e)}"
         )
+
+
+# Common ISO 3166-1 alpha-2 country codes to full names (for display)
+COUNTRY_CODE_NAMES = {
+    "NZ": "New Zealand", "AU": "Australia", "US": "United States", "GB": "United Kingdom", "UK": "United Kingdom",
+    "DE": "Germany", "FR": "France", "JP": "Japan", "CN": "China", "IN": "India", "SG": "Singapore",
+    "MY": "Malaysia", "TH": "Thailand", "ID": "Indonesia", "PH": "Philippines", "VN": "Vietnam",
+    "KR": "South Korea", "CA": "Canada", "MX": "Mexico", "BR": "Brazil", "ES": "Spain", "IT": "Italy",
+    "NL": "Netherlands", "CH": "Switzerland", "SE": "Sweden", "NO": "Norway", "DK": "Denmark",
+    "FI": "Finland", "IE": "Ireland", "BE": "Belgium", "AT": "Austria", "PL": "Poland",
+    "AE": "United Arab Emirates", "SA": "Saudi Arabia", "ZA": "South Africa", "HK": "Hong Kong",
+}
+
+
+def _country_code_to_name(code: str) -> str:
+    """Return full country name for ISO code, or code itself if unknown."""
+    if not code or code == "Unknown":
+        return code or "Unknown"
+    return COUNTRY_CODE_NAMES.get(str(code).upper(), code)
 
 
 def _calculate_std_dev(values):

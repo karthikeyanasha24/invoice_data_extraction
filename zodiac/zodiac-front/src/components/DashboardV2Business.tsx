@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { dashboardApi } from '@/lib/api';
-import { TrendingUp, TrendingDown, Package, RefreshCw, BarChart3, Users, Sparkles } from 'lucide-react';
+import { TrendingUp, TrendingDown, Package, RefreshCw, BarChart3, Users, Sparkles, Globe, MapPin, Layers, Banknote } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
 import {
   BarChart,
@@ -17,6 +17,7 @@ import {
 
 export default function DashboardV2Business() {
   const [days, setDays] = useState(90);
+  const [currency, setCurrency] = useState<string>('');
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +26,7 @@ export default function DashboardV2Business() {
     try {
       setLoading(true);
       setError(null);
-      const res = await dashboardApi.getV2Business(days);
+      const res = await dashboardApi.getV2Business(days, currency || undefined);
       setData(res);
     } catch (err: any) {
       setError(err.message || 'Failed to load business data');
@@ -36,7 +37,7 @@ export default function DashboardV2Business() {
 
   useEffect(() => {
     fetchData();
-  }, [days]);
+  }, [days, currency]);
 
   if (loading) {
     return (
@@ -62,14 +63,16 @@ export default function DashboardV2Business() {
 
   if (!data) return null;
 
-  const { products_by_industry, industry_breakdown, revenue_by_customer, trend, ai_insights } = data;
+  const { products_by_industry, industry_breakdown, quantity_price_analysis, revenue_by_customer, revenue_by_country, revenue_by_currency, customers_by_country, trend, ai_insights } = data;
+  const qtyData = (quantity_price_analysis || []).filter((r: any) => r.total_quantity > 0).slice(0, 12);
+  const priceData = (quantity_price_analysis || []).filter((r: any) => r.avg_price != null && r.avg_price > 0).sort((a: any, b: any) => (b.avg_price || 0) - (a.avg_price || 0)).slice(0, 12);
   const trendPct = trend?.revenue_change_pct ?? 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
         <h2 className="text-xl font-semibold text-gray-900">Business Analytics</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
@@ -78,6 +81,17 @@ export default function DashboardV2Business() {
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>
             <option value={365}>Last 12 months</option>
+          </select>
+          <select
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            className="rounded-md border border-gray-300 text-sm py-1.5 px-2"
+            title="Filter by currency"
+          >
+            <option value="">All currencies</option>
+            {(revenue_by_currency || []).map((r: any) => (
+              <option key={r.currency} value={r.currency}>{r.currency}</option>
+            ))}
           </select>
           <button
             onClick={fetchData}
@@ -124,11 +138,43 @@ export default function DashboardV2Business() {
         </div>
       )}
 
-      {/* Revenue by customer (customer_id = RFC) */}
+      {/* Revenue by currency */}
+      {(revenue_by_currency?.length ?? 0) > 0 && (
+        <div className="border border-gray-200 rounded-xl p-4 md:p-5 bg-white shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Banknote className="h-4 w-4 text-amber-600" /> Revenue by Currency
+          </h3>
+          <div className="h-44 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={revenue_by_currency.slice(0, 10)}
+                layout="vertical"
+                margin={{ top: 8, right: 20, left: 56, bottom: 8 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                <YAxis type="category" dataKey="currency" width={52} tick={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  labelFormatter={(_, payload) => {
+                    const p = payload?.[0]?.payload;
+                    return p ? `${p.currency} · ${p.invoice_count} invoices` : _;
+                  }}
+                  contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                />
+                <Bar dataKey="total_revenue" name="Revenue" fill="#b45309" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">Revenue mix by invoice currency. Use the currency filter above to drill down.</p>
+        </div>
+      )}
+
+      {/* Revenue by customer (customer_name from successful invoices) */}
       {(revenue_by_customer?.length ?? 0) > 0 && (
         <div className="border border-gray-200 rounded-lg p-4">
           <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-            <Users className="h-4 w-4" /> Revenue by Customer (RFC)
+            <Users className="h-4 w-4" /> Revenue by Customer
           </h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -139,7 +185,7 @@ export default function DashboardV2Business() {
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
-                <YAxis type="category" dataKey="customer_id" width={120} tick={{ fontSize: 10 }} />
+                <YAxis type="category" dataKey="customer_name" width={120} tick={{ fontSize: 10 }} />
                 <Tooltip
                   formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   labelFormatter={(_, payload) => payload?.[0]?.payload?.customer_name ?? _}
@@ -148,7 +194,82 @@ export default function DashboardV2Business() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <p className="text-xs text-gray-500 mt-2">Customer ID is RFC (tax id). From successful validated invoices.</p>
+          <p className="text-xs text-gray-500 mt-2">Customer names from successful validated invoices.</p>
+        </div>
+      )}
+
+      {/* Geographic section: Revenue by Country + Customers by Country */}
+      {((revenue_by_country?.length ?? 0) > 0 || (customers_by_country?.length ?? 0) > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+          {/* Revenue by country */}
+          {(revenue_by_country?.length ?? 0) > 0 && (
+            <div className="border border-gray-200 rounded-xl p-4 md:p-5 bg-white shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <Globe className="h-4 w-4 text-emerald-600" /> Revenue by Country
+              </h3>
+              <div className="h-48 sm:h-56 min-h-[12rem] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={revenue_by_country.slice(0, 12)}
+                    layout="vertical"
+                    margin={{ top: 8, right: 20, left: 80, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                    <YAxis type="category" dataKey="country_name" width={80} tick={{ fontSize: 10 }} />
+                    <Tooltip
+                      formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      labelFormatter={(_, payload) => {
+                        const p = payload?.[0]?.payload;
+                        if (!p) return _;
+                        const label = p.country_name || p.country;
+                        const extra = p.country !== p.country_name ? ` (${p.country})` : '';
+                        return `${label}${extra}`;
+                      }}
+                      contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                    />
+                    <Bar dataKey="total_revenue" name="Revenue" fill="#059669" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">Total revenue per customer country.</p>
+            </div>
+          )}
+
+          {/* Customers by country histogram */}
+          {(customers_by_country?.length ?? 0) > 0 && (
+            <div className="border border-gray-200 rounded-xl p-4 md:p-5 bg-white shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-amber-600" /> Customers by Country
+              </h3>
+              <div className="h-48 sm:h-56 min-h-[12rem] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={customers_by_country.slice(0, 12)}
+                    layout="vertical"
+                    margin={{ top: 8, right: 20, left: 80, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} tickFormatter={(v) => Number(v)?.toLocaleString()} />
+                    <YAxis type="category" dataKey="country_name" width={80} tick={{ fontSize: 10 }} />
+                    <Tooltip
+                      formatter={(value: number) => [Number(value)?.toLocaleString(), 'Customers']}
+                      labelFormatter={(_, payload) => {
+                        const p = payload?.[0]?.payload;
+                        if (!p) return _;
+                        const label = p.country_name || p.country;
+                        const extra = p.country !== p.country_name ? ` (${p.country})` : '';
+                        return `${label}${extra}`;
+                      }}
+                      contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                    />
+                    <Bar dataKey="customer_count" name="Customers" fill="#d97706" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">Distinct customers per country (histogram).</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -177,6 +298,67 @@ export default function DashboardV2Business() {
         </div>
       )}
 
+      {/* Quantity & price: two bar charts */}
+      {(quantity_price_analysis?.length ?? 0) > 0 && (
+        <div className="space-y-6">
+          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+            <Layers className="h-4 w-4 text-violet-600" /> Quantity & Price Analysis
+          </h3>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Chart 1: Top products by units sold */}
+            {qtyData.length > 0 && (
+              <div className="border border-gray-200 rounded-xl p-4 md:p-5 bg-white shadow-sm">
+                <h4 className="text-xs font-semibold text-gray-700 mb-1">Units sold by product</h4>
+                <p className="text-xs text-gray-500 mb-3">Top products by total quantity sold</p>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={qtyData} layout="vertical" margin={{ top: 8, right: 20, left: 88, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                      <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => Number(v)?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+                      <YAxis type="category" dataKey="product_name" width={84} tick={{ fontSize: 10 }} />
+                      <Tooltip
+                        formatter={(value: number) => [Number(value)?.toLocaleString(undefined, { maximumFractionDigits: 2 }), 'Units sold']}
+                        labelFormatter={(_, payload) => {
+                          const p = payload?.[0]?.payload;
+                          return p ? `${p.product_name} · ${p.industry}` : _;
+                        }}
+                        contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                      />
+                      <Bar dataKey="total_quantity" name="Units sold" fill="#0d9488" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+            {/* Chart 2: Top products by average price */}
+            {priceData.length > 0 && (
+              <div className="border border-gray-200 rounded-xl p-4 md:p-5 bg-white shadow-sm">
+                <h4 className="text-xs font-semibold text-gray-700 mb-1">Average price by product</h4>
+                <p className="text-xs text-gray-500 mb-3">Products with highest average selling price</p>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={priceData} layout="vertical" margin={{ top: 8, right: 20, left: 88, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                      <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => Number(v)?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} />
+                      <YAxis type="category" dataKey="product_name" width={84} tick={{ fontSize: 10 }} />
+                      <Tooltip
+                        formatter={(value: number) => [Number(value)?.toLocaleString(undefined, { minimumFractionDigits: 2 }), 'Avg price']}
+                        labelFormatter={(_, payload) => {
+                          const p = payload?.[0]?.payload;
+                          return p ? `${p.product_name} · ${p.industry}` : _;
+                        }}
+                        contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                      />
+                      <Bar dataKey="avg_price" name="Avg price" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Products by industry table */}
       <div className="border border-gray-200 rounded-lg p-4">
         <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -189,6 +371,7 @@ export default function DashboardV2Business() {
                 <tr>
                   <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
                   <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Industry</th>
+                  <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Unit</th>
                   <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Invoices</th>
                   <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Revenue</th>
                 </tr>
@@ -198,6 +381,7 @@ export default function DashboardV2Business() {
                   <tr key={i} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-gray-900 truncate max-w-xs">{row.product_name}</td>
                     <td className="px-3 py-2 text-gray-700">{row.industry}</td>
+                    <td className="px-3 py-2 text-center text-gray-600 font-medium">{row.unit_of_measure ?? '—'}</td>
                     <td className="px-3 py-2 text-right text-gray-700">{row.invoice_count}</td>
                     <td className="px-3 py-2 text-right font-medium text-gray-900">
                       {Number(row.revenue).toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -252,6 +436,26 @@ export default function DashboardV2Business() {
                 <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">Customers</p>
                 <ul className="list-disc list-inside text-gray-700 space-y-0.5">
                   {ai_insights.customer_insights.map((s: string, i: number) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {ai_insights.country_insights?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">Geographic</p>
+                <ul className="list-disc list-inside text-gray-700 space-y-0.5">
+                  {ai_insights.country_insights.map((s: string, i: number) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {ai_insights.currency_insights?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">Currency</p>
+                <ul className="list-disc list-inside text-gray-700 space-y-0.5">
+                  {ai_insights.currency_insights.map((s: string, i: number) => (
                     <li key={i}>{s}</li>
                   ))}
                 </ul>
