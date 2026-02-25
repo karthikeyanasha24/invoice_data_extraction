@@ -17,6 +17,32 @@ from .file_service import read_file_from_storage
 
 logger = logging.getLogger("zodiac-api.invoice_v2_validation")
 
+# UBL 2.0 namespaces for lightweight extraction (e.g. customer_id only)
+_UBL_NS = {
+    "cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2",
+    "cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
+}
+
+
+def extract_customer_id_from_xml(xml_bytes: bytes) -> Optional[str]:
+    """
+    Lightweight extraction of customer_id from UBL XML (AccountingCustomerParty).
+    Returns None if not found or on parse error. Used to filter unvalidated docs for customer users.
+    """
+    try:
+        parser = etree.XMLParser(recover=True, resolve_entities=False, no_network=True)
+        root = etree.fromstring(xml_bytes, parser)
+        customer_party = root.find(".//cac:AccountingCustomerParty/cac:Party", _UBL_NS)
+        if customer_party is None:
+            return None
+        endpoint = customer_party.find(".//cbc:EndpointID", _UBL_NS)
+        if endpoint is not None and endpoint.text:
+            return endpoint.text.strip()
+        return None
+    except Exception as e:
+        logger.debug("extract_customer_id_from_xml failed: %s", e)
+        return None
+
 
 class InvoiceV2ValidationService:
     """

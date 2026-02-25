@@ -5,6 +5,7 @@ export interface User {
   is_active: boolean;
   is_verified: boolean;
   is_admin: boolean;
+  is_customer_user?: boolean;
   created_at: string;
   updated_at: string;
 }

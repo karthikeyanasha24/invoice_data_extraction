@@ -27,7 +27,11 @@ interface ValidatedInvoice {
   document?: any;
 }
 
-export default function SuccessfulInvoicesTab() {
+interface SuccessfulInvoicesTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function SuccessfulInvoicesTab({ customerUserMode }: SuccessfulInvoicesTabProps = {}) {
   const { handleAuthError } = useAuth();
   const [successful, setSuccessful] = useState<ValidatedInvoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,9 +42,10 @@ export default function SuccessfulInvoicesTab() {
   const fetchSuccessful = useCallback(async () => {
     try {
       setLoading(true);
-      // Include all successful invoices (converted and not converted)
-      const response = await invoicesV2Api.getValidated('success', false);
-      setSuccessful(response.validated_invoices);
+      const response = customerUserMode
+        ? await invoicesV2Api.getValidatedForCustomerUser({ status_filter: 'success' })
+        : await invoicesV2Api.getValidated('success', false);
+      setSuccessful(response.validated_invoices || []);
     } catch (error: any) {
       console.error('Failed to fetch successful invoices:', error);
       if (error.message?.includes('Session expired')) {
@@ -49,7 +54,7 @@ export default function SuccessfulInvoicesTab() {
     } finally {
       setLoading(false);
     }
-  }, [handleAuthError]);
+  }, [handleAuthError, customerUserMode]);
 
   useEffect(() => {
     fetchSuccessful();

@@ -7,7 +7,7 @@ import AuthForm from '@/components/AuthForm';
 import LoadingSpinner from '@/components/LoadingSpinner';
 
 function HomeContent() {
-  const { isAuthenticated, loading, clearAuthData } = useAuth();
+  const { user, isAuthenticated, loading, clearAuthData } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isLogin, setIsLogin] = useState(true);
@@ -43,10 +43,14 @@ function HomeContent() {
   useEffect(() => {
     if (!isClient) return;
     
-    if (isAuthenticated && !loading) {
-      router.push('/dashboard');
+    if (isAuthenticated && !loading && user) {
+      if (user.is_customer_user && !user.is_admin) {
+        router.push('/customer-invoices');
+      } else {
+        router.push('/dashboard');
+      }
     }
-  }, [isAuthenticated, loading, router, isClient]);
+  }, [isAuthenticated, loading, router, isClient, user]);
 
   const handleToggleMode = () => {
     setIsLogin(!isLogin);

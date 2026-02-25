@@ -27,7 +27,11 @@ interface ValidatedInvoice {
   document?: any;
 }
 
-export default function FailedInvoicesTab() {
+interface FailedInvoicesTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function FailedInvoicesTab({ customerUserMode }: FailedInvoicesTabProps = {}) {
   const { handleAuthError } = useAuth();
   const [failed, setFailed] = useState<ValidatedInvoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,8 +42,10 @@ export default function FailedInvoicesTab() {
   const fetchFailed = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await invoicesV2Api.getValidated('failed');
-      setFailed(response.validated_invoices);
+      const response = customerUserMode
+        ? await invoicesV2Api.getValidatedForCustomerUser({ status_filter: 'failed' })
+        : await invoicesV2Api.getValidated('failed');
+      setFailed(response.validated_invoices || []);
     } catch (error: any) {
       console.error('Failed to fetch failed invoices:', error);
       if (error.message?.includes('Session expired')) {
@@ -48,7 +54,7 @@ export default function FailedInvoicesTab() {
     } finally {
       setLoading(false);
     }
-  }, [handleAuthError]);
+  }, [handleAuthError, customerUserMode]);
 
   useEffect(() => {
     fetchFailed();

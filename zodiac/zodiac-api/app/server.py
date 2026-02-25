@@ -161,6 +161,13 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to load Supplier Tokens router: {e}")
 
+try:
+    from .api.customer_users import router as customer_users_router
+    app.include_router(customer_users_router, prefix="/api/v1")
+    logger.info("✅ Customer Users router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load Customer Users router: {e}")
+
 logger.info("✅ Zodiac API initialized successfully")
 
 if __name__ == "__main__":

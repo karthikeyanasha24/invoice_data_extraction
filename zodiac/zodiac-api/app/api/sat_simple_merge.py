@@ -11,6 +11,8 @@ from lxml import etree
 from ..database import get_db
 from ..api.auth import get_current_user
 from ..models.user import ZodiacUser
+from ..models.user_customer import UserCustomer
+from ..models.customer_receiver_rfc import CustomerReceiverRfc
 from ..models.sat_document import SATDocument
 from ..models.sat_simple_merged import SATSimpleMerged
 from ..models.sat_supplier_account_mapping import SATSupplierAccountMapping
@@ -115,6 +117,28 @@ class SimpleMergedDetailResponse(SimpleMergedResponse):
 
 
 # =====================
+# Helpers for customer user
+# =====================
+
+
+def _get_customer_user_allowed_receiver_rfcs(db: Session, user: ZodiacUser):
+    """Return list of receiver_rfc allowed for this user when is_customer_user; else None (use user_id)."""
+    if not getattr(user, "is_customer_user", False) or getattr(user, "is_admin", False):
+        return None
+    customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == user.id).all()]
+    if not customer_ids:
+        return []
+    rfcs = []
+    for cid in customer_ids:
+        rfcs.extend([
+            r[0] for r in db.query(CustomerReceiverRfc.receiver_rfc).filter(
+                CustomerReceiverRfc.customer_id == cid
+            ).all()
+        ])
+    return list({r for r in rfcs if r})
+
+
+# =====================
 # Endpoints
 # =====================
 
@@ -132,17 +156,21 @@ async def check_merge_requirements(
     2. Mapping data exists for this RFC
     
     Returns merge eligibility status and details about what's present/missing.
+    For customer users, documents are filtered by allowed receiver_rfc instead of user_id.
     """
     try:
         logger.info(f"Checking merge requirements for RFC {supplier_rfc}, period {fiscal_year}-{fiscal_period}")
-        
-        # Query documents for this supplier and period
-        documents = db.query(SATDocument).filter(
-            SATDocument.user_id == current_user.id,
+        allowed_rfcs = _get_customer_user_allowed_receiver_rfcs(db, current_user)
+        base_filter = [
             SATDocument.supplier_rfc == supplier_rfc,
             func.extract('year', SATDocument.fecha) == fiscal_year,
             func.extract('month', SATDocument.fecha) == fiscal_period
-        ).all()
+        ]
+        if allowed_rfcs is not None:
+            base_filter.append(SATDocument.receiver_rfc.in_(allowed_rfcs))
+        else:
+            base_filter.append(SATDocument.user_id == current_user.id)
+        documents = db.query(SATDocument).filter(*base_filter).all()
         
         if not documents:
             return {
@@ -215,14 +243,17 @@ async def merge_documents(
     """
     try:
         logger.info(f"Merging documents for supplier {request.supplier_rfc}, period {request.fiscal_year}-{request.fiscal_period}")
-        
-        # Fetch documents for the specified supplier and period
-        documents = db.query(SATDocument).filter(
-            SATDocument.user_id == current_user.id,
+        allowed_rfcs = _get_customer_user_allowed_receiver_rfcs(db, current_user)
+        base_filter = [
             SATDocument.supplier_rfc == request.supplier_rfc,
             func.extract('year', SATDocument.fecha) == request.fiscal_year,
             func.extract('month', SATDocument.fecha) == request.fiscal_period
-        ).all()
+        ]
+        if allowed_rfcs is not None:
+            base_filter.append(SATDocument.receiver_rfc.in_(allowed_rfcs))
+        else:
+            base_filter.append(SATDocument.user_id == current_user.id)
+        documents = db.query(SATDocument).filter(*base_filter).all()
         
         if not documents:
             raise HTTPException(

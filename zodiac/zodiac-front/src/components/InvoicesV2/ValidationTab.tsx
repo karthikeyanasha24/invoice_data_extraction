@@ -16,7 +16,11 @@ interface InvoiceV2Document {
   uploaded_at: string;
 }
 
-export default function ValidationTab() {
+interface ValidationTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function ValidationTab({ customerUserMode }: ValidationTabProps = {}) {
   const router = useRouter();
   const { handleAuthError } = useAuth();
   const [unvalidated, setUnvalidated] = useState<InvoiceV2Document[]>([]);
@@ -27,8 +31,10 @@ export default function ValidationTab() {
   const fetchUnvalidated = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await invoicesV2Api.getUnvalidated();
-      setUnvalidated(response.documents);
+      const response = customerUserMode
+        ? await invoicesV2Api.getUnvalidatedForCustomerUser()
+        : await invoicesV2Api.getUnvalidated();
+      setUnvalidated(response.documents || []);
     } catch (error: any) {
       console.error('Failed to fetch unvalidated invoices:', error);
       if (error.message?.includes('Session expired')) {
@@ -37,7 +43,7 @@ export default function ValidationTab() {
     } finally {
       setLoading(false);
     }
-  }, [handleAuthError]);
+  }, [handleAuthError, customerUserMode]);
 
   useEffect(() => {
     fetchUnvalidated();
@@ -70,7 +76,7 @@ export default function ValidationTab() {
       const selectedIds = Array.from(selected);
       await invoicesV2Api.validateInvoices(selectedIds);
 
-      // Redirect to processing page with document IDs
+      // Redirect to processing page with document IDs (same for admin and customer user)
       const idsParam = selectedIds.join(',');
       router.push(`/invoices-v2/processing?ids=${idsParam}`);
     } catch (error: any) {
