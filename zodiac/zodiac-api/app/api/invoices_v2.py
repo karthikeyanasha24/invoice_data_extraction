@@ -14,10 +14,11 @@ from datetime import datetime
 from ..database import get_db
 from ..api.auth import get_current_user
 from ..models.user import ZodiacUser
+from ..models.user_customer import UserCustomer
 from ..models.invoice_v2_document import InvoiceV2Document
 from ..models.invoice_v2_validated import InvoiceV2Validated
 from ..models.invoice_v2_correction_cache import InvoiceV2CorrectionCache
-from ..services.invoice_v2_validation_service import InvoiceV2ValidationService
+from ..services.invoice_v2_validation_service import InvoiceV2ValidationService, extract_customer_id_from_xml
 from ..services.invoice_v2_correction_service import InvoiceV2CorrectionService
 from ..services.file_service import save_file_to_storage, read_file_from_storage
 
@@ -331,6 +332,59 @@ async def receive_sap_invoice(
         )
 
 
+@router.get("/documents/for-customer-user")
+async def list_documents_for_customer_user(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List documents for customer users: only documents that appear in validated invoices
+    whose customer_id is in the user's assigned customers. Same response shape as list_documents.
+    """
+    if not getattr(current_user, "is_customer_user", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is for customer users only",
+        )
+    try:
+        customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+        if not customer_ids:
+            return {"total": 0, "skip": skip, "limit": limit, "documents": []}
+        subq = (
+            db.query(InvoiceV2Validated.document_id)
+            .filter(InvoiceV2Validated.invoice_data["customer_id"].astext.in_(customer_ids))
+            .distinct()
+        )
+        query = (
+            db.query(InvoiceV2Document)
+            .filter(
+                InvoiceV2Document.id.in_(subq),
+                InvoiceV2Document.deleted_at.is_(None),
+            )
+        )
+        total = query.count()
+        documents = (
+            query.order_by(InvoiceV2Document.uploaded_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "documents": [doc.to_dict() for doc in documents],
+        }
+    except Exception as e:
+        logger.error(f"❌ List documents for customer user failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
 @router.get("/documents")
 async def list_documents(
     source: Optional[str] = None,
@@ -554,6 +608,73 @@ async def download_document(
 
 # ==================== VALIDATION ENDPOINTS ====================
 
+@router.get("/unvalidated/for-customer-user")
+async def list_unvalidated_invoices_for_customer_user(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List unvalidated invoices for customer users. Returns only documents whose
+    XML customer_id (AccountingCustomerParty) is in the user's assigned customer_ids.
+    """
+    if not getattr(current_user, "is_customer_user", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only customer users can use this endpoint"
+        )
+    try:
+        customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+        if not customer_ids:
+            return {"total": 0, "documents": []}
+        customer_id_set = {str(c).strip() for c in customer_ids}
+
+        # Fetch unvalidated documents (limit to avoid timeouts when reading many files)
+        candidates = (
+            db.query(InvoiceV2Document)
+            .filter(
+                InvoiceV2Document.validation_status == 'not_validated',
+                InvoiceV2Document.deleted_at.is_(None),
+            )
+            .order_by(InvoiceV2Document.uploaded_at.desc())
+            .limit(500)
+            .all()
+        )
+        filtered = []
+        for doc in candidates:
+            try:
+                if doc.blob_xml_path:
+                    xml_bytes = await read_file_from_storage(
+                        file_path=doc.blob_xml_path,
+                        blob_xml_path=doc.blob_xml_path,
+                    )
+                elif doc.xml_path:
+                    xml_bytes = await read_file_from_storage(
+                        file_path=doc.xml_path,
+                        blob_xml_path=None,
+                    )
+                else:
+                    continue
+                cid = extract_customer_id_from_xml(xml_bytes)
+                if cid and (cid in customer_id_set or cid.strip() in customer_id_set):
+                    filtered.append(doc)
+            except Exception as e:
+                logger.debug("Skip doc %s for customer user unvalidated list: %s", doc.id, e)
+                continue
+        logger.info(f"✅ Found {len(filtered)} unvalidated invoices for customer user (assigned customers)")
+        return {
+            "total": len(filtered),
+            "documents": [doc.to_dict() for doc in filtered],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ List unvalidated for customer user failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
 @router.get("/unvalidated")
 async def list_unvalidated_invoices(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -643,12 +764,32 @@ async def validate_invoices(
     logger.info(f"   Document IDs: {document_ids}")
     
     try:
-        # Verify documents exist and belong to user
-        documents = db.query(InvoiceV2Document).filter(
+        # Verify documents exist; for customer users only allow docs whose customer_id is in assigned customers
+        base_query = db.query(InvoiceV2Document).filter(
             InvoiceV2Document.id.in_(document_ids),
-            InvoiceV2Document.user_id == current_user.id,
-            InvoiceV2Document.validation_status == 'not_validated'
-        ).all()
+            InvoiceV2Document.validation_status == 'not_validated',
+            InvoiceV2Document.deleted_at.is_(None)
+        )
+        if getattr(current_user, "is_customer_user", False):
+            raw_docs = base_query.all()
+            customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+            customer_id_set = {str(c).strip() for c in customer_ids} if customer_ids else set()
+            documents = []
+            for doc in raw_docs:
+                try:
+                    if doc.blob_xml_path:
+                        xml_bytes = await read_file_from_storage(file_path=doc.blob_xml_path, blob_xml_path=doc.blob_xml_path)
+                    elif doc.xml_path:
+                        xml_bytes = await read_file_from_storage(file_path=doc.xml_path, blob_xml_path=None)
+                    else:
+                        continue
+                    cid = extract_customer_id_from_xml(xml_bytes)
+                    if cid and (cid in customer_id_set or cid.strip() in customer_id_set):
+                        documents.append(doc)
+                except Exception:
+                    continue
+        else:
+            documents = base_query.filter(InvoiceV2Document.user_id == current_user.id).all()
         
         if not documents:
             raise HTTPException(
@@ -697,11 +838,11 @@ async def get_validation_progress(
         # Parse document IDs
         ids = [int(id.strip()) for id in document_ids.split(',')]
         
-        # Get documents
-        documents = db.query(InvoiceV2Document).filter(
-            InvoiceV2Document.id.in_(ids),
-            InvoiceV2Document.user_id == current_user.id
-        ).all()
+        # Get documents; customer users can query any document ids (they may have triggered validation)
+        q = db.query(InvoiceV2Document).filter(InvoiceV2Document.id.in_(ids))
+        if not getattr(current_user, "is_customer_user", False):
+            q = q.filter(InvoiceV2Document.user_id == current_user.id)
+        documents = q.all()
         
         if not documents:
             return {
@@ -747,6 +888,61 @@ async def get_validation_progress(
 
 
 # ==================== VALIDATED INVOICES ENDPOINTS ====================
+
+
+@router.get("/for-customer-user")
+async def list_validated_invoices_for_customer_user(
+    status_filter: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List validated invoices (From ERP) for customer users: only invoices whose customer_id is in the user's assigned customers.
+    """
+    if not getattr(current_user, "is_customer_user", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is for customer users only",
+        )
+    try:
+        customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+        if not customer_ids:
+            return {"total": 0, "skip": skip, "limit": limit, "validated_invoices": []}
+        # Filter by invoice_data->>'customer_id' IN customer_ids (JSONB)
+        query = db.query(InvoiceV2Validated).join(
+            InvoiceV2Document,
+            InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Validated.invoice_data["customer_id"].astext.in_(customer_ids)
+        )
+        if status_filter:
+            query = query.filter(InvoiceV2Validated.status == status_filter)
+        total = query.count()
+        validated = query.order_by(
+            InvoiceV2Validated.validated_at.desc()
+        ).offset(skip).limit(limit).all()
+        results = []
+        for v in validated:
+            result = v.to_dict()
+            result["document"] = v.document.to_dict() if v.document else None
+            result["is_converted"] = False
+            results.append(result)
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "validated_invoices": results
+        }
+    except Exception as e:
+        logger.error(f"❌ List for customer user failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
 
 @router.get("/validated")
 async def list_validated_invoices(

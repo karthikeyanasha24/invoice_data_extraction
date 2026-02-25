@@ -37,7 +37,11 @@ const FORMAT_COLORS: Record<string, { bg: string; text: string }> = {
   CFDI: { bg: 'bg-pink-100', text: 'text-pink-800' },
 };
 
-export default function ConvertedInvoicesTab() {
+interface ConvertedInvoicesTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function ConvertedInvoicesTab({ customerUserMode }: ConvertedInvoicesTabProps = {}) {
   const [convertedInvoices, setConvertedInvoices] = useState<ConvertedInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -47,14 +51,16 @@ export default function ConvertedInvoicesTab() {
 
   useEffect(() => {
     fetchConvertedInvoices();
-  }, [statusFilter]);
+  }, [statusFilter, customerUserMode]);
 
   const fetchConvertedInvoices = async () => {
     setLoading(true);
     setError('');
 
     try {
-      const response = await convertedInvoicesApi.getConverted(0, 100, statusFilter || undefined);
+      const response = customerUserMode
+        ? await convertedInvoicesApi.getConvertedForCustomerUser(0, 100, statusFilter || undefined)
+        : await convertedInvoicesApi.getConverted(0, 100, statusFilter || undefined);
       setConvertedInvoices(response.converted_invoices || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load converted invoices');

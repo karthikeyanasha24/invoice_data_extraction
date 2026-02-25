@@ -168,6 +168,46 @@ export const authApi = {
     },
 };
 
+// Customer users API (admin only)
+export interface CustomerUserResponse {
+    id: number;
+    email: string;
+    username: string;
+    is_customer_user: boolean;
+    customer_ids: string[];
+}
+export const customerUsersApi = {
+    list: async (): Promise<CustomerUserResponse[]> => {
+        const response = await api.get('/api/v1/customer-users');
+        return response.data;
+    },
+    create: async (data: { email: string; username: string; password: string }): Promise<CustomerUserResponse> => {
+        try {
+            const response = await api.post('/api/v1/customer-users', data);
+            return response.data;
+        } catch (error: any) {
+            const detail = error.response?.data?.detail;
+            let msg = 'Failed to create customer user.';
+            if (typeof detail === 'string') msg = detail;
+            else if (Array.isArray(detail) && detail.length)
+                msg = detail.map((d: { msg?: string; message?: string }) => d.msg || d.message).filter(Boolean).join(' ') || msg;
+            throw new Error(msg);
+        }
+    },
+    getMyCustomers: async (): Promise<string[]> => {
+        const response = await api.get('/api/v1/customer-users/me/customers');
+        return response.data;
+    },
+    getCustomers: async (userId: number): Promise<string[]> => {
+        const response = await api.get(`/api/v1/customer-users/${userId}/customers`);
+        return response.data;
+    },
+    assignCustomers: async (userId: number, customerIds: string[]): Promise<CustomerUserResponse> => {
+        const response = await api.put(`/api/v1/customer-users/${userId}/customers`, { customer_ids: customerIds });
+        return response.data;
+    },
+};
+
 // File upload API
 export const fileApi = {
     uploadFile: async (file: File): Promise<{
@@ -1253,6 +1293,15 @@ export const customerApi = {
         }
     },
 
+    getReceiverRfcs: async (customerId: string): Promise<string[]> => {
+        const response = await api.get(`/api/v1/customers/${encodeURIComponent(customerId)}/receiver-rfcs`);
+        return response.data;
+    },
+    setReceiverRfcs: async (customerId: string, receiverRfcs: string[]): Promise<string[]> => {
+        const response = await api.put(`/api/v1/customers/${encodeURIComponent(customerId)}/receiver-rfcs`, { receiver_rfcs: receiverRfcs });
+        return response.data;
+    },
+
     bulkCreateCustomers: async (customers: any[]): Promise<any> => {
         console.log('👥 Customer API - Bulk creating customers:', { count: customers.length });
         try {
@@ -1405,6 +1454,18 @@ export const dashboardApi = {
         const response = await api.get(`/api/v1/dashboard/v2/outbound?days=${days}`);
         return response.data;
     },
+    getV2FailedInvoicesAnalysis: async (days: number = 30, demo?: boolean) => {
+        let url = `/api/v1/dashboard/v2/failed-invoices-analysis?days=${days}`;
+        if (demo) url += '&demo=1';
+        const response = await api.get(url);
+        return response.data;
+    },
+    getV2FailedInvoicesAiInsights: async (days: number = 30, demo?: boolean) => {
+        let url = `/api/v1/dashboard/v2/failed-invoices-ai-insights?days=${days}`;
+        if (demo) url += '&demo=1';
+        const response = await api.get(url);
+        return response.data;
+    },
     getV2Business: async (days: number = 90, currency?: string | null) => {
         let url = `/api/v1/dashboard/v2/business?days=${days}`;
         if (currency && currency !== '') {
@@ -1498,6 +1559,18 @@ export const satApi = {
             console.error('Failed to list SAT documents:', error);
             throw new Error(error.response?.data?.detail || 'Failed to fetch SAT documents.');
         }
+    },
+
+    listDocumentsForCustomerUser: async (params?: {
+        fiscal_year?: number;
+        fiscal_period?: number;
+        doc_type?: string;
+        status_filter?: string;
+        skip?: number;
+        limit?: number;
+    }) => {
+        const response = await api.get('/api/v1/sat/documents/for-customer-user', { params: params || {} });
+        return response.data;
     },
 
     // Get a specific document
@@ -1931,6 +2004,11 @@ export const invoicesV2Api = {
         }
     },
 
+    getDocumentsForCustomerUser: async (params?: { skip?: number; limit?: number }) => {
+        const response = await api.get('/api/v1/invoices-v2/documents/for-customer-user', { params: params || {} });
+        return response.data;
+    },
+
     deleteDocument: async (documentId: number) => {
         try {
             const response = await api.delete(`/api/v1/invoices-v2/documents/${documentId}`);
@@ -2001,6 +2079,16 @@ export const invoicesV2Api = {
         }
     },
 
+    getUnvalidatedForCustomerUser: async () => {
+        try {
+            const response = await api.get('/api/v1/invoices-v2/unvalidated/for-customer-user');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get unvalidated invoices for customer user:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch unvalidated invoices.');
+        }
+    },
+
     validateInvoices: async (documentIds: number[]) => {
         try {
             const response = await api.post('/api/v1/invoices-v2/validate', { document_ids: documentIds });
@@ -2038,6 +2126,11 @@ export const invoicesV2Api = {
             console.error('Failed to get validated invoices:', error);
             throw new Error(error.response?.data?.detail || 'Failed to fetch validated invoices.');
         }
+    },
+
+    getValidatedForCustomerUser: async (params?: { status_filter?: string; skip?: number; limit?: number }) => {
+        const response = await api.get('/api/v1/invoices-v2/for-customer-user', { params: params || {} });
+        return response.data;
     },
 
     getValidatedDetails: async (validatedId: number) => {
@@ -2139,6 +2232,21 @@ export const convertedInvoicesApi = {
             return response.data;
         } catch (error: any) {
             console.error('Failed to get converted invoices:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch converted invoices.');
+        }
+    },
+
+    // List converted invoices for customer user (only assigned customer_ids)
+    getConvertedForCustomerUser: async (skip: number = 0, limit: number = 100, statusFilter?: string) => {
+        try {
+            const params: any = { skip, limit };
+            if (statusFilter) {
+                params.status_filter = statusFilter;
+            }
+            const response = await api.get('/api/v1/converted-invoices/list/for-customer-user', { params });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get converted invoices for customer user:', error);
             throw new Error(error.response?.data?.detail || 'Failed to fetch converted invoices.');
         }
     },

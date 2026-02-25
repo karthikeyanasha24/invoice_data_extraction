@@ -1056,7 +1056,9 @@ async def get_dashboard_v2_outbound(
 
         customer_rows = db.query(
             ConvertedInvoice.customer_id,
-            func.count(ConvertedInvoice.id).label("count")
+            func.max(InvoiceV2Validated.invoice_data["customer_name"].astext).label("customer_name"),
+            func.max(InvoiceV2Validated.invoice_data["currency"].astext).label("currency"),
+            func.count(ConvertedInvoice.id).label("count"),
         ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
             InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
         ).filter(
@@ -1065,7 +1067,15 @@ async def get_dashboard_v2_outbound(
         ).filter(ConvertedInvoice.customer_id.isnot(None)).group_by(
             ConvertedInvoice.customer_id
         ).order_by(func.count(ConvertedInvoice.id).desc()).limit(10).all()
-        top_customers = [{"customer_id": r.customer_id, "count": r.count} for r in customer_rows]
+        top_customers = [
+            {
+                "customer_id": r.customer_id,
+                "customer_name": r.customer_name or r.customer_id,
+                "currency": r.currency or "—",
+                "count": r.count,
+            }
+            for r in customer_rows
+        ]
 
         timeline_docs = db.query(
             cast(InvoiceV2Document.uploaded_at, Date).label("date"),
@@ -1111,6 +1121,300 @@ async def get_dashboard_v2_outbound(
     except Exception as e:
         logger.error(f"❌ Dashboard v2 outbound: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/failed-invoices-analysis")
+async def get_dashboard_v2_failed_invoices_analysis(
+    days: int = Query(default=30, ge=1, le=365),
+    demo: bool = Query(default=False, description="Return mock data for UI preview"),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard v2 - Failed invoices analytics: failure reasons, one-time vs repetitive, revenue loss."""
+    if demo:
+        return {
+            "total_failed": 4,
+            "failure_reasons": [
+                {"reason": "missing:customer_name,tax_percentage", "count": 2},
+                {"reason": "Invalid date format (issue_date)", "count": 1},
+                {"reason": "Invalid currency code", "count": 1},
+            ],
+            "one_time_count": 2,
+            "repetitive_count": 1,
+            "repetitive_customer_ids": ["CUST-002"],
+            "revenue_loss_by_currency": {"USD": 1250.5, "MXN": 15000.0},
+            "by_date": [
+                {"date": (datetime.utcnow() - timedelta(days=2)).strftime("%Y-%m-%d"), "failed_count": 2, "revenue_loss": 500.0},
+                {"date": (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d"), "failed_count": 2, "revenue_loss": 750.5},
+            ],
+        }
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        failed_list = (
+            db.query(InvoiceV2Validated)
+            .join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id)
+            .filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+                InvoiceV2Validated.status == "failed",
+            )
+            .order_by(InvoiceV2Validated.validated_at.desc())
+            .all()
+        )
+        total_failed = len(failed_list)
+
+        failure_reasons_map = defaultdict(int)
+        revenue_by_currency = defaultdict(float)
+        customer_fail_counts = defaultdict(int)
+        by_date_map = defaultdict(lambda: {"failed_count": 0, "revenue_loss": 0.0})
+
+        for v in failed_list:
+            reasons = []
+            if v.missing_fields:
+                key = "missing:" + ",".join(sorted(v.missing_fields))
+                reasons.append(key)
+            if v.validation_errors:
+                for err in v.validation_errors if isinstance(v.validation_errors, list) else []:
+                    if isinstance(err, dict):
+                        msg = err.get("message", "") or err.get("field", "error")
+                        reasons.append((msg[:50] + "..") if len(msg) > 50 else msg)
+                    else:
+                        reasons.append("validation_error")
+            if not reasons:
+                reasons.append("unknown")
+            for r in reasons:
+                failure_reasons_map[r] += 1
+
+            inv = v.invoice_data or {}
+            try:
+                total_val = inv.get("total") or inv.get("payable_amount")
+                if total_val is not None:
+                    amt = float(total_val) if not isinstance(total_val, (int, float)) else float(total_val)
+                    cur = (inv.get("currency") or "USD").strip() or "USD"
+                    revenue_by_currency[cur] += amt
+            except (TypeError, ValueError):
+                pass
+
+            cid = (inv.get("customer_id") or "").strip() or "unknown"
+            customer_fail_counts[cid] += 1
+
+            vdate = v.validated_at.date() if v.validated_at else None
+            if vdate:
+                by_date_map[vdate.strftime("%Y-%m-%d")]["failed_count"] += 1
+                try:
+                    total_val = inv.get("total") or inv.get("payable_amount")
+                    if total_val is not None:
+                        amt = float(total_val) if not isinstance(total_val, (int, float)) else float(total_val)
+                        by_date_map[vdate.strftime("%Y-%m-%d")]["revenue_loss"] += amt
+                except (TypeError, ValueError):
+                    pass
+
+        one_time_count = sum(1 for c in customer_fail_counts.values() if c == 1)
+        repetitive_count = sum(1 for c in customer_fail_counts.values() if c > 1)
+        repetitive_customer_ids = [cid for cid, count in customer_fail_counts.items() if count > 1 and cid != "unknown"]
+
+        failure_reasons = [{"reason": r, "count": c} for r, c in sorted(failure_reasons_map.items(), key=lambda x: -x[1])]
+        revenue_loss_by_currency = dict(revenue_by_currency)
+        by_date = [
+            {"date": d, "failed_count": by_date_map[d]["failed_count"], "revenue_loss": round(by_date_map[d]["revenue_loss"], 2)}
+            for d in sorted(by_date_map.keys())
+        ]
+
+        return {
+            "total_failed": total_failed,
+            "failure_reasons": failure_reasons,
+            "one_time_count": one_time_count,
+            "repetitive_count": repetitive_count,
+            "repetitive_customer_ids": repetitive_customer_ids,
+            "revenue_loss_by_currency": revenue_loss_by_currency,
+            "by_date": by_date,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 failed-invoices-analysis: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get("/v2/failed-invoices-ai-insights")
+async def get_dashboard_v2_failed_invoices_ai_insights(
+    days: int = Query(default=30, ge=1, le=365),
+    demo: bool = Query(default=False, description="Return mock AI insights for UI preview"),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard v2 - AI insights for failed invoices (summary, insights, recommendations, root causes)."""
+    if demo:
+        return {
+            "summary": "Demo: 4 failed invoices in the period. Main issues are missing required fields (customer_name, tax_percentage), invalid date format, and invalid currency. One customer has repetitive failures.",
+            "insights": [
+                "Missing customer_name and tax_percentage is the most frequent failure reason (2 invoices).",
+                "One customer (CUST-002) has multiple failures; consider a dedicated review for this customer.",
+                "Revenue at risk: USD 1,250.50 and MXN 15,000.00 across failed validations.",
+            ],
+            "recommendations": [
+                "Ensure UBL invoices include AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name and tax percentage where required.",
+                "Validate date formats (issue_date, due_date) against ISO 8601 before submission.",
+                "Review currency codes against ISO 4217; fix invalid or empty currency in source systems.",
+            ],
+            "root_causes": [
+                "Incomplete or blank required fields in supplier XML export.",
+                "Date/currency format mismatches between ERP and validation rules.",
+            ],
+            "revenue_impact_note": "Total revenue at risk: USD 1,250.50, MXN 15,000.00.",
+            "analyzed_at": datetime.utcnow().isoformat(),
+        }
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        failed_list = (
+            db.query(InvoiceV2Validated)
+            .join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id)
+            .filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+                InvoiceV2Validated.status == "failed",
+            )
+            .order_by(InvoiceV2Validated.validated_at.desc())
+            .limit(50)
+            .all()
+        )
+        if not failed_list:
+            return {
+                "summary": "No failed invoices in this period.",
+                "insights": [],
+                "recommendations": [],
+                "root_causes": [],
+                "revenue_impact_note": None,
+                "analyzed_at": datetime.utcnow().isoformat(),
+            }
+        failure_reasons_map = defaultdict(int)
+        revenue_by_currency = defaultdict(float)
+        customer_fail_counts = defaultdict(int)
+        examples = []
+        for v in failed_list[:10]:
+            inv = v.invoice_data or {}
+            reasons = []
+            if v.missing_fields:
+                reasons.append("missing: " + ", ".join(v.missing_fields))
+            if v.validation_errors and isinstance(v.validation_errors, list):
+                for err in v.validation_errors:
+                    if isinstance(err, dict):
+                        reasons.append(err.get("message", err.get("field", "error")))
+            if not reasons:
+                reasons.append("unknown")
+            examples.append({
+                "customer_id": inv.get("customer_id", "—"),
+                "customer_name": inv.get("customer_name", "—"),
+                "total": inv.get("total") or inv.get("payable_amount"),
+                "currency": inv.get("currency", "—"),
+                "reasons": reasons,
+            })
+            if v.missing_fields:
+                key = "missing:" + ",".join(sorted(v.missing_fields))
+                failure_reasons_map[key] += 1
+            if v.validation_errors and isinstance(v.validation_errors, list):
+                for err in v.validation_errors:
+                    if isinstance(err, dict):
+                        msg = (err.get("message") or err.get("field") or "error")[:80]
+                        failure_reasons_map[msg] += 1
+            try:
+                total_val = inv.get("total") or inv.get("payable_amount")
+                if total_val is not None:
+                    amt = float(total_val) if not isinstance(total_val, (int, float)) else float(total_val)
+                    cur = (inv.get("currency") or "USD").strip() or "USD"
+                    revenue_by_currency[cur] += amt
+            except (TypeError, ValueError):
+                pass
+            cid = (inv.get("customer_id") or "").strip() or "unknown"
+            customer_fail_counts[cid] += 1
+        one_time = sum(1 for c in customer_fail_counts.values() if c == 1)
+        repetitive = sum(1 for c in customer_fail_counts.values() if c > 1)
+        top_reasons = sorted(failure_reasons_map.items(), key=lambda x: -x[1])[:8]
+        reason_text = "\n".join([f"- {r}: {c} occurrences" for r, c in top_reasons])
+        revenue_text = ", ".join([f"{cur} {amt:.2f}" for cur, amt in revenue_by_currency.items()])
+        examples_text = "\n".join([
+            f"Customer {ex['customer_id']} ({ex['customer_name']}), total {ex['currency']} {ex['total']}: " + "; ".join(ex["reasons"])
+            for ex in examples[:3]
+        ])
+        context = f"""
+Failed invoices in period: {len(failed_list)} (showing up to 50).
+
+Failure reason counts:
+{reason_text}
+
+Revenue at risk by currency: {revenue_text or 'None'}
+
+One-time failures (customers with 1 failure): {one_time}. Repetitive (customers with >1 failure): {repetitive}.
+
+Example failed invoices and their reasons:
+{examples_text}
+"""
+        if OPENAI_API_KEY and openai_available:
+            try:
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                prompt = f"""
+You are an expert e-invoice and UBL analyst. Analyze the following failed invoice validation data and provide actionable insights.
+
+{context}
+
+Provide a JSON response with this exact structure:
+{{
+    "summary": "Brief 2-3 sentence overview of the main issues",
+    "insights": ["Specific insight 1", "Specific insight 2", "Specific insight 3"],
+    "recommendations": ["Actionable recommendation 1", "Actionable recommendation 2", "Actionable recommendation 3"],
+    "root_causes": ["Root cause 1", "Root cause 2"],
+    "revenue_impact_note": "One sentence on revenue at risk by currency, or null if none"
+}}
+
+Focus on: common patterns, missing/required fields, format issues, repetitive vs one-time, and practical fixes.
+Respond ONLY with valid JSON, no markdown or extra text.
+"""
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    response_format={"type": "json_object"},
+                )
+                ai_response = json.loads(completion.choices[0].message.content)
+                return {
+                    "summary": ai_response.get("summary", "Analysis complete."),
+                    "insights": ai_response.get("insights", []),
+                    "recommendations": ai_response.get("recommendations", []),
+                    "root_causes": ai_response.get("root_causes", []),
+                    "revenue_impact_note": ai_response.get("revenue_impact_note"),
+                    "analyzed_at": datetime.utcnow().isoformat(),
+                }
+            except Exception as ai_err:
+                logger.warning(f"V2 failed-invoices AI insights OpenAI error: {ai_err}")
+        top_3 = top_reasons[:3]
+        return {
+            "summary": f"Analyzed {len(failed_list)} failed invoices. Top issues: " + "; ".join([f"{r} ({c})" for r, c in top_3]) + ".",
+            "insights": [
+                f"Most frequent: {top_3[0][0]} ({top_3[0][1]} occurrences)" if top_3 else "No patterns",
+                "Review missing_fields and validation_errors in the Failed tab for details.",
+                f"Revenue at risk: {revenue_text}" if revenue_text else "No revenue totals in failed records.",
+            ],
+            "recommendations": [
+                "Fix missing required fields in source XML (see failure_reasons).",
+                "Validate date and currency formats before upload.",
+                "For repetitive failures by customer, check customer-specific configuration.",
+            ],
+            "root_causes": [
+                "Missing or invalid required UBL fields.",
+                "Format validation failures (dates, amounts, codes).",
+            ],
+            "revenue_impact_note": f"Total at risk: {revenue_text}" if revenue_text else None,
+            "analyzed_at": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 failed-invoices-ai-insights: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 @router.get("/v2/business")

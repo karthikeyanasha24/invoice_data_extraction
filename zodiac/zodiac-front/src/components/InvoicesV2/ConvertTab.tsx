@@ -26,7 +26,11 @@ interface ValidatedInvoice {
   document?: any;
 }
 
-export default function ConvertTab() {
+interface ConvertTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function ConvertTab({ customerUserMode }: ConvertTabProps = {}) {
   const { handleAuthError } = useAuth();
   const [invoices, setInvoices] = useState<ValidatedInvoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,8 +50,10 @@ export default function ConvertTab() {
   const fetchInvoices = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await invoicesV2Api.getValidated('success', true);
-      setInvoices(response.validated_invoices);
+      const response = customerUserMode
+        ? await invoicesV2Api.getValidatedForCustomerUser({ status_filter: 'success' })
+        : await invoicesV2Api.getValidated('success', true);
+      setInvoices(response.validated_invoices || []);
     } catch (error: any) {
       console.error('Failed to fetch invoices to convert:', error);
       if (error.message?.includes('Session expired')) {
@@ -56,7 +62,7 @@ export default function ConvertTab() {
     } finally {
       setLoading(false);
     }
-  }, [handleAuthError]);
+  }, [handleAuthError, customerUserMode]);
 
   useEffect(() => {
     fetchInvoices();

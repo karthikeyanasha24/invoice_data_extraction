@@ -5,7 +5,7 @@ Handles intake, validation, and storage of SAT CFDI documents
 import logging
 import hashlib
 import uuid
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -226,4 +226,74 @@ class SATDocumentProcessor:
                 for doc in documents
             ]
         }
+
+    def list_documents_by_receiver_rfcs(
+        self,
+        receiver_rfc_list: List[str],
+        fiscal_year: Optional[int] = None,
+        fiscal_period: Optional[int] = None,
+        doc_type: Optional[str] = None,
+        status: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100
+    ) -> Dict:
+        """List SAT documents where receiver_rfc is in the given list (for customer users)."""
+        if not receiver_rfc_list:
+            return {"total": 0, "documents": []}
+        rfc_set = {r.strip().upper() for r in receiver_rfc_list if r}
+        query = self.db.query(SATDocument).filter(
+            SATDocument.receiver_rfc.in_(rfc_set)
+        )
+        if fiscal_year:
+            query = query.filter(SATDocument.fiscal_year == fiscal_year)
+        if fiscal_period:
+            query = query.filter(SATDocument.fiscal_period == fiscal_period)
+        if doc_type:
+            query = query.filter(SATDocument.doc_type == doc_type)
+        if status:
+            query = query.filter(SATDocument.status == status)
+        total = query.count()
+        documents = query.order_by(
+            SATDocument.received_at.desc()
+        ).offset(skip).limit(limit).all()
+        return {
+            "total": total,
+            "documents": [
+                {
+                    "id": str(doc.id),
+                    "portal_ref_id": doc.portal_ref_id,
+                    "cfdi_uuid": doc.cfdi_uuid,
+                    "doc_type": doc.doc_type,
+                    "supplier_rfc": doc.supplier_rfc,
+                    "supplier_name": doc.supplier_name,
+                    "receiver_rfc": doc.receiver_rfc,
+                    "receiver_name": doc.receiver_name,
+                    "serie": doc.serie,
+                    "folio": doc.folio,
+                    "fecha": doc.fecha.isoformat() if doc.fecha else None,
+                    "total": doc.total,
+                    "moneda": doc.moneda,
+                    "status": doc.status,
+                    "fiscal_year": doc.fiscal_year,
+                    "fiscal_period": doc.fiscal_period,
+                    "source": doc.source,
+                    "received_at": doc.received_at.isoformat() if doc.received_at else None,
+                    "sap_document_number": doc.sap_document_number,
+                    "sent_to_sap_at": doc.sent_to_sap_at.isoformat() if doc.sent_to_sap_at else None
+                }
+                for doc in documents
+            ]
+        }
+
+    def get_document_by_id_if_receiver_allowed(
+        self, document_id: str, allowed_receiver_rfcs: List[str]
+    ) -> Optional[SATDocument]:
+        """Get a SAT document by ID if its receiver_rfc is in the allowed list (for customer users)."""
+        doc = self.db.query(SATDocument).filter(SATDocument.id == document_id).first()
+        if not doc or not allowed_receiver_rfcs:
+            return None
+        rfc_set = {r.strip().upper() for r in allowed_receiver_rfcs if r}
+        if (doc.receiver_rfc or "").strip().upper() not in rfc_set:
+            return None
+        return doc
 

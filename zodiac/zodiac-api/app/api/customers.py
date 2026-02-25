@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from ..models.customer import Customer
 from ..models.user import ZodiacUser
+from ..models.customer_receiver_rfc import CustomerReceiverRfc
 from ..schemas.customer import (
     CustomerCreate,
     CustomerUpdate,
@@ -106,6 +108,55 @@ def list_customers(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching customers: {str(e)}",
         )
+
+
+def _require_admin(current_user: ZodiacUser) -> None:
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+
+class ReceiverRfcsBody(BaseModel):
+    receiver_rfcs: list[str]
+
+
+@router.get("/{customer_id}/receiver-rfcs", response_model=list[str])
+def get_customer_receiver_rfcs(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """List receiver RFCs for a customer (for To ERP / inbound). Admin only."""
+    _require_admin(current_user)
+    rows = db.query(CustomerReceiverRfc.receiver_rfc).filter(
+        CustomerReceiverRfc.customer_id == customer_id
+    ).all()
+    return [r[0] for r in rows]
+
+
+@router.put("/{customer_id}/receiver-rfcs", response_model=list[str])
+def set_customer_receiver_rfcs(
+    customer_id: str,
+    body: ReceiverRfcsBody,
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """Set receiver RFCs for a customer (for To ERP / inbound). Admin only."""
+    _require_admin(current_user)
+    db.query(CustomerReceiverRfc).filter(
+        CustomerReceiverRfc.customer_id == customer_id
+    ).delete()
+    for rfc in (body.receiver_rfcs or []):
+        rfc = (rfc or "").strip().upper()
+        if rfc:
+            db.add(CustomerReceiverRfc(customer_id=customer_id, receiver_rfc=rfc))
+    db.commit()
+    rows = db.query(CustomerReceiverRfc.receiver_rfc).filter(
+        CustomerReceiverRfc.customer_id == customer_id
+    ).all()
+    return [r[0] for r in rows]
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)

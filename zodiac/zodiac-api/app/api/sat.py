@@ -13,6 +13,8 @@ from ..database import get_db
 from ..api.auth import get_current_user
 from ..api.supplier_auth import get_supplier_token
 from ..models.user import ZodiacUser
+from ..models.user_customer import UserCustomer
+from ..models.customer_receiver_rfc import CustomerReceiverRfc
 from ..models.supplier_token import SupplierToken
 from ..services.sat_processor import SATDocumentProcessor
 
@@ -323,18 +325,36 @@ async def list_sat_documents(
     fiscal_period: Optional[int] = None,
     doc_type: Optional[str] = None,
     status_filter: Optional[str] = None,
-    source_filter: Optional[str] = None,  # New: filter by source
+    source_filter: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    List SAT documents with optional filters.
-    Now includes source filter (admin/supplier).
+    List SAT documents. For customer users (is_customer_user), list by assigned customers' receiver RFCs.
+    For admin/normal users, list by user_id.
     """
     try:
         processor = SATDocumentProcessor(db)
+        if getattr(current_user, "is_customer_user", False) and not getattr(current_user, "is_admin", False):
+            customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+            rfcs = []
+            for cid in customer_ids:
+                rfcs.extend([
+                    r[0] for r in db.query(CustomerReceiverRfc.receiver_rfc).filter(
+                        CustomerReceiverRfc.customer_id == cid
+                    ).all()
+                ])
+            return processor.list_documents_by_receiver_rfcs(
+                receiver_rfc_list=rfcs,
+                fiscal_year=fiscal_year,
+                fiscal_period=fiscal_period,
+                doc_type=doc_type,
+                status=status_filter,
+                skip=skip,
+                limit=limit,
+            )
         result = processor.list_documents(
             user_id=current_user.id,
             fiscal_year=fiscal_year,
@@ -345,12 +365,68 @@ async def list_sat_documents(
             limit=limit
         )
         return result
-        
     except Exception as e:
         logger.error(f"❌ Failed to list documents: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list documents: {str(e)}"
+        )
+
+
+@router.get("/documents/for-customer-user")
+async def list_sat_documents_for_customer_user(
+    fiscal_year: Optional[int] = None,
+    fiscal_period: Optional[int] = None,
+    doc_type: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List SAT documents for customer user (by assigned customers' receiver RFCs). Customer users only."""
+    if not getattr(current_user, "is_customer_user", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is for customer users only",
+        )
+    try:
+        customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+        rfcs = []
+        for cid in customer_ids:
+            rfcs.extend([
+                r[0] for r in db.query(CustomerReceiverRfc.receiver_rfc).filter(
+                    CustomerReceiverRfc.customer_id == cid
+                ).all()
+            ])
+        processor = SATDocumentProcessor(db)
+        result = processor.list_documents_by_receiver_rfcs(
+            receiver_rfc_list=rfcs,
+            fiscal_year=fiscal_year,
+            fiscal_period=fiscal_period,
+            doc_type=doc_type,
+            status=status_filter,
+            skip=skip,
+            limit=limit,
+        )
+        # Build receiver_rfc -> [customer_id] for assigned customers only
+        rfc_to_customers: dict = {}
+        if customer_ids:
+            rows = db.query(CustomerReceiverRfc.receiver_rfc, CustomerReceiverRfc.customer_id).filter(
+                CustomerReceiverRfc.customer_id.in_(customer_ids)
+            ).all()
+            for rfc, cid in rows:
+                rfc_to_customers.setdefault(rfc or "", []).append(cid)
+        # Add customer_ids to each document for frontend grouping
+        for doc in result.get("documents") or []:
+            rfc = doc.get("receiver_rfc") or ""
+            doc["customer_ids"] = rfc_to_customers.get(rfc, [])
+        return result
+    except Exception as e:
+        logger.error(f"❌ Failed to list documents for customer user: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
         )
 
 
@@ -361,11 +437,22 @@ async def get_sat_document(
     db: Session = Depends(get_db)
 ):
     """
-    Get a specific SAT document by ID.
+    Get a specific SAT document by ID. For customer users, allowed only if document's receiver_rfc is in their customers' RFCs.
     """
     try:
         processor = SATDocumentProcessor(db)
-        document = processor.get_document_by_id(current_user.id, document_id)
+        if getattr(current_user, "is_customer_user", False) and not getattr(current_user, "is_admin", False):
+            customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+            rfcs = []
+            for cid in customer_ids:
+                rfcs.extend([
+                    r[0] for r in db.query(CustomerReceiverRfc.receiver_rfc).filter(
+                        CustomerReceiverRfc.customer_id == cid
+                    ).all()
+                ])
+            document = processor.get_document_by_id_if_receiver_allowed(document_id, rfcs)
+        else:
+            document = processor.get_document_by_id(current_user.id, document_id)
         
         if not document:
             raise HTTPException(
@@ -420,11 +507,22 @@ async def get_document_xml(
     db: Session = Depends(get_db)
 ):
     """
-    Get the original XML content of a SAT document.
+    Get the original XML content of a SAT document. For customer users, allowed only if receiver_rfc is in their customers' RFCs.
     """
     try:
         processor = SATDocumentProcessor(db)
-        document = processor.get_document_by_id(current_user.id, document_id)
+        if getattr(current_user, "is_customer_user", False) and not getattr(current_user, "is_admin", False):
+            customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+            rfcs = []
+            for cid in customer_ids:
+                rfcs.extend([
+                    r[0] for r in db.query(CustomerReceiverRfc.receiver_rfc).filter(
+                        CustomerReceiverRfc.customer_id == cid
+                    ).all()
+                ])
+            document = processor.get_document_by_id_if_receiver_allowed(document_id, rfcs)
+        else:
+            document = processor.get_document_by_id(current_user.id, document_id)
         
         if not document:
             raise HTTPException(

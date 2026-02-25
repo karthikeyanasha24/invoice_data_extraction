@@ -13,6 +13,7 @@ from io import BytesIO
 from ..database import get_db
 from ..models.user import ZodiacUser
 from ..models.converted_invoice import ConvertedInvoice
+from ..models.user_customer import UserCustomer
 from ..api.auth import get_current_user
 from ..services.invoice_conversion_service import InvoiceConversionService
 from ..services.file_service import read_file_from_storage
@@ -27,6 +28,18 @@ from ..schemas.converted_invoice import (
 
 router = APIRouter(prefix="/converted-invoices", tags=["converted-invoices"])
 logger = logging.getLogger("zodiac-api.converted_invoices")
+
+
+def _customer_user_can_access_converted(
+    db: Session, current_user: ZodiacUser, converted: ConvertedInvoice
+) -> bool:
+    """If current user is a customer user, return True only when converted.customer_id is in their assigned customers."""
+    if not getattr(current_user, "is_customer_user", False):
+        return True
+    customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+    if not customer_ids or not converted.customer_id:
+        return False
+    return str(converted.customer_id).strip() in {str(c).strip() for c in customer_ids}
 
 
 @router.post("/convert", response_model=ConversionBatchResult)
@@ -152,6 +165,43 @@ async def override_validation_and_convert(
         )
 
 
+@router.get("/list/for-customer-user", response_model=ConvertedInvoiceListResponse)
+async def list_converted_invoices_for_customer_user(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Number of records to return"),
+    status_filter: Optional[str] = Query(None, description="Filter by status: success, failed"),
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user)
+):
+    """Get paginated list of converted invoices for customer users (only assigned customer_ids)."""
+    if not getattr(current_user, "is_customer_user", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is for customer users only",
+        )
+    customer_ids = [r[0] for r in db.query(UserCustomer.customer_id).filter(UserCustomer.user_id == current_user.id).all()]
+    if not customer_ids:
+        return ConvertedInvoiceListResponse(total=0, skip=skip, limit=limit, converted_invoices=[])
+    try:
+        service = InvoiceConversionService(db)
+        converted_invoices, total = service.get_converted_invoices_for_customer_user(
+            skip, limit, status_filter, customer_ids
+        )
+        logger.info(f"✅ Retrieved {len(converted_invoices)} converted invoices for customer user (total: {total})")
+        return ConvertedInvoiceListResponse(
+            total=total,
+            skip=skip,
+            limit=limit,
+            converted_invoices=converted_invoices,
+        )
+    except Exception as e:
+        logger.error(f"❌ Error fetching converted invoices for customer user: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch converted invoices: {str(e)}",
+        )
+
+
 @router.get("/list", response_model=ConvertedInvoiceListResponse)
 async def list_converted_invoices(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
@@ -203,7 +253,11 @@ async def download_converted_invoice(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Converted invoice {converted_id} not found"
             )
-        
+        if not _customer_user_can_access_converted(db, current_user, converted):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this converted invoice",
+            )
         logger.info(f"📦 Converted invoice found:")
         logger.info(f"   Format: {converted.target_format}")
         logger.info(f"   Local path: {converted.converted_file_path}")
@@ -317,7 +371,11 @@ async def get_converted_invoice_info(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Converted invoice {converted_id} not found"
             )
-        
+        if not _customer_user_can_access_converted(db, current_user, converted):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this converted invoice",
+            )
         return converted
         
     except HTTPException:
@@ -348,7 +406,11 @@ async def delete_converted_invoice(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Converted invoice {converted_id} not found"
             )
-        
+        if not _customer_user_can_access_converted(db, current_user, converted):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this converted invoice",
+            )
         # Delete the converted file from storage if it exists
         if converted.converted_file_path:
             try:

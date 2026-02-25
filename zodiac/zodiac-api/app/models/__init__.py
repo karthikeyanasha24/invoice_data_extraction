@@ -10,6 +10,8 @@ from .supplier_token import SupplierToken
 from .invoice_v2_document import InvoiceV2Document
 from .invoice_v2_validated import InvoiceV2Validated
 from .invoice_v2_correction_cache import InvoiceV2CorrectionCache
+from .user_customer import UserCustomer
+from .customer_receiver_rfc import CustomerReceiverRfc
 
 __all__ = [
     "ZodiacUser", 
@@ -23,5 +25,7 @@ __all__ = [
     "SupplierToken",
     "InvoiceV2Document",
     "InvoiceV2Validated",
-    "InvoiceV2CorrectionCache"
+    "InvoiceV2CorrectionCache",
+    "UserCustomer",
+    "CustomerReceiverRfc",
 ]
