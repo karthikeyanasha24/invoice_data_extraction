@@ -109,7 +109,7 @@ def issue_certificate(
         )
 
 
-@router.get("", response_model=CertificateListResponse)
+@router.get("/", response_model=CertificateListResponse)
 def list_certificates(
     customer_id: Optional[str] = None,
     status_filter: Optional[str] = None,
