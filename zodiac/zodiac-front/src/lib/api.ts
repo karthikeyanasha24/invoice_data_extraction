@@ -1302,6 +1302,43 @@ export const customerApi = {
         return response.data;
     },
 
+    getDeliverySettings: async (customerId: string): Promise<any> => {
+        const response = await api.get(`/api/v1/customers/${encodeURIComponent(customerId)}/delivery-settings`);
+        return response.data;
+    },
+    updateDeliverySettings: async (customerId: string, body: {
+        delivery_method?: string;
+        host: string;
+        port?: number;
+        username: string;
+        remote_path?: string;
+        auth_type: 'key' | 'password';
+        private_key?: string;
+        password?: string;
+        key_passphrase?: string;
+        use_test_env?: boolean;
+    }): Promise<any> => {
+        const response = await api.put(`/api/v1/customers/${encodeURIComponent(customerId)}/delivery-settings`, body);
+        return response.data;
+    },
+    testDeliveryConnection: async (customerId: string): Promise<{ success: boolean; message: string }> => {
+        const response = await api.post(`/api/v1/customers/${encodeURIComponent(customerId)}/delivery-settings/test`);
+        return response.data;
+    },
+
+    generateCustomerToken: async (customerId: string, options?: { expires_in_days?: number; notes?: string }): Promise<{ success: boolean; token: string; customer_id: string; expires_at: string | null; message: string }> => {
+        const response = await api.post(`/api/v1/customers/${encodeURIComponent(customerId)}/token/generate`, options || {});
+        return response.data;
+    },
+    getCustomerTokenInfo: async (customerId: string): Promise<{ has_token: boolean; last_used_at?: string; expires_at?: string; is_active?: boolean }> => {
+        const response = await api.get(`/api/v1/customers/${encodeURIComponent(customerId)}/token`);
+        return response.data;
+    },
+    revokeCustomerToken: async (customerId: string): Promise<{ success: boolean; message: string }> => {
+        const response = await api.delete(`/api/v1/customers/${encodeURIComponent(customerId)}/token`);
+        return response.data;
+    },
+
     bulkCreateCustomers: async (customers: any[]): Promise<any> => {
         console.log('👥 Customer API - Bulk creating customers:', { count: customers.length });
         try {
@@ -1323,6 +1360,150 @@ export const customerApi = {
                 throw new Error(error.response?.data?.detail || 'Failed to bulk create customers.');
             }
         }
+    },
+};
+
+// Certificate API
+export const certificateApi = {
+    issueCertificate: async (data: {
+        customer_id: string;
+        organization?: string;
+        organizational_unit?: string;
+        country?: string;
+        email?: string;
+        validity_days?: number;
+        notes?: string;
+    }): Promise<any> => {
+        const response = await api.post('/api/v1/certificates/issue', data);
+        return response.data;
+    },
+
+    listCertificates: async (
+        customerId?: string,
+        statusFilter?: string,
+        skip: number = 0,
+        limit: number = 100
+    ): Promise<any> => {
+        const params = new URLSearchParams();
+        if (customerId) params.append('customer_id', customerId);
+        if (statusFilter) params.append('status_filter', statusFilter);
+        params.append('skip', skip.toString());
+        params.append('limit', limit.toString());
+
+        const response = await api.get(`/api/v1/certificates?${params}`);
+        return response.data;
+    },
+
+    getCertificate: async (certificateId: number): Promise<any> => {
+        const response = await api.get(`/api/v1/certificates/${certificateId}`);
+        return response.data;
+    },
+
+    getCustomerActiveCertificate: async (customerId: string): Promise<any> => {
+        try {
+            const response = await api.get(`/api/v1/certificates/customer/${encodeURIComponent(customerId)}/active`);
+            return response.data;
+        } catch (error: any) {
+            if (error.response?.status === 404) {
+                return null;
+            }
+            throw error;
+        }
+    },
+
+    renewCertificate: async (certificateId: number, data: {
+        validity_days?: number;
+        notes?: string;
+    }): Promise<any> => {
+        const response = await api.post(`/api/v1/certificates/${certificateId}/renew`, data);
+        return response.data;
+    },
+
+    revokeCertificate: async (certificateId: number, reason?: string): Promise<any> => {
+        const response = await api.post(`/api/v1/certificates/${certificateId}/revoke`, { reason });
+        return response.data;
+    },
+
+    downloadCertificatePEM: async (certificateId: number, includePrivateKey: boolean = false): Promise<any> => {
+        const params = includePrivateKey ? '?include_private_key=true' : '';
+        const response = await api.get(`/api/v1/certificates/${certificateId}/download-pem${params}`);
+        return response.data;
+    },
+
+    downloadCertificateCRT: async (certificateId: number): Promise<{ blob: Blob; filename: string }> => {
+        const response = await api.get(`/api/v1/certificates/${certificateId}/download-crt`, {
+            responseType: 'blob',
+        });
+
+        const contentDisposition = response.headers['content-disposition'] || '';
+        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+        const filename = filenameMatch ? filenameMatch[1] : `certificate-${certificateId}.crt`;
+
+        return {
+            blob: response.data,
+            filename,
+        };
+    },
+
+    downloadCertificateP12: async (certificateId: number): Promise<{ blob: Blob; password: string; filename: string }> => {
+        const response = await api.get(`/api/v1/certificates/${certificateId}/download-p12`, {
+            responseType: 'blob',
+        });
+
+        const password = response.headers['x-p12-password'] || '';
+        const contentDisposition = response.headers['content-disposition'] || '';
+        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+        const filename = filenameMatch ? filenameMatch[1] : `certificate-${certificateId}.p12`;
+
+        return {
+            blob: response.data,
+            password,
+            filename,
+        };
+    },
+
+    createRenewalRequest: async (certificateId: number, notes?: string): Promise<any> => {
+        const response = await api.post('/api/v1/certificates/renewal-requests', {
+            certificate_id: certificateId,
+            notes,
+        });
+        return response.data;
+    },
+
+    listRenewalRequests: async (
+        statusFilter?: string,
+        customerId?: string,
+        skip: number = 0,
+        limit: number = 100
+    ): Promise<any> => {
+        const params = new URLSearchParams();
+        if (statusFilter) params.append('status_filter', statusFilter);
+        if (customerId) params.append('customer_id', customerId);
+        params.append('skip', skip.toString());
+        params.append('limit', limit.toString());
+
+        const response = await api.get(`/api/v1/certificates/renewal-requests?${params}`);
+        return response.data;
+    },
+
+    processRenewalRequest: async (requestId: number, data: {
+        approved: boolean;
+        validity_days?: number;
+        notes?: string;
+        rejection_reason?: string;
+    }): Promise<any> => {
+        const response = await api.post(`/api/v1/certificates/renewal-requests/${requestId}/process`, data);
+        return response.data;
+    },
+
+    getCertificateHealth: async (): Promise<any> => {
+        const response = await api.get('/api/v1/certificates/health/summary');
+        return response.data;
+    },
+
+    updateCertificateStatuses: async (): Promise<any> => {
+        const response = await api.post('/api/v1/certificates/maintenance/update-statuses');
+        return response.data;
     },
 };
 
@@ -1490,6 +1671,28 @@ export const dashboardApi = {
             conversation_history: conversationHistory,
         });
         return response.data;
+    },
+    postAIAnalysisChat: async (
+        message: string,
+        conversationHistory: { role: string; content: string }[] = [],
+        contextKeys: string[] = [],
+        days: number = 30
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/chat', {
+                message,
+                conversation_history: conversationHistory,
+                context_keys: contextKeys,
+                days: Math.max(1, Math.min(365, days)),
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI analysis chat failed:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to get AI analysis response.');
+        }
     },
 };
 
@@ -2305,6 +2508,17 @@ export const convertedInvoicesApi = {
         } catch (error: any) {
             console.error('Failed to delete converted invoice:', error);
             throw new Error(error.response?.data?.detail || 'Failed to delete converted invoice.');
+        }
+    },
+
+    // Send converted file to customer SFTP (delivery settings must be configured)
+    sendToCustomer: async (convertedId: number): Promise<{ success: boolean; message: string; remote_path?: string }> => {
+        try {
+            const response = await api.post(`/api/v1/converted-invoices/${convertedId}/send-to-customer`);
+            return response.data;
+        } catch (error: any) {
+            const detail = error.response?.data?.detail;
+            throw new Error(typeof detail === 'string' ? detail : 'Failed to send to customer.');
         }
     },
 };

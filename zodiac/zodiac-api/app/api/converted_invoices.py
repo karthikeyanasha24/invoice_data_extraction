@@ -17,6 +17,7 @@ from ..models.user_customer import UserCustomer
 from ..api.auth import get_current_user
 from ..services.invoice_conversion_service import InvoiceConversionService
 from ..services.file_service import read_file_from_storage
+from ..services.customer_delivery_service import send_file_to_customer
 from ..schemas.converted_invoice import (
     ConversionRequest,
     ConversionBatchResult,
@@ -25,6 +26,7 @@ from ..schemas.converted_invoice import (
     ConvertedInvoiceListResponse,
     ConvertedInvoiceResponse
 )
+from ..schemas.customer_delivery import SendToCustomerResponse
 
 router = APIRouter(prefix="/converted-invoices", tags=["converted-invoices"])
 logger = logging.getLogger("zodiac-api.converted_invoices")
@@ -351,6 +353,74 @@ async def download_converted_invoice(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Download failed: {str(e)}"
         )
+
+
+@router.post("/{converted_id}/send-to-customer", response_model=SendToCustomerResponse)
+async def send_converted_invoice_to_customer(
+    converted_id: int,
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user)
+):
+    """Send the converted file to the customer's SFTP (delivery settings must be configured)."""
+    service = InvoiceConversionService(db)
+    converted = service.get_converted_invoice(converted_id)
+    if not converted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Converted invoice {converted_id} not found"
+        )
+    if not _customer_user_can_access_converted(db, current_user, converted):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this converted invoice",
+        )
+    if not converted.customer_id or not str(converted.customer_id).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Converted invoice has no customer_id; cannot send to customer.",
+        )
+    if not converted.blob_converted_path and not converted.converted_file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No file path found for this converted invoice"
+        )
+    try:
+        if converted.blob_converted_path:
+            file_bytes = await read_file_from_storage(
+                file_path=converted.blob_converted_path,
+                blob_xml_path=converted.blob_converted_path
+            )
+        else:
+            file_bytes = await read_file_from_storage(
+                file_path=converted.converted_file_path,
+                blob_xml_path=None
+            )
+    except Exception as e:
+        logger.error("Failed to read converted file: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read converted file: {str(e)}"
+        )
+    extension_map = {
+        "X12": "edi", "EDIFACT": "edi", "PDF": "pdf",
+        "XML": "xml", "UBL": "xml", "CFDI": "xml", "PIDX": "xml"
+    }
+    file_extension = extension_map.get(converted.target_format, "bin")
+    invoice_number = "unknown"
+    try:
+        from ..models.invoice_v2_validated import InvoiceV2Validated
+        validated = db.query(InvoiceV2Validated).filter(
+            InvoiceV2Validated.id == converted.validated_invoice_id
+        ).first()
+        if validated and validated.invoice_data:
+            invoice_number = validated.invoice_data.get("invoice_number", "unknown")
+    except Exception:
+        pass
+    remote_filename = f"invoice_{invoice_number}_{converted.target_format}.{file_extension}"
+    success, message, remote_path = send_file_to_customer(
+        db, str(converted.customer_id).strip(), file_bytes, remote_filename
+    )
+    return SendToCustomerResponse(success=success, message=message, remote_path=remote_path)
 
 
 @router.get("/{converted_id}/info", response_model=ConvertedInvoiceResponse)

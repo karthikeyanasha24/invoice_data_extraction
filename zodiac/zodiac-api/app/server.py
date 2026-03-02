@@ -5,10 +5,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables (Zodiac's .env first)
 load_dotenv()
+
+# Option B: load invoice-bot .env so the single backend uses invoice-bot config for Generative AI and shared vars
+# Set INVOICE_BOT_ENV_PATH to the full path to invoice-bot's .env, or INVOICE_BOT_CONFIG_DIR to the invoice-bot folder.
+# If unset, defaults to repo_root/invoice-bot/.env (repo root = parent of zodiac-api's parent's parent).
+_invoice_bot_env = os.getenv("INVOICE_BOT_ENV_PATH")
+if not _invoice_bot_env and os.getenv("INVOICE_BOT_CONFIG_DIR"):
+    _invoice_bot_env = str(Path(os.getenv("INVOICE_BOT_CONFIG_DIR")).resolve() / ".env")
+if not _invoice_bot_env:
+    _repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    _invoice_bot_env = str(_repo_root / "invoice-bot" / ".env")
+_invoice_bot_env_path = Path(_invoice_bot_env)
+if _invoice_bot_env_path.exists():
+    load_dotenv(_invoice_bot_env, override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +30,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("zodiac-api")
+if _invoice_bot_env_path.exists():
+    logger.info("Loaded invoice-bot env from %s", _invoice_bot_env)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -161,12 +177,20 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to load Supplier Tokens router: {e}")
 
+
 try:
     from .api.customer_users import router as customer_users_router
     app.include_router(customer_users_router, prefix="/api/v1")
     logger.info("✅ Customer Users router loaded")
 except Exception as e:
     logger.error(f"❌ Failed to load Customer Users router: {e}")
+
+try:
+    from .api.certificates import router as certificates_router
+    app.include_router(certificates_router, prefix="/api/v1")
+    logger.info("✅ Certificates router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load Certificates router: {e}")
 
 logger.info("✅ Zodiac API initialized successfully")
 

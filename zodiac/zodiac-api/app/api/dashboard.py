@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import logging
 import json
+import os
 
 from ..database import get_db
 from ..models.user import ZodiacUser
@@ -22,7 +23,8 @@ from ..models.sat_document import SATDocument
 from ..models.supplier_token import SupplierToken
 from ..models.converted_invoice import ConvertedInvoice
 from ..api.auth import get_current_user
-from ..config.config import OPENAI_API_KEY
+from ..config.config import OPENAI_API_KEY, USE_SAP_DB_FOR_AI
+from ..database import get_sap_session
 from ..services.database import extract_supplier_info_from_string
 from ..services.file_service import read_file_from_storage
 from ..services.invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
@@ -1876,6 +1878,382 @@ Answer the user's question based only on this data. If asked for a summary first
     except Exception as e:
         logger.warning(f"Customer comparison chat failed: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+def _get_ai_analysis_config():
+    """
+    Use same env var names as invoice-bot (config.example) for the AI analysis page only.
+    Enables a single set of env vars (e.g. OPENAI_API_KEY) for both invoice-bot and this page.
+    """
+    openai_key = os.environ.get("OPENAI_API_KEY") or OPENAI_API_KEY
+    return openai_key
+
+
+def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db: Session, days: int = 30) -> str:
+    """Build context string for AI analysis chat from requested context_keys.
+    Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
+    SATDocument, SATSimpleMerged for inbound. Context keys: stats, failed_summary, top_customers,
+    inbound_summary, business_summary, process_flow.
+    """
+    if not context_keys:
+        return ""
+    parts = []
+    cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+    if "stats" in context_keys:
+        try:
+            documents_received = db.query(func.count(InvoiceV2Document.id)).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).scalar() or 0
+            validated_query = db.query(
+                InvoiceV2Validated.status,
+                func.count(InvoiceV2Validated.id).label("count"),
+            ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(InvoiceV2Validated.status).all()
+            validated_success = sum(c for s, c in validated_query if s == "success")
+            validated_failed = sum(c for s, c in validated_query if s == "failed")
+            converted_query = db.query(
+                ConvertedInvoice.conversion_status,
+                func.count(ConvertedInvoice.id).label("count"),
+            ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+                InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id,
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(ConvertedInvoice.conversion_status).all()
+            converted_success = sum(c for s, c in converted_query if s == "success")
+            converted_failed = sum(c for s, c in converted_query if s == "failed")
+            converted_pending = sum(c for s, c in converted_query if s == "pending")
+            converted_total = converted_success + converted_failed + converted_pending
+            validation_rate = (
+                (validated_success / (validated_success + validated_failed) * 100)
+                if (validated_success + validated_failed) > 0 else 0
+            )
+            conversion_rate = (converted_success / converted_total * 100) if converted_total > 0 else 0
+        except Exception:
+            documents_received = validated_success = validated_failed = 0
+            converted_success = converted_failed = converted_pending = converted_total = 0
+            validation_rate = conversion_rate = 0
+        try:
+            sat_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+            ).scalar() or 0
+            sat_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True,
+            ).scalar() or 0
+            sat_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False,
+            ).scalar() or 0
+        except Exception:
+            sat_total = sat_sent = sat_pending = 0
+        parts.append(
+            f"Dashboard statistics (last {days} days). "
+            f"Outbound (V2): {documents_received} documents received; "
+            f"validated: {validated_success} success, {validated_failed} failed (rate {validation_rate:.1f}%); "
+            f"converted: {converted_success} success, {converted_failed} failed, {converted_pending} pending (rate {conversion_rate:.1f}%). "
+            f"Inbound (SAT): {sat_total} merged documents ({sat_sent} sent to SAP, {sat_pending} pending)."
+        )
+
+    if "failed_summary" in context_keys:
+        try:
+            failed_count_v2 = (
+                db.query(InvoiceV2Validated)
+                .join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id)
+                .filter(
+                    InvoiceV2Document.user_id == current_user.id,
+                    InvoiceV2Document.deleted_at.is_(None),
+                    InvoiceV2Document.uploaded_at >= cutoff_date,
+                    InvoiceV2Validated.status == "failed",
+                )
+                .count()
+            )
+            parts.append(
+                f"Failed invoices (V2 validations, last {days} days): {failed_count_v2} failed."
+            )
+        except Exception:
+            parts.append("Failed invoices (V2): data unavailable.")
+
+    if "top_customers" in context_keys:
+        try:
+            customer_rows = db.query(
+                ConvertedInvoice.customer_id,
+                func.max(InvoiceV2Validated.invoice_data["customer_name"].astext).label("customer_name"),
+                func.max(InvoiceV2Validated.invoice_data["currency"].astext).label("currency"),
+                func.count(ConvertedInvoice.id).label("count"),
+            ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+                InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id,
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).filter(ConvertedInvoice.customer_id.isnot(None)).group_by(
+                ConvertedInvoice.customer_id,
+            ).order_by(func.count(ConvertedInvoice.id).desc()).limit(10).all()
+            top_customers_list = [
+                {
+                    "customer_id": r.customer_id,
+                    "customer_name": (r.customer_name or r.customer_id) or "—",
+                    "currency": (r.currency or "—").strip() or "—",
+                    "invoice_count": r.count,
+                }
+                for r in customer_rows
+            ]
+            if top_customers_list:
+                parts.append("Top customers (outbound, by invoice count): " + json.dumps(top_customers_list))
+            else:
+                parts.append("Top customers (outbound): no customer data in the period.")
+        except Exception as e:
+            logger.warning(f"AI context top_customers: {e}")
+            parts.append("Top customers (outbound): data unavailable.")
+
+    if "inbound_summary" in context_keys:
+        try:
+            total_documents = db.query(func.count(SATDocument.id)).filter(
+                SATDocument.user_id == current_user.id,
+                SATDocument.received_at >= cutoff_date,
+            ).scalar() or 0
+            merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+            ).scalar() or 0
+            merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True,
+            ).scalar() or 0
+            merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False,
+            ).scalar() or 0
+            supplier_rows = db.query(
+                SATDocument.supplier_rfc,
+                SATDocument.supplier_name,
+                func.count(SATDocument.id).label("count"),
+                func.coalesce(
+                    func.sum(cast(func.nullif(func.trim(SATDocument.total), ""), Numeric(15, 2))),
+                    0,
+                ).label("total_amount"),
+            ).filter(
+                SATDocument.user_id == current_user.id,
+                SATDocument.received_at >= cutoff_date,
+            ).group_by(SATDocument.supplier_rfc, SATDocument.supplier_name).order_by(
+                func.count(SATDocument.id).desc(),
+            ).limit(10).all()
+            top_suppliers = [
+                {
+                    "supplier_rfc": r.supplier_rfc,
+                    "supplier_name": (r.supplier_name or r.supplier_rfc) or "—",
+                    "count": r.count,
+                    "total_amount": float(r.total_amount) if r.total_amount is not None else 0.0,
+                }
+                for r in supplier_rows
+            ]
+            parts.append(
+                f"Inbound (SAT): {total_documents} documents received; "
+                f"{merges_total} merges ({merges_sent} sent to SAP, {merges_pending} pending). "
+                f"Top suppliers: " + json.dumps(top_suppliers),
+            )
+        except Exception as e:
+            logger.warning(f"AI context inbound_summary: {e}")
+            parts.append("Inbound (SAT): data unavailable.")
+
+    if "business_summary" in context_keys:
+        try:
+            rows = db.query(InvoiceV2BusinessData).filter(
+                InvoiceV2BusinessData.user_id == current_user.id,
+                InvoiceV2BusinessData.created_at >= cutoff_date,
+            ).all()
+            customer_revenue = defaultdict(lambda: {"customer_name": None, "count": 0, "revenue": Decimal("0")})
+            country_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+            for r in rows:
+                cid = r.customer_id or "Unknown"
+                customer_revenue[cid]["customer_name"] = r.customer_name or cid
+                customer_revenue[cid]["count"] += 1
+                customer_revenue[cid]["revenue"] += (r.total_amount or Decimal("0"))
+                country = r.customer_country or "Unknown"
+                country_revenue[country]["count"] += 1
+                country_revenue[country]["revenue"] += (r.total_amount or Decimal("0"))
+            revenue_by_customer = sorted(
+                [
+                    {"customer_id": cid, "customer_name": d["customer_name"] or cid, "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+                    for cid, d in customer_revenue.items()
+                ],
+                key=lambda x: -x["total_revenue"],
+            )[:10]
+            revenue_by_country = sorted(
+                [
+                    {"country": c, "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+                    for c, d in country_revenue.items()
+                ],
+                key=lambda x: -x["total_revenue"],
+            )[:5]
+            mid = cutoff_date + (datetime.utcnow() - cutoff_date) / 2
+            prev_cutoff = cutoff_date - (datetime.utcnow() - cutoff_date)
+            current_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+                InvoiceV2BusinessData.user_id == current_user.id,
+                InvoiceV2BusinessData.created_at >= mid,
+            ).scalar() or 0
+            previous_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+                InvoiceV2BusinessData.user_id == current_user.id,
+                InvoiceV2BusinessData.created_at >= prev_cutoff,
+                InvoiceV2BusinessData.created_at < mid,
+            ).scalar() or 0
+            try:
+                current_revenue = float(current_revenue)
+                previous_revenue = float(previous_revenue)
+            except Exception:
+                current_revenue = previous_revenue = 0.0
+            trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
+            parts.append(
+                f"Business (revenue): current period {current_revenue:.0f}, previous {previous_revenue:.0f} (change {trend_pct:+.1f}%). "
+                f"Revenue by customer (top 10): {json.dumps(revenue_by_customer)}. "
+                f"Revenue by country (top 5): {json.dumps(revenue_by_country)}.",
+            )
+        except Exception as e:
+            logger.warning(f"AI context business_summary: {e}")
+            parts.append("Business summary: data unavailable.")
+
+    if "process_flow" in context_keys:
+        try:
+            documents_received = db.query(func.count(InvoiceV2Document.id)).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).scalar() or 0
+            validated_query = db.query(
+                InvoiceV2Validated.status,
+                func.count(InvoiceV2Validated.id).label("count"),
+            ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(InvoiceV2Validated.status).all()
+            validated_success = sum(c for s, c in validated_query if s == "success")
+            validated_failed = sum(c for s, c in validated_query if s == "failed")
+            converted_query = db.query(
+                ConvertedInvoice.conversion_status,
+                func.count(ConvertedInvoice.id).label("count"),
+            ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+                InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id,
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(ConvertedInvoice.conversion_status).all()
+            converted_success = sum(c for s, c in converted_query if s == "success")
+            converted_failed = sum(c for s, c in converted_query if s == "failed")
+            converted_pending = sum(c for s, c in converted_query if s == "pending")
+            merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+            ).scalar() or 0
+            merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True,
+            ).scalar() or 0
+            merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False,
+            ).scalar() or 0
+            parts.append(
+                "Standard process flows. Outbound: Document received -> Validation (success/fail) -> Conversion (format, success/fail/pending) -> Output. "
+                f"Current outbound counts: received {documents_received}, validated success {validated_success} failed {validated_failed}, "
+                f"converted success {converted_success} failed {converted_failed} pending {converted_pending}. "
+                "Inbound: SAT documents received -> Merge (batch) -> Send to SAP. "
+                f"Current inbound: {merges_total} merges, {merges_sent} sent to SAP, {merges_pending} pending.",
+            )
+        except Exception as e:
+            logger.warning(f"AI context process_flow: {e}")
+            parts.append(
+                "Standard process flows. Outbound: Document received -> Validation -> Conversion -> Output. "
+                "Inbound: SAT documents -> Merge -> Send to SAP. Current counts unavailable.",
+            )
+    return "\n".join(parts) if parts else ""
+
+
+@router.post("/ai-analysis/chat")
+async def post_ai_analysis_chat(
+    message: str = Body(..., embed=True),
+    conversation_history: list = Body(default=[], embed=True),
+    context_keys: list = Body(default=[], embed=True),
+    days: int = Body(default=30, embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generative AI analysis chat: answer user questions, optionally grounded in dashboard context.
+    context_keys: stats, failed_summary, top_customers, inbound_summary, business_summary, process_flow.
+    days: period for context (default 30). Uses same config env vars as invoice-bot (OPENAI_API_KEY)."""
+    ai_openai_key = _get_ai_analysis_config()
+    if not ai_openai_key or not openai_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI analysis not available (set OPENAI_API_KEY, or Zodiac OPEN_AI_KEY)",
+        )
+    days = max(1, min(365, days)) if isinstance(days, (int, float)) else 30
+    try:
+        if USE_SAP_DB_FOR_AI:
+            from ..services.sap_ai_context import build_ai_context_from_sap
+            sap_session = get_sap_session()
+            context_str = ""
+            if sap_session is not None:
+                try:
+                    context_str = build_ai_context_from_sap(
+                        context_keys if isinstance(context_keys, list) else [],
+                        sap_session,
+                        days=int(days),
+                    )
+                except Exception as sap_e:
+                    logger.warning("SAP AI context failed: %s", sap_e)
+                finally:
+                    sap_session.close()
+        else:
+            context_str = _build_ai_analysis_context(
+                context_keys if isinstance(context_keys, list) else [],
+                current_user,
+                db,
+                days=int(days),
+            )
+        system_content = (
+            "You are a business analyst assistant for Zodiac document management. "
+            "Answer the user's questions concisely and helpfully. "
+        )
+        if context_str:
+            system_content += (
+                "Use ONLY the following context about the user's dashboard when relevant. "
+                "If the user asks about their data or dashboard, base your answer on this.\n\nContext:\n"
+            )
+            system_content += context_str
+        else:
+            system_content += "If the user asks about their dashboard or invoices, suggest they use the context option to get data-backed answers."
+        messages = [{"role": "system", "content": system_content}]
+        for h in (conversation_history or [])[-10:]:
+            if isinstance(h, dict) and h.get("role") and h.get("content"):
+                messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
+        messages.append({"role": "user", "content": (message or "")[:1500]})
+        client = OpenAI(api_key=ai_openai_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.4,
+            max_tokens=800,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        return {"reply": reply}
+    except Exception as e:
+        logger.warning(f"AI analysis chat failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 @router.get("/auto-fix-details")

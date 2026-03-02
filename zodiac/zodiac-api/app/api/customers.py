@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from typing import Optional
+from datetime import datetime, timedelta
 from ..models.customer import Customer
 from ..models.user import ZodiacUser
 from ..models.customer_receiver_rfc import CustomerReceiverRfc
@@ -12,6 +14,8 @@ from ..schemas.customer import (
     CustomerListResponse,
     CustomerDelete,
 )
+from ..models.customer_token import CustomerToken
+from ..models.user import ZodiacUser, generate_api_key, hash_api_key
 from ..database import get_db
 from ..api.auth import get_current_user
 import logging
@@ -122,6 +126,26 @@ class ReceiverRfcsBody(BaseModel):
     receiver_rfcs: list[str]
 
 
+class CustomerTokenGenerateBody(BaseModel):
+    expires_in_days: Optional[int] = 365
+    notes: Optional[str] = None
+
+
+class CustomerTokenGenerateResponse(BaseModel):
+    success: bool
+    token: str
+    customer_id: str
+    expires_at: Optional[datetime]
+    message: str
+
+
+class CustomerTokenInfoResponse(BaseModel):
+    has_token: bool
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    is_active: Optional[bool] = None
+
+
 @router.get("/{customer_id}/receiver-rfcs", response_model=list[str])
 def get_customer_receiver_rfcs(
     customer_id: str,
@@ -157,6 +181,112 @@ def set_customer_receiver_rfcs(
         CustomerReceiverRfc.customer_id == customer_id
     ).all()
     return [r[0] for r in rows]
+
+
+# ---------- Delivery settings (install certificate / SFTP) ----------
+
+
+def _ensure_customer_exists(db: Session, customer_id: str) -> None:
+    """Raise 404 if customer does not exist."""
+    if not db.query(Customer).filter(Customer.customer_id == customer_id).first():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Customer '{customer_id}' not found",
+        )
+
+
+# --- Customer token (for API authentication) ---
+
+@router.post("/{customer_id}/token/generate", response_model=CustomerTokenGenerateResponse)
+def generate_customer_token(
+    customer_id: str,
+    body: Optional[CustomerTokenGenerateBody] = Body(None),
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """Generate an API token for a customer for API authentication. Admin only. Token is shown once."""
+    _require_admin(current_user)
+    _ensure_customer_exists(db, customer_id)
+    body = body or CustomerTokenGenerateBody()
+    expires_in_days = body.expires_in_days or 365
+    expires_at = datetime.utcnow() + timedelta(days=expires_in_days) if expires_in_days else None
+
+    plain_token = generate_api_key()
+    token_hash = hash_api_key(plain_token)
+
+    existing = db.query(CustomerToken).filter(CustomerToken.customer_id == customer_id).first()
+    if existing:
+        existing.token = plain_token
+        existing.token_hash = token_hash
+        existing.is_active = True
+        existing.expires_at = expires_at
+        existing.notes = body.notes
+        existing.created_by = current_user.id
+        db.commit()
+        db.refresh(existing)
+        return CustomerTokenGenerateResponse(
+            success=True,
+            token=plain_token,
+            customer_id=customer_id,
+            expires_at=expires_at,
+            message="Token regenerated. Store it securely; it will not be shown again.",
+        )
+
+    record = CustomerToken(
+        customer_id=customer_id,
+        token=plain_token,
+        token_hash=token_hash,
+        is_active=True,
+        expires_at=expires_at,
+        created_by=current_user.id,
+        notes=body.notes,
+    )
+    db.add(record)
+    db.commit()
+    return CustomerTokenGenerateResponse(
+        success=True,
+        token=plain_token,
+        customer_id=customer_id,
+        expires_at=expires_at,
+        message="Token created. Store it securely; it will not be shown again.",
+    )
+
+
+@router.get("/{customer_id}/token", response_model=CustomerTokenInfoResponse)
+def get_customer_token_info(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """Get customer token metadata (no token value). Admin only."""
+    _require_admin(current_user)
+    _ensure_customer_exists(db, customer_id)
+    record = db.query(CustomerToken).filter(CustomerToken.customer_id == customer_id).first()
+    if not record:
+        return CustomerTokenInfoResponse(has_token=False)
+    return CustomerTokenInfoResponse(
+        has_token=True,
+        last_used_at=record.last_used_at,
+        expires_at=record.expires_at,
+        is_active=record.is_active,
+    )
+
+
+@router.delete("/{customer_id}/token")
+def revoke_customer_token(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """Revoke the customer's API token. Admin only."""
+    _require_admin(current_user)
+    _ensure_customer_exists(db, customer_id)
+    record = db.query(CustomerToken).filter(CustomerToken.customer_id == customer_id).first()
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No token found for this customer.")
+    record.is_active = False
+    db.commit()
+    return {"success": True, "message": "Token revoked."}
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
