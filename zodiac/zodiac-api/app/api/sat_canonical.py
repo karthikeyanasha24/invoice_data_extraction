@@ -115,7 +115,7 @@ async def merge_documents(
         )
 
 
-@router.get("")
+@router.get("/")
 async def list_canonical_documents(
     fiscal_year: Optional[int] = None,
     fiscal_period: Optional[int] = None,
