@@ -5,8 +5,7 @@
       "src": "index.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "50mb",
-        "runtime": "python3.12"
+        "maxLambdaSize": "50mb"
       }
     }
   ],
@@ -15,8 +14,5 @@
       "src": "/(.*)",
       "dest": "index.py"
     }
-  ],
-  "env": {
-    "PYTHONPATH": "$PYTHONPATH:."
-  }
+  ]
 }
