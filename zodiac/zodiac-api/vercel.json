@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/server.py",
+      "src": "index.py",
       "use": "@vercel/python",
       "config": {
         "maxLambdaSize": "50mb",
@@ -13,7 +13,10 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "app/server.py"
+      "dest": "index.py"
     }
-  ]
+  ],
+  "env": {
+    "PYTHONPATH": "$PYTHONPATH:."
+  }
 }
