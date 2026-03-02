@@ -596,6 +596,34 @@ class InvoiceConversionService:
         except Exception as e:
             logger.error(f"❌ Failed to fetch converted invoices: {e}")
             return [], 0
+
+    def get_converted_invoices_for_customer_user(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        status_filter: Optional[str] = None,
+        customer_ids: Optional[List[str]] = None,
+    ) -> Tuple[List[ConvertedInvoice], int]:
+        """Get paginated list of converted invoices filtered by customer_ids (for customer users)."""
+        try:
+            if not customer_ids:
+                return [], 0
+            query = self.db.query(ConvertedInvoice).filter(
+                ConvertedInvoice.customer_id.in_(customer_ids)
+            )
+            if status_filter:
+                query = query.filter(ConvertedInvoice.conversion_status == status_filter)
+            total = query.count()
+            converted = (
+                query.order_by(ConvertedInvoice.converted_at.desc())
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
+            return converted, total
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch converted invoices for customer user: {e}")
+            return [], 0
     
     def get_converted_invoice(self, converted_id: int) -> Optional[ConvertedInvoice]:
         """Get a specific converted invoice"""

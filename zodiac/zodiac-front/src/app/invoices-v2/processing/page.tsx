@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import { invoicesV2Api } from '@/lib/api';
 import { Loader2, CheckCircle, XCircle, ArrowLeft, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -26,9 +27,11 @@ interface ValidationProgress {
 
 function ProcessingContent() {
   const router = useRouter();
+  const { user } = useAuth();
   const searchParams = useSearchParams();
   const documentIdsParam = searchParams.get('ids');
-  
+  const invoicesBasePath = user?.is_customer_user ? '/customer-invoices' : '/invoices-v2';
+
   const [progress, setProgress] = useState<ValidationProgress | null>(null);
   const [polling, setPolling] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,15 +95,15 @@ function ProcessingContent() {
   };
 
   const handleGoToFailed = () => {
-    router.push('/invoices-v2?tab=failed');
+    router.push(`${invoicesBasePath}?tab=failed`);
   };
 
   const handleGoToSuccessful = () => {
-    router.push('/invoices-v2?tab=successful');
+    router.push(`${invoicesBasePath}?tab=successful`);
   };
 
   const handleBack = () => {
-    router.push('/invoices-v2?tab=validation');
+    router.push(`${invoicesBasePath}?tab=validation`);
   };
 
   if (error) {

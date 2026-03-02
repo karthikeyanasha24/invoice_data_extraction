@@ -1,11 +1,13 @@
 """
 SAP Bulk Sender - Send all documents (canonical + simple merge) together
-Follows client's format from 'multiplefiles' example
+Follows client's format from 'multiplefiles' example.
+Uses same CSRF + session pattern as sap_api_client for SAP compatibility.
 """
 import httpx
 import logging
 from typing import Dict, Any, List
 from datetime import datetime
+from base64 import b64encode
 from sqlalchemy.orm import Session
 
 from ..models.sat_canonical_merged import SATCanonicalMerged
@@ -24,6 +26,11 @@ class SAPBulkSender:
         self.sap_client = "800"
         self.username = "andix"
         self.password = "init1234"
+
+    def _get_auth_header(self) -> str:
+        """Basic Auth header for SAP."""
+        credentials = f"{self.username}:{self.password}"
+        return f"Basic {b64encode(credentials.encode()).decode()}"
     
     async def send_all_to_sap(
         self,
@@ -81,19 +88,38 @@ class SAPBulkSender:
         
         logger.info(f"📝 Transformed {len(sap_payload)} total documents for SAP")
         
-        # 4. Send to SAP
+        # 4. Send to SAP (with CSRF token + same session, same as single-doc flow)
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            endpoint = f"{self.sap_url}?sap-client={self.sap_client}"
+            auth_header = self._get_auth_header()
+            async with httpx.AsyncClient(timeout=60.0, verify=False, follow_redirects=True) as client:
+                # Step 1: Fetch CSRF token (establishes session/cookies)
+                logger.info("   Fetching CSRF token for bulk send...")
+                get_headers = {
+                    "Authorization": auth_header,
+                    "x-csrf-token": "fetch",
+                }
+                csrf_response = await client.get(endpoint, headers=get_headers)
+                if csrf_response.status_code != 200:
+                    raise Exception(f"Failed to fetch CSRF token: {csrf_response.status_code} - {csrf_response.text[:300]}")
+                csrf_token = csrf_response.headers.get("x-csrf-token")
+                if not csrf_token or csrf_token == "fetch":
+                    raise Exception("No CSRF token returned from SAP")
+                logger.info("   CSRF token obtained, sending POST...")
+                # Step 2: POST with CSRF token and session cookies
+                post_headers = {
+                    "Authorization": auth_header,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "x-csrf-token": csrf_token,
+                }
                 response = await client.post(
-                    f"{self.sap_url}?sap-client={self.sap_client}",
+                    endpoint,
+                    headers=post_headers,
                     json=sap_payload,
-                    auth=(self.username, self.password),
-                    headers={"Content-Type": "application/json"}
                 )
-                
                 response.raise_for_status()
                 sap_response = response.json() if response.content else {}
-                
                 logger.info(f"✅ SAP Response: {response.status_code}")
                 
         except httpx.HTTPStatusError as e:

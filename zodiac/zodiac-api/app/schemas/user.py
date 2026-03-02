@@ -18,6 +18,7 @@ class ZodiacUser(UserBase):
     is_active: bool
     is_verified: bool
     is_admin: bool
+    is_customer_user: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     

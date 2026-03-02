@@ -1,13 +1,14 @@
 """
 Dashboard API endpoints for statistics, analytics, and AI insights
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func, cast, Date, Numeric
 from datetime import datetime, timedelta
 from collections import defaultdict
 import logging
 import json
+import os
 
 from ..database import get_db
 from ..models.user import ZodiacUser
@@ -18,8 +19,12 @@ from ..models.invoice_v2_business_data import InvoiceV2BusinessData
 from ..models.invoice_v2_validated import InvoiceV2Validated
 from ..models.invoice_v2_document import InvoiceV2Document
 from ..models.sat_simple_merged import SATSimpleMerged
+from ..models.sat_document import SATDocument
+from ..models.supplier_token import SupplierToken
+from ..models.converted_invoice import ConvertedInvoice
 from ..api.auth import get_current_user
-from ..config.config import OPENAI_API_KEY
+from ..config.config import OPENAI_API_KEY, USE_SAP_DB_FOR_AI
+from ..database import get_sap_session
 from ..services.database import extract_supplier_info_from_string
 from ..services.file_service import read_file_from_storage
 from ..services.invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
@@ -867,6 +872,1387 @@ async def get_operations_statistics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch operations statistics: {str(e)}"
+        )
+
+
+# ==================== Dashboard v2 endpoints ====================
+
+
+@router.get("/v2/inbound")
+async def get_dashboard_v2_inbound(
+    days: int = Query(default=30, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dashboard v2 - Inbound process stats (SAT documents, merges, suppliers by RFC, tokens)."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        total_documents = db.query(func.count(SATDocument.id)).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).scalar() or 0
+
+        doc_type_rows = db.query(
+            SATDocument.doc_type,
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).group_by(SATDocument.doc_type).all()
+        by_document_type = [{"doc_type": row.doc_type, "count": row.count} for row in doc_type_rows]
+
+        source_rows = db.query(
+            SATDocument.source,
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).group_by(SATDocument.source).all()
+        by_source = [{"source": row.source, "count": row.count} for row in source_rows]
+
+        period_rows = db.query(
+            SATDocument.fiscal_year,
+            SATDocument.fiscal_period,
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date,
+            SATDocument.fiscal_year.isnot(None),
+            SATDocument.fiscal_period.isnot(None)
+        ).group_by(SATDocument.fiscal_year, SATDocument.fiscal_period).order_by(
+            SATDocument.fiscal_year.desc(),
+            SATDocument.fiscal_period.desc()
+        ).limit(24).all()
+        by_period = [
+            {"fiscal_year": r.fiscal_year, "fiscal_period": r.fiscal_period, "count": r.count}
+            for r in period_rows
+        ]
+
+        supplier_rows = db.query(
+            SATDocument.supplier_rfc,
+            SATDocument.supplier_name,
+            func.count(SATDocument.id).label("count"),
+            func.coalesce(
+                func.sum(cast(func.nullif(func.trim(SATDocument.total), ""), Numeric(15, 2))),
+                0
+            ).label("total_amount")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= cutoff_date
+        ).group_by(SATDocument.supplier_rfc, SATDocument.supplier_name).order_by(
+            func.count(SATDocument.id).desc()
+        ).limit(10).all()
+        top_suppliers = [
+            {
+                "supplier_rfc": r.supplier_rfc,
+                "supplier_name": r.supplier_name or r.supplier_rfc,
+                "count": r.count,
+                "total_amount": float(r.total_amount) if r.total_amount is not None else 0.0,
+            }
+            for r in supplier_rows
+        ]
+
+        merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
+            SATSimpleMerged.user_id == current_user.id,
+            SATSimpleMerged.created_at >= cutoff_date
+        ).scalar() or 0
+        merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+            SATSimpleMerged.user_id == current_user.id,
+            SATSimpleMerged.created_at >= cutoff_date,
+            SATSimpleMerged.sent_to_sap == True
+        ).scalar() or 0
+        merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+            SATSimpleMerged.user_id == current_user.id,
+            SATSimpleMerged.created_at >= cutoff_date,
+            SATSimpleMerged.sent_to_sap == False
+        ).scalar() or 0
+
+        token_total = db.query(func.count(SupplierToken.id)).scalar() or 0
+        token_active = db.query(func.count(SupplierToken.id)).filter(
+            SupplierToken.is_active == True,
+            (SupplierToken.expires_at.is_(None)) | (SupplierToken.expires_at >= datetime.utcnow())
+        ).scalar() or 0
+        token_expired = db.query(func.count(SupplierToken.id)).filter(
+            SupplierToken.expires_at < datetime.utcnow(),
+            SupplierToken.is_active == True
+        ).scalar() or 0
+        token_recently_used = db.query(func.count(SupplierToken.id)).filter(
+            SupplierToken.last_used_at >= (datetime.utcnow() - timedelta(days=7))
+        ).scalar() or 0
+
+        return {
+            "summary": {
+                "total_documents": total_documents,
+                "merges_total": merges_total,
+                "merges_sent_to_sap": merges_sent,
+                "merges_pending": merges_pending,
+            },
+            "by_document_type": by_document_type,
+            "by_source": by_source,
+            "by_period": by_period,
+            "top_suppliers": top_suppliers,
+            "tokens": {
+                "total": token_total,
+                "active": token_active,
+                "expired": token_expired,
+                "recently_used": token_recently_used,
+            },
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 inbound: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/outbound")
+async def get_dashboard_v2_outbound(
+    days: int = Query(default=30, ge=1, le=365),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dashboard v2 - Outbound process stats (V2 documents, validated, converted)."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        documents_received = db.query(func.count(InvoiceV2Document.id)).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).scalar() or 0
+
+        validated_query = db.query(
+            InvoiceV2Validated.status,
+            func.count(InvoiceV2Validated.id).label("count")
+        ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).group_by(InvoiceV2Validated.status).all()
+        validated_success = sum(c for s, c in validated_query if s == "success")
+        validated_failed = sum(c for s, c in validated_query if s == "failed")
+
+        converted_query = db.query(
+            ConvertedInvoice.conversion_status,
+            func.count(ConvertedInvoice.id).label("count")
+        ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).group_by(ConvertedInvoice.conversion_status).all()
+        converted_success = sum(c for s, c in converted_query if s == "success")
+        converted_failed = sum(c for s, c in converted_query if s == "failed")
+        converted_pending = sum(c for s, c in converted_query if s == "pending")
+        converted_total = converted_success + converted_failed + converted_pending
+
+        format_rows = db.query(
+            ConvertedInvoice.target_format,
+            func.count(ConvertedInvoice.id).label("count")
+        ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date,
+            ConvertedInvoice.conversion_status == "success"
+        ).group_by(ConvertedInvoice.target_format).all()
+        by_format = [{"format": r.target_format, "count": r.count} for r in format_rows]
+
+        customer_rows = db.query(
+            ConvertedInvoice.customer_id,
+            func.max(InvoiceV2Validated.invoice_data["customer_name"].astext).label("customer_name"),
+            func.max(InvoiceV2Validated.invoice_data["currency"].astext).label("currency"),
+            func.count(ConvertedInvoice.id).label("count"),
+        ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).filter(ConvertedInvoice.customer_id.isnot(None)).group_by(
+            ConvertedInvoice.customer_id
+        ).order_by(func.count(ConvertedInvoice.id).desc()).limit(10).all()
+        top_customers = [
+            {
+                "customer_id": r.customer_id,
+                "customer_name": r.customer_name or r.customer_id,
+                "currency": r.currency or "—",
+                "count": r.count,
+            }
+            for r in customer_rows
+        ]
+
+        timeline_docs = db.query(
+            cast(InvoiceV2Document.uploaded_at, Date).label("date"),
+            func.count(InvoiceV2Document.id).label("count")
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Document.uploaded_at >= cutoff_date
+        ).group_by(cast(InvoiceV2Document.uploaded_at, Date)).order_by(
+            cast(InvoiceV2Document.uploaded_at, Date)
+        ).all()
+        timeline = [{"date": d.date.strftime("%Y-%m-%d") if d.date else None, "documents": d.count} for d in timeline_docs]
+
+        validation_rate = (validated_success / (validated_success + validated_failed) * 100) if (validated_success + validated_failed) > 0 else 0
+        conversion_rate = (converted_success / converted_total * 100) if converted_total > 0 else 0
+
+        return {
+            "funnel": {
+                "documents_received": documents_received,
+                "validated_success": validated_success,
+                "validated_failed": validated_failed,
+                "converted_success": converted_success,
+                "converted_failed": converted_failed,
+                "converted_pending": converted_pending,
+                "converted_total": converted_total,
+            },
+            "summary": {
+                "documents_received": documents_received,
+                "validated_total": validated_success + validated_failed,
+                "validated_success": validated_success,
+                "validated_failed": validated_failed,
+                "validation_success_rate_pct": round(validation_rate, 1),
+                "converted_total": converted_total,
+                "converted_success": converted_success,
+                "converted_failed": converted_failed,
+                "converted_pending": converted_pending,
+                "conversion_success_rate_pct": round(conversion_rate, 1),
+            },
+            "by_format": by_format,
+            "top_customers": top_customers,
+            "timeline": timeline,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 outbound: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/failed-invoices-analysis")
+async def get_dashboard_v2_failed_invoices_analysis(
+    days: int = Query(default=30, ge=1, le=365),
+    demo: bool = Query(default=False, description="Return mock data for UI preview"),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard v2 - Failed invoices analytics: failure reasons, one-time vs repetitive, revenue loss."""
+    if demo:
+        return {
+            "total_failed": 4,
+            "failure_reasons": [
+                {"reason": "missing:customer_name,tax_percentage", "count": 2},
+                {"reason": "Invalid date format (issue_date)", "count": 1},
+                {"reason": "Invalid currency code", "count": 1},
+            ],
+            "one_time_count": 2,
+            "repetitive_count": 1,
+            "repetitive_customer_ids": ["CUST-002"],
+            "revenue_loss_by_currency": {"USD": 1250.5, "MXN": 15000.0},
+            "by_date": [
+                {"date": (datetime.utcnow() - timedelta(days=2)).strftime("%Y-%m-%d"), "failed_count": 2, "revenue_loss": 500.0},
+                {"date": (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d"), "failed_count": 2, "revenue_loss": 750.5},
+            ],
+        }
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        failed_list = (
+            db.query(InvoiceV2Validated)
+            .join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id)
+            .filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+                InvoiceV2Validated.status == "failed",
+            )
+            .order_by(InvoiceV2Validated.validated_at.desc())
+            .all()
+        )
+        total_failed = len(failed_list)
+
+        failure_reasons_map = defaultdict(int)
+        revenue_by_currency = defaultdict(float)
+        customer_fail_counts = defaultdict(int)
+        by_date_map = defaultdict(lambda: {"failed_count": 0, "revenue_loss": 0.0})
+
+        for v in failed_list:
+            reasons = []
+            if v.missing_fields:
+                key = "missing:" + ",".join(sorted(v.missing_fields))
+                reasons.append(key)
+            if v.validation_errors:
+                for err in v.validation_errors if isinstance(v.validation_errors, list) else []:
+                    if isinstance(err, dict):
+                        msg = err.get("message", "") or err.get("field", "error")
+                        reasons.append((msg[:50] + "..") if len(msg) > 50 else msg)
+                    else:
+                        reasons.append("validation_error")
+            if not reasons:
+                reasons.append("unknown")
+            for r in reasons:
+                failure_reasons_map[r] += 1
+
+            inv = v.invoice_data or {}
+            try:
+                total_val = inv.get("total") or inv.get("payable_amount")
+                if total_val is not None:
+                    amt = float(total_val) if not isinstance(total_val, (int, float)) else float(total_val)
+                    cur = (inv.get("currency") or "USD").strip() or "USD"
+                    revenue_by_currency[cur] += amt
+            except (TypeError, ValueError):
+                pass
+
+            cid = (inv.get("customer_id") or "").strip() or "unknown"
+            customer_fail_counts[cid] += 1
+
+            vdate = v.validated_at.date() if v.validated_at else None
+            if vdate:
+                by_date_map[vdate.strftime("%Y-%m-%d")]["failed_count"] += 1
+                try:
+                    total_val = inv.get("total") or inv.get("payable_amount")
+                    if total_val is not None:
+                        amt = float(total_val) if not isinstance(total_val, (int, float)) else float(total_val)
+                        by_date_map[vdate.strftime("%Y-%m-%d")]["revenue_loss"] += amt
+                except (TypeError, ValueError):
+                    pass
+
+        one_time_count = sum(1 for c in customer_fail_counts.values() if c == 1)
+        repetitive_count = sum(1 for c in customer_fail_counts.values() if c > 1)
+        repetitive_customer_ids = [cid for cid, count in customer_fail_counts.items() if count > 1 and cid != "unknown"]
+
+        failure_reasons = [{"reason": r, "count": c} for r, c in sorted(failure_reasons_map.items(), key=lambda x: -x[1])]
+        revenue_loss_by_currency = dict(revenue_by_currency)
+        by_date = [
+            {"date": d, "failed_count": by_date_map[d]["failed_count"], "revenue_loss": round(by_date_map[d]["revenue_loss"], 2)}
+            for d in sorted(by_date_map.keys())
+        ]
+
+        return {
+            "total_failed": total_failed,
+            "failure_reasons": failure_reasons,
+            "one_time_count": one_time_count,
+            "repetitive_count": repetitive_count,
+            "repetitive_customer_ids": repetitive_customer_ids,
+            "revenue_loss_by_currency": revenue_loss_by_currency,
+            "by_date": by_date,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 failed-invoices-analysis: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get("/v2/failed-invoices-ai-insights")
+async def get_dashboard_v2_failed_invoices_ai_insights(
+    days: int = Query(default=30, ge=1, le=365),
+    demo: bool = Query(default=False, description="Return mock AI insights for UI preview"),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard v2 - AI insights for failed invoices (summary, insights, recommendations, root causes)."""
+    if demo:
+        return {
+            "summary": "Demo: 4 failed invoices in the period. Main issues are missing required fields (customer_name, tax_percentage), invalid date format, and invalid currency. One customer has repetitive failures.",
+            "insights": [
+                "Missing customer_name and tax_percentage is the most frequent failure reason (2 invoices).",
+                "One customer (CUST-002) has multiple failures; consider a dedicated review for this customer.",
+                "Revenue at risk: USD 1,250.50 and MXN 15,000.00 across failed validations.",
+            ],
+            "recommendations": [
+                "Ensure UBL invoices include AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name and tax percentage where required.",
+                "Validate date formats (issue_date, due_date) against ISO 8601 before submission.",
+                "Review currency codes against ISO 4217; fix invalid or empty currency in source systems.",
+            ],
+            "root_causes": [
+                "Incomplete or blank required fields in supplier XML export.",
+                "Date/currency format mismatches between ERP and validation rules.",
+            ],
+            "revenue_impact_note": "Total revenue at risk: USD 1,250.50, MXN 15,000.00.",
+            "analyzed_at": datetime.utcnow().isoformat(),
+        }
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        failed_list = (
+            db.query(InvoiceV2Validated)
+            .join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id)
+            .filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+                InvoiceV2Validated.status == "failed",
+            )
+            .order_by(InvoiceV2Validated.validated_at.desc())
+            .limit(50)
+            .all()
+        )
+        if not failed_list:
+            return {
+                "summary": "No failed invoices in this period.",
+                "insights": [],
+                "recommendations": [],
+                "root_causes": [],
+                "revenue_impact_note": None,
+                "analyzed_at": datetime.utcnow().isoformat(),
+            }
+        failure_reasons_map = defaultdict(int)
+        revenue_by_currency = defaultdict(float)
+        customer_fail_counts = defaultdict(int)
+        examples = []
+        for v in failed_list[:10]:
+            inv = v.invoice_data or {}
+            reasons = []
+            if v.missing_fields:
+                reasons.append("missing: " + ", ".join(v.missing_fields))
+            if v.validation_errors and isinstance(v.validation_errors, list):
+                for err in v.validation_errors:
+                    if isinstance(err, dict):
+                        reasons.append(err.get("message", err.get("field", "error")))
+            if not reasons:
+                reasons.append("unknown")
+            examples.append({
+                "customer_id": inv.get("customer_id", "—"),
+                "customer_name": inv.get("customer_name", "—"),
+                "total": inv.get("total") or inv.get("payable_amount"),
+                "currency": inv.get("currency", "—"),
+                "reasons": reasons,
+            })
+            if v.missing_fields:
+                key = "missing:" + ",".join(sorted(v.missing_fields))
+                failure_reasons_map[key] += 1
+            if v.validation_errors and isinstance(v.validation_errors, list):
+                for err in v.validation_errors:
+                    if isinstance(err, dict):
+                        msg = (err.get("message") or err.get("field") or "error")[:80]
+                        failure_reasons_map[msg] += 1
+            try:
+                total_val = inv.get("total") or inv.get("payable_amount")
+                if total_val is not None:
+                    amt = float(total_val) if not isinstance(total_val, (int, float)) else float(total_val)
+                    cur = (inv.get("currency") or "USD").strip() or "USD"
+                    revenue_by_currency[cur] += amt
+            except (TypeError, ValueError):
+                pass
+            cid = (inv.get("customer_id") or "").strip() or "unknown"
+            customer_fail_counts[cid] += 1
+        one_time = sum(1 for c in customer_fail_counts.values() if c == 1)
+        repetitive = sum(1 for c in customer_fail_counts.values() if c > 1)
+        top_reasons = sorted(failure_reasons_map.items(), key=lambda x: -x[1])[:8]
+        reason_text = "\n".join([f"- {r}: {c} occurrences" for r, c in top_reasons])
+        revenue_text = ", ".join([f"{cur} {amt:.2f}" for cur, amt in revenue_by_currency.items()])
+        examples_text = "\n".join([
+            f"Customer {ex['customer_id']} ({ex['customer_name']}), total {ex['currency']} {ex['total']}: " + "; ".join(ex["reasons"])
+            for ex in examples[:3]
+        ])
+        context = f"""
+Failed invoices in period: {len(failed_list)} (showing up to 50).
+
+Failure reason counts:
+{reason_text}
+
+Revenue at risk by currency: {revenue_text or 'None'}
+
+One-time failures (customers with 1 failure): {one_time}. Repetitive (customers with >1 failure): {repetitive}.
+
+Example failed invoices and their reasons:
+{examples_text}
+"""
+        if OPENAI_API_KEY and openai_available:
+            try:
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                prompt = f"""
+You are an expert e-invoice and UBL analyst. Analyze the following failed invoice validation data and provide actionable insights.
+
+{context}
+
+Provide a JSON response with this exact structure:
+{{
+    "summary": "Brief 2-3 sentence overview of the main issues",
+    "insights": ["Specific insight 1", "Specific insight 2", "Specific insight 3"],
+    "recommendations": ["Actionable recommendation 1", "Actionable recommendation 2", "Actionable recommendation 3"],
+    "root_causes": ["Root cause 1", "Root cause 2"],
+    "revenue_impact_note": "One sentence on revenue at risk by currency, or null if none"
+}}
+
+Focus on: common patterns, missing/required fields, format issues, repetitive vs one-time, and practical fixes.
+Respond ONLY with valid JSON, no markdown or extra text.
+"""
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    response_format={"type": "json_object"},
+                )
+                ai_response = json.loads(completion.choices[0].message.content)
+                return {
+                    "summary": ai_response.get("summary", "Analysis complete."),
+                    "insights": ai_response.get("insights", []),
+                    "recommendations": ai_response.get("recommendations", []),
+                    "root_causes": ai_response.get("root_causes", []),
+                    "revenue_impact_note": ai_response.get("revenue_impact_note"),
+                    "analyzed_at": datetime.utcnow().isoformat(),
+                }
+            except Exception as ai_err:
+                logger.warning(f"V2 failed-invoices AI insights OpenAI error: {ai_err}")
+        top_3 = top_reasons[:3]
+        return {
+            "summary": f"Analyzed {len(failed_list)} failed invoices. Top issues: " + "; ".join([f"{r} ({c})" for r, c in top_3]) + ".",
+            "insights": [
+                f"Most frequent: {top_3[0][0]} ({top_3[0][1]} occurrences)" if top_3 else "No patterns",
+                "Review missing_fields and validation_errors in the Failed tab for details.",
+                f"Revenue at risk: {revenue_text}" if revenue_text else "No revenue totals in failed records.",
+            ],
+            "recommendations": [
+                "Fix missing required fields in source XML (see failure_reasons).",
+                "Validate date and currency formats before upload.",
+                "For repetitive failures by customer, check customer-specific configuration.",
+            ],
+            "root_causes": [
+                "Missing or invalid required UBL fields.",
+                "Format validation failures (dates, amounts, codes).",
+            ],
+            "revenue_impact_note": f"Total at risk: {revenue_text}" if revenue_text else None,
+            "analyzed_at": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 failed-invoices-ai-insights: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get("/v2/business")
+async def get_dashboard_v2_business(
+    days: int = Query(default=90, ge=1, le=365),
+    currency: str = Query(default=None, description="Filter by currency code (e.g. NZD, USD). Omit for all."),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Dashboard v2 - Business: products by industry, industry breakdown, trend. Data comes from successful invoices' line_items."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        rows = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None),
+            InvoiceV2BusinessData.industry.isnot(None),
+        ).all()
+
+        # If no BI data yet but user has successful validated invoices, backfill from line_items
+        if not rows:
+            success_count = db.query(InvoiceV2Validated).join(
+                InvoiceV2Document,
+                InvoiceV2Validated.document_id == InvoiceV2Document.id
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Validated.status == "success"
+            ).count()
+            if success_count > 0:
+                _run_backfill_invoice_v2_bi(db, current_user, max_invoices=500)
+                rows = db.query(InvoiceV2BusinessData).filter(
+                    InvoiceV2BusinessData.user_id == current_user.id,
+                    InvoiceV2BusinessData.created_at >= cutoff_date,
+                    InvoiceV2BusinessData.products.isnot(None),
+                    InvoiceV2BusinessData.industry.isnot(None),
+                ).all()
+
+        # Revenue by currency (from full dataset, before currency filter)
+        currency_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            curr = (r.currency or "Unknown").strip() or "Unknown"
+            currency_revenue[curr]["count"] += 1
+            currency_revenue[curr]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_currency = [
+            {
+                "currency": curr,
+                "invoice_count": int(data["count"]),
+                "total_revenue": float(data["revenue"]),
+            }
+            for curr, data in sorted(currency_revenue.items(), key=lambda x: -x[1]["revenue"])
+        ][:15]
+
+        # Currency filter (optional): restrict to selected currency
+        if currency and str(currency).strip():
+            curr_upper = str(currency).strip().upper()
+            rows = [r for r in rows if (r.currency or "").strip().upper() == curr_upper]
+
+        product_industry = defaultdict(lambda: {"count": 0, "revenue": Decimal("0"), "quantity": Decimal("0"), "unit_counts": defaultdict(int)})
+        industry_totals = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+
+        for r in rows:
+            industry = r.industry or "General"
+            amount = (r.total_amount or Decimal("0"))
+            products = r.products if isinstance(r.products, list) else []
+            industry_totals[industry]["count"] += 1
+            industry_totals[industry]["revenue"] += amount
+            for p in products:
+                if not isinstance(p, dict):
+                    continue
+                name = (p.get("name") or p.get("item_name") or "Unknown").strip() or "Unknown"
+                key = (name, industry)
+                product_industry[key]["count"] += 1
+                unit = (p.get("unit_code") or "").strip() or None
+                if unit:
+                    product_industry[key]["unit_counts"][unit] += 1
+                qty = p.get("quantity")
+                if qty is not None:
+                    try:
+                        product_industry[key]["quantity"] += Decimal(str(qty))
+                    except Exception:
+                        pass
+                line_revenue = p.get("revenue") or p.get("line_extension_amount")
+                if line_revenue is not None:
+                    try:
+                        product_industry[key]["revenue"] += Decimal(str(line_revenue))
+                    except Exception:
+                        product_industry[key]["revenue"] += amount / len(products) if products else amount
+                else:
+                    product_industry[key]["revenue"] += amount / len(products) if products else amount
+
+        def _most_common_unit(unit_counts):
+            if not unit_counts:
+                return None
+            return max(unit_counts.items(), key=lambda x: x[1])[0]
+
+        products_by_industry = [
+            {
+                "product_name": name,
+                "industry": ind,
+                "unit_of_measure": _most_common_unit(data["unit_counts"]) or "—",
+                "invoice_count": data["count"],
+                "revenue": float(data["revenue"]),
+            }
+            for (name, ind), data in sorted(product_industry.items(), key=lambda x: -x[1]["revenue"])
+        ][:100]
+
+        # Quantity & price analysis: total units sold, avg price per product+industry (for scatter chart)
+        quantity_price_analysis = []
+        for (name, ind), data in product_industry.items():
+            total_qty = float(data["quantity"])
+            rev = float(data["revenue"])
+            avg_price = (rev / total_qty) if total_qty and total_qty > 0 else None
+            quantity_price_analysis.append({
+                "product_name": name,
+                "industry": ind,
+                "unit_of_measure": _most_common_unit(data["unit_counts"]) or "—",
+                "total_quantity": round(total_qty, 2),
+                "avg_price": round(avg_price, 2) if avg_price is not None else None,
+                "revenue": rev,
+            })
+        quantity_price_analysis = sorted(
+            [x for x in quantity_price_analysis if x["total_quantity"] > 0],
+            key=lambda x: -x["total_quantity"]
+        )[:50]
+
+        industry_breakdown = [
+            {"industry": ind, "count": data["count"], "total_revenue": float(data["revenue"])}
+            for ind, data in sorted(industry_totals.items(), key=lambda x: -x[1]["revenue"])
+        ]
+
+        # Revenue by customer (customer_id = RFC from successful data)
+        customer_revenue = defaultdict(lambda: {"customer_name": None, "count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            cid = r.customer_id or "Unknown"
+            customer_revenue[cid]["customer_name"] = r.customer_name or cid
+            customer_revenue[cid]["count"] += 1
+            customer_revenue[cid]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_customer = [
+            {
+                "customer_id": cid,
+                "customer_name": data["customer_name"] or cid,
+                "invoice_count": data["count"],
+                "total_revenue": float(data["revenue"]),
+            }
+            for cid, data in sorted(customer_revenue.items(), key=lambda x: -x[1]["revenue"])
+        ][:50]
+
+        # Revenue by country (customer_country from successful invoices)
+        country_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            country = r.customer_country or "Unknown"
+            country_revenue[country]["count"] += 1
+            country_revenue[country]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_country = [
+            {
+                "country": country,
+                "country_name": _country_code_to_name(country),
+                "invoice_count": int(data["count"]),
+                "total_revenue": float(data["revenue"]),
+            }
+            for country, data in sorted(country_revenue.items(), key=lambda x: -x[1]["revenue"])
+        ][:20]
+
+        # Customers by country (distinct customers per country - histogram)
+        country_customers = defaultdict(set)  # country -> set of customer_id
+        for r in rows:
+            country = r.customer_country or "Unknown"
+            cust_key = r.customer_id or r.customer_name or f"anon_{r.id}"
+            country_customers[country].add(cust_key)
+        customers_by_country = [
+            {
+                "country": country,
+                "country_name": _country_code_to_name(country),
+                "customer_count": len(cust_set),
+            }
+            for country, cust_set in sorted(country_customers.items(), key=lambda x: -len(x[1]))
+        ][:20]
+
+        mid = cutoff_date + (datetime.utcnow() - cutoff_date) / 2
+        prev_cutoff = cutoff_date - (datetime.utcnow() - cutoff_date)
+        current_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= mid,
+        ).scalar() or 0
+        previous_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= prev_cutoff,
+            InvoiceV2BusinessData.created_at < mid,
+        ).scalar() or 0
+        try:
+            current_revenue = float(current_revenue)
+            previous_revenue = float(previous_revenue)
+        except Exception:
+            current_revenue = previous_revenue = 0.0
+        trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
+
+        trend = {
+            "current_period_revenue": current_revenue,
+            "previous_period_revenue": previous_revenue,
+            "revenue_change_pct": round(trend_pct, 1),
+        }
+
+        # AI insights about the whole business tab (using existing API key)
+        ai_insights = None
+        if OPENAI_API_KEY and openai_available and rows:
+            try:
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                prompt = f"""You are a business analyst. Based on the following dashboard data (from validated invoices), provide concise AI insights in JSON format.
+
+REVENUE TREND:
+- Current period revenue: {current_revenue}
+- Previous period revenue: {previous_revenue}
+- Change: {trend_pct:+.1f}%
+
+INDUSTRY BREAKDOWN (top 10):
+{json.dumps(industry_breakdown[:10], indent=2)}
+
+REVENUE BY CUSTOMER (top 10):
+{json.dumps(revenue_by_customer[:10], indent=2)}
+
+REVENUE BY COUNTRY (top 10):
+{json.dumps(revenue_by_country[:10], indent=2)}
+
+REVENUE BY CURRENCY:
+{json.dumps(revenue_by_currency, indent=2)}
+
+CUSTOMERS BY COUNTRY (top 10):
+{json.dumps(customers_by_country[:10], indent=2)}
+
+PRODUCTS BY INDUSTRY (top 15):
+{json.dumps(products_by_industry[:15], indent=2)}
+
+Respond with a single JSON object with this structure (no markdown, only valid JSON):
+{{
+  "summary": "2-3 sentence overall summary of the business situation",
+  "revenue_insights": ["insight about revenue trend"],
+  "industry_insights": ["insight about industry mix"],
+  "customer_insights": ["insight about top customers / concentration"],
+  "country_insights": ["insight about geographic distribution / top countries"],
+  "currency_insights": ["insight about revenue by currency / multi-currency mix"],
+  "product_insights": ["insight about product performance"],
+  "recommendations": ["1-3 actionable recommendations"]
+}}"""
+
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.5,
+                    response_format={"type": "json_object"},
+                )
+                ai_insights = json.loads(completion.choices[0].message.content)
+                logger.info("AI business insights generated for v2/business")
+            except Exception as ai_err:
+                logger.warning(f"AI insights for v2/business failed: {ai_err}")
+                ai_insights = None
+
+        return {
+            "products_by_industry": products_by_industry,
+            "industry_breakdown": industry_breakdown,
+            "quantity_price_analysis": quantity_price_analysis,
+            "revenue_by_customer": revenue_by_customer,
+            "revenue_by_country": revenue_by_country,
+            "revenue_by_currency": revenue_by_currency,
+            "customers_by_country": customers_by_country,
+            "trend": trend,
+            "ai_insights": ai_insights,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 business: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/v2/customer-comparison")
+async def get_dashboard_v2_customer_comparison(
+    days: int = Query(default=90, ge=1, le=365),
+    currency: str = Query(default=None, description="Filter by currency code. Omit for all."),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Customer comparison: per-customer product breakdown and revenue. For interactive customer vs customer analysis."""
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        rows = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None),
+        ).all()
+
+        if not rows:
+            success_count = db.query(InvoiceV2Validated).join(
+                InvoiceV2Document,
+                InvoiceV2Validated.document_id == InvoiceV2Document.id
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Validated.status == "success"
+            ).count()
+            if success_count > 0:
+                _run_backfill_invoice_v2_bi(db, current_user, max_invoices=500)
+                rows = db.query(InvoiceV2BusinessData).filter(
+                    InvoiceV2BusinessData.user_id == current_user.id,
+                    InvoiceV2BusinessData.created_at >= cutoff_date,
+                    InvoiceV2BusinessData.products.isnot(None),
+                ).all()
+
+        # Currency filter
+        if currency and str(currency).strip():
+            curr_upper = str(currency).strip().upper()
+            rows = [r for r in rows if (r.currency or "").strip().upper() == curr_upper]
+
+        # Revenue by currency (for filter dropdown, from full dataset)
+        all_rows = db.query(InvoiceV2BusinessData).filter(
+            InvoiceV2BusinessData.user_id == current_user.id,
+            InvoiceV2BusinessData.created_at >= cutoff_date,
+            InvoiceV2BusinessData.products.isnot(None),
+        ).all()
+        curr_rev = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in all_rows:
+            c = (r.currency or "Unknown").strip() or "Unknown"
+            curr_rev[c]["count"] += 1
+            curr_rev[c]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_currency = [
+            {"currency": c, "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+            for c, d in sorted(curr_rev.items(), key=lambda x: -x[1]["revenue"])
+        ]
+
+        # Aggregate: customer -> { total_revenue, invoice_count, industry_counts, currency_revenue, products }
+        cust_data = defaultdict(lambda: {
+            "customer_id": None,
+            "customer_name": None,
+            "customer_country": None,
+            "invoice_count": 0,
+            "total_revenue": Decimal("0"),
+            "industry_counts": defaultdict(int),
+            "currency_revenue": defaultdict(lambda: Decimal("0")),
+            "products": defaultdict(lambda: {"revenue": Decimal("0"), "quantity": Decimal("0"), "unit": None}),
+        })
+        for r in rows:
+            cid = r.customer_id or r.customer_name or f"anon_{r.id}"
+            cust_data[cid]["customer_id"] = r.customer_id
+            cust_data[cid]["customer_name"] = r.customer_name or cid
+            cust_data[cid]["customer_country"] = r.customer_country
+            cust_data[cid]["invoice_count"] += 1
+            cust_data[cid]["total_revenue"] += (r.total_amount or Decimal("0"))
+            if r.industry:
+                cust_data[cid]["industry_counts"][r.industry] += 1
+            curr = (r.currency or "Unknown").strip() or "Unknown"
+            cust_data[cid]["currency_revenue"][curr] += (r.total_amount or Decimal("0"))
+            products = r.products if isinstance(r.products, list) else []
+            for p in products:
+                if not isinstance(p, dict):
+                    continue
+                name = (p.get("name") or p.get("item_name") or "Unknown").strip() or "Unknown"
+                rev = p.get("revenue") or p.get("line_extension_amount")
+                qty = p.get("quantity")
+                unit = (p.get("unit_code") or "").strip() or None
+                try:
+                    if rev is not None:
+                        cust_data[cid]["products"][name]["revenue"] += Decimal(str(rev))
+                    if qty is not None:
+                        cust_data[cid]["products"][name]["quantity"] += Decimal(str(qty))
+                    if unit:
+                        cust_data[cid]["products"][name]["unit"] = unit
+                except Exception:
+                    pass
+
+        # Revenue by country (for map)
+        country_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+        for r in rows:
+            c = (r.customer_country or "Unknown").strip() or "Unknown"
+            country_revenue[c]["count"] += 1
+            country_revenue[c]["revenue"] += (r.total_amount or Decimal("0"))
+        revenue_by_country = [
+            {"country": c, "country_name": _country_code_to_name(c), "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+            for c, d in sorted(country_revenue.items(), key=lambda x: -float(x[1]["revenue"]))
+        ][:30]
+
+        customers = []
+        for cid, data in sorted(cust_data.items(), key=lambda x: -float(x[1]["total_revenue"])):
+            products_list = [
+                {
+                    "product_name": pname,
+                    "revenue": round(float(pdata["revenue"]), 2),
+                    "quantity": round(float(pdata["quantity"]), 2),
+                    "unit": pdata["unit"] or "—",
+                }
+                for pname, pdata in sorted(data["products"].items(), key=lambda y: -float(y[1]["revenue"]))
+            ]
+            industry = max(data["industry_counts"].items(), key=lambda x: x[1])[0] if data["industry_counts"] else None
+            currencies = [{"currency": c, "revenue": round(float(rev), 2)} for c, rev in sorted(data["currency_revenue"].items(), key=lambda x: -float(x[1]))]
+            customers.append({
+                "customer_id": data["customer_id"],
+                "customer_name": data["customer_name"],
+                "customer_country": data["customer_country"],
+                "industry": industry,
+                "currencies": currencies,
+                "invoice_count": data["invoice_count"],
+                "total_revenue": round(float(data["total_revenue"]), 2),
+                "products": products_list,
+            })
+
+        return {
+            "customers": customers,
+            "revenue_by_currency": revenue_by_currency,
+            "revenue_by_country": revenue_by_country,
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard v2 customer-comparison: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/v2/customer-comparison-chat")
+async def post_customer_comparison_chat(
+    message: str = Body(..., embed=True),
+    customer_a: dict = Body(..., embed=True),
+    customer_b: dict = Body(..., embed=True),
+    conversation_history: list = Body(default=[], embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """AI chat for customer comparison: initial summary and follow-up Q&A about two customers."""
+    if not OPENAI_API_KEY or not openai_available:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI chat not available (OpenAI key missing)")
+    try:
+        sys_content = f"""You are a business analyst assistant. The user is comparing two customers. Use ONLY the data below to answer. Be concise and factual.
+
+CUSTOMER A:
+- Name: {customer_a.get('customer_name', 'N/A')}
+- Country: {customer_a.get('customer_country', 'N/A')}
+- Industry: {customer_a.get('industry', 'N/A')}
+- Total Revenue: {customer_a.get('total_revenue', 0)}
+- Invoices: {customer_a.get('invoice_count', 0)}
+- Currencies: {json.dumps(customer_a.get('currencies', []))}
+- Top products: {json.dumps((customer_a.get('products') or [])[:5])}
+
+CUSTOMER B:
+- Name: {customer_b.get('customer_name', 'N/A')}
+- Country: {customer_b.get('customer_country', 'N/A')}
+- Industry: {customer_b.get('industry', 'N/A')}
+- Total Revenue: {customer_b.get('total_revenue', 0)}
+- Invoices: {customer_b.get('invoice_count', 0)}
+- Currencies: {json.dumps(customer_b.get('currencies', []))}
+- Top products: {json.dumps((customer_b.get('products') or [])[:5])}
+
+Answer the user's question based only on this data. If asked for a summary first, provide 2-3 sentences comparing revenue, geography, industry, and product mix."""
+        messages = [{"role": "system", "content": sys_content}]
+        for h in conversation_history[-10:]:
+            if isinstance(h, dict) and h.get("role") and h.get("content"):
+                messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
+        messages.append({"role": "user", "content": message[:1500]})
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.4,
+            max_tokens=500,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        return {"reply": reply}
+    except Exception as e:
+        logger.warning(f"Customer comparison chat failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+def _get_ai_analysis_config():
+    """
+    Use same env var names as invoice-bot (config.example) for the AI analysis page only.
+    Enables a single set of env vars (e.g. OPENAI_API_KEY) for both invoice-bot and this page.
+    """
+    openai_key = os.environ.get("OPENAI_API_KEY") or OPENAI_API_KEY
+    return openai_key
+
+
+def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db: Session, days: int = 30) -> str:
+    """Build context string for AI analysis chat from requested context_keys.
+    Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
+    SATDocument, SATSimpleMerged for inbound. Context keys: stats, failed_summary, top_customers,
+    inbound_summary, business_summary, process_flow.
+    """
+    if not context_keys:
+        return ""
+    parts = []
+    cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+    if "stats" in context_keys:
+        try:
+            documents_received = db.query(func.count(InvoiceV2Document.id)).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).scalar() or 0
+            validated_query = db.query(
+                InvoiceV2Validated.status,
+                func.count(InvoiceV2Validated.id).label("count"),
+            ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(InvoiceV2Validated.status).all()
+            validated_success = sum(c for s, c in validated_query if s == "success")
+            validated_failed = sum(c for s, c in validated_query if s == "failed")
+            converted_query = db.query(
+                ConvertedInvoice.conversion_status,
+                func.count(ConvertedInvoice.id).label("count"),
+            ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+                InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id,
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(ConvertedInvoice.conversion_status).all()
+            converted_success = sum(c for s, c in converted_query if s == "success")
+            converted_failed = sum(c for s, c in converted_query if s == "failed")
+            converted_pending = sum(c for s, c in converted_query if s == "pending")
+            converted_total = converted_success + converted_failed + converted_pending
+            validation_rate = (
+                (validated_success / (validated_success + validated_failed) * 100)
+                if (validated_success + validated_failed) > 0 else 0
+            )
+            conversion_rate = (converted_success / converted_total * 100) if converted_total > 0 else 0
+        except Exception:
+            documents_received = validated_success = validated_failed = 0
+            converted_success = converted_failed = converted_pending = converted_total = 0
+            validation_rate = conversion_rate = 0
+        try:
+            sat_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+            ).scalar() or 0
+            sat_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True,
+            ).scalar() or 0
+            sat_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False,
+            ).scalar() or 0
+        except Exception:
+            sat_total = sat_sent = sat_pending = 0
+        parts.append(
+            f"Dashboard statistics (last {days} days). "
+            f"Outbound (V2): {documents_received} documents received; "
+            f"validated: {validated_success} success, {validated_failed} failed (rate {validation_rate:.1f}%); "
+            f"converted: {converted_success} success, {converted_failed} failed, {converted_pending} pending (rate {conversion_rate:.1f}%). "
+            f"Inbound (SAT): {sat_total} merged documents ({sat_sent} sent to SAP, {sat_pending} pending)."
+        )
+
+    if "failed_summary" in context_keys:
+        try:
+            failed_count_v2 = (
+                db.query(InvoiceV2Validated)
+                .join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id)
+                .filter(
+                    InvoiceV2Document.user_id == current_user.id,
+                    InvoiceV2Document.deleted_at.is_(None),
+                    InvoiceV2Document.uploaded_at >= cutoff_date,
+                    InvoiceV2Validated.status == "failed",
+                )
+                .count()
+            )
+            parts.append(
+                f"Failed invoices (V2 validations, last {days} days): {failed_count_v2} failed."
+            )
+        except Exception:
+            parts.append("Failed invoices (V2): data unavailable.")
+
+    if "top_customers" in context_keys:
+        try:
+            customer_rows = db.query(
+                ConvertedInvoice.customer_id,
+                func.max(InvoiceV2Validated.invoice_data["customer_name"].astext).label("customer_name"),
+                func.max(InvoiceV2Validated.invoice_data["currency"].astext).label("currency"),
+                func.count(ConvertedInvoice.id).label("count"),
+            ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+                InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id,
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).filter(ConvertedInvoice.customer_id.isnot(None)).group_by(
+                ConvertedInvoice.customer_id,
+            ).order_by(func.count(ConvertedInvoice.id).desc()).limit(10).all()
+            top_customers_list = [
+                {
+                    "customer_id": r.customer_id,
+                    "customer_name": (r.customer_name or r.customer_id) or "—",
+                    "currency": (r.currency or "—").strip() or "—",
+                    "invoice_count": r.count,
+                }
+                for r in customer_rows
+            ]
+            if top_customers_list:
+                parts.append("Top customers (outbound, by invoice count): " + json.dumps(top_customers_list))
+            else:
+                parts.append("Top customers (outbound): no customer data in the period.")
+        except Exception as e:
+            logger.warning(f"AI context top_customers: {e}")
+            parts.append("Top customers (outbound): data unavailable.")
+
+    if "inbound_summary" in context_keys:
+        try:
+            total_documents = db.query(func.count(SATDocument.id)).filter(
+                SATDocument.user_id == current_user.id,
+                SATDocument.received_at >= cutoff_date,
+            ).scalar() or 0
+            merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+            ).scalar() or 0
+            merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True,
+            ).scalar() or 0
+            merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False,
+            ).scalar() or 0
+            supplier_rows = db.query(
+                SATDocument.supplier_rfc,
+                SATDocument.supplier_name,
+                func.count(SATDocument.id).label("count"),
+                func.coalesce(
+                    func.sum(cast(func.nullif(func.trim(SATDocument.total), ""), Numeric(15, 2))),
+                    0,
+                ).label("total_amount"),
+            ).filter(
+                SATDocument.user_id == current_user.id,
+                SATDocument.received_at >= cutoff_date,
+            ).group_by(SATDocument.supplier_rfc, SATDocument.supplier_name).order_by(
+                func.count(SATDocument.id).desc(),
+            ).limit(10).all()
+            top_suppliers = [
+                {
+                    "supplier_rfc": r.supplier_rfc,
+                    "supplier_name": (r.supplier_name or r.supplier_rfc) or "—",
+                    "count": r.count,
+                    "total_amount": float(r.total_amount) if r.total_amount is not None else 0.0,
+                }
+                for r in supplier_rows
+            ]
+            parts.append(
+                f"Inbound (SAT): {total_documents} documents received; "
+                f"{merges_total} merges ({merges_sent} sent to SAP, {merges_pending} pending). "
+                f"Top suppliers: " + json.dumps(top_suppliers),
+            )
+        except Exception as e:
+            logger.warning(f"AI context inbound_summary: {e}")
+            parts.append("Inbound (SAT): data unavailable.")
+
+    if "business_summary" in context_keys:
+        try:
+            rows = db.query(InvoiceV2BusinessData).filter(
+                InvoiceV2BusinessData.user_id == current_user.id,
+                InvoiceV2BusinessData.created_at >= cutoff_date,
+            ).all()
+            customer_revenue = defaultdict(lambda: {"customer_name": None, "count": 0, "revenue": Decimal("0")})
+            country_revenue = defaultdict(lambda: {"count": 0, "revenue": Decimal("0")})
+            for r in rows:
+                cid = r.customer_id or "Unknown"
+                customer_revenue[cid]["customer_name"] = r.customer_name or cid
+                customer_revenue[cid]["count"] += 1
+                customer_revenue[cid]["revenue"] += (r.total_amount or Decimal("0"))
+                country = r.customer_country or "Unknown"
+                country_revenue[country]["count"] += 1
+                country_revenue[country]["revenue"] += (r.total_amount or Decimal("0"))
+            revenue_by_customer = sorted(
+                [
+                    {"customer_id": cid, "customer_name": d["customer_name"] or cid, "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+                    for cid, d in customer_revenue.items()
+                ],
+                key=lambda x: -x["total_revenue"],
+            )[:10]
+            revenue_by_country = sorted(
+                [
+                    {"country": c, "invoice_count": d["count"], "total_revenue": float(d["revenue"])}
+                    for c, d in country_revenue.items()
+                ],
+                key=lambda x: -x["total_revenue"],
+            )[:5]
+            mid = cutoff_date + (datetime.utcnow() - cutoff_date) / 2
+            prev_cutoff = cutoff_date - (datetime.utcnow() - cutoff_date)
+            current_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+                InvoiceV2BusinessData.user_id == current_user.id,
+                InvoiceV2BusinessData.created_at >= mid,
+            ).scalar() or 0
+            previous_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
+                InvoiceV2BusinessData.user_id == current_user.id,
+                InvoiceV2BusinessData.created_at >= prev_cutoff,
+                InvoiceV2BusinessData.created_at < mid,
+            ).scalar() or 0
+            try:
+                current_revenue = float(current_revenue)
+                previous_revenue = float(previous_revenue)
+            except Exception:
+                current_revenue = previous_revenue = 0.0
+            trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
+            parts.append(
+                f"Business (revenue): current period {current_revenue:.0f}, previous {previous_revenue:.0f} (change {trend_pct:+.1f}%). "
+                f"Revenue by customer (top 10): {json.dumps(revenue_by_customer)}. "
+                f"Revenue by country (top 5): {json.dumps(revenue_by_country)}.",
+            )
+        except Exception as e:
+            logger.warning(f"AI context business_summary: {e}")
+            parts.append("Business summary: data unavailable.")
+
+    if "process_flow" in context_keys:
+        try:
+            documents_received = db.query(func.count(InvoiceV2Document.id)).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.deleted_at.is_(None),
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).scalar() or 0
+            validated_query = db.query(
+                InvoiceV2Validated.status,
+                func.count(InvoiceV2Validated.id).label("count"),
+            ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(InvoiceV2Validated.status).all()
+            validated_success = sum(c for s, c in validated_query if s == "success")
+            validated_failed = sum(c for s, c in validated_query if s == "failed")
+            converted_query = db.query(
+                ConvertedInvoice.conversion_status,
+                func.count(ConvertedInvoice.id).label("count"),
+            ).join(InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id).join(
+                InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id,
+            ).filter(
+                InvoiceV2Document.user_id == current_user.id,
+                InvoiceV2Document.uploaded_at >= cutoff_date,
+            ).group_by(ConvertedInvoice.conversion_status).all()
+            converted_success = sum(c for s, c in converted_query if s == "success")
+            converted_failed = sum(c for s, c in converted_query if s == "failed")
+            converted_pending = sum(c for s, c in converted_query if s == "pending")
+            merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+            ).scalar() or 0
+            merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == True,
+            ).scalar() or 0
+            merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
+                SATSimpleMerged.user_id == current_user.id,
+                SATSimpleMerged.created_at >= cutoff_date,
+                SATSimpleMerged.sent_to_sap == False,
+            ).scalar() or 0
+            parts.append(
+                "Standard process flows. Outbound: Document received -> Validation (success/fail) -> Conversion (format, success/fail/pending) -> Output. "
+                f"Current outbound counts: received {documents_received}, validated success {validated_success} failed {validated_failed}, "
+                f"converted success {converted_success} failed {converted_failed} pending {converted_pending}. "
+                "Inbound: SAT documents received -> Merge (batch) -> Send to SAP. "
+                f"Current inbound: {merges_total} merges, {merges_sent} sent to SAP, {merges_pending} pending.",
+            )
+        except Exception as e:
+            logger.warning(f"AI context process_flow: {e}")
+            parts.append(
+                "Standard process flows. Outbound: Document received -> Validation -> Conversion -> Output. "
+                "Inbound: SAT documents -> Merge -> Send to SAP. Current counts unavailable.",
+            )
+    return "\n".join(parts) if parts else ""
+
+
+@router.post("/ai-analysis/chat")
+async def post_ai_analysis_chat(
+    message: str = Body(..., embed=True),
+    conversation_history: list = Body(default=[], embed=True),
+    context_keys: list = Body(default=[], embed=True),
+    days: int = Body(default=30, embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generative AI analysis chat: answer user questions, optionally grounded in dashboard context.
+    context_keys: stats, failed_summary, top_customers, inbound_summary, business_summary, process_flow.
+    days: period for context (default 30). Uses same config env vars as invoice-bot (OPENAI_API_KEY)."""
+    ai_openai_key = _get_ai_analysis_config()
+    if not ai_openai_key or not openai_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI analysis not available (set OPENAI_API_KEY, or Zodiac OPEN_AI_KEY)",
+        )
+    days = max(1, min(365, days)) if isinstance(days, (int, float)) else 30
+    try:
+        if USE_SAP_DB_FOR_AI:
+            from ..services.sap_ai_context import build_ai_context_from_sap
+            sap_session = get_sap_session()
+            context_str = ""
+            if sap_session is not None:
+                try:
+                    context_str = build_ai_context_from_sap(
+                        context_keys if isinstance(context_keys, list) else [],
+                        sap_session,
+                        days=int(days),
+                    )
+                except Exception as sap_e:
+                    logger.warning("SAP AI context failed: %s", sap_e)
+                finally:
+                    sap_session.close()
+        else:
+            context_str = _build_ai_analysis_context(
+                context_keys if isinstance(context_keys, list) else [],
+                current_user,
+                db,
+                days=int(days),
+            )
+        system_content = (
+            "You are a business analyst assistant for Zodiac document management. "
+            "Answer the user's questions concisely and helpfully. "
+        )
+        if context_str:
+            system_content += (
+                "Use ONLY the following context about the user's dashboard when relevant. "
+                "If the user asks about their data or dashboard, base your answer on this.\n\nContext:\n"
+            )
+            system_content += context_str
+        else:
+            system_content += "If the user asks about their dashboard or invoices, suggest they use the context option to get data-backed answers."
+        messages = [{"role": "system", "content": system_content}]
+        for h in (conversation_history or [])[-10:]:
+            if isinstance(h, dict) and h.get("role") and h.get("content"):
+                messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
+        messages.append({"role": "user", "content": (message or "")[:1500]})
+        client = OpenAI(api_key=ai_openai_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.4,
+            max_tokens=800,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        return {"reply": reply}
+    except Exception as e:
+        logger.warning(f"AI analysis chat failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
         )
 
 
@@ -1907,6 +3293,25 @@ Focus on: pricing strategy, demand patterns, competitive positioning, and revenu
         )
 
 
+# Common ISO 3166-1 alpha-2 country codes to full names (for display)
+COUNTRY_CODE_NAMES = {
+    "NZ": "New Zealand", "AU": "Australia", "US": "United States", "GB": "United Kingdom", "UK": "United Kingdom",
+    "DE": "Germany", "FR": "France", "JP": "Japan", "CN": "China", "IN": "India", "SG": "Singapore",
+    "MY": "Malaysia", "TH": "Thailand", "ID": "Indonesia", "PH": "Philippines", "VN": "Vietnam",
+    "KR": "South Korea", "CA": "Canada", "MX": "Mexico", "BR": "Brazil", "ES": "Spain", "IT": "Italy",
+    "NL": "Netherlands", "CH": "Switzerland", "SE": "Sweden", "NO": "Norway", "DK": "Denmark",
+    "FI": "Finland", "IE": "Ireland", "BE": "Belgium", "AT": "Austria", "PL": "Poland",
+    "AE": "United Arab Emirates", "SA": "Saudi Arabia", "ZA": "South Africa", "HK": "Hong Kong",
+}
+
+
+def _country_code_to_name(code: str) -> str:
+    """Return full country name for ISO code, or code itself if unknown."""
+    if not code or code == "Unknown":
+        return code or "Unknown"
+    return COUNTRY_CODE_NAMES.get(str(code).upper(), code)
+
+
 def _calculate_std_dev(values):
     """Calculate standard deviation"""
     if not values:
@@ -2305,6 +3710,101 @@ async def get_product_demand_analysis(
         )
 
 
+@router.get("/dashboard-data-stats")
+async def get_dashboard_data_stats(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Counts for the Invoices "Dashboard data" tab: successful validated, converted, and BI records.
+    Used so users can see how much data is available and trigger extraction for the Business tab.
+    """
+    try:
+        validated_success = db.query(func.count(InvoiceV2Validated.id)).join(
+            InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id
+        ).filter(
+            InvoiceV2Document.user_id == current_user.id,
+            InvoiceV2Document.deleted_at.is_(None),
+            InvoiceV2Validated.status == "success"
+        ).scalar() or 0
+        converted_count = db.query(func.count(ConvertedInvoice.id)).join(
+            InvoiceV2Validated, ConvertedInvoice.validated_invoice_id == InvoiceV2Validated.id
+        ).join(InvoiceV2Document, InvoiceV2Validated.document_id == InvoiceV2Document.id).filter(
+            InvoiceV2Document.user_id == current_user.id
+        ).scalar() or 0
+        bi_count = db.query(func.count(InvoiceV2BusinessData.id)).filter(
+            InvoiceV2BusinessData.user_id == current_user.id
+        ).scalar() or 0
+        return {
+            "validated_success_count": validated_success,
+            "converted_count": converted_count,
+            "bi_extracted_count": bi_count,
+        }
+    except Exception as e:
+        logger.error(f"Dashboard data stats: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+def _run_backfill_invoice_v2_bi(db: Session, current_user: ZodiacUser, max_invoices: int = 2000) -> tuple:
+    """
+    Backfill InvoiceV2BusinessData from successful validated invoices (line_items -> products).
+    Returns (processed, skipped, errors, total).
+    """
+    bi_service = InvoiceV2BusinessIntelligence()
+    validated_invoices = db.query(InvoiceV2Validated).join(
+        InvoiceV2Document,
+        InvoiceV2Validated.document_id == InvoiceV2Document.id
+    ).filter(
+        InvoiceV2Document.user_id == current_user.id,
+        InvoiceV2Validated.status == "success"
+    ).limit(max_invoices).all()
+
+    processed = skipped = errors = 0
+    for validated_invoice in validated_invoices:
+        try:
+            existing = db.query(InvoiceV2BusinessData).filter(
+                InvoiceV2BusinessData.validated_invoice_id == validated_invoice.id
+            ).first()
+            if existing:
+                skipped += 1
+                continue
+            bi_data = bi_service.extract_bi_data(validated_invoice)
+            user_id = bi_data.get("user_id") or current_user.id
+            bi_record = InvoiceV2BusinessData(
+                validated_invoice_id=bi_data["validated_invoice_id"],
+                user_id=user_id,
+                customer_id=bi_data["customer"].get("id"),
+                customer_name=bi_data["customer"].get("name"),
+                customer_country=bi_data["customer"].get("country"),
+                supplier_id=bi_data["supplier"].get("id"),
+                supplier_name=bi_data["supplier"].get("name"),
+                products=bi_data["products"],
+                total_products_count=bi_data["total_products_count"],
+                total_amount=bi_data["financial"].get("total_amount"),
+                tax_amount=bi_data["financial"].get("tax_amount"),
+                currency=bi_data["financial"].get("currency"),
+                industry=bi_data["industry"],
+                industry_confidence=bi_data["industry_confidence"],
+                industry_keywords_matched=bi_data["industry_keywords_matched"],
+                invoice_date=bi_data["temporal"].get("invoice_date"),
+                fiscal_quarter=bi_data["temporal"].get("fiscal_quarter"),
+                fiscal_year=bi_data["temporal"].get("fiscal_year"),
+                season=bi_data["temporal"].get("season"),
+                current_stage=bi_data["lifecycle"].get("current_stage"),
+                stage_status=bi_data["lifecycle"].get("stage_status"),
+            )
+            db.add(bi_record)
+            processed += 1
+            if processed % 50 == 0:
+                db.commit()
+        except Exception as e:
+            logger.warning(f"Backfill BI invoice {getattr(validated_invoice, 'id', '?')}: {e}")
+            errors += 1
+    if processed > 0 or errors > 0:
+        db.commit()
+    return (processed, skipped, errors, len(validated_invoices))
+
+
 @router.post("/backfill-invoice-v2-bi")
 async def backfill_invoice_v2_bi(
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2312,94 +3812,20 @@ async def backfill_invoice_v2_bi(
 ):
     """
     Backfill business intelligence data from existing Invoice V2 validated invoices.
-    This processes all validated invoices and creates InvoiceV2BusinessData records.
+    Uses line_items from each successful validated invoice to populate products for the Business tab.
     """
     logger.info(f"🔄 Starting Invoice V2 BI backfill for user {current_user.id}")
-    
     try:
-        bi_service = InvoiceV2BusinessIntelligence()
-        
-        # Get all validated invoices for this user through documents
-        validated_invoices = db.query(InvoiceV2Validated).join(
-            InvoiceV2Document,
-            InvoiceV2Validated.document_id == InvoiceV2Document.id
-        ).filter(
-            InvoiceV2Document.user_id == current_user.id
-        ).all()
-        
-        logger.info(f"📊 Found {len(validated_invoices)} validated invoices to process")
-        
-        processed = 0
-        skipped = 0
-        errors = 0
-        
-        for validated_invoice in validated_invoices:
-            try:
-                # Check if BI data already exists
-                existing = db.query(InvoiceV2BusinessData).filter(
-                    InvoiceV2BusinessData.validated_invoice_id == validated_invoice.id
-                ).first()
-                
-                if existing:
-                    logger.debug(f"  ⏭️  Skipping invoice {validated_invoice.id} - BI data already exists")
-                    skipped += 1
-                    continue
-                
-                # Extract BI data
-                bi_data = bi_service.extract_bi_data(validated_invoice)
-                
-                # Create BI record
-                bi_record = InvoiceV2BusinessData(
-                    validated_invoice_id=bi_data['validated_invoice_id'],
-                    user_id=bi_data['user_id'],
-                    customer_id=bi_data['customer']['id'],
-                    customer_name=bi_data['customer']['name'],
-                    customer_country=bi_data['customer']['country'],
-                    supplier_id=bi_data['supplier']['id'],
-                    supplier_name=bi_data['supplier']['name'],
-                    products=bi_data['products'],
-                    total_products_count=bi_data['total_products_count'],
-                    total_amount=bi_data['financial']['total_amount'],
-                    tax_amount=bi_data['financial']['tax_amount'],
-                    currency=bi_data['financial']['currency'],
-                    industry=bi_data['industry'],
-                    industry_confidence=bi_data['industry_confidence'],
-                    industry_keywords_matched=bi_data['industry_keywords_matched'],
-                    invoice_date=bi_data['temporal']['invoice_date'],
-                    fiscal_quarter=bi_data['temporal']['fiscal_quarter'],
-                    fiscal_year=bi_data['temporal']['fiscal_year'],
-                    season=bi_data['temporal']['season'],
-                    current_stage=bi_data['lifecycle']['current_stage'],
-                    stage_status=bi_data['lifecycle']['stage_status']
-                )
-                
-                db.add(bi_record)
-                processed += 1
-                
-                # Commit in batches of 50
-                if processed % 50 == 0:
-                    db.commit()
-                    logger.info(f"  ✅ Processed {processed} invoices...")
-                
-            except Exception as e:
-                logger.error(f"  ❌ Error processing invoice {validated_invoice.id}: {e}")
-                errors += 1
-                continue
-        
-        # Final commit
-        db.commit()
-        
+        processed, skipped, errors, total = _run_backfill_invoice_v2_bi(db, current_user)
         logger.info(f"✅ Backfill completed: {processed} processed, {skipped} skipped, {errors} errors")
-        
         return {
             "success": True,
             "processed": processed,
             "skipped": skipped,
             "errors": errors,
-            "total": len(validated_invoices),
-            "message": f"Successfully backfilled BI data for {processed} invoices"
+            "total": total,
+            "message": f"Successfully backfilled BI data for {processed} invoices (products from line_items)",
         }
-        
     except Exception as e:
         logger.error(f"❌ Backfill failed: {e}", exc_info=True)
         raise HTTPException(

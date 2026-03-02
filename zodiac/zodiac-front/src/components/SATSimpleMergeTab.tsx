@@ -17,7 +17,8 @@ import {
   Eye,
   XCircle,
   AlertTriangle,
-  Trash2
+  Trash2,
+  Flag
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -81,6 +82,9 @@ interface SimpleMergedDocument {
   total_amount: number;
   currency: string;
   created_at: string;
+  sent_to_sap?: boolean;
+  sap_document_number?: string | null;
+  sent_to_sap_at?: string | null;
 }
 
 // File Status Card Component
@@ -142,7 +146,11 @@ const FileStatusCard = ({
   );
 };
 
-export default function SATSimpleMergeTab() {
+interface SATSimpleMergeTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function SATSimpleMergeTab({ customerUserMode }: SATSimpleMergeTabProps = {}) {
   const router = useRouter();
   const { user } = useAuth();
   const [allDocuments, setAllDocuments] = useState<SATDocument[]>([]);
@@ -164,7 +172,7 @@ export default function SATSimpleMergeTab() {
     if (user) {
       fetchData();
     }
-  }, [user, yearFilter, periodFilter]);
+  }, [user, yearFilter, periodFilter, customerUserMode]);
 
   const fetchData = async () => {
     await Promise.all([fetchDocuments(), fetchMergedDocuments()]);
@@ -174,20 +182,25 @@ export default function SATSimpleMergeTab() {
     try {
       setLoading(true);
       setError(null);
-      const response = await satApi.list();
-      const docs = response.documents || [];
-      
-      // Filter documents by fiscal year and period
-      const filteredDocs = docs.filter((doc: SATDocument) => {
-        if (!doc.fecha) return false;
-        const docDate = new Date(doc.fecha);
-        return docDate.getFullYear() === yearFilter && (docDate.getMonth() + 1) === periodFilter;
-      });
-
-      setAllDocuments(filteredDocs);
-      
-      // Group documents by supplier and period
-      const groups = await groupDocumentsBySupplierAndPeriod(filteredDocs);
+      let docs: SATDocument[];
+      if (customerUserMode) {
+        const response = await satApi.listDocumentsForCustomerUser({
+          fiscal_year: yearFilter,
+          fiscal_period: periodFilter,
+          limit: 500,
+        });
+        docs = response.documents || [];
+      } else {
+        const response = await satApi.list();
+        const allDocs = response.documents || [];
+        docs = allDocs.filter((doc: SATDocument) => {
+          if (!doc.fecha) return false;
+          const docDate = new Date(doc.fecha);
+          return docDate.getFullYear() === yearFilter && (docDate.getMonth() + 1) === periodFilter;
+        });
+      }
+      setAllDocuments(docs);
+      const groups = await groupDocumentsBySupplierAndPeriod(docs);
       setDocumentGroups(groups);
     } catch (err: any) {
       console.error('Error fetching documents for simple merge:', err);
@@ -681,13 +694,18 @@ export default function SATSimpleMergeTab() {
                   <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Total Amount
                   </th>
+                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    SAP
+                  </th>
                   <th className="px-4 sm:px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {mergedDocuments.map((doc) => (
+                {mergedDocuments.map((doc) => {
+                  const sentToSap = doc.sent_to_sap === true || !!(doc.sap_document_number);
+                  return (
                   <tr key={doc.id} className="hover:bg-gray-50">
                     <td className="px-4 sm:px-6 py-4">
                       <div className="flex items-center">
@@ -719,6 +737,19 @@ export default function SATSimpleMergeTab() {
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-gray-900 font-medium">
                       {formatCurrency(doc.total_amount, doc.currency)}
                     </td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                      {sentToSap ? (
+                        <div className="inline-flex items-center gap-1.5 text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-1" title={doc.sap_document_number ? `SAP Doc #: ${doc.sap_document_number}` : 'Sent to SAP'}>
+                          <Flag className="w-4 h-4 text-green-600 flex-shrink-0" fill="currentColor" />
+                          <span className="text-xs font-medium">Sent to SAP</span>
+                          {doc.sap_document_number && (
+                            <span className="text-xs text-green-600 font-mono">#{doc.sap_document_number}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-right text-xs sm:text-sm font-medium">
                       <div className="flex items-center justify-end gap-2">
                         <button
@@ -731,9 +762,12 @@ export default function SATSimpleMergeTab() {
                         </button>
                         <button
                           onClick={() => handleDelete(doc.id, doc.vendor_rfc)}
-                          disabled={deletingId === doc.id}
-                          className="text-red-600 hover:text-red-900 inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Delete merge"
+                          disabled={deletingId === doc.id || sentToSap}
+                          className={cn(
+                            "inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed",
+                            sentToSap ? "text-gray-400 cursor-not-allowed" : "text-red-600 hover:text-red-900"
+                          )}
+                          title={sentToSap ? 'Cannot delete – already sent to SAP' : 'Delete merge'}
                         >
                           {deletingId === doc.id ? (
                             <RefreshCw className="w-4 h-4 animate-spin" />
@@ -745,7 +779,8 @@ export default function SATSimpleMergeTab() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

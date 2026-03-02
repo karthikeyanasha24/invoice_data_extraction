@@ -168,6 +168,46 @@ export const authApi = {
     },
 };
 
+// Customer users API (admin only)
+export interface CustomerUserResponse {
+    id: number;
+    email: string;
+    username: string;
+    is_customer_user: boolean;
+    customer_ids: string[];
+}
+export const customerUsersApi = {
+    list: async (): Promise<CustomerUserResponse[]> => {
+        const response = await api.get('/api/v1/customer-users');
+        return response.data;
+    },
+    create: async (data: { email: string; username: string; password: string }): Promise<CustomerUserResponse> => {
+        try {
+            const response = await api.post('/api/v1/customer-users', data);
+            return response.data;
+        } catch (error: any) {
+            const detail = error.response?.data?.detail;
+            let msg = 'Failed to create customer user.';
+            if (typeof detail === 'string') msg = detail;
+            else if (Array.isArray(detail) && detail.length)
+                msg = detail.map((d: { msg?: string; message?: string }) => d.msg || d.message).filter(Boolean).join(' ') || msg;
+            throw new Error(msg);
+        }
+    },
+    getMyCustomers: async (): Promise<string[]> => {
+        const response = await api.get('/api/v1/customer-users/me/customers');
+        return response.data;
+    },
+    getCustomers: async (userId: number): Promise<string[]> => {
+        const response = await api.get(`/api/v1/customer-users/${userId}/customers`);
+        return response.data;
+    },
+    assignCustomers: async (userId: number, customerIds: string[]): Promise<CustomerUserResponse> => {
+        const response = await api.put(`/api/v1/customer-users/${userId}/customers`, { customer_ids: customerIds });
+        return response.data;
+    },
+};
+
 // File upload API
 export const fileApi = {
     uploadFile: async (file: File): Promise<{
@@ -1253,6 +1293,52 @@ export const customerApi = {
         }
     },
 
+    getReceiverRfcs: async (customerId: string): Promise<string[]> => {
+        const response = await api.get(`/api/v1/customers/${encodeURIComponent(customerId)}/receiver-rfcs`);
+        return response.data;
+    },
+    setReceiverRfcs: async (customerId: string, receiverRfcs: string[]): Promise<string[]> => {
+        const response = await api.put(`/api/v1/customers/${encodeURIComponent(customerId)}/receiver-rfcs`, { receiver_rfcs: receiverRfcs });
+        return response.data;
+    },
+
+    getDeliverySettings: async (customerId: string): Promise<any> => {
+        const response = await api.get(`/api/v1/customers/${encodeURIComponent(customerId)}/delivery-settings`);
+        return response.data;
+    },
+    updateDeliverySettings: async (customerId: string, body: {
+        delivery_method?: string;
+        host: string;
+        port?: number;
+        username: string;
+        remote_path?: string;
+        auth_type: 'key' | 'password';
+        private_key?: string;
+        password?: string;
+        key_passphrase?: string;
+        use_test_env?: boolean;
+    }): Promise<any> => {
+        const response = await api.put(`/api/v1/customers/${encodeURIComponent(customerId)}/delivery-settings`, body);
+        return response.data;
+    },
+    testDeliveryConnection: async (customerId: string): Promise<{ success: boolean; message: string }> => {
+        const response = await api.post(`/api/v1/customers/${encodeURIComponent(customerId)}/delivery-settings/test`);
+        return response.data;
+    },
+
+    generateCustomerToken: async (customerId: string, options?: { expires_in_days?: number; notes?: string }): Promise<{ success: boolean; token: string; customer_id: string; expires_at: string | null; message: string }> => {
+        const response = await api.post(`/api/v1/customers/${encodeURIComponent(customerId)}/token/generate`, options || {});
+        return response.data;
+    },
+    getCustomerTokenInfo: async (customerId: string): Promise<{ has_token: boolean; last_used_at?: string; expires_at?: string; is_active?: boolean }> => {
+        const response = await api.get(`/api/v1/customers/${encodeURIComponent(customerId)}/token`);
+        return response.data;
+    },
+    revokeCustomerToken: async (customerId: string): Promise<{ success: boolean; message: string }> => {
+        const response = await api.delete(`/api/v1/customers/${encodeURIComponent(customerId)}/token`);
+        return response.data;
+    },
+
     bulkCreateCustomers: async (customers: any[]): Promise<any> => {
         console.log('👥 Customer API - Bulk creating customers:', { count: customers.length });
         try {
@@ -1274,6 +1360,150 @@ export const customerApi = {
                 throw new Error(error.response?.data?.detail || 'Failed to bulk create customers.');
             }
         }
+    },
+};
+
+// Certificate API
+export const certificateApi = {
+    issueCertificate: async (data: {
+        customer_id: string;
+        organization?: string;
+        organizational_unit?: string;
+        country?: string;
+        email?: string;
+        validity_days?: number;
+        notes?: string;
+    }): Promise<any> => {
+        const response = await api.post('/api/v1/certificates/issue', data);
+        return response.data;
+    },
+
+    listCertificates: async (
+        customerId?: string,
+        statusFilter?: string,
+        skip: number = 0,
+        limit: number = 100
+    ): Promise<any> => {
+        const params = new URLSearchParams();
+        if (customerId) params.append('customer_id', customerId);
+        if (statusFilter) params.append('status_filter', statusFilter);
+        params.append('skip', skip.toString());
+        params.append('limit', limit.toString());
+
+        const response = await api.get(`/api/v1/certificates?${params}`);
+        return response.data;
+    },
+
+    getCertificate: async (certificateId: number): Promise<any> => {
+        const response = await api.get(`/api/v1/certificates/${certificateId}`);
+        return response.data;
+    },
+
+    getCustomerActiveCertificate: async (customerId: string): Promise<any> => {
+        try {
+            const response = await api.get(`/api/v1/certificates/customer/${encodeURIComponent(customerId)}/active`);
+            return response.data;
+        } catch (error: any) {
+            if (error.response?.status === 404) {
+                return null;
+            }
+            throw error;
+        }
+    },
+
+    renewCertificate: async (certificateId: number, data: {
+        validity_days?: number;
+        notes?: string;
+    }): Promise<any> => {
+        const response = await api.post(`/api/v1/certificates/${certificateId}/renew`, data);
+        return response.data;
+    },
+
+    revokeCertificate: async (certificateId: number, reason?: string): Promise<any> => {
+        const response = await api.post(`/api/v1/certificates/${certificateId}/revoke`, { reason });
+        return response.data;
+    },
+
+    downloadCertificatePEM: async (certificateId: number, includePrivateKey: boolean = false): Promise<any> => {
+        const params = includePrivateKey ? '?include_private_key=true' : '';
+        const response = await api.get(`/api/v1/certificates/${certificateId}/download-pem${params}`);
+        return response.data;
+    },
+
+    downloadCertificateCRT: async (certificateId: number): Promise<{ blob: Blob; filename: string }> => {
+        const response = await api.get(`/api/v1/certificates/${certificateId}/download-crt`, {
+            responseType: 'blob',
+        });
+
+        const contentDisposition = response.headers['content-disposition'] || '';
+        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+        const filename = filenameMatch ? filenameMatch[1] : `certificate-${certificateId}.crt`;
+
+        return {
+            blob: response.data,
+            filename,
+        };
+    },
+
+    downloadCertificateP12: async (certificateId: number): Promise<{ blob: Blob; password: string; filename: string }> => {
+        const response = await api.get(`/api/v1/certificates/${certificateId}/download-p12`, {
+            responseType: 'blob',
+        });
+
+        const password = response.headers['x-p12-password'] || '';
+        const contentDisposition = response.headers['content-disposition'] || '';
+        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+        const filename = filenameMatch ? filenameMatch[1] : `certificate-${certificateId}.p12`;
+
+        return {
+            blob: response.data,
+            password,
+            filename,
+        };
+    },
+
+    createRenewalRequest: async (certificateId: number, notes?: string): Promise<any> => {
+        const response = await api.post('/api/v1/certificates/renewal-requests', {
+            certificate_id: certificateId,
+            notes,
+        });
+        return response.data;
+    },
+
+    listRenewalRequests: async (
+        statusFilter?: string,
+        customerId?: string,
+        skip: number = 0,
+        limit: number = 100
+    ): Promise<any> => {
+        const params = new URLSearchParams();
+        if (statusFilter) params.append('status_filter', statusFilter);
+        if (customerId) params.append('customer_id', customerId);
+        params.append('skip', skip.toString());
+        params.append('limit', limit.toString());
+
+        const response = await api.get(`/api/v1/certificates/renewal-requests?${params}`);
+        return response.data;
+    },
+
+    processRenewalRequest: async (requestId: number, data: {
+        approved: boolean;
+        validity_days?: number;
+        notes?: string;
+        rejection_reason?: string;
+    }): Promise<any> => {
+        const response = await api.post(`/api/v1/certificates/renewal-requests/${requestId}/process`, data);
+        return response.data;
+    },
+
+    getCertificateHealth: async (): Promise<any> => {
+        const response = await api.get('/api/v1/certificates/health/summary');
+        return response.data;
+    },
+
+    updateCertificateStatuses: async (): Promise<any> => {
+        const response = await api.post('/api/v1/certificates/maintenance/update-statuses');
+        return response.data;
     },
 };
 
@@ -1372,6 +1602,10 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to backfill Invoice V2 business intelligence.');
         }
     },
+    getDashboardDataStats: async () => {
+        const response = await api.get('/api/v1/dashboard/dashboard-data-stats');
+        return response.data;
+    },
     
     getRevenueAnalysis: async (days: number = 90) => {
         try {
@@ -1390,6 +1624,74 @@ export const dashboardApi = {
         } catch (error: any) {
             console.error('Failed to fetch product demand:', error);
             throw new Error(error.response?.data?.detail || 'Failed to load product demand analysis.');
+        }
+    },
+
+    getV2Inbound: async (days: number = 30) => {
+        const response = await api.get(`/api/v1/dashboard/v2/inbound?days=${days}`);
+        return response.data;
+    },
+    getV2Outbound: async (days: number = 30) => {
+        const response = await api.get(`/api/v1/dashboard/v2/outbound?days=${days}`);
+        return response.data;
+    },
+    getV2FailedInvoicesAnalysis: async (days: number = 30, demo?: boolean) => {
+        let url = `/api/v1/dashboard/v2/failed-invoices-analysis?days=${days}`;
+        if (demo) url += '&demo=1';
+        const response = await api.get(url);
+        return response.data;
+    },
+    getV2FailedInvoicesAiInsights: async (days: number = 30, demo?: boolean) => {
+        let url = `/api/v1/dashboard/v2/failed-invoices-ai-insights?days=${days}`;
+        if (demo) url += '&demo=1';
+        const response = await api.get(url);
+        return response.data;
+    },
+    getV2Business: async (days: number = 90, currency?: string | null) => {
+        let url = `/api/v1/dashboard/v2/business?days=${days}`;
+        if (currency && currency !== '') {
+            url += `&currency=${encodeURIComponent(currency)}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    getV2CustomerComparison: async (days: number = 90, currency?: string | null) => {
+        let url = `/api/v1/dashboard/v2/customer-comparison?days=${days}`;
+        if (currency && currency !== '') {
+            url += `&currency=${encodeURIComponent(currency)}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    postCustomerComparisonChat: async (message: string, customerA: object, customerB: object, conversationHistory: { role: string; content: string }[] = []) => {
+        const response = await api.post('/api/v1/dashboard/v2/customer-comparison-chat', {
+            message,
+            customer_a: customerA,
+            customer_b: customerB,
+            conversation_history: conversationHistory,
+        });
+        return response.data;
+    },
+    postAIAnalysisChat: async (
+        message: string,
+        conversationHistory: { role: string; content: string }[] = [],
+        contextKeys: string[] = [],
+        days: number = 30
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/chat', {
+                message,
+                conversation_history: conversationHistory,
+                context_keys: contextKeys,
+                days: Math.max(1, Math.min(365, days)),
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI analysis chat failed:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to get AI analysis response.');
         }
     },
 };
@@ -1460,6 +1762,18 @@ export const satApi = {
             console.error('Failed to list SAT documents:', error);
             throw new Error(error.response?.data?.detail || 'Failed to fetch SAT documents.');
         }
+    },
+
+    listDocumentsForCustomerUser: async (params?: {
+        fiscal_year?: number;
+        fiscal_period?: number;
+        doc_type?: string;
+        status_filter?: string;
+        skip?: number;
+        limit?: number;
+    }) => {
+        const response = await api.get('/api/v1/sat/documents/for-customer-user', { params: params || {} });
+        return response.data;
     },
 
     // Get a specific document
@@ -1893,6 +2207,11 @@ export const invoicesV2Api = {
         }
     },
 
+    getDocumentsForCustomerUser: async (params?: { skip?: number; limit?: number }) => {
+        const response = await api.get('/api/v1/invoices-v2/documents/for-customer-user', { params: params || {} });
+        return response.data;
+    },
+
     deleteDocument: async (documentId: number) => {
         try {
             const response = await api.delete(`/api/v1/invoices-v2/documents/${documentId}`);
@@ -1963,6 +2282,16 @@ export const invoicesV2Api = {
         }
     },
 
+    getUnvalidatedForCustomerUser: async () => {
+        try {
+            const response = await api.get('/api/v1/invoices-v2/unvalidated/for-customer-user');
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get unvalidated invoices for customer user:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch unvalidated invoices.');
+        }
+    },
+
     validateInvoices: async (documentIds: number[]) => {
         try {
             const response = await api.post('/api/v1/invoices-v2/validate', { document_ids: documentIds });
@@ -2000,6 +2329,11 @@ export const invoicesV2Api = {
             console.error('Failed to get validated invoices:', error);
             throw new Error(error.response?.data?.detail || 'Failed to fetch validated invoices.');
         }
+    },
+
+    getValidatedForCustomerUser: async (params?: { status_filter?: string; skip?: number; limit?: number }) => {
+        const response = await api.get('/api/v1/invoices-v2/for-customer-user', { params: params || {} });
+        return response.data;
     },
 
     getValidatedDetails: async (validatedId: number) => {
@@ -2105,6 +2439,21 @@ export const convertedInvoicesApi = {
         }
     },
 
+    // List converted invoices for customer user (only assigned customer_ids)
+    getConvertedForCustomerUser: async (skip: number = 0, limit: number = 100, statusFilter?: string) => {
+        try {
+            const params: any = { skip, limit };
+            if (statusFilter) {
+                params.status_filter = statusFilter;
+            }
+            const response = await api.get('/api/v1/converted-invoices/list/for-customer-user', { params });
+            return response.data;
+        } catch (error: any) {
+            console.error('Failed to get converted invoices for customer user:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to fetch converted invoices.');
+        }
+    },
+
     // Download a converted invoice file
     downloadConverted: async (convertedId: number) => {
         try {
@@ -2159,6 +2508,17 @@ export const convertedInvoicesApi = {
         } catch (error: any) {
             console.error('Failed to delete converted invoice:', error);
             throw new Error(error.response?.data?.detail || 'Failed to delete converted invoice.');
+        }
+    },
+
+    // Send converted file to customer SFTP (delivery settings must be configured)
+    sendToCustomer: async (convertedId: number): Promise<{ success: boolean; message: string; remote_path?: string }> => {
+        try {
+            const response = await api.post(`/api/v1/converted-invoices/${convertedId}/send-to-customer`);
+            return response.data;
+        } catch (error: any) {
+            const detail = error.response?.data?.detail;
+            throw new Error(typeof detail === 'string' ? detail : 'Failed to send to customer.');
         }
     },
 };

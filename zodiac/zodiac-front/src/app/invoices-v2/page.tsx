@@ -9,10 +9,11 @@ import ValidationTab from '@/components/InvoicesV2/ValidationTab';
 import FailedInvoicesTab from '@/components/InvoicesV2/FailedInvoicesTab';
 import SuccessfulInvoicesTab from '@/components/InvoicesV2/SuccessfulInvoicesTab';
 import ConvertedInvoicesTab from '@/components/InvoicesV2/ConvertedInvoicesTab';
-import { FileText, CheckCircle, ClipboardList, XCircle, FileType } from 'lucide-react';
+import ConvertTab from '@/components/InvoicesV2/ConvertTab';
+import { FileText, CheckCircle, ClipboardList, XCircle, FileType, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-type TabType = 'documents' | 'validation' | 'failed' | 'successful' | 'converted';
+type TabType = 'documents' | 'validation' | 'failed' | 'successful' | 'convert' | 'converted';
 
 function InvoicesV2Content() {
   const searchParams = useSearchParams();
@@ -20,7 +21,7 @@ function InvoicesV2Content() {
   const [activeTab, setActiveTab] = useState<TabType>(tabParam || 'documents');
 
   useEffect(() => {
-    if (tabParam && ['documents', 'validation', 'failed', 'successful', 'converted'].includes(tabParam)) {
+    if (tabParam && ['documents', 'validation', 'failed', 'successful', 'convert', 'converted'].includes(tabParam)) {
       setActiveTab(tabParam);
     }
   }, [tabParam]);
@@ -28,8 +29,8 @@ function InvoicesV2Content() {
   return (
     <div className="space-y-6">
       {/* Tab Navigation */}
-      <div className="border-b border-gray-200 overflow-x-auto">
-        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+      <div className="border-b border-gray-200 min-w-0 overflow-hidden">
+        <nav className="-mb-px flex flex-wrap gap-x-4 gap-y-1 sm:gap-x-6 md:gap-x-8" aria-label="Tabs">
           <button
             onClick={() => setActiveTab('documents')}
             className={cn(
@@ -111,6 +112,26 @@ function InvoicesV2Content() {
           </button>
 
           <button
+            onClick={() => setActiveTab('convert')}
+            className={cn(
+              'group inline-flex items-center border-b-2 py-4 px-1 text-sm font-medium transition-colors whitespace-nowrap',
+              activeTab === 'convert'
+                ? 'border-purple-500 text-purple-600'
+                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+            )}
+          >
+            <RefreshCw
+              className={cn(
+                'mr-2 h-5 w-5',
+                activeTab === 'convert'
+                  ? 'text-purple-500'
+                  : 'text-gray-400 group-hover:text-gray-500'
+              )}
+            />
+            Convert
+          </button>
+
+          <button
             onClick={() => setActiveTab('converted')}
             className={cn(
               'group inline-flex items-center border-b-2 py-4 px-1 text-sm font-medium transition-colors whitespace-nowrap',
@@ -138,6 +159,7 @@ function InvoicesV2Content() {
         {activeTab === 'validation' && <ValidationTab />}
         {activeTab === 'failed' && <FailedInvoicesTab />}
         {activeTab === 'successful' && <SuccessfulInvoicesTab />}
+        {activeTab === 'convert' && <ConvertTab />}
         {activeTab === 'converted' && <ConvertedInvoicesTab />}
       </div>
     </div>

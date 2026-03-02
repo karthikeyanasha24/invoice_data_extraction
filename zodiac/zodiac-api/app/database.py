@@ -58,6 +58,10 @@ def init_models():
         from .models.invoice import ZodiacInvoiceSuccessEdi, ZodiacInvoiceFailedEdi
         from .models.customer import Customer
         from .models.correction_cache import CorrectionCache
+        from .models.customer_token import CustomerToken
+        from .models.customer_certificate import CustomerCertificate
+        from .models.certificate_renewal_request import CertificateRenewalRequest
+        from .models.certificate_revocation import CertificateRevocation
         # Models are now registered with Base.metadata
         print("✅ All models initialized and registered with Base.metadata")
     except ImportError as e:
@@ -165,6 +169,65 @@ def ensure_columns_exist():
             "external_message": "VARCHAR DEFAULT 'No msg' NULL",
             "target_file_format": "VARCHAR NULL"
         },
+        "customer_tokens": {
+            "customer_id": "VARCHAR(255) NOT NULL",
+            "token": "VARCHAR(255) NOT NULL",
+            "token_hash": "VARCHAR(255) NOT NULL",
+            "is_active": "BOOLEAN DEFAULT TRUE NOT NULL",
+            "created_at": "TIMESTAMP NOT NULL",
+            "last_used_at": "TIMESTAMP NULL",
+            "expires_at": "TIMESTAMP NULL",
+            "created_by": "INTEGER NULL",
+            "notes": "TEXT NULL",
+        },
+        "customer_certificates": {
+            "customer_id": "VARCHAR(255) NOT NULL",
+            "certificate_type": "VARCHAR(32) NOT NULL DEFAULT 'client'",
+            "common_name": "VARCHAR(255) NOT NULL",
+            "organization": "VARCHAR(255) NULL",
+            "organizational_unit": "VARCHAR(255) NULL",
+            "country": "VARCHAR(2) NULL",
+            "email": "VARCHAR(255) NULL",
+            "certificate_pem": "TEXT NOT NULL",
+            "private_key_encrypted": "TEXT NULL",
+            "serial_number": "VARCHAR(255) NOT NULL",
+            "fingerprint_sha256": "VARCHAR(64) NOT NULL",
+            "issued_at": "TIMESTAMP NOT NULL",
+            "expires_at": "TIMESTAMP NOT NULL",
+            "revoked_at": "TIMESTAMP NULL",
+            "renewed_at": "TIMESTAMP NULL",
+            "status": "VARCHAR(32) NOT NULL DEFAULT 'pending'",
+            "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+            "updated_at": "TIMESTAMP NULL",
+            "created_by": "INTEGER NULL",
+            "revoked_by": "INTEGER NULL",
+            "notes": "TEXT NULL",
+            "revocation_reason": "VARCHAR(255) NULL",
+            "renewed_certificate_id": "INTEGER NULL",
+        },
+        "certificate_renewal_requests": {
+            "certificate_id": "INTEGER NOT NULL",
+            "customer_id": "VARCHAR(255) NOT NULL",
+            "request_status": "VARCHAR(32) NOT NULL DEFAULT 'pending'",
+            "requested_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+            "requested_by": "INTEGER NULL",
+            "processed_at": "TIMESTAMP NULL",
+            "processed_by": "INTEGER NULL",
+            "new_certificate_id": "INTEGER NULL",
+            "notes": "TEXT NULL",
+            "rejection_reason": "TEXT NULL",
+        },
+        "certificate_revocation_list": {
+            "certificate_id": "INTEGER NOT NULL",
+            "customer_id": "VARCHAR(255) NOT NULL",
+            "serial_number": "VARCHAR(255) NOT NULL",
+            "fingerprint_sha256": "VARCHAR(64) NOT NULL",
+            "revoked_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+            "revoked_by": "INTEGER NULL",
+            "reason": "VARCHAR(64) NULL",
+            "notes": "TEXT NULL",
+            "published_in_crl_at": "TIMESTAMP NULL",
+        },
         # ZodiacInvoiceFailedEdi model - zodiac_invoice_failed_edi table
         "zodiac_invoice_failed_edi": {
             "tracking_id": "UUID NULL",
@@ -195,7 +258,11 @@ def ensure_columns_exist():
             "zodiac_customers": ["id"],
             "correction_cache": ["id"],
             "zodiac_invoice_success_edi": ["id"],
-            "zodiac_invoice_failed_edi": ["id"]
+            "zodiac_invoice_failed_edi": ["id"],
+            "customer_tokens": ["id"],
+            "customer_certificates": ["id"],
+            "certificate_renewal_requests": ["id"],
+            "certificate_revocation_list": ["id"],
         }
         
         tables_checked = 0
@@ -257,3 +324,56 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# --------------------------------
+# Optional SAP database (for Generative AI context only)
+# --------------------------------
+_sap_engine = None
+_sap_session_factory = None
+
+
+def get_sap_engine():
+    """Create or return the SAP database engine. Returns None if SAP_DATABASE_URL is not set."""
+    global _sap_engine, _sap_session_factory
+    if _sap_engine is not None:
+        return _sap_engine
+    sap_url = os.getenv("SAP_DATABASE_URL") or os.getenv("SAP_DB_URL")
+    if not sap_url:
+        return None
+    try:
+        _sap_engine = create_engine(
+            sap_url,
+            pool_size=2,
+            max_overflow=5,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            echo=False,
+            connect_args={"connect_timeout": 15},
+        )
+        _sap_session_factory = sessionmaker(autocommit=False, autoflush=False, bind=_sap_engine)
+        return _sap_engine
+    except Exception as e:
+        print(f"⚠️ SAP database engine creation failed: {e}")
+        return None
+
+
+def get_sap_db():
+    """Provide a SQLAlchemy session for the SAP database. Yields None if SAP is not configured."""
+    sap_engine = get_sap_engine()
+    if sap_engine is None or _sap_session_factory is None:
+        yield None
+        return
+    session = _sap_session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def get_sap_session():
+    """Return a new SAP database session. Caller must close it. Returns None if SAP is not configured."""
+    sap_engine = get_sap_engine()
+    if sap_engine is None or _sap_session_factory is None:
+        return None
+    return _sap_session_factory()

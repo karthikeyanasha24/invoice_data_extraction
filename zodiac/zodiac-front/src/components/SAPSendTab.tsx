@@ -169,28 +169,6 @@ export default function SAPSendTab() {
     }
   };
 
-  const handleSendAllToSAP = async () => {
-    setSending(prev => ({ ...prev, 'send-all': true }));
-    setError(null);
-    setSuccess(null);
-
-    try {
-      // Send all pending documents together
-      const response = await satCanonicalApi.sendAllToSAP({
-        fiscal_year: yearFilter,
-        fiscal_period: periodFilter
-      });
-      
-      setSuccess(`✅ All documents sent successfully to SAP! Total: ${response.documents_sent} documents`);
-      await fetchData(); // Refresh to show updated status
-    } catch (err: any) {
-      console.error('Error sending all to SAP:', err);
-      setError(err.message || 'Failed to send all documents to SAP.');
-    } finally {
-      setSending(prev => ({ ...prev, 'send-all': false }));
-    }
-  };
-
   const formatCurrency = (amount: number, currency: string = 'MXN') => {
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -301,38 +279,6 @@ export default function SAPSendTab() {
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
           <p className="text-red-800">{error}</p>
-        </div>
-      )}
-
-      {/* Send All Button */}
-      {(pendingCanonicalDocs.length > 0 || pendingSimpleDocs.length > 0) && (
-        <div className="bg-gradient-to-r from-green-500 to-blue-500 rounded-lg shadow-lg p-6">
-          <div className="flex items-center justify-between text-white">
-            <div>
-              <h3 className="text-xl font-bold mb-2">Ready to Send</h3>
-              <p className="text-green-50">
-                {pendingCanonicalDocs.length + pendingSimpleDocs.length} documents ready to send to SAP
-                ({pendingCanonicalDocs.length} Canonical, {pendingSimpleDocs.length} Simple Merge)
-              </p>
-            </div>
-            <button
-              onClick={handleSendAllToSAP}
-              disabled={sending['send-all']}
-              className="px-8 py-4 text-lg font-bold text-green-600 bg-white hover:bg-green-50 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed rounded-lg shadow-xl hover:shadow-2xl transition-all duration-200 flex items-center gap-3"
-            >
-              {sending['send-all'] ? (
-                <>
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  Sending All...
-                </>
-              ) : (
-                <>
-                  <Send className="w-6 h-6" />
-                  Send All to SAP
-                </>
-              )}
-            </button>
-          </div>
         </div>
       )}
 

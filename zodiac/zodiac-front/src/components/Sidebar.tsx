@@ -12,7 +12,9 @@ import {
   User,
   LogOut,
   Building2,
-  Key
+  Key,
+  Users,
+  Sparkles
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -29,64 +31,24 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
-  const menuItems = [
-    {
-      id: 'dashboard',
-      label: 'Dashboard',
-      icon: LayoutDashboard,
-      path: '/dashboard',
-      description: 'Overview and analytics'
-    },
-    {
-      id: 'invoices',
-      label: 'Invoices',
-      icon: FileText,
-      path: '/invoices-v2',
-      description: 'Manage and validate invoices'
-    },
-    {
-      id: 'quotations',
-      label: 'Quotations',
-      icon: Receipt,
-      path: '/quotations',
-      description: 'Manage quotation files'
-    },
-    {
-      id: 'customers',
-      label: 'Customers',
-      icon: Building2,
-      path: '/customers',
-      description: 'Manage EDI customers'
-    },
-    {
-      id: 'sat-documents',
-      label: 'SAT Documents',
-      icon: Receipt,
-      path: '/sat-documents',
-      description: 'CFDI documents & SAP integration'
-    },
-    {
-      id: 'account-mapping',
-      label: 'Account Mapping',
-      icon: Settings,
-      path: '/admin/account-mapping',
-      description: 'RFC to SAP G/L mapping'
-    },
-    {
-      id: 'supplier-tokens',
-      label: 'Supplier Tokens',
-      icon: Key,
-      path: '/admin/supplier-tokens',
-      description: 'Manage supplier API tokens'
-    },
-    {
-      id: 'settings',
-      label: 'Settings',
-      icon: Settings,
-      path: '/settings',
-      description: 'Account and preferences'
-    }
+  const isCustomerUser = user?.is_customer_user && !user?.is_admin;
+  const adminMenuItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', description: 'Overview and analytics' },
+    { id: 'generative-ai', label: 'Generative AI', icon: Sparkles, path: '/dashboard/ai', description: 'AI-powered dashboard analysis' },
+    { id: 'invoices', label: 'Invoices', icon: FileText, path: '/invoices-v2', description: 'Manage and validate invoices' },
+    { id: 'quotations', label: 'Quotations', icon: Receipt, path: '/quotations', description: 'Manage quotation files' },
+    { id: 'customers', label: 'Customers', icon: Building2, path: '/customers', description: 'Manage EDI customers' },
+    ...(user?.is_admin ? [{ id: 'customer-users', label: 'Customer users', icon: Users, path: '/customer-users', description: 'Users & customer assignments' }] : []),
+    { id: 'sat-documents', label: 'SAT Documents', icon: Receipt, path: '/sat-documents', description: 'CFDI documents & SAP integration' },
+    { id: 'account-mapping', label: 'Account Mapping', icon: Settings, path: '/admin/account-mapping', description: 'RFC to SAP G/L mapping' },
+    { id: 'supplier-tokens', label: 'Supplier Tokens', icon: Key, path: '/admin/supplier-tokens', description: 'Manage supplier API tokens' },
+    { id: 'settings', label: 'Settings', icon: Settings, path: '/settings', description: 'Account and preferences' }
   ];
+  const customerUserMenuItems = [
+    { id: 'customer-invoices', label: 'Invoices', icon: FileText, path: '/customer-invoices', description: 'View and process your invoices' },
+    { id: 'customer-sat-documents', label: 'SAT Documents', icon: Receipt, path: '/customer-sat-documents', description: 'CFDI documents, merge and send to SAP' }
+  ];
+  const menuItems = isCustomerUser ? customerUserMenuItems : adminMenuItems;
 
   const handleNavigation = (path: string) => {
     router.push(path);
@@ -148,14 +110,16 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
         <div className="space-y-1 sm:space-y-2">
           {menuItems.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname === item.path || pathname.startsWith(item.path + '/');
+            const isActive = item.path === '/dashboard'
+              ? pathname === '/dashboard'
+              : pathname === item.path || pathname.startsWith(item.path + '/');
             
             return (
               <button
                 key={item.id}
                 onClick={() => handleNavigation(item.path)}
                 className={cn(
-                  "w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-left transition-all duration-200 group cursor-pointer",
+                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-200 group cursor-pointer min-w-0",
                   isActive 
                     ? "bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 border border-blue-200 shadow-sm" 
                     : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
@@ -167,7 +131,7 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
                   isActive ? "text-blue-600" : "text-slate-500 group-hover:text-slate-700"
                 )} />
                 {(!isCollapsed || isMobile) && (
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 overflow-hidden">
                     <div className="font-medium text-sm truncate">{item.label}</div>
                     <div className="text-xs text-slate-500 truncate">{item.description}</div>
                   </div>

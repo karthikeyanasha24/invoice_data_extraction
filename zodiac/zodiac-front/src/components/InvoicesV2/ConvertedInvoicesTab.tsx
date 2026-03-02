@@ -13,6 +13,7 @@ import {
   Calendar,
   FileType,
   Trash2,
+  Send,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -37,24 +38,31 @@ const FORMAT_COLORS: Record<string, { bg: string; text: string }> = {
   CFDI: { bg: 'bg-pink-100', text: 'text-pink-800' },
 };
 
-export default function ConvertedInvoicesTab() {
+interface ConvertedInvoicesTabProps {
+  customerUserMode?: boolean;
+}
+
+export default function ConvertedInvoicesTab({ customerUserMode }: ConvertedInvoicesTabProps = {}) {
   const [convertedInvoices, setConvertedInvoices] = useState<ConvertedInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [downloading, setDownloading] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [sending, setSending] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
 
   useEffect(() => {
     fetchConvertedInvoices();
-  }, [statusFilter]);
+  }, [statusFilter, customerUserMode]);
 
   const fetchConvertedInvoices = async () => {
     setLoading(true);
     setError('');
 
     try {
-      const response = await convertedInvoicesApi.getConverted(0, 100, statusFilter || undefined);
+      const response = customerUserMode
+        ? await convertedInvoicesApi.getConvertedForCustomerUser(0, 100, statusFilter || undefined)
+        : await convertedInvoicesApi.getConverted(0, 100, statusFilter || undefined);
       setConvertedInvoices(response.converted_invoices || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load converted invoices');
@@ -93,6 +101,25 @@ export default function ConvertedInvoicesTab() {
       setError(`Delete failed: ${err.message}`);
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const handleSendToCustomer = async (convertedId: number) => {
+    setSending(convertedId);
+    setError('');
+
+    try {
+      const result = await convertedInvoicesApi.sendToCustomer(convertedId);
+      if (result.success) {
+        setError('');
+        alert(result.message + (result.remote_path ? `\nPath: ${result.remote_path}` : ''));
+      } else {
+        setError(result.message || 'Send failed');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Send to customer failed');
+    } finally {
+      setSending(null);
     }
   };
 
@@ -250,7 +277,7 @@ export default function ConvertedInvoicesTab() {
                             <>
                               <button
                                 onClick={() => handleDownload(invoice.id)}
-                                disabled={downloading === invoice.id || deleting === invoice.id}
+                                disabled={downloading === invoice.id || deleting === invoice.id || sending === invoice.id}
                                 className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
                               >
                                 {downloading === invoice.id ? (
@@ -265,10 +292,27 @@ export default function ConvertedInvoicesTab() {
                                   </>
                                 )}
                               </button>
-                              
+                              <button
+                                onClick={() => handleSendToCustomer(invoice.id)}
+                                disabled={sending === invoice.id || downloading === invoice.id || deleting === invoice.id}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
+                                title="Send file to customer SFTP"
+                              >
+                                {sending === invoice.id ? (
+                                  <>
+                                    <Loader className="w-3 h-3 animate-spin" />
+                                    Sending...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Send className="w-3 h-3" />
+                                    Send to customer
+                                  </>
+                                )}
+                              </button>
                               <button
                                 onClick={() => handleDelete(invoice.id)}
-                                disabled={deleting === invoice.id || downloading === invoice.id}
+                                disabled={deleting === invoice.id || downloading === invoice.id || sending === invoice.id}
                                 className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
                                 title="Delete converted invoice"
                               >

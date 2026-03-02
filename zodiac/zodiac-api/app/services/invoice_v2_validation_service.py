@@ -10,10 +10,38 @@ from sqlalchemy.orm import Session
 
 from ..models.invoice_v2_document import InvoiceV2Document
 from ..models.invoice_v2_validated import InvoiceV2Validated
+from ..models.invoice_v2_business_data import InvoiceV2BusinessData
 from .invoice_v2_correction_service import InvoiceV2CorrectionService
+from .invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
 from .file_service import read_file_from_storage
 
 logger = logging.getLogger("zodiac-api.invoice_v2_validation")
+
+# UBL 2.0 namespaces for lightweight extraction (e.g. customer_id only)
+_UBL_NS = {
+    "cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2",
+    "cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
+}
+
+
+def extract_customer_id_from_xml(xml_bytes: bytes) -> Optional[str]:
+    """
+    Lightweight extraction of customer_id from UBL XML (AccountingCustomerParty).
+    Returns None if not found or on parse error. Used to filter unvalidated docs for customer users.
+    """
+    try:
+        parser = etree.XMLParser(recover=True, resolve_entities=False, no_network=True)
+        root = etree.fromstring(xml_bytes, parser)
+        customer_party = root.find(".//cac:AccountingCustomerParty/cac:Party", _UBL_NS)
+        if customer_party is None:
+            return None
+        endpoint = customer_party.find(".//cbc:EndpointID", _UBL_NS)
+        if endpoint is not None and endpoint.text:
+            return endpoint.text.strip()
+        return None
+    except Exception as e:
+        logger.debug("extract_customer_id_from_xml failed: %s", e)
+        return None
 
 
 class InvoiceV2ValidationService:
@@ -109,6 +137,49 @@ class InvoiceV2ValidationService:
             
             self.db.commit()
             self.db.refresh(validated_invoice)
+            
+            # Auto-save BI for dashboard when validation succeeds (products, industry, etc.)
+            if status == "success" and document.user_id:
+                try:
+                    existing = self.db.query(InvoiceV2BusinessData).filter(
+                        InvoiceV2BusinessData.validated_invoice_id == validated_invoice.id
+                    ).first()
+                    if not existing:
+                        bi_service = InvoiceV2BusinessIntelligence()
+                        bi_data = bi_service.extract_bi_data(validated_invoice)
+                        user_id = getattr(document, "user_id", None) or bi_data.get("user_id")
+                        if not user_id:
+                            logger.warning("   BI auto-save skipped: no user_id")
+                        else:
+                            bi_record = InvoiceV2BusinessData(
+                                validated_invoice_id=bi_data["validated_invoice_id"],
+                                user_id=user_id,
+                                customer_id=bi_data["customer"].get("id"),
+                                customer_name=bi_data["customer"].get("name"),
+                                customer_country=bi_data["customer"].get("country"),
+                                supplier_id=bi_data["supplier"].get("id"),
+                                supplier_name=bi_data["supplier"].get("name"),
+                                products=bi_data["products"],
+                                total_products_count=bi_data["total_products_count"],
+                                total_amount=bi_data["financial"].get("total_amount"),
+                                tax_amount=bi_data["financial"].get("tax_amount"),
+                                currency=bi_data["financial"].get("currency"),
+                                industry=bi_data["industry"],
+                                industry_confidence=bi_data["industry_confidence"],
+                                industry_keywords_matched=bi_data["industry_keywords_matched"],
+                                invoice_date=bi_data["temporal"].get("invoice_date"),
+                                fiscal_quarter=bi_data["temporal"].get("fiscal_quarter"),
+                                fiscal_year=bi_data["temporal"].get("fiscal_year"),
+                                season=bi_data["temporal"].get("season"),
+                                current_stage=bi_data["lifecycle"].get("current_stage"),
+                                stage_status=bi_data["lifecycle"].get("stage_status"),
+                            )
+                            self.db.add(bi_record)
+                            self.db.commit()
+                            logger.info(f"   BI data saved for dashboard (products: {bi_data['total_products_count']})")
+                except Exception as bi_err:
+                    logger.warning(f"   BI auto-save skipped: {bi_err}")
+                    self.db.rollback()
             
             logger.info(f"✅ Validation completed: {status.upper()}")
             logger.info(f"   Missing fields: {len(missing_fields)}")
