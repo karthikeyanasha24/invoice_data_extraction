@@ -3,7 +3,6 @@ Dashboard API endpoints for statistics, analytics, and AI insights
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.orm import Session
-
 from sqlalchemy import func, cast, Date, Numeric, inspect, text
 from datetime import datetime, timedelta
 from collections import defaultdict
