@@ -1889,6 +1889,67 @@ def _get_ai_analysis_config():
     return openai_key
 
 
+def _get_sales_by_product_from_vbrp(db: Session, limit: int = 10) -> list[dict]:
+    """
+    Compute highest sales by product from the primary DATABASE_URL using the SAP-style
+    line-item table (vbrp) if present.
+
+    - Works with both lower/upper-case table/column names.
+    - Tries common SAP column names: MATNR for product, NETWR for net value.
+    - Falls back to other generic names if needed.
+    """
+    bind = db.get_bind()
+    if bind is None:
+        return []
+
+    inspector = inspect(bind)
+    table_names = inspector.get_table_names()
+    table_map = {name.lower(): name for name in table_names}
+
+    if "vbrp" not in table_map:
+        return []
+
+    vbrp_name = table_map["vbrp"]
+    columns = inspector.get_columns(vbrp_name)
+    name_map = {c["name"].lower(): c["name"] for c in columns}
+
+    product_candidates = ["matnr", "product_id", "material"]
+    value_candidates = ["netwr", "net_value", "amount", "sales_value"]
+
+    product_col = next((name_map[c] for c in product_candidates if c in name_map), None)
+    value_col = next((name_map[c] for c in value_candidates if c in name_map), None)
+
+    if not product_col or not value_col:
+        return []
+
+    query = text(
+        f"""
+        SELECT {product_col} AS product_id,
+               SUM(CAST({value_col} AS NUMERIC)) AS total_sales
+        FROM {vbrp_name}
+        GROUP BY {product_col}
+        ORDER BY total_sales DESC
+        LIMIT :limit
+        """
+    )
+
+    rows = db.execute(query, {"limit": limit}).fetchall()
+
+    results: list[dict] = []
+    for r in rows:
+        total = r.total_sales
+        if isinstance(total, Decimal):
+            total = float(total)
+        results.append(
+            {
+                "product_id": str(r.product_id),
+                "total_sales": float(total) if total is not None else 0.0,
+            }
+        )
+
+    return results
+
+
 def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db: Session, days: int = 30) -> str:
     """Build context string for AI analysis chat from requested context_keys.
     Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
@@ -2113,10 +2174,19 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
             except Exception:
                 current_revenue = previous_revenue = 0.0
             trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
+
+            # Optional: derive sales by product directly from vbrp in the primary DB
+            product_sales: list[dict] = []
+            try:
+                product_sales = _get_sales_by_product_from_vbrp(db, limit=10)
+            except Exception as e2:
+                logger.warning(f"AI context product_sales from vbrp: {e2}")
+
             parts.append(
                 f"Business (revenue): current period {current_revenue:.0f}, previous {previous_revenue:.0f} (change {trend_pct:+.1f}%). "
                 f"Revenue by customer (top 10): {json.dumps(revenue_by_customer)}. "
-                f"Revenue by country (top 5): {json.dumps(revenue_by_country)}.",
+                f"Revenue by country (top 5): {json.dumps(revenue_by_country)}. "
+                f"Sales by product (top 10 from vbrp): {json.dumps(product_sales)}.",
             )
         except Exception as e:
             logger.warning(f"AI context business_summary: {e}")
