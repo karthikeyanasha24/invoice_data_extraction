@@ -68,6 +68,41 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
 }
 
 
+# High-level join hints between common SAP tables. This is injected into the LLM
+# prompt so that the SQL JSON spec uses realistic join paths instead of guessing.
+SAP_JOIN_HINTS = """
+Typical business key joins you MUST prefer (do NOT invent other join columns):
+
+- VBRP (billing items) <-> VBRK (billing header)
+  * VBRP.VBELN = VBRK.VBELN
+
+- VBRK (billing header) <-> KNA1 (customer master)
+  * VBRK.KUNAG = KNA1.KUNNR
+  * VBRK.KUNRG = KNA1.KUNNR   (payer, if present)
+
+- VBAK (sales order header) <-> VBAP (sales order items)
+  * VBAK.VBELN = VBAP.VBELN
+
+- VBAP (order items) / VBRP (billing items) <-> VBEP (schedule lines)
+  * VBEP.VBELN = VBAP.VBELN AND VBEP.POSNR = VBAP.POSNR
+
+- VBRP / VBAP (items with product) <-> MAKT / MVKE / MARC (material master & descriptions)
+  * VBRP.MATNR = MAKT.MATNR = MVKE.MATNR = MARC.MATNR
+  * VBAP.MATNR = MAKT.MATNR = MVKE.MATNR = MARC.MATNR
+
+- BSAD / BSEG (AR items) <-> KNA1 (customer master)
+  * BSAD.KUNNR = KNA1.KUNNR
+  * BSEG.KUNNR = KNA1.KUNNR
+
+VERY IMPORTANT:
+- VBRP usually does NOT have KUNNR directly. To reach the customer, go:
+  VBRP.VBELN -> VBRK.VBELN, then VBRK.KUNAG -> KNA1.KUNNR.
+- When you need INDUSTRY or COUNTRY of a customer, read it from:
+  * KNA1.BRSCH (industry)
+  * KNA1.LAND1 (country)
+"""
+
+
 @dataclass
 class SqlAgentResult:
     sql: str
@@ -220,9 +255,13 @@ Tables available (subset already selected as relevant):
 Column mappings (table -> column -> short description):
 {json.dumps(column_mappings, indent=2)}
 
+Known join patterns between these tables:
+{SAP_JOIN_HINTS}
+
 Task:
 - Choose relevant columns from these tables.
-- Propose joins between tables using business keys (for example, VBRP.VBELN = VBRK.VBELN, VBRK.KUNAG = KNA1.KUNNR, VBRP.MATNR = MVKE.MATNR or MAKT.MATNR).
+- Propose joins between tables using ONLY the business keys listed above (do NOT invent other join columns).
+- Remember that VBRP typically does NOT have KUNNR; to reach the customer, you MUST join via VBRK then KNA1.
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
 {{
