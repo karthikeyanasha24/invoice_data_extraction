@@ -161,6 +161,7 @@ def run_ai_analysis_orchestrator(
     db: Session,
     conversation_history: Optional[list] = None,
     context_str: str = "",
+    sap_db: Optional[Session] = None,
 ) -> OrchestratorResult:
     """
     Orchestrates INVOICE_BOT-like behaviors:
@@ -316,7 +317,8 @@ Explain the answer briefly (3-8 sentences). If result is empty, say so and sugge
         )
 
     # new: run SAP SQL agent, store sql+rows and return summary; if no rows, return a helpful message
-    result = run_sap_sql_agent(user_query, db)
+    sql_db = sap_db or db
+    result = run_sap_sql_agent(user_query, sql_db)
     if not result:
         return OrchestratorResult(
             reply="I couldn’t generate a SQL query for that question. Try rephrasing with the specific entity (customer, product, country) and time period.",
