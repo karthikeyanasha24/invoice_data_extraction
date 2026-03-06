@@ -1,0 +1,396 @@
+import json
+import logging
+import re
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
+from openai import OpenAI
+from sqlalchemy.orm import Session
+
+from ..config.config import OPENAI_API_KEY
+from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
+from .sap_sql_agent import run_sap_sql_agent, _serialize_value  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OrchestratorResult:
+    reply: str
+    action: str
+    reason: str = ""
+    sql: str = ""
+    rows_preview: Optional[List[Dict[str, Any]]] = None
+    compare: Optional[Dict[str, Any]] = None
+    memory_updated: bool = False
+
+
+def _get_client(api_key: str) -> OpenAI:
+    return OpenAI(api_key=api_key)
+
+
+def _safe_json_extract(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except Exception:
+        m = re.search(r"\{[\s\S]*\}", text)
+        if not m:
+            return {}
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return {}
+
+
+def _decide_action(client: OpenAI, user_query: str, mem: AiAnalysisMemory) -> Tuple[str, str]:
+    last_sql = (mem.last_sql or "")[:2000]
+    last_q = (mem.last_user_query or "")[:500]
+    prompt = f"""
+You are assisting with SQL query generation for an analytics chat.
+
+User query: "{user_query}"
+Last user query in this chat: "{last_q}"
+Last SQL query (if any): "{last_sql}"
+
+Task:
+Decide whether this query is:
+1) identical to a query asked before (reuse)
+2) a comparison between multiple datasets/periods (compare)
+3) a follow-up that can be answered from prior results/context without new SQL (follow-up)
+4) new knowledge/instructions the user wants remembered (knowledge)
+5) a new query requiring new SQL and new data (new)
+
+Return JSON only:
+{{
+  "action": "reuse"|"compare"|"follow-up"|"knowledge"|"new",
+  "reason": "short reason"
+}}
+"""
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=120,
+    )
+    decision = _safe_json_extract((resp.choices[0].message.content or "").strip())
+    action = str(decision.get("action") or "new").strip()
+    reason = str(decision.get("reason") or "").strip()
+    if action not in {"reuse", "compare", "follow-up", "knowledge", "new"}:
+        action = "new"
+    return action, reason
+
+
+def _rows_preview(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in rows[:limit]:
+        clean = {str(k): _serialize_value(v) for k, v in (r or {}).items()}
+        out.append(clean)
+    return out
+
+
+def _split_compare_query(client: OpenAI, user_query: str) -> List[str]:
+    """
+    INVOICE_BOT uses split_comparison_query. We mimic via LLM:
+    return 2+ sub-questions that can be executed separately.
+    """
+    prompt = f"""
+User query: "{user_query}"
+
+Task:
+If the user is asking to compare two or more things (time periods, customers, products, countries),
+rewrite into multiple standalone questions that can be answered by SQL independently.
+
+Return JSON only:
+{{
+  "subqueries": ["...", "..."]
+}}
+"""
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        max_tokens=250,
+    )
+    data = _safe_json_extract((resp.choices[0].message.content or "").strip())
+    subs = data.get("subqueries")
+    if isinstance(subs, list):
+        cleaned = [str(s).strip() for s in subs if str(s).strip()]
+        return cleaned[:4]
+    return []
+
+
+def _compare_numeric(datasets: List[Tuple[str, List[Dict[str, Any]]]]) -> Dict[str, Any]:
+    """
+    Lightweight compare: for each dataset compute numeric column sums/means where possible.
+    """
+    def is_num(x: Any) -> bool:
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    summary: Dict[str, Any] = {"datasets": []}
+    for label, rows in datasets:
+        if not rows:
+            summary["datasets"].append({"label": label, "row_count": 0, "numeric": {}})
+            continue
+        numeric_acc: Dict[str, Dict[str, float]] = {}
+        counts: Dict[str, int] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            for k, v in r.items():
+                if is_num(v):
+                    if k not in numeric_acc:
+                        numeric_acc[k] = {"sum": 0.0}
+                        counts[k] = 0
+                    numeric_acc[k]["sum"] += float(v)
+                    counts[k] += 1
+        numeric_out: Dict[str, Dict[str, float]] = {}
+        for k, agg in numeric_acc.items():
+            c = counts.get(k, 0) or 0
+            numeric_out[k] = {"sum": agg["sum"], "mean": (agg["sum"] / c) if c else 0.0}
+        summary["datasets"].append({"label": label, "row_count": len(rows), "numeric": numeric_out})
+    return summary
+
+
+def run_ai_analysis_orchestrator(
+    *,
+    api_key: Optional[str],
+    user_id: int,
+    user_query: str,
+    db: Session,
+    conversation_history: Optional[list] = None,
+    context_str: str = "",
+) -> OrchestratorResult:
+    """
+    Orchestrates INVOICE_BOT-like behaviors:
+    - action decision (reuse/compare/follow-up/knowledge/new)
+    - persisted memory per user (last SQL, last rows, knowledge)
+    - runs sap_sql_agent when needed
+    Returns a response payload that keeps `reply` for the current frontend.
+    """
+    effective_key = api_key or OPENAI_API_KEY
+    if not effective_key:
+        return OrchestratorResult(reply="AI analysis is not configured (missing OPENAI_API_KEY).", action="error", reason="missing_api_key")
+
+    client = _get_client(effective_key)
+    mem = load_memory(db, user_id)
+    action, reason = _decide_action(client, user_query, mem)
+
+    # knowledge: store a short instruction snippet
+    if action == "knowledge":
+        upsert_knowledge(db, user_id, f"note_{len(mem.knowledge())+1}", user_query.strip()[:2000])
+        return OrchestratorResult(
+            reply="Saved that as a note for this chat session. Ask me a question anytime and I’ll use it as context.",
+            action=action,
+            reason=reason,
+            memory_updated=True,
+        )
+
+    # follow-up: respond from memory + context without new SQL
+    if action == "follow-up":
+        last_rows = mem.last_rows()
+        prompt = f"""
+You are a business analyst assistant. Answer the user's follow-up using prior context and the last result sample when relevant.
+
+Dashboard context:
+{context_str[:6000]}
+
+Last SQL (if any):
+{(mem.last_sql or '')[:3000]}
+
+Last result sample (JSON, may be empty):
+{json.dumps(last_rows[:10], default=str)[:6000]}
+
+Conversation (latest last):
+{json.dumps((conversation_history or [])[-10:], default=str)[:6000]}
+
+User follow-up:
+{user_query}
+
+Answer concisely.
+"""
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            max_tokens=700,
+        )
+        return OrchestratorResult(
+            reply=(resp.choices[0].message.content or "").strip() or "I couldn’t generate a response.",
+            action=action,
+            reason=reason,
+            sql=mem.last_sql or "",
+            rows_preview=last_rows[:30] if last_rows else None,
+        )
+
+    # compare: run multiple subqueries, compare numeric summaries, then summarize differences
+    if action == "compare":
+        subqueries = _split_compare_query(client, user_query)
+        if len(subqueries) < 2:
+            action = "new"
+        else:
+            datasets: List[Tuple[str, List[Dict[str, Any]]]] = []
+            sqls: List[str] = []
+            for sq in subqueries[:3]:
+                r = run_sap_sql_agent(sq, db)
+                if not r or not r.rows:
+                    datasets.append((sq, []))
+                    sqls.append(r.sql if r else "")
+                else:
+                    datasets.append((sq, r.rows))
+                    sqls.append(r.sql)
+            compare_summary = _compare_numeric(datasets)
+            prompt = f"""
+You are a data analyst. The user asked for a comparison:
+"{user_query}"
+
+We executed these sub-questions:
+{json.dumps(subqueries, indent=2)}
+
+Comparison summary (auto-computed numeric sums/means):
+{json.dumps(compare_summary, indent=2)}
+
+Write a short comparison summary (5-10 sentences). Call out the biggest differences.
+If data is missing for a dataset, mention it clearly.
+"""
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+                max_tokens=800,
+            )
+            reply = (resp.choices[0].message.content or "").strip()
+            # update memory to last dataset (helps follow-ups)
+            last_sql = next((s for s in reversed(sqls) if s), "")
+            last_rows = next((rows for _, rows in reversed(datasets) if rows), [])
+            mem.last_user_query = user_query
+            mem.last_sql = last_sql
+            mem.last_rows_json = json.dumps(_rows_preview(last_rows, limit=80), default=str)
+            save_memory(db, mem)
+            return OrchestratorResult(
+                reply=reply or "Comparison complete, but I couldn’t generate a narrative summary.",
+                action="compare",
+                reason=reason,
+                sql=last_sql,
+                rows_preview=_rows_preview(last_rows) if last_rows else None,
+                compare={"subqueries": subqueries, "sqls": sqls, "summary": compare_summary},
+                memory_updated=True,
+            )
+
+    # reuse: re-run last SQL if we have it, otherwise treat as new
+    if action == "reuse" and mem.last_sql:
+        # In serverless, re-executing arbitrary SQL can be expensive/unreliable.
+        # Prefer reusing the last cached rows preview for "reuse" answers; "new" will re-run via sap_sql_agent.
+        rows_list = mem.last_rows()
+        prompt = f"""
+User asked: "{user_query}"
+
+We are reusing the prior SQL:
+```sql
+{mem.last_sql}
+```
+
+Result preview JSON:
+{json.dumps(_rows_preview(rows_list, limit=20), default=str)}
+
+Explain the answer briefly (3-8 sentences). If result is empty, say so and suggest a refined question.
+"""
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            max_tokens=650,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        mem.last_user_query = user_query
+        mem.last_rows_json = json.dumps(_rows_preview(rows_list, limit=80), default=str)
+        save_memory(db, mem)
+        return OrchestratorResult(
+            reply=reply or "Reused the prior query, but no response was generated.",
+            action="reuse",
+            reason=reason,
+            sql=mem.last_sql,
+            rows_preview=_rows_preview(rows_list) if rows_list else None,
+            memory_updated=True,
+        )
+
+    # new: run SAP SQL agent, store sql+rows and return summary; if no rows, return a helpful message
+    result = run_sap_sql_agent(user_query, db)
+    if not result:
+        return OrchestratorResult(
+            reply="I couldn’t generate a SQL query for that question. Try rephrasing with the specific entity (customer, product, country) and time period.",
+            action="new",
+            reason=reason or "sap_sql_agent_no_result",
+        )
+    if not result.rows:
+        mem.last_user_query = user_query
+        mem.last_sql = result.sql or ""
+        mem.last_rows_json = "[]"
+        save_memory(db, mem)
+        return OrchestratorResult(
+            reply="I generated and ran a query, but it returned **no rows**. This usually means the filters/time window didn’t match any data. Try widening the period or removing a filter.",
+            action="new",
+            reason=reason or "sql_returned_no_rows",
+            sql=result.sql,
+            rows_preview=[],
+            memory_updated=True,
+        )
+
+    # Summarize rows with LLM (same as sap_sql_agent summarizer, but we add memory/knowledge/context)
+    preview = _rows_preview(result.rows, limit=20)
+    prompt = f"""
+You are an expert SAP sales/finance analyst.
+
+Dashboard context (optional):
+{context_str[:6000]}
+
+Saved knowledge/notes (optional):
+{json.dumps(mem.knowledge(), indent=2, default=str)[:4000]}
+
+User question:
+{user_query}
+
+SQL executed:
+```sql
+{result.sql}
+```
+
+Result preview as JSON:
+{json.dumps(preview, default=str)}
+
+Task:
+- Answer the question in clear business language.
+- Include specific numbers when helpful.
+- Be concise (3–10 sentences).
+"""
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4,
+        max_tokens=800,
+    )
+    reply = (resp.choices[0].message.content or "").strip()
+
+    mem.last_user_query = user_query
+    mem.last_sql = result.sql
+    mem.last_rows_json = json.dumps(_rows_preview(result.rows, limit=80), default=str)
+    save_memory(db, mem)
+
+    return OrchestratorResult(
+        reply=reply or "Query executed, but I couldn’t generate a summary.",
+        action="new",
+        reason=reason,
+        sql=result.sql,
+        rows_preview=preview,
+        memory_updated=True,
+    )
+
+
+def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
+    payload = asdict(result)
+    # keep payload small and frontend-safe
+    if payload.get("rows_preview") is not None and len(payload["rows_preview"]) > 30:
+        payload["rows_preview"] = payload["rows_preview"][:30]
+    return payload
+
