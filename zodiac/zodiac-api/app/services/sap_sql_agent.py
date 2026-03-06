@@ -305,6 +305,18 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
     def _actual_table_name(logical: str) -> str:
         return logical_to_actual.get(logical, logical)
 
+    # Build a case-insensitive column name map per table so we can always
+    # use the real DB column identifiers even if the JSON spec uses upper-case.
+    column_name_map: Dict[str, Dict[str, str]] = {}
+    for actual_tbl, cols in column_mappings.items():
+        column_name_map[actual_tbl] = {c_name.lower(): c_name for c_name in cols.keys()}
+
+    def _actual_column_name(actual_tbl: str, logical_col: str) -> str:
+        if not logical_col:
+            return logical_col
+        table_cols = column_name_map.get(actual_tbl, {})
+        return table_cols.get(str(logical_col).lower(), logical_col)
+
     for tbl in all_tables:
         actual = _actual_table_name(tbl)
         table_aliases[actual] = _fmt_alias(actual)
@@ -315,13 +327,14 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
 
     for col in columns:
         logical_tbl = col.get("table")
-        col_name = col.get("name")
-        if not logical_tbl or not col_name:
+        col_name_raw = col.get("name")
+        if not logical_tbl or not col_name_raw:
             continue
         actual_tbl = _actual_table_name(logical_tbl)
         if actual_tbl not in table_aliases:
             continue
         alias = table_aliases[actual_tbl]
+        col_name = _actual_column_name(actual_tbl, col_name_raw)
         human = col.get("description") or f"{actual_tbl}_{col_name}"
         human_safe = re.sub(r"[^\w]", "_", human)[:60] or f"{alias}_{col_name}"
         if human_safe in used_col_aliases:
@@ -390,12 +403,15 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             continue
         alias = table_aliases[actual_tbl]
         sql_lines.append(f'\nLEFT JOIN "{actual_tbl}" AS {alias}')
-        # Try to join on a shared key with base table
+        # Try to join on a shared key with base table (case-insensitive column resolution)
         join_cond = None
         for key in COMMON_KEYS:
-            join_cond_candidate = f"{base_alias}.\"{key}\" = {alias}.\"{key}\""
-            join_cond = join_cond_candidate
-            break
+            base_col = _actual_column_name(base_actual, key)
+            other_col = _actual_column_name(actual_tbl, key)
+            if base_col and other_col:
+                join_cond_candidate = f'{base_alias}."{base_col}" = {alias}."{other_col}"'
+                join_cond = join_cond_candidate
+                break
         if join_cond:
             sql_lines.append(f"    ON {join_cond}")
         added_actuals.add(actual_tbl)
@@ -418,11 +434,12 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             order_by_parts.append(_rewrite_expr(ob))
         else:
             t_logical = ob.get("table")
-            col = ob.get("column")
+            col_raw = ob.get("column")
             direction = ob.get("direction", "DESC").upper()
             t_actual = _actual_table_name(t_logical) if t_logical else None
             alias = table_aliases.get(t_actual) if t_actual else None
-            if alias and col:
+            if alias and col_raw and t_actual:
+                col = _actual_column_name(t_actual, col_raw)
                 order_by_parts.append(f'{alias}."{col}" {direction}')
     if order_by_parts:
         sql_lines.append("\nORDER BY " + ", ".join(order_by_parts))
