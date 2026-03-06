@@ -376,27 +376,52 @@ Explain the answer briefly (3-8 sentences). If result is empty, say so and sugge
             memory_updated=True,
         )
 
-    # new: run SAP SQL agent, store sql+rows and return summary; if no rows, return a helpful message
+    # new: run SAP SQL agent, store sql+rows and return summary.
+    # If the agent cannot produce useful rows, fall back to answering from the
+    # already-built dashboard context only (which we know works and has data).
     sql_db = sap_db or db
     result = run_sap_sql_agent(user_query, sql_db)
-    if not result:
+    if not result or not result.rows:
+        # Fallback: answer from context_str alone, without relying on live SQL rows
+        if context_str.strip():
+            prompt = f"""
+You are a business analyst assistant.
+
+You have the following SALES and INVOICE context (plain text, already computed from the database):
+
+{context_str[:8000]}
+
+User question:
+{user_query}
+
+Task:
+- Answer ONLY using the context above (do NOT invent numbers that are not implied there).
+- If the context already includes information about top products, customers, revenues, etc.,
+  reuse those numbers.
+- If something is missing, say clearly what is missing instead of guessing.
+"""
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+                max_tokens=800,
+            )
+            reply = (resp.choices[0].message.content or "").strip()
+            mem.last_user_query = user_query
+            save_memory(db, mem)
+            return OrchestratorResult(
+                reply=reply or "I used your dashboard context, but it doesn’t include enough detail to answer that exactly.",
+                action="new",
+                reason=reason or "fallback_to_context_only",
+                sql="",
+                rows_preview=None,
+                memory_updated=True,
+            )
+        # If we have neither a useful SQL result nor context, return a clear error.
         return OrchestratorResult(
-            reply="I couldn’t generate a SQL query for that question. Try rephrasing with the specific entity (customer, product, country) and time period.",
+            reply="I couldn’t generate a SQL query or find enough dashboard context to answer that. Try rephrasing with more detail (customer, product, country, and time period).",
             action="new",
             reason=reason or "sap_sql_agent_no_result",
-        )
-    if not result.rows:
-        mem.last_user_query = user_query
-        mem.last_sql = result.sql or ""
-        mem.last_rows_json = "[]"
-        save_memory(db, mem)
-        return OrchestratorResult(
-            reply="I generated and ran a query, but it returned **no rows**. This usually means the filters/time window didn’t match any data. Try widening the period or removing a filter.",
-            action="new",
-            reason=reason or "sql_returned_no_rows",
-            sql=result.sql,
-            rows_preview=[],
-            memory_updated=True,
         )
 
     # Summarize rows with LLM (same as sap_sql_agent summarizer, but we add memory/knowledge/context)
