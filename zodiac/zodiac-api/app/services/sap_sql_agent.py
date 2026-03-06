@@ -658,3 +658,4 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
 
     return summary
 
+
