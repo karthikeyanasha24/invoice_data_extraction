@@ -82,6 +82,38 @@ Return JSON only:
     return action, reason
 
 
+def _is_small_chitchat(user_query: str) -> bool:
+    """
+    Fast heuristic: detect trivial greetings/thanks that should NOT trigger SQL.
+    """
+    q = (user_query or "").strip().lower()
+    if not q:
+        return False
+    # Single-word or very short chit-chat
+    simple_greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "yo",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "hola",
+        "bye",
+        "good morning",
+        "good evening",
+        "good night",
+    }
+    # If the query is very short and matches a greeting/thanks, treat as chit-chat
+    if len(q.split()) <= 3 and any(g in q for g in simple_greetings):
+        # Avoid false positives when there are clear data keywords
+        data_keywords = ["invoice", "invoices", "sales", "revenue", "customer", "product", "country", "industry"]
+        if not any(k in q for k in data_keywords):
+            return True
+    return False
+
+
 def _rows_preview(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for r in rows[:limit]:
@@ -177,6 +209,34 @@ def run_ai_analysis_orchestrator(
     client = _get_client(effective_key)
     mem = load_memory(db, user_id)
     action, reason = _decide_action(client, user_query, mem)
+
+    # Pure chit-chat (greetings, thanks, etc.) – do NOT hit the database.
+    if _is_small_chitchat(user_query):
+        prompt = f"""
+You are a friendly business assistant.
+
+The user sent a short greeting or casual message that does NOT require database queries.
+Respond briefly and naturally. Do NOT mention SQL or data, just be polite.
+
+User: {user_query}
+"""
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            max_tokens=80,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+        mem.last_user_query = user_query
+        save_memory(db, mem)
+        return OrchestratorResult(
+            reply=reply or "Hello!",
+            action="chitchat",
+            reason="short_greeting_no_sql",
+            sql="",
+            rows_preview=None,
+            memory_updated=True,
+        )
 
     # knowledge: store a short instruction snippet
     if action == "knowledge":
