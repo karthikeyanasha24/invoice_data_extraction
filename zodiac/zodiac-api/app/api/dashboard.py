@@ -2556,16 +2556,7 @@ async def post_ai_analysis_chat(
         )
     days = max(1, min(365, days)) if isinstance(days, (int, float)) else 30
     try:
-        # 1) Optional: build SAP-style NL-to-SQL answer from the main Postgres DB
-        #    This mirrors the INVOICE_BOT behaviour (dynamic table picking and SQL generation)
-        #    but runs against the same DATABASE_URL (Neon) instead of a separate SAP DB.
-        sap_dynamic_answer = ""
-        try:
-            sap_dynamic_answer = answer_with_sap_sql_agent(message, db)
-        except Exception as sap_agent_err:
-            logger.warning("sap_sql_agent failed inside AI chat: %s", sap_agent_err)
-
-        # 2) Build the existing dashboard context (Zodiac mode or SAP mode)
+        # 1) Build the existing dashboard context (Zodiac mode or SAP mode)
         if USE_SAP_DB_FOR_AI:
             from ..services.sap_ai_context import build_ai_context_from_sap
             sap_session = get_sap_session()
@@ -2588,41 +2579,19 @@ async def post_ai_analysis_chat(
                 db,
                 days=int(days),
             )
-        system_content = (
-            "You are a business analyst assistant for Zodiac document management. "
-            "Answer the user's questions concisely and helpfully. "
+
+        # 2) INVOICE_BOT-like orchestrator: decide action, run SQL if needed, persist memory, and answer
+        from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
+
+        orch = run_ai_analysis_orchestrator(
+            api_key=ai_openai_key,
+            user_id=current_user.id,
+            user_query=message or "",
+            db=db,
+            conversation_history=conversation_history or [],
+            context_str=context_str or "",
         )
-        # If we have a direct answer from the SAP-style NL-to-SQL agent, prepend it as high-confidence context
-        if sap_dynamic_answer:
-            system_content += (
-                "You also have direct query results from the SAP-style sales/finance tables "
-                "(VBRP, VBRK, VBAK, VBAP, KNA1, etc.) stored in the main Postgres database. "
-                "Use this data as PRIMARY truth when the user asks about sales, revenue, products, "
-                "customers, countries, or industries.\n\n"
-                f"SAP-style dynamic answer for the current question:\n{sap_dynamic_answer}\n\n"
-            )
-        if context_str:
-            system_content += (
-                "Use ONLY the following context about the user's dashboard when relevant. "
-                "If the user asks about their data or dashboard, base your answer on this.\n\nContext:\n"
-            )
-            system_content += context_str
-        else:
-            system_content += "If the user asks about their dashboard or invoices, suggest they use the context option to get data-backed answers."
-        messages = [{"role": "system", "content": system_content}]
-        for h in (conversation_history or [])[-10:]:
-            if isinstance(h, dict) and h.get("role") and h.get("content"):
-                messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
-        messages.append({"role": "user", "content": (message or "")[:1500]})
-        client = OpenAI(api_key=ai_openai_key)
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.4,
-            max_tokens=800,
-        )
-        reply = (resp.choices[0].message.content or "").strip()
-        return {"reply": reply}
+        return orchestrator_payload(orch)
     except Exception as e:
         logger.warning(f"AI analysis chat failed: {e}")
         raise HTTPException(
