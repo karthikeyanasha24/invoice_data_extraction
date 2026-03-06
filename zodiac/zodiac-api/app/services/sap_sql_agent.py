@@ -245,6 +245,11 @@ def _generate_sql_json(
 ) -> Dict[str, Any]:
     """
     Equivalent of INVOICE_BOT.generate_sql_json, but simplified and Postgres-focused.
+
+    Supports:
+    - simple SELECTs
+    - aggregates (SUM/AVG/COUNT/MIN/MAX) via the optional "agg" field on columns
+    - GROUP BY via a dedicated "group_by" list
     """
     prompt = f"""
 User question: "{question}"
@@ -266,17 +271,36 @@ Task:
 - Return STRICT JSON with this structure:
 {{
   "tables": [{{ "name": "VBRP", "description": "..." }}],
-  "columns": [{{ "table": "VBRP", "name": "NETWR", "description": "billing item net value" }}],
+  "columns": [
+    {{ "table": "KNA1", "name": "BRSCH", "description": "industry of the customer", "agg": null }},
+    {{ "table": "VBRP", "name": "NETWR", "description": "billing item net value", "agg": "SUM" }}
+  ],
   "joins": [{{ "left": "VBRP", "right": "VBRK", "on": "VBRP.VBELN = VBRK.VBELN" }}],
   "filters": [{{ "lhs": "VBRK.FKDAT", "operator": ">=", "rhs": "'2024-01-01'" }}],
-  "order_by": [{{ "table": "VBRP", "column": "NETWR", "direction": "DESC" }}],
+  "group_by": [
+    {{ "table": "KNA1", "column": "BRSCH" }}
+  ],
+  "order_by": [
+    "total_sales DESC"
+  ],
   "limit": 200
 }}
 
 Rules:
 - Use table and column names that actually exist in the column mappings.
-- If the question is about "highest" or "top", sort DESC and use a small limit (e.g. 50 or 100).
-- If the question is about "lowest", sort ASC.
+- If a column entry has "agg": "SUM" | "AVG" | "COUNT" | "MIN" | "MAX",
+  you are defining an aggregated metric over that column.
+- For questions like:
+    * "which industry has highest revenues"
+    * "top customers by sales"
+    * "highest sales by customer and product"
+  you MUST:
+    * pick an appropriate numeric metric column (e.g., VBRP.NETWR, BSAD.DMBTR, INVOICE_V2_BUSINESS_DATA.TOTAL_AMOUNT)
+    * set "agg": "SUM" (or another relevant aggregate) on that metric column
+    * add the dimension columns (industry, customer, product, country, etc.) to "group_by"
+    * filter out NULL dimension values where it makes sense (e.g., industry IS NOT NULL)
+    * order by the aggregated metric (e.g., "total_sales DESC") and use a small limit (e.g. 50 or 100).
+- If the question is about "lowest", sort ASC instead of DESC.
 """
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -374,6 +398,11 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             continue
         alias = table_aliases[actual_tbl]
         col_name = _actual_column_name(actual_tbl, col_name_raw)
+        agg = str(col.get("agg") or "").upper()
+        if agg in {"SUM", "AVG", "COUNT", "MIN", "MAX"}:
+            expr = f"{agg}({alias}.\"{col_name}\")"
+        else:
+            expr = f'{alias}."{col_name}"'
         human = col.get("description") or f"{actual_tbl}_{col_name}"
         human_safe = re.sub(r"[^\w]", "_", human)[:60] or f"{alias}_{col_name}"
         if human_safe in used_col_aliases:
@@ -382,7 +411,7 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
                 suffix += 1
             human_safe = f"{human_safe}_{suffix}"
         used_col_aliases.add(human_safe)
-        select_parts.append(f'    {alias}."{col_name}" AS "{human_safe}"')
+        select_parts.append(f'    {expr} AS "{human_safe}"')
 
     if not select_parts:
         # Fallback: SELECT * from first table
@@ -454,6 +483,25 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         if join_cond:
             sql_lines.append(f"    ON {join_cond}")
         added_actuals.add(actual_tbl)
+
+    # GROUP BY
+    group_bys = json_spec.get("group_by", []) or []
+    gb_parts: List[str] = []
+    for gb in group_bys:
+        if not isinstance(gb, dict):
+            continue
+        t_logical = gb.get("table")
+        col_raw = gb.get("column")
+        if not t_logical or not col_raw:
+            continue
+        t_actual = _actual_table_name(t_logical)
+        alias = table_aliases.get(t_actual)
+        if not alias:
+            continue
+        col = _actual_column_name(t_actual, col_raw)
+        gb_parts.append(f'{alias}."{col}"')
+    if gb_parts:
+        sql_lines.append("\nGROUP BY " + ", ".join(gb_parts))
 
     # WHERE
     conds: List[str] = []
