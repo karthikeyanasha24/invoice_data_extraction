@@ -160,7 +160,6 @@ async def get_dashboard_statistics(
             SuccessModel.deleted_at.is_(None),
             SuccessModel.uploaded_at >= start_date
         ).all()
-
         
         format_counts = defaultdict(int)
         
@@ -2040,7 +2039,8 @@ def _get_lowest_sales_by_customer_country(db: Session, limit: int = 10) -> list[
 
     join_kna1 = ""
     if kna1_table and kna1_kunnr:
-        join_kna1 = f"LEFT JOIN {kna1_table} k ON vbrk.{kunag} = k.{kna1_kunnr}"
+        # Quote the table name so Postgres uses the actual mixed-case identifier (e.g. "KNA1")
+        join_kna1 = f'LEFT JOIN "{kna1_table}" k ON vbrk.{kunag} = k.{kna1_kunnr}'
 
     sql = f"""
         SELECT
@@ -2181,7 +2181,8 @@ def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list
 
     join_kna1 = ""
     if kna1_table and kna1_kunnr:
-        join_kna1 = f"LEFT JOIN {kna1_table} k ON vbrk.{kunag} = k.{kna1_kunnr}"
+        # Quote the table name so Postgres uses the actual mixed-case identifier (e.g. "KNA1")
+        join_kna1 = f'LEFT JOIN "{kna1_table}" k ON vbrk.{kunag} = k.{kna1_kunnr}'
 
     sql = f"""
         SELECT
@@ -4184,4 +4185,6 @@ async def backfill_invoice_v2_bi(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Backfill failed: {str(e)}"
         )
+
+
 
