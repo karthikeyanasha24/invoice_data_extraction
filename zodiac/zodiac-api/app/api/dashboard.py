@@ -160,6 +160,7 @@ async def get_dashboard_statistics(
             SuccessModel.deleted_at.is_(None),
             SuccessModel.uploaded_at >= start_date
         ).all()
+
         
         format_counts = defaultdict(int)
         
