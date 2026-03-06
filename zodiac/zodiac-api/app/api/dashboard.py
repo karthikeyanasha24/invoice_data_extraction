@@ -1892,12 +1892,11 @@ def _get_ai_analysis_config():
 
 def _get_sales_by_product_from_vbrp(db: Session, limit: int = 10) -> list[dict]:
     """
-    Compute highest sales by product from the primary DATABASE_URL using the SAP-style
-    line-item table (vbrp) if present.
-
-    - Works with both lower/upper-case table/column names.
-    - Tries common SAP column names: MATNR for product, NETWR for net value.
-    - Falls back to other generic names if needed.
+    Highest sales by product from vbrp, enriched with:
+    - product_name (from MAKT.MAKTX if available)
+    - total_quantity (sum of FKIMG or similar)
+    - unit_of_measure (VRKME / MEINS)
+    - currency (from VBRK.WAERK if available)
     """
     bind = db.get_bind()
     if bind is None:
@@ -1907,44 +1906,102 @@ def _get_sales_by_product_from_vbrp(db: Session, limit: int = 10) -> list[dict]:
     table_names = inspector.get_table_names()
     table_map = {name.lower(): name for name in table_names}
 
-    if "vbrp" not in table_map:
+    vbrp_table = table_map.get("vbrp")
+    if not vbrp_table:
         return []
 
-    vbrp_name = table_map["vbrp"]
-    columns = inspector.get_columns(vbrp_name)
-    name_map = {c["name"].lower(): c["name"] for c in columns}
+    vbrp_cols = inspector.get_columns(vbrp_table)
+    vbrp_map = {c["name"].lower(): c["name"] for c in vbrp_cols}
 
     product_candidates = ["matnr", "product_id", "material"]
     value_candidates = ["netwr", "net_value", "amount", "sales_value"]
+    qty_candidates = ["fkimg", "quantity", "qty"]
+    uom_candidates = ["vrkme", "meins", "unit"]
 
-    product_col = next((name_map[c] for c in product_candidates if c in name_map), None)
-    value_col = next((name_map[c] for c in value_candidates if c in name_map), None)
+    product_col = next((vbrp_map[c] for c in product_candidates if c in vbrp_map), None)
+    value_col = next((vbrp_map[c] for c in value_candidates if c in vbrp_map), None)
+    qty_col = next((vbrp_map[c] for c in qty_candidates if c in vbrp_map), None)
+    uom_col = next((vbrp_map[c] for c in uom_candidates if c in vbrp_map), None)
 
     if not product_col or not value_col:
         return []
 
-    query = text(
-        f"""
-        SELECT {product_col} AS product_id,
-               SUM(CAST({value_col} AS NUMERIC)) AS total_sales
-        FROM {vbrp_name}
-        GROUP BY {product_col}
+    # Optional product description (MAKT)
+    makt_table = table_map.get("makt")
+    makt_matnr = makt_maktx = None
+    if makt_table:
+        makt_cols = inspector.get_columns(makt_table)
+        makt_map = {c["name"].lower(): c["name"] for c in makt_cols}
+        makt_matnr = makt_map.get("matnr")
+        makt_maktx = makt_map.get("maktx")
+
+    # Optional currency from billing header (VBRK)
+    vbrk_table = table_map.get("vbrk")
+    vbrk_vbeln = vbrk_waerk = None
+    if vbrk_table:
+        vbrk_cols = inspector.get_columns(vbrk_table)
+        vbrk_map = {c["name"].lower(): c["name"] for c in vbrk_cols}
+        vbrk_vbeln = vbrk_map.get("vbeln")
+        vbrk_waerk = vbrk_map.get("waerk")
+
+    vbeln_vbrp = vbrp_map.get("vbeln")
+
+    select_parts = [f"vbrp.{product_col} AS product_id"]
+    group_by_parts = [f"vbrp.{product_col}"]
+
+    if makt_table and makt_matnr and makt_maktx and vbrp_map.get("matnr"):
+        select_parts.append(f"m.{makt_maktx} AS product_name")
+        group_by_parts.append(f"m.{makt_maktx}")
+
+    if qty_col:
+        select_parts.append(f"SUM(CAST(vbrp.{qty_col} AS NUMERIC)) AS total_quantity")
+    if uom_col:
+        select_parts.append(f"vbrp.{uom_col} AS unit_of_measure")
+        group_by_parts.append(f"vbrp.{uom_col}")
+
+    if vbrk_table and vbrk_vbeln and vbrk_waerk and vbeln_vbrp:
+        select_parts.append(f"vbrk.{vbrk_waerk} AS currency")
+        group_by_parts.append(f"vbrk.{vbrk_waerk}")
+
+    select_parts.append(f"SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales")
+
+    join_makt = ""
+    if makt_table and makt_matnr and vbrp_map.get("matnr"):
+        join_makt = f'LEFT JOIN "{makt_table}" m ON vbrp.{vbrp_map["matnr"]} = m.{makt_matnr}'
+
+    join_vbrk = ""
+    if vbrk_table and vbrk_vbeln and vbeln_vbrp:
+        join_vbrk = f'LEFT JOIN "{vbrk_table}" vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbrk_vbeln}'
+
+    sql = f"""
+        SELECT
+            {", ".join(select_parts)}
+        FROM "{vbrp_table}" vbrp
+        {join_makt}
+        {join_vbrk}
+        GROUP BY {", ".join(group_by_parts)}
         ORDER BY total_sales DESC
         LIMIT :limit
-        """
-    )
+    """
 
-    rows = db.execute(query, {"limit": limit}).fetchall()
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
 
     results: list[dict] = []
     for r in rows:
         total = r.total_sales
         if isinstance(total, Decimal):
             total = float(total)
+        total_qty = getattr(r, "total_quantity", None)
+        if isinstance(total_qty, Decimal):
+            total_qty = float(total_qty)
         results.append(
             {
-                "product_id": str(r.product_id),
+                "product_id": str(getattr(r, "product_id", "")),
+                "product_name": str(getattr(r, "product_name", "")) if hasattr(r, "product_name") else None,
                 "total_sales": float(total) if total is not None else 0.0,
+                "total_quantity": float(total_qty) if total_qty is not None else None,
+                "unit_of_measure": str(getattr(r, "unit_of_measure", "")) if hasattr(r, "unit_of_measure") else None,
+                "currency": str(getattr(r, "currency", "")) if hasattr(r, "currency") else None,
             }
         )
 
@@ -4185,6 +4242,4 @@ async def backfill_invoice_v2_bi(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Backfill failed: {str(e)}"
         )
-
-
 
