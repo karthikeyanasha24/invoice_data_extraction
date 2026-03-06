@@ -187,7 +187,7 @@ export default function DashboardAIAnalysis() {
                 }
               }}
               placeholder="Ask about sales, finance, logistics, or process flows..."
-              className="flex-1 min-w-0 rounded-lg border border-gray-200 text-sm py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-60"
+              className="flex-1 min-w-0 rounded-lg border border-gray-200 text-sm py-2.5 px-3 text-gray-900 placeholder:text-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-60"
               disabled={loading}
               aria-label="Message input"
             />
