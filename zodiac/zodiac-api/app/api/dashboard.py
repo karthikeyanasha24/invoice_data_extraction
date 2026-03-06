@@ -2559,19 +2559,19 @@ async def post_ai_analysis_chat(
         # 1) Build the existing dashboard context (Zodiac mode or SAP mode)
         if USE_SAP_DB_FOR_AI:
             from ..services.sap_ai_context import build_ai_context_from_sap
-            sap_session = get_sap_session()
+            sap_session_for_context = get_sap_session()
             context_str = ""
-            if sap_session is not None:
+            if sap_session_for_context is not None:
                 try:
                     context_str = build_ai_context_from_sap(
                         context_keys if isinstance(context_keys, list) else [],
-                        sap_session,
+                        sap_session_for_context,
                         days=int(days),
                     )
                 except Exception as sap_e:
                     logger.warning("SAP AI context failed: %s", sap_e)
                 finally:
-                    sap_session.close()
+                    sap_session_for_context.close()
         else:
             context_str = _build_ai_analysis_context(
                 context_keys if isinstance(context_keys, list) else [],
@@ -2583,14 +2583,21 @@ async def post_ai_analysis_chat(
         # 2) INVOICE_BOT-like orchestrator: decide action, run SQL if needed, persist memory, and answer
         from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
 
-        orch = run_ai_analysis_orchestrator(
-            api_key=ai_openai_key,
-            user_id=current_user.id,
-            user_query=message or "",
-            db=db,
-            conversation_history=conversation_history or [],
-            context_str=context_str or "",
-        )
+        sap_session_for_sql = get_sap_session() if USE_SAP_DB_FOR_AI else None
+        try:
+            orch = run_ai_analysis_orchestrator(
+                api_key=ai_openai_key,
+                user_id=current_user.id,
+                user_query=message or "",
+                db=db,
+                conversation_history=conversation_history or [],
+                context_str=context_str or "",
+                sap_db=sap_session_for_sql,
+            )
+        finally:
+            if sap_session_for_sql is not None:
+                sap_session_for_sql.close()
+
         return orchestrator_payload(orch)
     except Exception as e:
         logger.warning(f"AI analysis chat failed: {e}")
