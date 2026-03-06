@@ -28,6 +28,7 @@ from ..database import get_sap_session
 from ..services.database import extract_supplier_info_from_string
 from ..services.file_service import read_file_from_storage
 from ..services.invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
+from ..services.sap_sql_agent import answer_with_sap_sql_agent
 from collections import defaultdict
 from decimal import Decimal
 
@@ -2555,6 +2556,16 @@ async def post_ai_analysis_chat(
         )
     days = max(1, min(365, days)) if isinstance(days, (int, float)) else 30
     try:
+        # 1) Optional: build SAP-style NL-to-SQL answer from the main Postgres DB
+        #    This mirrors the INVOICE_BOT behaviour (dynamic table picking and SQL generation)
+        #    but runs against the same DATABASE_URL (Neon) instead of a separate SAP DB.
+        sap_dynamic_answer = ""
+        try:
+            sap_dynamic_answer = answer_with_sap_sql_agent(message, db)
+        except Exception as sap_agent_err:
+            logger.warning("sap_sql_agent failed inside AI chat: %s", sap_agent_err)
+
+        # 2) Build the existing dashboard context (Zodiac mode or SAP mode)
         if USE_SAP_DB_FOR_AI:
             from ..services.sap_ai_context import build_ai_context_from_sap
             sap_session = get_sap_session()
@@ -2581,6 +2592,15 @@ async def post_ai_analysis_chat(
             "You are a business analyst assistant for Zodiac document management. "
             "Answer the user's questions concisely and helpfully. "
         )
+        # If we have a direct answer from the SAP-style NL-to-SQL agent, prepend it as high-confidence context
+        if sap_dynamic_answer:
+            system_content += (
+                "You also have direct query results from the SAP-style sales/finance tables "
+                "(VBRP, VBRK, VBAK, VBAP, KNA1, etc.) stored in the main Postgres database. "
+                "Use this data as PRIMARY truth when the user asks about sales, revenue, products, "
+                "customers, countries, or industries.\n\n"
+                f"SAP-style dynamic answer for the current question:\n{sap_dynamic_answer}\n\n"
+            )
         if context_str:
             system_content += (
                 "Use ONLY the following context about the user's dashboard when relevant. "
