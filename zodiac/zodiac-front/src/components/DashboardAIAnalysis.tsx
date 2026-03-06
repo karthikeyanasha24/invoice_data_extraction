@@ -251,37 +251,44 @@ export default function DashboardAIAnalysis() {
                     {m.role === 'user' && <p className="font-medium text-gray-500 mb-0.5">You</p>}
                     {m.role === 'assistant' && <p className="font-medium text-indigo-600 mb-0.5">AI</p>}
                     <div className="leading-relaxed whitespace-pre-wrap break-words text-gray-800">{m.content}</div>
-                    {m.role === 'assistant' && m.meta && (
-                      <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-                        <summary className="cursor-pointer select-none font-medium text-gray-600">
-                          Show query details
-                        </summary>
-                        <div className="mt-2 space-y-2">
-                          {m.meta.action && (
-                            <div>
-                              <div className="text-gray-500">Action</div>
-                              <div className="font-mono text-[11px]">{m.meta.action}{m.meta.reason ? ` — ${m.meta.reason}` : ''}</div>
-                            </div>
-                          )}
-                          {m.meta.sql && (
-                            <div>
-                              <div className="text-gray-500">SQL</div>
-                              <pre className="whitespace-pre-wrap break-words rounded bg-white border border-gray-200 p-2 font-mono text-[11px] text-gray-900">
-                                {m.meta.sql}
-                              </pre>
-                            </div>
-                          )}
-                          {m.meta.rows_preview?.length ? (
-                            <div>
-                              <div className="text-gray-500">Rows preview</div>
-                              <pre className="whitespace-pre-wrap break-words rounded bg-white border border-gray-200 p-2 font-mono text-[11px] text-gray-900">
-                                {JSON.stringify(m.meta.rows_preview.slice(0, 10), null, 2)}
-                              </pre>
-                            </div>
-                          ) : null}
-                        </div>
-                      </details>
-                    )}
+                    {/* {m.role === 'assistant' && m.meta && (m.meta.action || m.meta.reason) && (
+                      <div className="mt-1 text-xs text-gray-500">
+                        <span className="font-semibold">Action</span>{' '}
+                        <span className="font-mono">
+                          {m.meta.action ?? 'unknown'}
+                          {m.meta.reason ? ` — ${m.meta.reason}` : ''}
+                        </span>
+                      </div>
+                    )} */}
+                    {/* {m.role === 'assistant' && m.meta && (
+                      <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700 space-y-2">
+                        {m.meta.action && (
+                          <div>
+                            <span className="font-semibold text-gray-600">Action</span>{' '}
+                            <span className="font-mono">
+                              {m.meta.action}
+                              {m.meta.reason ? ` — ${m.meta.reason}` : ''}
+                            </span>
+                          </div>
+                        )}
+                        {m.meta.sql && (
+                          <div>
+                            <div className="text-gray-500">-- SQL query used</div>
+                            <pre className="whitespace-pre-wrap break-words rounded bg-white border border-gray-200 p-2 font-mono text-[11px] text-gray-900">
+                              {m.meta.sql}
+                            </pre>
+                          </div>
+                        )}
+                        {m.meta.rows_preview?.length ? (
+                          <div>
+                            <div className="text-gray-500">-- Rows preview</div>
+                            <pre className="whitespace-pre-wrap break-words rounded bg-white border border-gray-200 p-2 font-mono text-[11px] text-gray-900">
+                              {JSON.stringify(m.meta.rows_preview.slice(0, 10), null, 2)}
+                            </pre>
+                          </div>
+                        ) : null}
+                      </div>
+                    )} */}
                   </div>
                 ))}
                 {loading && (
