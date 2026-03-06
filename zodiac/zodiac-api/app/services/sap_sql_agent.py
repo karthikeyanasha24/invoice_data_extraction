@@ -1,0 +1,526 @@
+"""
+Dynamic NL-to-SQL agent for SAP-style tables stored in the main Postgres DB.
+
+This mirrors the INVOICE_BOT behaviour at a high level:
+- LLM picks relevant tables based on the question and table descriptions.
+- LLM produces a JSON SQL specification (tables, columns, joins, filters, order_by, limit).
+- We convert that JSON spec into real SQL for Postgres and execute it via SQLAlchemy.
+- Results are summarized back to the user via another LLM call.
+
+It is intentionally generic and works over the following tables (if present in the DB):
+VBRP, VBRK, VBAK, VBAP, VBEP, BSAD, BSEG, FAGLFLEXA, KNA1, KNVP, KNVV, MAKT, MARC, MARM, MEAN, MVKE.
+
+The goal is to power questions like:
+- "show me highest sales by product"
+- "compare sales data with invoice data and identify major differences"
+- "show me lowest sales by customer and country"
+- "show me sales by country and industry"
+- "which industry has highest revenues"
+- "show me highest sales by customer and product and country"
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any, Dict, List, Tuple
+
+from sqlalchemy import inspect, text
+from sqlalchemy.orm import Session
+
+from ..config.config import OPENAI_API_KEY
+
+logger = logging.getLogger("zodiac-api.sap_sql_agent")
+
+try:
+    from openai import OpenAI
+
+    _openai_available = True
+except ImportError:  # pragma: no cover - runtime dependency
+    OpenAI = None  # type: ignore
+    _openai_available = False
+
+
+# --- Static metadata ---------------------------------------------------------------------------
+
+SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
+    "VBRP": "Billing document item (sales by product, quantities, net values, currencies, customers, countries).",
+    "VBRK": "Billing document header (invoice-level amounts, dates, currencies, customers).",
+    "VBAK": "Sales document header (orders, customers, dates, overall values).",
+    "VBAP": "Sales document item (ordered products, quantities, values).",
+    "VBEP": "Schedule lines for sales document items (delivery quantities and dates).",
+    "KNA1": "Customer master (names, addresses, countries, industries).",
+    "KNVV": "Customer sales data (sales area, pricing, related attributes).",
+    "KNVP": "Customer partners (payer, ship-to, bill-to relationships).",
+    "MAKT": "Material descriptions (product names).",
+    "MARC": "Plant data for material (plant-level material attributes).",
+    "MARM": "Units of measure for material (UOM conversion).",
+    "MEAN": "International Article Numbers (EAN/UPC) for materials.",
+    "MVKE": "Sales data for materials (sales org, distribution channel, pricing group).",
+    "BSAD": "Customer open and cleared items (AR line items, payments).",
+    "BSEG": "Accounting document segment (line items for GL, customers, vendors).",
+    "FAGLFLEXA": "General ledger: totals/line items for new G/L accounting.",
+}
+
+
+@dataclass
+class SqlAgentResult:
+    sql: str
+    rows: List[Dict[str, Any]]
+
+
+_QUERY_TO_SQL_CACHE: Dict[str, str] = {}
+_SQL_TO_ROWS_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+
+
+# --- Utility helpers --------------------------------------------------------------------------
+
+
+def _get_openai_client() -> OpenAI | None:
+    if not _openai_available:
+        logger.warning("OpenAI package not available for sap_sql_agent")
+        return None
+    api_key = OPENAI_API_KEY
+    if not api_key:
+        logger.warning("OPEN_AI_KEY/OPENAI_API_KEY not set for sap_sql_agent")
+        return None
+    try:
+        return OpenAI(api_key=api_key)
+    except Exception as e:  # pragma: no cover - network/config
+        logger.warning("Failed to create OpenAI client for sap_sql_agent: %s", e)
+        return None
+
+
+def _serialize_value(v: Any) -> Any:
+    if isinstance(v, Decimal):
+        return float(v)
+    if hasattr(v, "isoformat"):
+        try:
+            return v.isoformat()
+        except Exception:
+            return str(v)
+    if isinstance(v, (bytes, bytearray)):
+        return v.decode("utf-8", errors="ignore")
+    return v
+
+
+def _introspect_columns(db: Session, table_names: List[str]) -> Dict[str, Dict[str, str]]:
+    """
+    Introspect the DB to get columns for each table and build simple semantic descriptions.
+    This replaces the static JSON mapping files used by INVOICE_BOT.
+    """
+    insp = inspect(db.bind)
+    mapping: Dict[str, Dict[str, str]] = {}
+
+    for tbl in table_names:
+        # Find matching table in DB, case-insensitive
+        db_tables = {t.lower(): t for t in insp.get_table_names()}
+        actual_name = db_tables.get(tbl.lower())
+        if not actual_name:
+            continue
+
+        cols = {}
+        for col in insp.get_columns(actual_name):
+            col_name = col["name"]
+            # Simple heuristic description; LLM will still see raw names
+            cols[col_name] = f"{tbl}.{col_name} column"
+        if cols:
+            mapping[actual_name] = cols
+
+    return mapping
+
+
+def _pick_tables(question: str, client: OpenAI) -> List[str]:
+    """
+    Rough equivalent of INVOICE_BOT.pick_tables over our Postgres tables.
+    """
+    prompt = f"""
+User question: "{question}"
+
+You are selecting SAP-style tables that live in a Postgres database.
+Here are the available tables and what they mean:
+{json.dumps(SAP_TABLE_DESCRIPTIONS, indent=2)}
+
+Task:
+- Choose ONLY the tables that are truly needed to answer the question.
+- Prefer fewer tables and clearer joins (for example, VBRP + VBRK + KNA1 for sales by product and customer).
+- Return STRICT JSON in this format, and nothing else:
+{{
+  "selected_tables": [
+    {{ "name": "VBRP", "description": "..." }}
+  ]
+}}
+"""
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+    content = resp.choices[0].message.content or ""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+    tables = [t.get("name") for t in data.get("selected_tables", []) if isinstance(t, dict) and t.get("name")]
+    # Fallback: at least VBRP/VBRK if nothing returned
+    if not tables:
+        tables = ["VBRP", "VBRK"]
+    return tables
+
+
+def _generate_sql_json(
+    question: str,
+    selected_tables: List[str],
+    column_mappings: Dict[str, Dict[str, str]],
+    client: OpenAI,
+) -> Dict[str, Any]:
+    """
+    Equivalent of INVOICE_BOT.generate_sql_json, but simplified and Postgres-focused.
+    """
+    prompt = f"""
+User question: "{question}"
+
+Tables available (subset already selected as relevant):
+{json.dumps({tbl: SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}, indent=2)}
+
+Column mappings (table -> column -> short description):
+{json.dumps(column_mappings, indent=2)}
+
+Task:
+- Choose relevant columns from these tables.
+- Propose joins between tables using business keys (for example, VBRP.VBELN = VBRK.VBELN, VBRK.KUNAG = KNA1.KUNNR, VBRP.MATNR = MVKE.MATNR or MAKT.MATNR).
+- Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
+- Return STRICT JSON with this structure:
+{{
+  "tables": [{{ "name": "VBRP", "description": "..." }}],
+  "columns": [{{ "table": "VBRP", "name": "NETWR", "description": "billing item net value" }}],
+  "joins": [{{ "left": "VBRP", "right": "VBRK", "on": "VBRP.VBELN = VBRK.VBELN" }}],
+  "filters": [{{ "lhs": "VBRK.FKDAT", "operator": ">=", "rhs": "'2024-01-01'" }}],
+  "order_by": [{{ "table": "VBRP", "column": "NETWR", "direction": "DESC" }}],
+  "limit": 200
+}}
+
+Rules:
+- Use table and column names that actually exist in the column mappings.
+- If the question is about "highest" or "top", sort DESC and use a small limit (e.g. 50 or 100).
+- If the question is about "lowest", sort ASC.
+"""
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+    content = resp.choices[0].message.content or ""
+    try:
+        spec = json.loads(content)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        spec = json.loads(m.group(0)) if m else {}
+    return spec or {}
+
+
+def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, Dict[str, str]]) -> str:
+    """
+    Convert JSON spec into a Postgres SQL query.
+
+    We mirror the INVOICE_BOT approach:
+    - Build SELECT list for chosen columns.
+    - Start from a base table, then add JOINs from the spec.
+    - If some tables are missing join conditions, join them via common keys if possible (e.g., VBELN, KUNNR, MATNR).
+    """
+    columns = json_spec.get("columns", []) or []
+    joins = json_spec.get("joins", []) or []
+    tables_info = json_spec.get("tables", []) or []
+    limit = int(json_spec.get("limit", 100) or 100)
+
+    all_tables: List[str] = []
+    for j in joins:
+        all_tables.append(j.get("left"))
+        all_tables.append(j.get("right"))
+    for c in columns:
+        all_tables.append(c.get("table"))
+    for t in tables_info:
+        all_tables.append(t.get("name"))
+    all_tables = [t for t in {t for t in all_tables if t}]  # unique, remove None
+
+    if not all_tables:
+        raise ValueError("sap_sql_agent: JSON spec contains no tables")
+
+    # Map spec table names to actual DB table names (case differences already handled by column_mappings keys)
+    table_aliases: Dict[str, str] = {}
+    used_aliases: set[str] = set()
+
+    def _fmt_alias(tbl: str) -> str:
+        base = tbl[0].lower()
+        alias = base
+        i = 1
+        while alias in used_aliases:
+            alias = f"{base}{i}"
+            i += 1
+        used_aliases.add(alias)
+        return alias
+
+    # The mapping keys in column_mappings are the actual DB table names.
+    # Build a map from upper-case logical name -> actual DB table name.
+    logical_to_actual: Dict[str, str] = {}
+    for logical in SAP_TABLE_DESCRIPTIONS.keys():
+        for actual in column_mappings.keys():
+            if actual.lower() == logical.lower():
+                logical_to_actual[logical] = actual
+
+    def _actual_table_name(logical: str) -> str:
+        return logical_to_actual.get(logical, logical)
+
+    for tbl in all_tables:
+        actual = _actual_table_name(tbl)
+        table_aliases[actual] = _fmt_alias(actual)
+
+    # SELECT
+    select_parts: List[str] = []
+    used_col_aliases: set[str] = set()
+
+    for col in columns:
+        logical_tbl = col.get("table")
+        col_name = col.get("name")
+        if not logical_tbl or not col_name:
+            continue
+        actual_tbl = _actual_table_name(logical_tbl)
+        if actual_tbl not in table_aliases:
+            continue
+        alias = table_aliases[actual_tbl]
+        human = col.get("description") or f"{actual_tbl}_{col_name}"
+        human_safe = re.sub(r"[^\w]", "_", human)[:60] or f"{alias}_{col_name}"
+        if human_safe in used_col_aliases:
+            suffix = 1
+            while f"{human_safe}_{suffix}" in used_col_aliases:
+                suffix += 1
+            human_safe = f"{human_safe}_{suffix}"
+        used_col_aliases.add(human_safe)
+        select_parts.append(f'    {alias}."{col_name}" AS "{human_safe}"')
+
+    if not select_parts:
+        # Fallback: SELECT * from first table
+        base_logical = all_tables[0]
+        base_actual = _actual_table_name(base_logical)
+        alias = table_aliases[base_actual]
+        select_parts.append(f"    {alias}.*")
+
+    sql_lines: List[str] = [f"SELECT {', '.join(select_parts)}",]
+
+    # Base table: first in joins, else first in tables_info, else first in list
+    base_logical = (
+        (joins[0].get("left") if joins else None)
+        or (tables_info[0].get("name") if tables_info else None)
+        or all_tables[0]
+    )
+    base_actual = _actual_table_name(base_logical)
+    base_alias = table_aliases[base_actual]
+    sql_lines.append(f'FROM "{base_actual}" AS {base_alias}')
+
+    added_actuals = {base_actual}
+
+    # Helper to rewrite "VBRP.VBELN" → "p.\"VBELN\"" using aliases and actual names
+    def _rewrite_expr(expr: str) -> str:
+        out = expr
+        for logical, actual in logical_to_actual.items():
+            alias = table_aliases.get(actual)
+            if not alias:
+                continue
+            out = re.sub(rf"\b{logical}\.", f"{alias}.", out)
+        # If already uses actual names, also replace them
+        for actual, alias in table_aliases.items():
+            out = re.sub(rf"\b{actual}\.", f"{alias}.", out)
+        return out
+
+    # Add joins from spec
+    for j in joins:
+        left_logical = j.get("left")
+        right_logical = j.get("right")
+        on_expr = j.get("on") or ""
+        if not right_logical:
+            continue
+        right_actual = _actual_table_name(right_logical)
+        if right_actual in added_actuals:
+            continue
+        right_alias = table_aliases[right_actual]
+        sql_lines.append(f'\nLEFT JOIN "{right_actual}" AS {right_alias}')
+        if on_expr:
+            sql_lines.append(f"    ON {_rewrite_expr(on_expr)}")
+        added_actuals.add(right_actual)
+
+    # Add any missing tables with heuristic joins on common keys
+    COMMON_KEYS = ["VBELN", "KUNNR", "KUNAG", "MATNR"]
+    for logical_tbl in all_tables:
+        actual_tbl = _actual_table_name(logical_tbl)
+        if actual_tbl in added_actuals:
+            continue
+        alias = table_aliases[actual_tbl]
+        sql_lines.append(f'\nLEFT JOIN "{actual_tbl}" AS {alias}')
+        # Try to join on a shared key with base table
+        join_cond = None
+        for key in COMMON_KEYS:
+            join_cond_candidate = f"{base_alias}.\"{key}\" = {alias}.\"{key}\""
+            join_cond = join_cond_candidate
+            break
+        if join_cond:
+            sql_lines.append(f"    ON {join_cond}")
+        added_actuals.add(actual_tbl)
+
+    # WHERE
+    conds: List[str] = []
+    for f in json_spec.get("filters", []) or []:
+        lhs = _rewrite_expr(str(f.get("lhs", "")))
+        op = str(f.get("operator", "")).strip()
+        rhs = str(f.get("rhs", "")).strip()
+        if lhs and op and rhs:
+            conds.append(f"{lhs} {op} {rhs}")
+    if conds:
+        sql_lines.append("\nWHERE " + " AND ".join(conds))
+
+    # ORDER BY
+    order_by_parts: List[str] = []
+    for ob in json_spec.get("order_by", []) or []:
+        if isinstance(ob, str):
+            order_by_parts.append(_rewrite_expr(ob))
+        else:
+            t_logical = ob.get("table")
+            col = ob.get("column")
+            direction = ob.get("direction", "DESC").upper()
+            t_actual = _actual_table_name(t_logical) if t_logical else None
+            alias = table_aliases.get(t_actual) if t_actual else None
+            if alias and col:
+                order_by_parts.append(f'{alias}."{col}" {direction}')
+    if order_by_parts:
+        sql_lines.append("\nORDER BY " + ", ".join(order_by_parts))
+
+    sql_lines.append(f"\nLIMIT {limit}")
+    return "\n".join(sql_lines) + ";"
+
+
+def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
+    if not sql or not sql.strip():
+        return []
+    try:
+        result = db.execute(text(sql))
+        rows = result.fetchall()
+        keys = result.keys()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            row_dict = {k: _serialize_value(v) for k, v in zip(keys, row)}
+            out.append(row_dict)
+        return out
+    except Exception as e:
+        logger.warning("sap_sql_agent SQL execution failed: %s", e)
+        return []
+
+
+def _summarize_results(question: str, sql: str, rows: List[Dict[str, Any]], client: OpenAI) -> str:
+    """
+    Ask the LLM to summarize the tabular result in natural language.
+    """
+    if not rows:
+        return ""
+
+    # Truncate to keep prompt reasonable
+    sample_rows = rows[:100]
+    data_json = json.dumps(sample_rows, default=_serialize_value)
+
+    prompt = f"""
+You are an expert SAP sales and finance analyst.
+
+The user asked:
+\"\"\"{question}\"\"\"
+
+You executed the following SQL on a Postgres database that contains SAP-style tables:
+```sql
+{sql}
+```
+
+Here is a sample of the result rows as JSON:
+{data_json}
+
+Task:
+- Explain the answer to the user's question in clear business language.
+- Include specific numbers (totals, top items, customers, countries, industries) when helpful.
+- Be concise (3–8 sentences).
+"""
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4,
+        max_tokens=600,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def run_sap_sql_agent(question: str, db: Session) -> SqlAgentResult | None:
+    """
+    Main entry point used by the dashboard AI endpoint.
+
+    It:
+    - Uses LLM to pick tables
+    - Introspects columns from Postgres
+    - Uses LLM to build a JSON SQL spec
+    - Translates to Postgres SQL and executes
+    - Caches SQL per question
+    """
+    client = _get_openai_client()
+    if not client:
+        return None
+
+    q_key = question.strip().lower()
+    if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
+        sql = _QUERY_TO_SQL_CACHE[q_key]
+        rows = _SQL_TO_ROWS_CACHE[sql]
+        return SqlAgentResult(sql=sql, rows=rows)
+
+    try:
+        selected_tables = _pick_tables(question, client)
+        column_mappings = _introspect_columns(db, selected_tables)
+        if not column_mappings:
+            logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
+            return None
+
+        spec = _generate_sql_json(question, selected_tables, column_mappings, client)
+        if not spec:
+            logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
+            return None
+
+        sql = _json_to_sql_postgres(spec, column_mappings)
+        rows = _run_sql(db, sql)
+        if not rows:
+            logger.info("sap_sql_agent: SQL returned no rows for question %s", question)
+        else:
+            _QUERY_TO_SQL_CACHE[q_key] = sql
+            _SQL_TO_ROWS_CACHE[sql] = rows
+
+        return SqlAgentResult(sql=sql, rows=rows)
+    except Exception as e:
+        logger.warning("sap_sql_agent failed for question '%s': %s", question, e)
+        return None
+
+
+def answer_with_sap_sql_agent(question: str, db: Session) -> str:
+    """
+    Convenience wrapper: run the SAP SQL agent and turn its result into a natural language answer.
+    """
+    client = _get_openai_client()
+    if not client:
+        return ""
+
+    result = run_sap_sql_agent(question, db)
+    if not result or not result.rows:
+        return ""
+
+    try:
+        summary = _summarize_results(question, result.sql, result.rows, client)
+    except Exception as e:
+        logger.warning("sap_sql_agent summarization failed: %s", e)
+        return ""
+
+    return summary
+
