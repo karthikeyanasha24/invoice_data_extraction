@@ -1950,6 +1950,268 @@ def _get_sales_by_product_from_vbrp(db: Session, limit: int = 10) -> list[dict]:
     return results
 
 
+def _get_sales_vs_invoice_v2(db: Session) -> dict:
+    """
+    Compare total sales from vbrp with total revenue from InvoiceV2BusinessData.
+    Used so AI can talk about differences between raw SAP billing data and Zodiac invoice BI data.
+    """
+    bind = db.get_bind()
+    if bind is None:
+        return {}
+
+    inspector = inspect(bind)
+    table_names = inspector.get_table_names()
+    table_map = {name.lower(): name for name in table_names}
+
+    vbrp_table = table_map.get("vbrp")
+    if not vbrp_table:
+        return {}
+
+    cols = inspector.get_columns(vbrp_table)
+    name_map = {c["name"].lower(): c["name"] for c in cols}
+    value_candidates = ["netwr", "net_value", "amount", "sales_value"]
+    value_col = next((name_map[c] for c in value_candidates if c in name_map), None)
+    if not value_col:
+        return {}
+
+    # Sum from vbrp
+    q_vbrp = text(f"SELECT SUM(CAST({value_col} AS NUMERIC)) AS total_sales FROM {vbrp_table}")
+    row = db.execute(q_vbrp).fetchone()
+    sales_total = row.total_sales if row and row.total_sales is not None else 0
+    if isinstance(sales_total, Decimal):
+        sales_total = float(sales_total)
+
+    # Sum from InvoiceV2BusinessData (Zodiac BI)
+    inv_total = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).scalar() or 0
+    try:
+        inv_total = float(inv_total)
+    except Exception:
+        inv_total = 0.0
+
+    diff = sales_total - inv_total
+    return {
+        "sales_total_from_vbrp": sales_total,
+        "revenue_total_from_invoice_v2": inv_total,
+        "difference": diff,
+    }
+
+
+def _get_lowest_sales_by_customer_country(db: Session, limit: int = 10) -> list[dict]:
+    """
+    Aggregate lowest sales by customer and country using vbrp + vbrk + kna1 if present.
+    """
+    bind = db.get_bind()
+    if bind is None:
+        return []
+
+    inspector = inspect(bind)
+    tables = {t.lower(): t for t in inspector.get_table_names()}
+    vbrp_table = tables.get("vbrp")
+    vbrk_table = tables.get("vbrk")
+    kna1_table = tables.get("kna1")
+    if not vbrp_table or not vbrk_table:
+        return []
+
+    # Column maps (case-insensitive)
+    vbrp_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(vbrp_table)}
+    vbrk_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(vbrk_table)}
+    kna1_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(kna1_table)} if kna1_table else {}
+
+    # Join keys and fields
+    vbeln_vbrp = vbrp_cols.get("vbeln")
+    vbeln_vbrk = vbrk_cols.get("vbeln")
+    kunag = vbrk_cols.get("kunag")
+    if not vbeln_vbrp or not vbeln_vbrk or not kunag:
+        return []
+
+    value_candidates = ["netwr", "net_value", "amount", "sales_value"]
+    value_col = next((vbrp_cols[c] for c in value_candidates if c in vbrp_cols), None)
+    if not value_col:
+        return []
+
+    kna1_kunnr = kna1_cols.get("kunnr")
+    kna1_name1 = kna1_cols.get("name1") or kna1_cols.get("name")
+    kna1_land1 = kna1_cols.get("land1") or kna1_cols.get("country")
+
+    customer_expr = f"COALESCE(k.{kna1_name1}, vbrk.{kunag})" if kna1_table and kna1_name1 else f"vbrk.{kunag}"
+    country_expr = f"COALESCE(k.{kna1_land1}, 'Unknown')" if kna1_table and kna1_land1 else "'Unknown'"
+
+    join_kna1 = ""
+    if kna1_table and kna1_kunnr:
+        join_kna1 = f"LEFT JOIN {kna1_table} k ON vbrk.{kunag} = k.{kna1_kunnr}"
+
+    sql = f"""
+        SELECT
+            {customer_expr} AS customer_name,
+            {country_expr} AS country,
+            SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales
+        FROM {vbrp_table} vbrp
+        JOIN {vbrk_table} vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
+        {join_kna1}
+        GROUP BY {customer_expr}, {country_expr}
+        ORDER BY total_sales ASC
+        LIMIT :limit
+    """
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+
+    results: list[dict] = []
+    for r in rows:
+        total = r.total_sales
+        if isinstance(total, Decimal):
+            total = float(total)
+        results.append(
+            {
+                "customer_name": str(r.customer_name) if r.customer_name is not None else "Unknown",
+                "country": str(r.country) if r.country is not None else "Unknown",
+                "total_sales": float(total) if total is not None else 0.0,
+            }
+        )
+    return results
+
+
+def _get_sales_by_country_industry(db: Session, limit: int = 20) -> list[dict]:
+    """
+    Aggregate sales by country and industry using vbrp + vbrk + kna1 (BRSCH) if present.
+    """
+    bind = db.get_bind()
+    if bind is None:
+        return []
+
+    inspector = inspect(bind)
+    tables = {t.lower(): t for t in inspector.get_table_names()}
+    vbrp_table = tables.get("vbrp")
+    vbrk_table = tables.get("vbrk")
+    kna1_table = tables.get("kna1")
+    if not vbrp_table or not vbrk_table or not kna1_table:
+        return []
+
+    vbrp_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(vbrp_table)}
+    vbrk_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(vbrk_table)}
+    kna1_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(kna1_table)}
+
+    vbeln_vbrp = vbrp_cols.get("vbeln")
+    vbeln_vbrk = vbrk_cols.get("vbeln")
+    kunag = vbrk_cols.get("kunag")
+    if not vbeln_vbrp or not vbeln_vbrk or not kunag:
+        return []
+
+    value_candidates = ["netwr", "net_value", "amount", "sales_value"]
+    value_col = next((vbrp_cols[c] for c in value_candidates if c in vbrp_cols), None)
+    if not value_col:
+        return []
+
+    kna1_kunnr = kna1_cols.get("kunnr")
+    kna1_land1 = kna1_cols.get("land1") or kna1_cols.get("country")
+    kna1_brsch = kna1_cols.get("brsch") or kna1_cols.get("industry")
+    if not kna1_kunnr or not kna1_land1 or not kna1_brsch:
+        return []
+
+    sql = f"""
+        SELECT
+            k.{kna1_land1} AS country,
+            k.{kna1_brsch} AS industry,
+            SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales,
+            COUNT(DISTINCT vbrk.{kunag}) AS customer_count
+        FROM {vbrp_table} vbrp
+        JOIN {vbrk_table} vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
+        JOIN {kna1_table} k ON vbrk.{kunag} = k.{kna1_kunnr}
+        GROUP BY k.{kna1_land1}, k.{kna1_brsch}
+        ORDER BY total_sales DESC
+        LIMIT :limit
+    """
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+
+    results: list[dict] = []
+    for r in rows:
+        total = r.total_sales
+        if isinstance(total, Decimal):
+            total = float(total)
+        results.append(
+            {
+                "country": str(r.country) if r.country is not None else "Unknown",
+                "industry": str(r.industry) if r.industry is not None else "Unknown",
+                "total_sales": float(total) if total is not None else 0.0,
+                "customer_count": int(r.customer_count or 0),
+            }
+        )
+    return results
+
+
+def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list[dict]:
+    """
+    Aggregate highest sales by customer, product, and country using vbrp + vbrk + kna1.
+    """
+    bind = db.get_bind()
+    if bind is None:
+        return []
+
+    inspector = inspect(bind)
+    tables = {t.lower(): t for t in inspector.get_table_names()}
+    vbrp_table = tables.get("vbrp")
+    vbrk_table = tables.get("vbrk")
+    kna1_table = tables.get("kna1")
+    if not vbrp_table or not vbrk_table:
+        return []
+
+    vbrp_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(vbrp_table)}
+    vbrk_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(vbrk_table)}
+    kna1_cols = {c["name"].lower(): c["name"] for c in inspector.get_columns(kna1_table)} if kna1_table else {}
+
+    vbeln_vbrp = vbrp_cols.get("vbeln")
+    vbeln_vbrk = vbrk_cols.get("vbeln")
+    kunag = vbrk_cols.get("kunag")
+    if not vbeln_vbrp or not vbeln_vbrk or not kunag:
+        return []
+
+    product_candidates = ["matnr", "product_id", "material"]
+    value_candidates = ["netwr", "net_value", "amount", "sales_value"]
+    product_col = next((vbrp_cols[c] for c in product_candidates if c in vbrp_cols), None)
+    value_col = next((vbrp_cols[c] for c in value_candidates if c in vbrp_cols), None)
+    if not product_col or not value_col:
+        return []
+
+    kna1_kunnr = kna1_cols.get("kunnr")
+    kna1_name1 = kna1_cols.get("name1") or kna1_cols.get("name")
+    kna1_land1 = kna1_cols.get("land1") or kna1_cols.get("country")
+
+    customer_expr = f"COALESCE(k.{kna1_name1}, vbrk.{kunag})" if kna1_table and kna1_name1 else f"vbrk.{kunag}"
+    country_expr = f"COALESCE(k.{kna1_land1}, 'Unknown')" if kna1_table and kna1_land1 else "'Unknown'"
+
+    join_kna1 = ""
+    if kna1_table and kna1_kunnr:
+        join_kna1 = f"LEFT JOIN {kna1_table} k ON vbrk.{kunag} = k.{kna1_kunnr}"
+
+    sql = f"""
+        SELECT
+            {customer_expr} AS customer_name,
+            {country_expr} AS country,
+            vbrp.{product_col} AS product_id,
+            SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales
+        FROM {vbrp_table} vbrp
+        JOIN {vbrk_table} vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
+        {join_kna1}
+        GROUP BY {customer_expr}, {country_expr}, vbrp.{product_col}
+        ORDER BY total_sales DESC
+        LIMIT :limit
+    """
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+
+    results: list[dict] = []
+    for r in rows:
+        total = r.total_sales
+        if isinstance(total, Decimal):
+            total = float(total)
+        results.append(
+            {
+                "customer_name": str(r.customer_name) if r.customer_name is not None else "Unknown",
+                "country": str(r.country) if r.country is not None else "Unknown",
+                "product_id": str(r.product_id),
+                "total_sales": float(total) if total is not None else 0.0,
+            }
+        )
+    return results
+
+
 def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db: Session, days: int = 30) -> str:
     """Build context string for AI analysis chat from requested context_keys.
     Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
@@ -2174,19 +2436,42 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
             except Exception:
                 current_revenue = previous_revenue = 0.0
             trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
-
-            # Optional: derive sales by product directly from vbrp in the primary DB
+            # Optional: derive sales by product and related breakdowns directly from vbrp in the primary DB
             product_sales: list[dict] = []
+            lowest_sales_by_customer_country: list[dict] = []
+            sales_by_country_industry: list[dict] = []
+            sales_by_customer_product_country: list[dict] = []
+            sales_vs_invoice = {}
             try:
                 product_sales = _get_sales_by_product_from_vbrp(db, limit=10)
             except Exception as e2:
                 logger.warning(f"AI context product_sales from vbrp: {e2}")
+            try:
+                lowest_sales_by_customer_country = _get_lowest_sales_by_customer_country(db, limit=10)
+            except Exception as e2:
+                logger.warning(f"AI context lowest_sales_by_customer_country: {e2}")
+            try:
+                sales_by_country_industry = _get_sales_by_country_industry(db, limit=20)
+            except Exception as e2:
+                logger.warning(f"AI context sales_by_country_industry: {e2}")
+            try:
+                sales_by_customer_product_country = _get_sales_by_customer_product_country(db, limit=10)
+            except Exception as e2:
+                logger.warning(f"AI context sales_by_customer_product_country: {e2}")
+            try:
+                sales_vs_invoice = _get_sales_vs_invoice_v2(db)
+            except Exception as e2:
+                logger.warning(f"AI context sales_vs_invoice_v2: {e2}")
 
             parts.append(
                 f"Business (revenue): current period {current_revenue:.0f}, previous {previous_revenue:.0f} (change {trend_pct:+.1f}%). "
                 f"Revenue by customer (top 10): {json.dumps(revenue_by_customer)}. "
                 f"Revenue by country (top 5): {json.dumps(revenue_by_country)}. "
-                f"Sales by product (top 10 from vbrp): {json.dumps(product_sales)}.",
+                f"Sales by product (top 10 from vbrp): {json.dumps(product_sales)}. "
+                f"Lowest sales by customer and country (from vbrp/vbrk/kna1): {json.dumps(lowest_sales_by_customer_country)}. "
+                f"Sales by country and industry (from vbrp/vbrk/kna1): {json.dumps(sales_by_country_industry)}. "
+                f"Highest sales by customer, product, and country (from vbrp/vbrk/kna1): {json.dumps(sales_by_customer_product_country)}. "
+                f"Comparison of total sales (vbrp) vs InvoiceV2BusinessData: {json.dumps(sales_vs_invoice)}.",
             )
         except Exception as e:
             logger.warning(f"AI context business_summary: {e}")
