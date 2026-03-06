@@ -2046,8 +2046,8 @@ def _get_lowest_sales_by_customer_country(db: Session, limit: int = 10) -> list[
             {customer_expr} AS customer_name,
             {country_expr} AS country,
             SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales
-        FROM {vbrp_table} vbrp
-        JOIN {vbrk_table} vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
+        FROM "{vbrp_table}" vbrp
+        JOIN "{vbrk_table}" vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
         {join_kna1}
         GROUP BY {customer_expr}, {country_expr}
         ORDER BY total_sales ASC
@@ -2113,9 +2113,9 @@ def _get_sales_by_country_industry(db: Session, limit: int = 20) -> list[dict]:
             k.{kna1_brsch} AS industry,
             SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales,
             COUNT(DISTINCT vbrk.{kunag}) AS customer_count
-        FROM {vbrp_table} vbrp
-        JOIN {vbrk_table} vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
-        JOIN {kna1_table} k ON vbrk.{kunag} = k.{kna1_kunnr}
+        FROM "{vbrp_table}" vbrp
+        JOIN "{vbrk_table}" vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
+        JOIN "{kna1_table}" k ON vbrk.{kunag} = k.{kna1_kunnr}
         GROUP BY k.{kna1_land1}, k.{kna1_brsch}
         ORDER BY total_sales DESC
         LIMIT :limit
@@ -2188,8 +2188,8 @@ def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list
             {country_expr} AS country,
             vbrp.{product_col} AS product_id,
             SUM(CAST(vbrp.{value_col} AS NUMERIC)) AS total_sales
-        FROM {vbrp_table} vbrp
-        JOIN {vbrk_table} vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
+        FROM "{vbrp_table}" vbrp
+        JOIN "{vbrk_table}" vbrk ON vbrp.{vbeln_vbrp} = vbrk.{vbeln_vbrk}
         {join_kna1}
         GROUP BY {customer_expr}, {country_expr}, vbrp.{product_col}
         ORDER BY total_sales DESC
