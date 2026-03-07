@@ -1,7 +1,8 @@
 """
 Dashboard API endpoints for statistics, analytics, and AI insights
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, Numeric, inspect, text
 from datetime import datetime, timedelta
@@ -2660,6 +2661,195 @@ async def post_ai_analysis_chat(
         return orchestrator_payload(orch)
     except Exception as e:
         logger.warning(f"AI analysis chat failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.post("/ai-analysis-multi-model")
+async def ai_analysis_multi_model_chat(
+    message: str = Query(..., description="User's natural language query"),
+    context_keys: Optional[list] = Query(None, description="Dashboard context keys to include"),
+    days: int = Query(30, ge=1, le=365, description="Time period for context data"),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI analysis chat endpoint with multi-model comparison (GPT + Gemini + Claude).
+    Runs all models in parallel and returns individual + synthesized responses.
+    """
+    try:
+        from ..config.config import ENABLE_MULTI_MODEL, USE_SAP_DB_FOR_AI
+        from ..services.multi_model_orchestrator import run_all_models_parallel
+        
+        if not ENABLE_MULTI_MODEL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Multi-model mode is not enabled. Set ENABLE_MULTI_MODEL=true in .env"
+            )
+        
+        # Build context (same as regular AI analysis)
+        if USE_SAP_DB_FOR_AI:
+            from ..database import get_sap_session
+            from ..services.sap_ai_context import build_ai_context_from_sap
+            sap_session_for_context = get_sap_session()
+            try:
+                context_str = build_ai_context_from_sap(
+                    context_keys if isinstance(context_keys, list) else [],
+                    sap_session_for_context,
+                    days=int(days),
+                )
+            except Exception as sap_e:
+                logger.warning("SAP AI context failed: %s", sap_e)
+                context_str = ""
+            finally:
+                sap_session_for_context.close()
+        else:
+            context_str = _build_ai_analysis_context(
+                context_keys if isinstance(context_keys, list) else [],
+                current_user,
+                db,
+                days=int(days),
+            )
+        
+        # Run multi-model analysis
+        result = await run_all_models_parallel(
+            user_query=message,
+            context=context_str,
+        )
+        
+        return {
+            "synthesized_answer": result.synthesized_answer,
+            "best_model": result.best_model,
+            "total_time_ms": result.total_time_ms,
+            "models": [
+                {
+                    "name": r.model_name,
+                    "content": r.content,
+                    "response_time_ms": r.response_time_ms,
+                    "success": r.success,
+                    "error": r.error,
+                    "token_usage": r.token_usage,
+                }
+                for r in result.individual_responses
+            ],
+        }
+    
+    except Exception as e:
+        logger.error(f"Multi-model analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.post("/training-feedback")
+async def submit_training_feedback(
+    record_id: int = Query(..., description="Training data record ID"),
+    feedback_score: int = Query(..., ge=1, le=5, description="Rating 1-5"),
+    feedback_comment: str = Query(None, description="Optional feedback comment"),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Submit user feedback for an AI analysis response.
+    Used to build training dataset for fine-tuning.
+    """
+    try:
+        from ..services.training_data_collector import submit_feedback
+        
+        success = submit_feedback(
+            db=db,
+            record_id=record_id,
+            feedback_score=feedback_score,
+            feedback_comment=feedback_comment,
+        )
+        
+        if success:
+            return {"success": True, "message": "Feedback submitted successfully"}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to submit feedback"
+            )
+    
+    except Exception as e:
+        logger.error(f"Feedback submission failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.post("/voice-transcribe")
+async def transcribe_voice(
+    audio_file: UploadFile = File(..., description="Audio file to transcribe"),
+    language: str = Query("en", description="Language code (e.g., 'en', 'es')"),
+    current_user: ZodiacUser = Depends(get_current_user),
+):
+    """
+    Transcribe audio file using OpenAI Whisper API.
+    Supports WebM, MP3, WAV, and other common audio formats.
+    """
+    try:
+        from ..services.voice_transcription import transcribe_audio
+        
+        # Read audio file content
+        audio_content = await audio_file.read()
+        
+        if not audio_content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Empty audio file"
+            )
+        
+        # Determine file format
+        file_format = "webm"  # default
+        if audio_file.filename:
+            file_ext = audio_file.filename.split('.')[-1].lower()
+            if file_ext in ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'webm']:
+                file_format = file_ext
+        
+        # Transcribe
+        result = transcribe_audio(
+            audio_file_content=audio_content,
+            file_format=file_format,
+            language=language if language != "auto" else None,
+        )
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result["error"]
+            )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Voice transcription failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get("/training-stats")
+async def get_training_statistics(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get training data collection statistics for the current user.
+    """
+    try:
+        from ..services.training_data_collector import get_training_stats
+        
+        stats = get_training_stats(db, user_id=current_user.id)
+        return stats
+    
+    except Exception as e:
+        logger.error(f"Failed to get training stats: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),

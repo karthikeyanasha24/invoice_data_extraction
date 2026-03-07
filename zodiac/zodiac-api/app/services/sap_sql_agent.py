@@ -728,10 +728,120 @@ Task:
     return (resp.choices[0].message.content or "").strip()
 
 
+def validate_sql_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """
+    Validate SQL specification before execution.
+    
+    Args:
+        spec: JSON SQL specification
+    
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+    
+    # Check basic structure
+    if not spec:
+        errors.append("Empty specification")
+        return False, errors
+    
+    tables = spec.get("tables", [])
+    columns = spec.get("columns", [])
+    
+    if not tables:
+        errors.append("No tables specified")
+    
+    if not columns:
+        errors.append("No columns specified")
+    
+    # Validate columns reference existing tables
+    table_names = {t.get("name") for t in tables if isinstance(t, dict) and t.get("name")}
+    for col in columns:
+        if isinstance(col, dict):
+            col_table = col.get("table")
+            if col_table and col_table not in table_names:
+                errors.append(f"Column references unknown table: {col_table}")
+    
+    # Validate joins reference existing tables
+    joins = spec.get("joins", [])
+    for j in joins:
+        if isinstance(j, dict):
+            left = j.get("left")
+            right = j.get("right")
+            if left and left not in table_names:
+                errors.append(f"Join references unknown left table: {left}")
+            if right and right not in table_names:
+                errors.append(f"Join references unknown right table: {right}")
+    
+    is_valid = len(errors) == 0
+    return is_valid, errors
+
+
+def refine_query_on_error(
+    client: OpenAI,
+    original_question: str,
+    sql_error: str,
+    previous_spec: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Use LLM to refine the query specification after an SQL error.
+    
+    Args:
+        client: OpenAI client
+        original_question: User's original question
+        sql_error: Error message from SQL execution
+        previous_spec: Previous JSON SQL specification that failed
+    
+    Returns:
+        Refined JSON SQL specification
+    """
+    try:
+        prompt = f"""
+An SQL query failed with an error. Please fix the JSON SQL specification.
+
+Original question: "{original_question}"
+
+Previous specification that failed:
+{json.dumps(previous_spec, indent=2)}
+
+Error message:
+{sql_error}
+
+Common issues:
+- Missing join conditions
+- Invalid column names
+- Incorrect table references
+- Missing GROUP BY for aggregated columns
+
+Return a CORRECTED JSON specification with the same structure.
+"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=1000,
+        )
+        
+        content = (response.choices[0].message.content or "").strip()
+        try:
+            refined_spec = json.loads(content)
+        except json.JSONDecodeError:
+            m = re.search(r"\{.*\}", content, re.DOTALL)
+            refined_spec = json.loads(m.group(0)) if m else previous_spec
+        
+        return refined_spec or previous_spec
+    
+    except Exception as e:
+        logger.error(f"Query refinement failed: {e}")
+        return previous_spec
+
+
 def run_sap_sql_agent(
     question: str,
     db: Session,
     knowledge_context: Optional[str] = None,
+    max_retries: int = 2,
 ) -> SqlAgentResult | None:
     """
     Main entry point used by the dashboard AI endpoint.
@@ -755,6 +865,10 @@ def run_sap_sql_agent(
         rows = _SQL_TO_ROWS_CACHE[sql]
         return SqlAgentResult(sql=sql, rows=rows)
 
+    attempt = 0
+    last_error = None
+    spec = None
+    
     try:
         selected_tables = _pick_tables(question, client, db, knowledge_context)
         column_mappings = _introspect_columns(db, selected_tables)
@@ -767,15 +881,47 @@ def run_sap_sql_agent(
             logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
             return None
 
-        sql = _json_to_sql_postgres(spec, column_mappings)
-        rows = _run_sql(db, sql)
-        if not rows:
-            logger.info("sap_sql_agent: SQL returned no rows for question %s", question)
-        else:
-            _QUERY_TO_SQL_CACHE[q_key] = sql
-            _SQL_TO_ROWS_CACHE[sql] = rows
-
-        return SqlAgentResult(sql=sql, rows=rows)
+        # Validate specification
+        is_valid, validation_errors = validate_sql_spec(spec)
+        if not is_valid:
+            logger.warning(f"Invalid SQL spec: {validation_errors}")
+            # Try to auto-fix common issues
+            if validation_errors and len(validation_errors) < 5:
+                logger.info("Attempting to refine specification...")
+                spec = refine_query_on_error(client, question, ", ".join(validation_errors), spec)
+                is_valid, validation_errors = validate_sql_spec(spec)
+        
+        # Retry loop for SQL execution
+        while attempt <= max_retries:
+            try:
+                sql = _json_to_sql_postgres(spec, column_mappings)
+                rows = _run_sql(db, sql)
+                
+                # Success!
+                if not rows:
+                    logger.info("sap_sql_agent: SQL returned no rows for question %s", question)
+                else:
+                    _QUERY_TO_SQL_CACHE[q_key] = sql
+                    _SQL_TO_ROWS_CACHE[sql] = rows
+                
+                return SqlAgentResult(sql=sql, rows=rows)
+            
+            except Exception as sql_err:
+                last_error = str(sql_err)
+                logger.warning(f"SQL execution failed (attempt {attempt + 1}/{max_retries + 1}): {last_error}")
+                
+                if attempt < max_retries:
+                    # Try to refine the query
+                    logger.info("Refining query specification...")
+                    spec = refine_query_on_error(client, question, last_error, spec)
+                    attempt += 1
+                else:
+                    # Max retries reached
+                    logger.error(f"Max retries reached for question: {question}")
+                    return None
+        
+        return None
+    
     except Exception as e:
         logger.warning("sap_sql_agent failed for question '%s': %s", question, e)
         return None
