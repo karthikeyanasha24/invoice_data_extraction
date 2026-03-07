@@ -291,10 +291,13 @@ Answer concisely.
         if len(subqueries) < 2:
             action = "new"
         else:
+            sql_db = sap_db or db
+            knowledge = mem.knowledge()
+            knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
             datasets: List[Tuple[str, List[Dict[str, Any]]]] = []
             sqls: List[str] = []
             for sq in subqueries[:3]:
-                r = run_sap_sql_agent(sq, db)
+                r = run_sap_sql_agent(sq, sql_db, knowledge_context=knowledge_context)
                 if not r or not r.rows:
                     datasets.append((sq, []))
                     sqls.append(r.sql if r else "")
@@ -380,7 +383,9 @@ Explain the answer briefly (3-8 sentences). If result is empty, say so and sugge
     # If the agent cannot produce useful rows, fall back to answering from the
     # already-built dashboard context only (which we know works and has data).
     sql_db = sap_db or db
-    result = run_sap_sql_agent(user_query, sql_db)
+    knowledge = mem.knowledge()
+    knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
+    result = run_sap_sql_agent(user_query, sql_db, knowledge_context=knowledge_context)
     if not result or not result.rows:
         # Fallback: answer from context_str alone, without relying on live SQL rows
         if context_str.strip():
