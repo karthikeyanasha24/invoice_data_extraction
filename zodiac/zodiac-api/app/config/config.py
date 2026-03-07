@@ -13,6 +13,9 @@ logger = logging.getLogger("zodiac-api.config")
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ENABLE_MULTI_MODEL = os.getenv("ENABLE_MULTI_MODEL", "false").lower() == "true"
 # Import Vercel Blob for production file storage
 try:
     import vercel_blob

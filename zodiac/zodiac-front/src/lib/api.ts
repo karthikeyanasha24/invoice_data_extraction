@@ -1694,6 +1694,32 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to get AI analysis response.');
         }
     },
+
+    postAIAnalysisMultiModel: async (
+        message: string,
+        contextKeys: string[] = [],
+        days: number = 30
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis-multi-model', null, {
+                params: {
+                    message,
+                    context_keys: contextKeys,
+                    days: Math.max(1, Math.min(365, days)),
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('Multi-model AI analysis failed:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            if (error.response?.status === 400) {
+                throw new Error(error.response?.data?.detail || 'Multi-model mode is not enabled.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to get multi-model AI response.');
+        }
+    },
 };
 
 // Admin API

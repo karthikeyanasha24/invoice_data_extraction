@@ -12,7 +12,7 @@ passlib[bcrypt]==1.7.4
 python-jose==3.5.0
 
 # HTTP Clients
-requests==2.32.3
+requests>=2.32.5
 httpx==0.27.0
 
 # File Processing
@@ -29,7 +29,16 @@ openpyxl>=3.1.0
 paramiko>=3.4.0
 cryptography>=42.0.0
 
-# Other
+# AI Models
 python-dotenv==1.1.1
-openai
+openai>=1.12.0
+google-generativeai>=0.8.0
+anthropic>=0.18.0
+
+# Optional: Langchain (if needed)
+# Uncomment if you're using langchain features
+# langchain-core==0.3.72
+# langchain==0.3.27
+# langchain-community==0.3.29
+# langchain-experimental==0.3.4
 

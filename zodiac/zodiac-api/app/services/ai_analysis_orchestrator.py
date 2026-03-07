@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 from ..config.config import OPENAI_API_KEY
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
 from .sap_sql_agent import run_sap_sql_agent, _serialize_value  # type: ignore
+from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
+from .training_data_collector import log_query_execution
+from .query_cache import find_similar_cached_query, cache_query_result
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,7 @@ class OrchestratorResult:
     rows_preview: Optional[List[Dict[str, Any]]] = None
     compare: Optional[Dict[str, Any]] = None
     memory_updated: bool = False
+    charts: Optional[List[Dict[str, Any]]] = None
 
 
 def _get_client(api_key: str) -> OpenAI:
@@ -356,6 +360,18 @@ If data is missing for a dataset, mention it clearly.
             # update memory to last dataset (helps follow-ups)
             last_sql = next((s for s in reversed(sqls) if s), "")
             last_rows = next((rows for _, rows in reversed(datasets) if rows), [])
+            
+            # Generate comparison charts
+            charts_data = None
+            try:
+                if last_rows:
+                    chart_specs = analyze_visualization_needs(last_rows, user_query, "compare", last_sql)
+                    if chart_specs:
+                        charts_data = chart_specs_to_json(chart_specs)
+                        logger.info(f"Generated {len(charts_data)} comparison chart(s)")
+            except Exception as chart_err:
+                logger.warning(f"Comparison chart generation failed: {chart_err}")
+            
             mem.last_user_query = user_query
             mem.last_sql = last_sql
             mem.last_rows_json = json.dumps(_rows_preview(last_rows, limit=80), default=str)
@@ -368,6 +384,7 @@ If data is missing for a dataset, mention it clearly.
                 rows_preview=_rows_preview(last_rows) if last_rows else None,
                 compare={"subqueries": subqueries, "sqls": sqls, "summary": compare_summary},
                 memory_updated=True,
+                charts=charts_data,
             )
 
     # reuse: re-run last SQL if we have it, otherwise treat as new
@@ -408,6 +425,23 @@ Explain the answer briefly (3-8 sentences). If result is empty, say so and sugge
         )
 
     # new: run SAP SQL agent, store sql+rows and return summary.
+    # Check cache first for similar queries
+    try:
+        cached_result = find_similar_cached_query(db, user_query, threshold=0.85)
+        if cached_result:
+            logger.info(f"Serving from cache (similarity={cached_result.get('similarity', 0):.3f})")
+            return OrchestratorResult(
+                reply=cached_result["result_summary"],
+                action="cached",
+                reason=f"cache_hit_similarity_{cached_result.get('similarity', 0):.2f}",
+                sql=cached_result.get("sql_query", ""),
+                rows_preview=cached_result.get("result_preview"),
+                memory_updated=False,
+                charts=cached_result.get("charts"),
+            )
+    except Exception as cache_err:
+        logger.warning(f"Cache lookup failed: {cache_err}")
+    
     # If the agent cannot produce useful rows, fall back to answering from the
     # already-built dashboard context only (which we know works and has data).
     sql_db = sap_db or db
@@ -514,10 +548,56 @@ Task:
     )
     reply = (resp.choices[0].message.content or "").strip()
 
+    # Generate charts for visualization
+    charts_data = None
+    try:
+        logger.info(f"Attempting chart generation for query with {len(result.rows)} rows")
+        chart_specs = analyze_visualization_needs(result.rows, user_query, "new", result.sql)
+        if chart_specs:
+            charts_data = chart_specs_to_json(chart_specs)
+            logger.info(f"✅ Generated {len(charts_data)} chart(s) for user query")
+            logger.info(f"Chart types: {[c.get('chart_type') for c in charts_data]}")
+        else:
+            logger.info("No charts generated - analyze_visualization_needs returned empty list")
+    except Exception as chart_err:
+        logger.error(f"❌ Chart generation failed: {chart_err}", exc_info=True)
+
     mem.last_user_query = user_query
     mem.last_sql = result.sql
     mem.last_rows_json = json.dumps(_rows_preview(result.rows, limit=80), default=str)
     save_memory(db, mem)
+
+    # Log to training data for fine-tuning
+    try:
+        log_query_execution(
+            db=db,
+            user_id=user_id,
+            user_query=user_query,
+            sql_query=result.sql,
+            result_summary=reply,
+            action_type="new",
+            metadata={
+                "rows_count": len(result.rows),
+                "has_charts": bool(charts_data),
+                "chart_count": len(charts_data) if charts_data else 0,
+            },
+        )
+    except Exception as log_err:
+        logger.warning(f"Failed to log training data: {log_err}")
+
+    # Cache the result for future queries
+    try:
+        cache_query_result(
+            db=db,
+            query_text=user_query,
+            sql_query=result.sql,
+            result_summary=reply,
+            result_preview=preview,
+            charts=charts_data,
+            ttl_hours=24,
+        )
+    except Exception as cache_err:
+        logger.warning(f"Failed to cache query result: {cache_err}")
 
     return OrchestratorResult(
         reply=reply or "Query executed, but I couldn’t generate a summary.",
@@ -526,6 +606,7 @@ Task:
         sql=result.sql,
         rows_preview=preview,
         memory_updated=True,
+        charts=charts_data,
     )
 
 
