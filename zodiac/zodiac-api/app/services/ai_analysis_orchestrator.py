@@ -82,6 +82,30 @@ Return JSON only:
     return action, reason
 
 
+def _is_explicit_knowledge_instruction(user_query: str) -> bool:
+    """
+    Detect when the user is clearly giving an instruction to save/remember,
+    so we always treat it as "knowledge" and do not run SQL or answer from context.
+    """
+    q = (user_query or "").strip().lower()
+    if not q or len(q) < 10:
+        return False
+    prefixes = (
+        "remember:",
+        "remember that",
+        "save this:",
+        "save that",
+        "store this:",
+        "store that",
+        "note:",
+        "note that",
+        "for future:",
+        "when i ask about",
+        "when i ask for",
+    )
+    return any(q.startswith(p) for p in prefixes)
+
+
 def _is_small_chitchat(user_query: str) -> bool:
     """
     Fast heuristic: detect trivial greetings/thanks that should NOT trigger SQL.
@@ -208,7 +232,11 @@ def run_ai_analysis_orchestrator(
 
     client = _get_client(effective_key)
     mem = load_memory(db, user_id)
-    action, reason = _decide_action(client, user_query, mem)
+    # If user clearly says "Remember:" or "Save this:", always treat as knowledge (don't run SQL).
+    if _is_explicit_knowledge_instruction(user_query):
+        action, reason = "knowledge", "explicit_save_instruction"
+    else:
+        action, reason = _decide_action(client, user_query, mem)
 
     # Pure chit-chat (greetings, thanks, etc.) – do NOT hit the database.
     if _is_small_chitchat(user_query):
@@ -387,6 +415,28 @@ Explain the answer briefly (3-8 sentences). If result is empty, say so and sugge
     knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
     result = run_sap_sql_agent(user_query, sql_db, knowledge_context=knowledge_context)
     if not result or not result.rows:
+        # If user asked about costs and we have cost-table knowledge, explain that the query ran but returned no rows.
+        q_lower = (user_query or "").lower()
+        knowledge = mem.knowledge()
+        knowledge_str = " ".join(str(v) for v in knowledge.values()).lower()
+        cost_related = "cost" in q_lower or "costing" in q_lower or "vendor" in q_lower
+        has_cost_tables_note = knowledge and ("ekpo" in knowledge_str or "rbkp" in knowledge_str or "rseg" in knowledge_str)
+        if cost_related and has_cost_tables_note:
+            fallback_reply = (
+                "I used your cost tables (e.g. EKPO, RBKP, RSEG) for this question, but the query returned no rows. "
+                "Those tables may be empty in the database for the current period, or the question may need different filters. "
+                "You can try asking for costs by vendor, by material, or by purchase order; if data exists, I’ll show it."
+            )
+            mem.last_user_query = user_query
+            save_memory(db, mem)
+            return OrchestratorResult(
+                reply=fallback_reply,
+                action="new",
+                reason=reason or "cost_query_no_rows",
+                sql=result.sql if result else "",
+                rows_preview=None,
+                memory_updated=True,
+            )
         # Fallback: answer from context_str alone, without relying on live SQL rows
         if context_str.strip():
             prompt = f"""
