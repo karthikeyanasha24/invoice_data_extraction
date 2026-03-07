@@ -26,7 +26,7 @@ import logging
 import re
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pathlib import Path
 
@@ -49,11 +49,14 @@ except ImportError:  # pragma: no cover - runtime dependency
 # --- Static metadata ---------------------------------------------------------------------------
 
 SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
-    "VBRP": "Billing document item (sales by product, quantities, net values, currencies, customers, countries).",
+    # Sales / Billing
+    "VBRP": "Billing document item (sales by product, quantities, net values, currencies, customers). Use for: highest sales by product, revenue analysis.",
+    "vbrp": "Same as VBRP – billing document item. Use for sales, revenue, product analysis.",
     "VBRK": "Billing document header (invoice-level amounts, dates, currencies, customers).",
     "VBAK": "Sales document header (orders, customers, dates, overall values).",
     "VBAP": "Sales document item (ordered products, quantities, values).",
     "VBEP": "Schedule lines for sales document items (delivery quantities and dates).",
+    # Customer / Material Master
     "KNA1": "Customer master (names, addresses, countries, industries).",
     "KNVV": "Customer sales data (sales area, pricing, related attributes).",
     "KNVP": "Customer partners (payer, ship-to, bill-to relationships).",
@@ -62,9 +65,27 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     "MARM": "Units of measure for material (UOM conversion).",
     "MEAN": "International Article Numbers (EAN/UPC) for materials.",
     "MVKE": "Sales data for materials (sales org, distribution channel, pricing group).",
+    # Finance / Accounting
     "BSAD": "Customer open and cleared items (AR line items, payments).",
     "BSEG": "Accounting document segment (line items for GL, customers, vendors).",
     "FAGLFLEXA": "General ledger: totals/line items for new G/L accounting.",
+    # Logistics – Outbound
+    "LIKP": "Outbound delivery header (delivery documents, shipping dates, quantities, ship-to). Use for: deliveries, logistics.",
+    "LIPS": "Outbound delivery item (products, quantities, reference to sales order). Use for: delivery line details.",
+    # Vendor / Purchasing
+    "LFA1": "Vendor master (vendor names, addresses, countries). Use for: supplier analysis, purchasing.",
+    "LFB1": "Vendor company code (vendor accounting, payment terms).",
+    "LFM1": "Vendor purchasing org (vendor–purchasing org data).",
+    "EKKO": "Purchasing document header (PO header, vendor, dates, currency). Use for: purchase orders.",
+    "EKPO": "Purchasing document item (PO line items, materials, quantities, values).",
+    "EBAN": "Purchase requisition (requisition items, materials, quantities).",
+    # Invoice Verification (Vendor Invoices)
+    "RBKP": "Vendor invoice header (invoice document, vendor, amount, currency). Use for: vendor invoice analysis.",
+    "RSEG": "Vendor invoice item (invoice line items, materials, quantities, amounts).",
+    # Material Document / Reservations
+    "MKPF": "Material document header (goods movement header, posting date).",
+    "RESB": "Reservation/dependent requirements (material reservations, requirements).",
+    "LSEG": "Document segment (document item data).",
 }
 
 
@@ -73,8 +94,10 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
 SAP_JOIN_HINTS = """
 Typical business key joins you MUST prefer (do NOT invent other join columns):
 
+SALES / BILLING:
 - VBRP (billing items) <-> VBRK (billing header)
   * VBRP.VBELN = VBRK.VBELN
+- vbrp: same as VBRP, use vbrp.VBELN = VBRK.VBELN
 
 - VBRK (billing header) <-> KNA1 (customer master)
   * VBRK.KUNAG = KNA1.KUNNR
@@ -86,20 +109,52 @@ Typical business key joins you MUST prefer (do NOT invent other join columns):
 - VBAP (order items) / VBRP (billing items) <-> VBEP (schedule lines)
   * VBEP.VBELN = VBAP.VBELN AND VBEP.POSNR = VBAP.POSNR
 
-- VBRP / VBAP (items with product) <-> MAKT / MVKE / MARC (material master & descriptions)
+- VBRP / VBAP / LIPS (items with product) <-> MAKT / MVKE / MARC (material master & descriptions)
   * VBRP.MATNR = MAKT.MATNR = MVKE.MATNR = MARC.MATNR
-  * VBAP.MATNR = MAKT.MATNR = MVKE.MATNR = MARC.MATNR
+  * VBAP.MATNR = MAKT.MATNR
+  * LIPS.MATNR = MAKT.MATNR
 
 - BSAD / BSEG (AR items) <-> KNA1 (customer master)
   * BSAD.KUNNR = KNA1.KUNNR
   * BSEG.KUNNR = KNA1.KUNNR
 
+LOGISTICS – OUTBOUND DELIVERY:
+- LIKP (delivery header) <-> LIPS (delivery items)
+  * LIKP.VBELN = LIPS.VBELN
+
+- LIPS (delivery items) <-> VBAP (sales order items) – reference
+  * LIPS.VGBEL = VBAP.VBELN AND LIPS.VGPOS = VBAP.POSNR
+
+- LIKP (delivery) <-> KNA1 (ship-to customer)
+  * LIKP.KUNNR = KNA1.KUNNR  (if present)
+
+PURCHASING / VENDOR:
+- EKKO (PO header) <-> EKPO (PO items)
+  * EKKO.EBELN = EKPO.EBELN
+
+- EKKO / EKPO <-> LFA1 (vendor master)
+  * EKKO.LIFNR = LFA1.LIFNR
+  * EKPO.LIFNR = LFA1.LIFNR  (if present)
+
+- RBKP (vendor invoice header) <-> RSEG (vendor invoice items)
+  * RBKP.BELNR = RSEG.BELNR AND RBKP.GJAHR = RSEG.GJAHR  (if GJAHR present)
+  * or RBKP.BELNR = RSEG.BELNR
+
+- RBKP <-> LFA1 (vendor)
+  * RBKP.LIFNR = LFA1.LIFNR
+
+- EBAN (purchase req) <-> EKPO (PO items) – optional, via EBAN–EKPO reference fields if present
+
+MATERIAL DOCUMENT:
+- MKPF <-> MSEG (if MSEG exists): MKPF.MBLNR = MSEG.MBLNR, MKPF.MJAHR = MSEG.MJAHR
+
 VERY IMPORTANT:
-- VBRP usually does NOT have KUNNR directly. To reach the customer, go:
+- VBRP / vbrp usually does NOT have KUNNR directly. To reach the customer, go:
   VBRP.VBELN -> VBRK.VBELN, then VBRK.KUNAG -> KNA1.KUNNR.
-- When you need INDUSTRY or COUNTRY of a customer, read it from:
+- When you need INDUSTRY or COUNTRY of a customer, read from:
   * KNA1.BRSCH (industry)
   * KNA1.LAND1 (country)
+- For cost-related or COGS queries, use EKPO (purchase values), RBKP/RSEG (vendor invoice amounts), BSEG (accounting).
 """
 
 
@@ -198,24 +253,90 @@ def _introspect_columns(db: Session, table_names: List[str]) -> Dict[str, Dict[s
     return mapping
 
 
-def _pick_tables(question: str, client: OpenAI) -> List[str]:
+def _get_table_descriptions(db: Session) -> Dict[str, str]:
     """
-    Rough equivalent of INVOICE_BOT.pick_tables over our Postgres tables.
+    Build table descriptions by merging:
+    1) SAP_TABLE_DESCRIPTIONS (known tables with semantic descriptions)
+    2) db_table_mapping.json meta (for tables in DB, when mapping exists)
+    3) Generic fallback for any other DB table
+
+    This allows new tables added to the DB + mapping to be automatically
+    discoverable by the model without code changes.
     """
+    insp = inspect(db.bind)
+    db_table_names = insp.get_table_names()
+    # Skip non-SAP / internal tables for AI analysis
+    skip = {"ai_analysis_memory", "zodiac_users", "zodiac_customers", "customers", "user_customers"}
+    db_table_names = [t for t in db_table_names if t.lower() not in skip]
+
+    mapping_file: Dict[str, Any] = {}
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "db_table_mapping.json"
+        if path.exists():
+            import json as _json
+            with path.open("r", encoding="utf-8") as f:
+                raw = _json.load(f)
+            if isinstance(raw, dict):
+                mapping_file = raw
+    except Exception:
+        pass
+
+    out: Dict[str, str] = {}
+    for actual_name in db_table_names:
+        # Prefer SAP_TABLE_DESCRIPTIONS (supports both VBRP and vbrp)
+        desc = SAP_TABLE_DESCRIPTIONS.get(actual_name) or SAP_TABLE_DESCRIPTIONS.get(actual_name.upper())
+        if desc:
+            out[actual_name] = desc
+            continue
+        # Else use mapping meta
+        entry = mapping_file.get(actual_name) or mapping_file.get(actual_name.upper())
+        if isinstance(entry, dict) and entry.get("meta", {}).get("description"):
+            out[actual_name] = str(entry["meta"]["description"])
+        else:
+            out[actual_name] = f"{actual_name} table – check columns for available fields."
+    return out
+
+
+def _pick_tables(
+    question: str,
+    client: OpenAI,
+    db: Session,
+    knowledge_context: Optional[str] = None,
+) -> List[str]:
+    """
+    Pick tables needed to answer the question. Uses dynamic table list from DB +
+    mapping so new tables are auto-detected. User knowledge (e.g. "use these for costs")
+    is injected when provided.
+    """
+    table_descriptions = _get_table_descriptions(db)
+    if not table_descriptions:
+        table_descriptions = SAP_TABLE_DESCRIPTIONS  # fallback
+
+    knowledge_block = ""
+    if knowledge_context and knowledge_context.strip():
+        knowledge_block = f"""
+User preferences / stored knowledge (apply when relevant):
+{knowledge_context.strip()}
+"""
+
     prompt = f"""
 User question: "{question}"
-
+{knowledge_block}
 You are selecting SAP-style tables that live in a Postgres database.
-Here are the available tables and what they mean:
-{json.dumps(SAP_TABLE_DESCRIPTIONS, indent=2)}
+Here are the available tables (use exact names as shown):
+{json.dumps(table_descriptions, indent=2)}
 
 Task:
 - Choose ONLY the tables that are truly needed to answer the question.
-- Prefer fewer tables and clearer joins (for example, VBRP + VBRK + KNA1 for sales by product and customer).
-- Return STRICT JSON in this format, and nothing else:
+- Use EXACT table names as they appear above (e.g. vbrp if listed, VBRK, LIKP, etc.).
+- For sales/revenue: prefer VBRP or vbrp + VBRK + KNA1 + MAKT.
+- For purchasing/vendor invoices: prefer EKKO + EKPO + LFA1, or RBKP + RSEG + LFA1.
+- For logistics/deliveries: prefer LIKP + LIPS.
+- Return STRICT JSON only:
 {{
   "selected_tables": [
-    {{ "name": "VBRP", "description": "..." }}
+    {{ "name": "<exact_table_name>", "description": "..." }}
   ]
 }}
 """
@@ -231,9 +352,25 @@ Task:
         m = re.search(r"\{.*\}", content, re.DOTALL)
         data = json.loads(m.group(0)) if m else {}
     tables = [t.get("name") for t in data.get("selected_tables", []) if isinstance(t, dict) and t.get("name")]
-    # Fallback: at least VBRP/VBRK if nothing returned
+    # Normalize: ensure we only pick tables that exist in DB
+    db_tables_lower = {t.lower(): t for t in table_descriptions}
+    normalized = []
+    for t in tables:
+        key = (t or "").strip()
+        if not key:
+            continue
+        actual = db_tables_lower.get(key.lower())
+        if actual:
+            normalized.append(actual)
+    tables = normalized
     if not tables:
-        tables = ["VBRP", "VBRK"]
+        # Fallback: try vbrp/VBRP, VBRK, or first available
+        for cand in ["vbrp", "VBRP", "VBRK"]:
+            if cand in table_descriptions or cand.upper() in {k.upper() for k in table_descriptions}:
+                tables = [cand if cand in table_descriptions else next(k for k in table_descriptions if k.upper() == cand.upper())]
+                break
+        if not tables and table_descriptions:
+            tables = [list(table_descriptions.keys())[0]]
     return tables
 
 
@@ -464,7 +601,7 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         added_actuals.add(right_actual)
 
     # Add any missing tables with heuristic joins on common keys
-    COMMON_KEYS = ["VBELN", "KUNNR", "KUNAG", "MATNR"]
+    COMMON_KEYS = ["VBELN", "KUNNR", "KUNAG", "MATNR", "EBELN", "LIFNR", "BELNR"]
     for logical_tbl in all_tables:
         actual_tbl = _actual_table_name(logical_tbl)
         if actual_tbl in added_actuals:
@@ -591,16 +728,22 @@ Task:
     return (resp.choices[0].message.content or "").strip()
 
 
-def run_sap_sql_agent(question: str, db: Session) -> SqlAgentResult | None:
+def run_sap_sql_agent(
+    question: str,
+    db: Session,
+    knowledge_context: Optional[str] = None,
+) -> SqlAgentResult | None:
     """
     Main entry point used by the dashboard AI endpoint.
 
     It:
-    - Uses LLM to pick tables
+    - Uses LLM to pick tables (dynamically from DB + mapping; supports new tables)
     - Introspects columns from Postgres
     - Uses LLM to build a JSON SQL spec
     - Translates to Postgres SQL and executes
     - Caches SQL per question
+
+    knowledge_context: Optional user preferences (e.g. "For cost queries use EKPO, RBKP, RSEG").
     """
     client = _get_openai_client()
     if not client:
@@ -613,7 +756,7 @@ def run_sap_sql_agent(question: str, db: Session) -> SqlAgentResult | None:
         return SqlAgentResult(sql=sql, rows=rows)
 
     try:
-        selected_tables = _pick_tables(question, client)
+        selected_tables = _pick_tables(question, client, db, knowledge_context)
         column_mappings = _introspect_columns(db, selected_tables)
         if not column_mappings:
             logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
@@ -657,5 +800,4 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-
 
