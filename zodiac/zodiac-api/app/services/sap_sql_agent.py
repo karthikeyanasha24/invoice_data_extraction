@@ -950,6 +950,7 @@ Common issues:
 - Invalid column names
 - Incorrect table references
 - Missing GROUP BY for aggregated columns
+- Query returned no rows: remove date filters, use all periods (no FKDAT/BUDAT/BEDAT filters), simplify to fewer joins
 
 Return a CORRECTED JSON specification with the same structure.
 """
@@ -1063,7 +1064,8 @@ def run_sap_sql_agent(
                     spec = refine_query_on_error(
                         client,
                         question,
-                        "Query returned no rows. Remove unnecessary joins or filters.",
+                        "Query returned no rows. The database may have historical data (1994-2010) but little recent data. "
+                        "Remove date filters, use ALL periods, simplify joins to only essential tables.",
                         spec,
                     )
                     attempt += 1
@@ -1084,25 +1086,20 @@ def run_sap_sql_agent(
                     logger.error(f"Max retries reached for question: {question}")
                     return None
 
-        # Fallback for sales questions when LLM query returned no rows
-        if not rows and "sales" in question.lower():
-            logger.info("Running fallback sales query")
-            try:
-                fallback_sql = """
-    SELECT
-        m."maktx" AS product_name,
-        SUM(NULLIF(v."netwr",'')::numeric) AS total_sales
-    FROM "vbrp" AS v
-    LEFT JOIN "MAKT" AS m ON v."matnr" = m."matnr"
-    GROUP BY m."maktx"
-    ORDER BY total_sales DESC
-    LIMIT 20
-                """.strip()
-                fallback_rows = _run_sql(db, fallback_sql)
-                if fallback_rows:
-                    return SqlAgentResult(sql=fallback_sql, rows=fallback_rows)
-            except Exception as fb_err:
-                logger.debug(f"Fallback sales query failed: {fb_err}")
+        # ADAPTIVE: If 0 rows and we used "current" (recent) scope, retry once with ALL periods.
+        # Works for any question — sales, costs, compare — no hardcoding.
+        if not rows and time_scope == "current":
+            logger.info("Retrying with time_scope='both' (all periods) — adaptive fallback")
+            retry_result = run_sap_sql_agent(
+                question,
+                db,
+                knowledge_context=knowledge_context,
+                max_retries=1,
+                time_scope="both",
+                few_shot_examples=few_shot_examples,
+            )
+            if retry_result and retry_result.rows:
+                return retry_result
 
         return None
 
