@@ -1676,13 +1676,15 @@ export const dashboardApi = {
         message: string,
         conversationHistory: { role: string; content: string }[] = [],
         contextKeys: string[] = [],
-        days: number = 30
+        days: number = 30,
+        timeScope?: 'current' | 'historical' | 'both'
     ) => {
         try {
             const response = await api.post('/api/v1/dashboard/ai-analysis/chat', {
                 message,
                 conversation_history: conversationHistory,
                 context_keys: contextKeys,
+                time_scope: timeScope || 'current',
                 days: Math.max(1, Math.min(365, days)),
             });
             return response.data;
@@ -1698,7 +1700,8 @@ export const dashboardApi = {
     postAIAnalysisMultiModel: async (
         message: string,
         contextKeys: string[] = [],
-        days: number = 30
+        days: number = 30,
+        timeScope?: 'current' | 'historical' | 'both'
     ) => {
         try {
             const response = await api.post('/api/v1/dashboard/ai-analysis-multi-model', null, {
@@ -1706,6 +1709,7 @@ export const dashboardApi = {
                     message,
                     context_keys: contextKeys,
                     days: Math.max(1, Math.min(365, days)),
+                    time_scope: timeScope || 'current',
                 },
             });
             return response.data;

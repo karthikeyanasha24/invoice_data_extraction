@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ChartSpec:
     """Specification for a single chart visualization."""
-    chart_type: str  # "bar", "line", "pie", "area", "table"
+    chart_type: str  # "bar", "line", "pie", "area", "table", "stacked_bar", "stacked_area", "timeline"
     title: str
     description: str
     data: List[Dict[str, Any]]
@@ -28,9 +28,11 @@ class ChartSpec:
     y_keys: Optional[List[str]] = None  # Keys for Y-axis values
     name_key: Optional[str] = None  # Key for pie chart labels
     value_key: Optional[str] = None  # Key for pie chart values
-    colors: Optional[List[str]] = None  # Color scheme
+    colors: Optional[List[str]] = None  # Enhanced color scheme
     show_legend: bool = True
     show_grid: bool = True
+    stacked: bool = False  # For stacked bar/area charts
+    period_info: Optional[str] = None  # Period context (e.g., "Q1 2024", "2023-2024")
 
 
 def _get_client() -> OpenAI:
@@ -55,15 +57,39 @@ def _safe_json_extract(text: str) -> Dict[str, Any]:
 
 
 def _detect_numeric_columns(rows: List[Dict[str, Any]]) -> List[str]:
-    """Detect numeric columns in result set."""
+    """
+    Detect numeric columns in result set.
+    Uses both value inspection AND column name patterns.
+    """
     if not rows:
         return []
     
     numeric_cols = []
-    first_row = rows[0]
     
-    for key, value in first_row.items():
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+    # Check first few rows (not just first row in case of NULL values)
+    sample_size = min(5, len(rows))
+    for key in rows[0].keys():
+        is_numeric = False
+        
+        # Strategy 1: Check if column name suggests numeric data
+        key_lower = key.lower()
+        numeric_name_patterns = [
+            "total", "sum", "count", "amount", "value", "revenue", "sales",
+            "price", "cost", "quantity", "volume", "avg", "average", "max",
+            "min", "balance", "payment", "invoice", "credit", "debit", "netwr"
+        ]
+        if any(pattern in key_lower for pattern in numeric_name_patterns):
+            is_numeric = True
+        
+        # Strategy 2: Check actual values in sample rows
+        if not is_numeric:
+            for row in rows[:sample_size]:
+                value = row.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    is_numeric = True
+                    break
+        
+        if is_numeric:
             numeric_cols.append(key)
     
     return numeric_cols
@@ -160,6 +186,19 @@ def analyze_visualization_needs(
     logger.info(f"📊 Analyzing {len(rows)} rows for visualization")
     logger.info(f"📊 Sample row: {rows[0] if rows else 'None'}")
     
+    # Check for all-NULL data (common issue with bad joins)
+    if rows:
+        non_null_count = sum(1 for row in rows[:5] for v in row.values() if v is not None)
+        total_values = sum(len(row) for row in rows[:5])
+        null_percentage = ((total_values - non_null_count) / total_values * 100) if total_values > 0 else 0
+        
+        if null_percentage > 80:
+            logger.warning(f"⚠️ {null_percentage:.0f}% of values are NULL! This usually means:")
+            logger.warning("   1. JOIN conditions are incorrect or don't match any data")
+            logger.warning("   2. Data columns are empty in database")
+            logger.warning("   3. Filters are too restrictive")
+            logger.warning(f"   Sample row: {rows[0]}")
+    
     # Quick analysis of data structure
     numeric_cols = _detect_numeric_columns(rows)
     categorical_cols = _detect_categorical_columns(rows)
@@ -168,8 +207,13 @@ def analyze_visualization_needs(
     logger.info(f"📊 Found {len(categorical_cols)} categorical columns: {categorical_cols}")
     
     if not numeric_cols:
-        logger.info("❌ No numeric columns found, skipping chart generation")
-        return []
+        logger.warning("⚠️ No numeric columns detected. Generating table view only.")
+        # Generate at least a table view
+        try:
+            return _auto_generate_basic_charts(rows, user_query, [], categorical_cols)
+        except Exception as e:
+            logger.error(f"❌ Table generation failed: {e}")
+            return []
     
     # Use LLM to recommend chart types and structure
     try:
@@ -276,19 +320,120 @@ Rules:
                 y_keys=rec.get("y_keys"),
                 name_key=rec.get("name_key"),
                 value_key=rec.get("value_key"),
-                colors=color_schemes.get(chart_type, ["#4F46E5"]),
+                colors=color_schemes.get(chart_type, color_schemes.get("bar", ["#4F46E5"])),
                 show_legend=True,
-                show_grid=chart_type in ["bar", "line", "area"],
+                show_grid=chart_type in ["bar", "line", "area", "stacked_bar", "stacked_area", "timeline"],
+                stacked=rec.get("stacked", False),
+                period_info=rec.get("period_info"),
             )
             
             charts.append(chart_spec)
             logger.info(f"✅ Created chart spec: {chart_spec.title} (type={chart_type}, data_points={len(chart_data)})")
         
+        # If no charts were generated, try auto-generation
+        if not charts:
+            logger.info("📊 No charts from LLM, attempting auto-generation")
+            charts = _auto_generate_basic_charts(rows, user_query, numeric_cols, categorical_cols)
+        
         return charts
     
     except Exception as e:
-        logger.error(f"Chart generation failed: {e}")
+        logger.error(f"❌ Chart generation failed: {e}", exc_info=True)
+        # Try auto-generation as fallback
+        try:
+            numeric_cols = _detect_numeric_columns(rows)
+            categorical_cols = _detect_categorical_columns(rows)
+            return _auto_generate_basic_charts(rows, user_query, numeric_cols, categorical_cols)
+        except:
+            return []
+
+
+def _auto_generate_basic_charts(
+    rows: List[Dict[str, Any]],
+    user_query: str,
+    numeric_cols: List[str],
+    categorical_cols: List[str]
+) -> List[ChartSpec]:
+    """
+    Auto-generate basic charts when LLM doesn't provide recommendations.
+    Creates sensible default visualizations based on data structure.
+    """
+    charts = []
+    
+    if not numeric_cols or not rows:
+        logger.info("📊 Auto-gen: No numeric columns or rows, skipping")
         return []
+    
+    logger.info(f"📊 Auto-generating charts with {len(numeric_cols)} numeric, {len(categorical_cols)} categorical cols")
+    
+    formatted_data = _format_chart_data(rows, max_items=30)
+    
+    # Color scheme
+    colors = ["#3b82f6", "#6366f1", "#10b981", "#f59e0b", "#ef4444"]
+    
+    try:
+        # Strategy 1: If we have categorical + numeric, create bar chart
+        if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
+            x_key = categorical_cols[0]
+            y_key = numeric_cols[0]
+            
+            charts.append(ChartSpec(
+                chart_type="bar",
+                title=f"{y_key.replace('_', ' ').title()} by {x_key.replace('_', ' ').title()}",
+                description="Auto-generated visualization",
+                data=formatted_data,
+                x_key=x_key,
+                y_keys=[y_key],
+                colors=colors,
+                show_legend=True,
+                show_grid=True,
+            ))
+            logger.info(f"✅ Auto-generated bar chart: {x_key} vs {y_key}")
+        
+        # Strategy 2: If we have 2+ numeric cols and few rows, try pie chart
+        if len(categorical_cols) >= 1 and len(numeric_cols) >= 1 and len(rows) <= 15:
+            name_key = categorical_cols[0]
+            value_key = numeric_cols[0]
+            
+            pie_data = []
+            for row in formatted_data[:10]:
+                if name_key in row and value_key in row:
+                    pie_data.append({
+                        "name": str(row[name_key]),
+                        "value": float(row[value_key]) if isinstance(row[value_key], (int, float)) else 0
+                    })
+            
+            if pie_data:
+                charts.append(ChartSpec(
+                    chart_type="pie",
+                    title=f"{value_key.replace('_', ' ').title()} Distribution",
+                    description="Auto-generated pie chart",
+                    data=pie_data,
+                    name_key="name",
+                    value_key="value",
+                    colors=colors,
+                    show_legend=True,
+                    show_grid=False,
+                ))
+                logger.info(f"✅ Auto-generated pie chart: {name_key} distribution")
+        
+        # Strategy 3: Always add table view for reference
+        # Even if no numeric columns, show table
+        if len(formatted_data) > 0:
+            charts.append(ChartSpec(
+                chart_type="table",
+                title="Data Table",
+                description="Detailed view of query results",
+                data=formatted_data[:20],  # Limit to 20 rows for display
+                show_legend=False,
+                show_grid=False,
+            ))
+            logger.info(f"✅ Auto-generated table with {len(formatted_data[:20])} rows")
+    
+    except Exception as e:
+        logger.error(f"❌ Auto-chart generation failed: {e}")
+    
+    return charts
 
 
 def generate_chart_data(
@@ -397,10 +542,7 @@ def generate_chart_data(
             
             logger.info(f"✅ Using name_key={actual_name_key}, value_key={actual_value_key}")
             
-            # Update config with actual keys
-            config["name_key"] = actual_name_key
-            config["value_key"] = actual_value_key
-            
+            # Build pie data - ALWAYS uses "name" and "value" keys
             pie_data = []
             for row in limited_rows:
                 if actual_name_key in row and actual_value_key in row:
@@ -408,6 +550,11 @@ def generate_chart_data(
                         "name": str(row[actual_name_key]),
                         "value": float(row[actual_value_key]) if row[actual_value_key] is not None else 0
                     })
+            
+            # CRITICAL: Update config to reflect the ACTUAL keys in pie_data
+            # Since we transform to {"name": ..., "value": ...}, these are the keys
+            config["name_key"] = "name"
+            config["value_key"] = "value"
             
             logger.info(f"✅ Generated {len(pie_data)} pie chart segments")
             return pie_data

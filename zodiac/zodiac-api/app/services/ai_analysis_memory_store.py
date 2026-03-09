@@ -16,12 +16,21 @@ class AiAnalysisMemory:
     last_user_query: str = ""
     last_sql: str = ""
     last_rows_json: str = "[]"
+    last_reply: str = ""
+    last_charts_json: str = "[]"
     knowledge_json: str = "{}"
     updated_at: Optional[datetime] = None
 
     def last_rows(self) -> list[dict]:
         try:
             val = json.loads(self.last_rows_json or "[]")
+            return val if isinstance(val, list) else []
+        except Exception:
+            return []
+    
+    def last_charts(self) -> list[dict]:
+        try:
+            val = json.loads(self.last_charts_json or "[]")
             return val if isinstance(val, list) else []
         except Exception:
             return []
@@ -47,21 +56,52 @@ def ensure_ai_analysis_memory_table(db: Session) -> None:
     We do this at runtime because this repo doesn't use migrations,
     and serverless deploys need idempotent startup.
     """
-    db.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS ai_analysis_memory (
-              user_id BIGINT PRIMARY KEY,
-              last_user_query TEXT NULL,
-              last_sql TEXT NULL,
-              last_rows_json TEXT NULL,
-              knowledge_json TEXT NULL,
-              updated_at TIMESTAMPTZ NULL
+    try:
+        # Roll back any failed transaction first
+        db.rollback()
+        
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS ai_analysis_memory (
+                  user_id BIGINT PRIMARY KEY,
+                  last_user_query TEXT NULL,
+                  last_sql TEXT NULL,
+                  last_rows_json TEXT NULL,
+                  last_reply TEXT NULL,
+                  last_charts_json TEXT NULL,
+                  knowledge_json TEXT NULL,
+                  updated_at TIMESTAMPTZ NULL
+                )
+                """
             )
-            """
         )
-    )
-    db.commit()
+        # Add new columns if they don't exist (for existing tables)
+        db.execute(
+            text(
+                """
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'ai_analysis_memory' AND column_name = 'last_reply'
+                    ) THEN
+                        ALTER TABLE ai_analysis_memory ADD COLUMN last_reply TEXT NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'ai_analysis_memory' AND column_name = 'last_charts_json'
+                    ) THEN
+                        ALTER TABLE ai_analysis_memory ADD COLUMN last_charts_json TEXT NULL;
+                    END IF;
+                END $$;
+                """
+            )
+        )
+        db.commit()
+    except Exception as e:
+        logger.debug(f"Could not ensure memory table: {e}")
+        db.rollback()
 
 
 def load_memory(db: Session, user_id: int) -> AiAnalysisMemory:
@@ -70,7 +110,7 @@ def load_memory(db: Session, user_id: int) -> AiAnalysisMemory:
         row = db.execute(
             text(
                 """
-                SELECT user_id, last_user_query, last_sql, last_rows_json, knowledge_json, updated_at
+                SELECT user_id, last_user_query, last_sql, last_rows_json, last_reply, last_charts_json, knowledge_json, updated_at
                 FROM ai_analysis_memory
                 WHERE user_id = :user_id
                 """
@@ -86,6 +126,8 @@ def load_memory(db: Session, user_id: int) -> AiAnalysisMemory:
             last_user_query=row.get("last_user_query") or "",
             last_sql=row.get("last_sql") or "",
             last_rows_json=row.get("last_rows_json") or "[]",
+            last_reply=row.get("last_reply") or "",
+            last_charts_json=row.get("last_charts_json") or "[]",
             knowledge_json=row.get("knowledge_json") or "{}",
             updated_at=row.get("updated_at"),
         )
@@ -101,12 +143,14 @@ def save_memory(db: Session, mem: AiAnalysisMemory) -> None:
         db.execute(
             text(
                 """
-                INSERT INTO ai_analysis_memory (user_id, last_user_query, last_sql, last_rows_json, knowledge_json, updated_at)
-                VALUES (:user_id, :last_user_query, :last_sql, :last_rows_json, :knowledge_json, :updated_at)
+                INSERT INTO ai_analysis_memory (user_id, last_user_query, last_sql, last_rows_json, last_reply, last_charts_json, knowledge_json, updated_at)
+                VALUES (:user_id, :last_user_query, :last_sql, :last_rows_json, :last_reply, :last_charts_json, :knowledge_json, :updated_at)
                 ON CONFLICT (user_id) DO UPDATE SET
                   last_user_query = EXCLUDED.last_user_query,
                   last_sql = EXCLUDED.last_sql,
                   last_rows_json = EXCLUDED.last_rows_json,
+                  last_reply = EXCLUDED.last_reply,
+                  last_charts_json = EXCLUDED.last_charts_json,
                   knowledge_json = EXCLUDED.knowledge_json,
                   updated_at = EXCLUDED.updated_at
                 """
@@ -116,6 +160,8 @@ def save_memory(db: Session, mem: AiAnalysisMemory) -> None:
                 "last_user_query": mem.last_user_query,
                 "last_sql": mem.last_sql,
                 "last_rows_json": mem.last_rows_json,
+                "last_reply": mem.last_reply,
+                "last_charts_json": mem.last_charts_json,
                 "knowledge_json": mem.knowledge_json,
                 "updated_at": mem.updated_at,
             },

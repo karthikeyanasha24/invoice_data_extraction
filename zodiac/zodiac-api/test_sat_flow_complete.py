@@ -28,7 +28,7 @@ def print_step(step_num, message):
     print(f"{Colors.BOLD}{Colors.CYAN}{'='*60}{Colors.END}")
 
 def print_success(message):
-    print(f"{Colors.GREEN}✅ {message}{Colors.END}")
+    print(f"{Colors.GREEN}✅ {messa--ge}{Colors.END}")
 
 def print_error(message):
     print(f"{Colors.RED}❌ {message}{Colors.END}")

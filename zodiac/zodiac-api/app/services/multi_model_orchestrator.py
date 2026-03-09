@@ -37,6 +37,9 @@ class MultiModelResult:
     individual_responses: List[ModelResponse]
     best_model: str
     total_time_ms: int
+    time_scope: Optional[str] = None
+    date_range: Optional[Dict[str, str]] = None
+    period_info: Optional[str] = None
 
 
 async def _call_openai_async(prompt: str, context: str) -> ModelResponse:
@@ -205,6 +208,8 @@ async def _call_claude_async(prompt: str, context: str) -> ModelResponse:
 async def run_all_models_parallel(
     user_query: str,
     context: str,
+    time_scope: str = "current",
+    days: int = 30,
 ) -> MultiModelResult:
     """
     Run all three AI models in parallel and synthesize the best response.
@@ -212,10 +217,28 @@ async def run_all_models_parallel(
     Args:
         user_query: User's natural language question
         context: Dashboard context and data
+        time_scope: Time scope for analysis (current/historical/both)
+        days: Number of days for current period
     
     Returns:
         MultiModelResult with individual responses and synthesized answer
     """
+    from datetime import datetime, timedelta
+    
+    # Compute period information
+    if time_scope == "historical":
+        period_info = "Historical Data (1994-2010)"
+        date_range = {"min_date": "1994-01-01", "max_date": "2010-12-31"}
+    elif time_scope == "both":
+        today = datetime.now().date()
+        period_info = f"All Periods (1994-{today.year})"
+        date_range = {"min_date": "1994-01-01", "max_date": today.isoformat()}
+    else:  # current
+        today = datetime.now().date()
+        start_date = today - timedelta(days=days)
+        period_info = f"Last {days} days"
+        date_range = {"min_date": start_date.isoformat(), "max_date": today.isoformat()}
+    
     start_time = time.time()
     
     # Run all models in parallel
@@ -268,6 +291,9 @@ async def run_all_models_parallel(
         individual_responses=individual_responses,
         best_model=best_model,
         total_time_ms=total_time_ms,
+        time_scope=time_scope,
+        date_range=date_range,
+        period_info=period_info,
     )
 
 

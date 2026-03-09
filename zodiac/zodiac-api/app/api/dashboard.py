@@ -2278,6 +2278,8 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
     Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
     SATDocument, SATSimpleMerged for inbound. Context keys: stats, failed_summary, top_customers,
     inbound_summary, business_summary, process_flow.
+    
+    Also includes table availability and date ranges from cached schemas.
     """
     if not context_keys:
         return ""
@@ -2593,6 +2595,35 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
                 "Standard process flows. Outbound: Document received -> Validation -> Conversion -> Output. "
                 "Inbound: SAT documents -> Merge -> Send to SAP. Current counts unavailable.",
             )
+    
+    # Add table availability and date ranges from cached schemas
+    try:
+        from ..services.table_schema_manager import get_all_cached_schemas
+        cached_schemas = get_all_cached_schemas(db)
+        
+        if cached_schemas:
+            table_info_parts = ["\n\nAvailable data tables for SQL queries:"]
+            for schema in cached_schemas[:15]:  # Limit to top 15 tables
+                table_name = schema["table_name"]
+                row_count = schema.get("row_count", 0)
+                date_range = schema.get("date_range")
+                description = schema.get("description", "")
+                
+                info = f"- {table_name}"
+                if description:
+                    info += f" ({description[:80]})"
+                info += f": {row_count:,} rows"
+                
+                if date_range:
+                    info += f", date range {date_range.get('min_date', 'N/A')} to {date_range.get('max_date', 'N/A')}"
+                
+                table_info_parts.append(info)
+            
+            parts.append("\n".join(table_info_parts))
+            logger.info(f"📊 Added {len(cached_schemas)} table availability info to context")
+    except Exception as schema_err:
+        logger.debug(f"Schema cache not available (not critical): {schema_err}")
+    
     return "\n".join(parts) if parts else ""
 
 
@@ -2602,12 +2633,15 @@ async def post_ai_analysis_chat(
     conversation_history: list = Body(default=[], embed=True),
     context_keys: list = Body(default=[], embed=True),
     days: int = Body(default=30, embed=True),
+    time_scope: str = Body(default="current", embed=True),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Generative AI analysis chat: answer user questions, optionally grounded in dashboard context.
     context_keys: stats, failed_summary, top_customers, inbound_summary, business_summary, process_flow.
-    days: period for context (default 30). Uses same config env vars as invoice-bot (OPENAI_API_KEY)."""
+    days: period for context (default 30).
+    time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (compare periods).
+    Uses same config env vars as invoice-bot (OPENAI_API_KEY)."""
     ai_openai_key = _get_ai_analysis_config()
     if not ai_openai_key or not openai_available:
         raise HTTPException(
@@ -2653,6 +2687,8 @@ async def post_ai_analysis_chat(
                 conversation_history=conversation_history or [],
                 context_str=context_str or "",
                 sap_db=sap_session_for_sql,
+                time_scope=time_scope or "current",
+                days=int(days),
             )
         finally:
             if sap_session_for_sql is not None:
@@ -2672,12 +2708,14 @@ async def ai_analysis_multi_model_chat(
     message: str = Query(..., description="User's natural language query"),
     context_keys: Optional[list] = Query(None, description="Dashboard context keys to include"),
     days: int = Query(30, ge=1, le=365, description="Time period for context data"),
+    time_scope: str = Query("current", description="Data scope: 'current', 'historical' (1994-2010), or 'both'"),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     AI analysis chat endpoint with multi-model comparison (GPT + Gemini + Claude).
     Runs all models in parallel and returns individual + synthesized responses.
+    time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (compare periods).
     """
     try:
         from ..config.config import ENABLE_MULTI_MODEL, USE_SAP_DB_FOR_AI
@@ -2717,12 +2755,17 @@ async def ai_analysis_multi_model_chat(
         result = await run_all_models_parallel(
             user_query=message,
             context=context_str,
+            time_scope=time_scope,
+            days=int(days),
         )
         
         return {
             "synthesized_answer": result.synthesized_answer,
             "best_model": result.best_model,
             "total_time_ms": result.total_time_ms,
+            "time_scope": result.time_scope,
+            "date_range": result.date_range,
+            "period_info": result.period_info,
             "models": [
                 {
                     "name": r.model_name,

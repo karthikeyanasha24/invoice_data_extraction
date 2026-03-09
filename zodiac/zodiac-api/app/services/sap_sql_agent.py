@@ -8,7 +8,7 @@ This mirrors the INVOICE_BOT behaviour at a high level:
 - Results are summarized back to the user via another LLM call.
 
 It is intentionally generic and works over the following tables (if present in the DB):
-VBRP, VBRK, VBAK, VBAP, VBEP, BSAD, BSEG, FAGLFLEXA, KNA1, KNVP, KNVV, MAKT, MARC, MARM, MEAN, MVKE.
+VBRP, VBRK, VBAK, VBAP, VBEP, BSAD, BSEG, FAGLFLEXA, KNA1, KNVP, KNVV, MAKT, MARC, MARM, MEAN, MVKE, T016T.
 
 The goal is to power questions like:
 - "show me highest sales by product"
@@ -57,7 +57,8 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     "VBAP": "Sales document item (ordered products, quantities, values).",
     "VBEP": "Schedule lines for sales document items (delivery quantities and dates).",
     # Customer / Material Master
-    "KNA1": "Customer master (names, addresses, countries, industries).",
+    "KNA1": "Customer master (names, addresses, countries, brsch=industry code). IMPORTANT: brsch is a code, use T016T for industry descriptions.",
+    "T016T": "Industry text/descriptions (converts brsch codes to readable industry names). Use this for industry labels in charts.",
     "KNVV": "Customer sales data (sales area, pricing, related attributes).",
     "KNVP": "Customer partners (payer, ship-to, bill-to relationships).",
     "MAKT": "Material descriptions (product names).",
@@ -118,6 +119,15 @@ SALES / BILLING:
   * BSAD.KUNNR = KNA1.KUNNR
   * BSEG.KUNNR = KNA1.KUNNR
 
+TEXT / DESCRIPTION TABLES (IMPORTANT for readable labels):
+- KNA1 (customer with brsch code) <-> T016T (industry descriptions)
+  * KNA1.brsch = T016T.brsch
+  * ALWAYS use T016T.brtxt for industry name (not KNA1.brsch which is just "HITE", "TRAD", "FOOD")
+
+- Materials (MATNR code) <-> MAKT (material text)
+  * VBRP.MATNR = MAKT.MATNR or VBAP.MATNR = MAKT.MATNR
+  * Use MAKT.MAKTX for product names (not just MATNR codes)
+
 LOGISTICS – OUTBOUND DELIVERY:
 - LIKP (delivery header) <-> LIPS (delivery items)
   * LIKP.VBELN = LIPS.VBELN
@@ -151,9 +161,16 @@ MATERIAL DOCUMENT:
 VERY IMPORTANT:
 - VBRP / vbrp usually does NOT have KUNNR directly. To reach the customer, go:
   VBRP.VBELN -> VBRK.VBELN, then VBRK.KUNAG -> KNA1.KUNNR.
-- When you need INDUSTRY or COUNTRY of a customer, read from:
-  * KNA1.BRSCH (industry)
-  * KNA1.LAND1 (country)
+
+- When you need INDUSTRY of a customer:
+  * NEVER use KNA1.brsch alone (it's just a code like "HITE", "TRAD", "FOOD")
+  * ALWAYS join T016T to get the description: T016T.brtxt (readable industry name)
+  * Join: KNA1.brsch = T016T.brsch
+  * SELECT T016T.brtxt as industry_name (not KNA1.brsch)
+
+- When you need COUNTRY of a customer:
+  * KNA1.LAND1 (country code)
+
 - For cost-related or COGS queries, use EKPO (purchase values), RBKP/RSEG (vendor invoice amounts), BSEG (accounting).
 """
 
@@ -363,6 +380,23 @@ Task:
         if actual:
             normalized.append(actual)
     tables = normalized
+    
+    # Auto-include description/text tables for better labels
+    q_lower = question.lower()
+    if "industry" in q_lower or "industries" in q_lower:
+        # Ensure T016T is included for industry descriptions
+        t016t_match = db_tables_lower.get("t016t")
+        if t016t_match and t016t_match not in tables and any(t.upper() == "KNA1" for t in tables):
+            tables.append(t016t_match)
+            logger.info(f"✨ Auto-added T016T for industry descriptions")
+    
+    if "product" in q_lower or "material" in q_lower:
+        # Ensure MAKT is included for product descriptions
+        makt_match = db_tables_lower.get("makt")
+        if makt_match and makt_match not in tables:
+            tables.append(makt_match)
+            logger.info(f"✨ Auto-added MAKT for product descriptions")
+    
     if not tables:
         # Fallback: try vbrp/VBRP, VBRK, or first available
         for cand in ["vbrp", "VBRP", "VBRK"]:
@@ -379,6 +413,7 @@ def _generate_sql_json(
     selected_tables: List[str],
     column_mappings: Dict[str, Dict[str, str]],
     client: OpenAI,
+    time_scope: str = "current",
 ) -> Dict[str, Any]:
     """
     Equivalent of INVOICE_BOT.generate_sql_json, but simplified and Postgres-focused.
@@ -388,8 +423,29 @@ def _generate_sql_json(
     - aggregates (SUM/AVG/COUNT/MIN/MAX) via the optional "agg" field on columns
     - GROUP BY via a dedicated "group_by" list
     """
+    # Determine date filter based on time_scope
+    date_filter_instruction = ""
+    if time_scope == "historical":
+        date_filter_instruction = """
+⏳ **TIME SCOPE: HISTORICAL DATA (1994-2010)**
+- MUST add date filters to ONLY include data from 1994-01-01 to 2010-12-31
+- Example: {{"lhs": "VBRK.FKDAT", "operator": ">=", "rhs": "'1994-01-01'"}}, {{"lhs": "VBRK.FKDAT", "operator": "<=", "rhs": "'2010-12-31'"}}
+"""
+    elif time_scope == "current":
+        date_filter_instruction = """
+⏳ **TIME SCOPE: CURRENT PERIOD**
+- Include recent data only (no strict date filter unless user specifies)
+"""
+    elif time_scope == "both":
+        date_filter_instruction = """
+⏳ **TIME SCOPE: ALL PERIODS**
+- Include ALL data from 1994 to present for comparison
+"""
+    
     prompt = f"""
 User question: "{question}"
+
+{date_filter_instruction}
 
 Tables available (subset already selected as relevant):
 {json.dumps({tbl: SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}, indent=2)}
@@ -404,18 +460,28 @@ Task:
 - Choose relevant columns from these tables.
 - Propose joins between tables using ONLY the business keys listed above (do NOT invent other join columns).
 - Remember that VBRP typically does NOT have KUNNR; to reach the customer, you MUST join via VBRK then KNA1.
+- **CRITICAL FOR INDUSTRY**: If the question asks for "industry" or "by industry":
+  * Include T016T table in your selection
+  * SELECT T016T.brtxt (description) NOT KNA1.brsch (code)
+  * Add join: {{ "left": "KNA1", "right": "T016T", "on": "KNA1.brsch = T016T.brsch" }}
+  * Use T016T.brtxt in GROUP BY if grouping by industry
+- **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
 {{
   "tables": [{{ "name": "VBRP", "description": "..." }}],
   "columns": [
-    {{ "table": "KNA1", "name": "BRSCH", "description": "industry of the customer", "agg": null }},
-    {{ "table": "VBRP", "name": "NETWR", "description": "billing item net value", "agg": "SUM" }}
+    {{ "table": "T016T", "name": "brtxt", "description": "industry_name", "agg": null }},
+    {{ "table": "VBRP", "name": "NETWR", "description": "total_sales", "agg": "SUM" }}
   ],
-  "joins": [{{ "left": "VBRP", "right": "VBRK", "on": "VBRP.VBELN = VBRK.VBELN" }}],
+  "joins": [
+    {{ "left": "VBRP", "right": "VBRK", "on": "VBRP.VBELN = VBRK.VBELN" }},
+    {{ "left": "VBRK", "right": "KNA1", "on": "VBRK.KUNAG = KNA1.KUNNR" }},
+    {{ "left": "KNA1", "right": "T016T", "on": "KNA1.brsch = T016T.brsch" }}
+  ],
   "filters": [{{ "lhs": "VBRK.FKDAT", "operator": ">=", "rhs": "'2024-01-01'" }}],
   "group_by": [
-    {{ "table": "KNA1", "column": "BRSCH" }}
+    {{ "table": "T016T", "column": "brtxt" }}
   ],
   "order_by": [
     "total_sales DESC"
@@ -427,6 +493,9 @@ Rules:
 - Use table and column names that actually exist in the column mappings.
 - If a column entry has "agg": "SUM" | "AVG" | "COUNT" | "MIN" | "MAX",
   you are defining an aggregated metric over that column.
+- CRITICAL: For "order_by", you MUST reference a column by its "description" field from the "columns" array.
+  Example: If you have {{"table": "VBRP", "name": "NETWR", "description": "total_sales", "agg": "SUM"}},
+  then order_by should be ["total_sales DESC"], NOT ["NETWR DESC"] or ["billing_item_net_value DESC"].
 - For questions like:
     * "which industry has highest revenues"
     * "top customers by sales"
@@ -434,9 +503,10 @@ Rules:
   you MUST:
     * pick an appropriate numeric metric column (e.g., VBRP.NETWR, BSAD.DMBTR, INVOICE_V2_BUSINESS_DATA.TOTAL_AMOUNT)
     * set "agg": "SUM" (or another relevant aggregate) on that metric column
+    * give it a clear "description" like "total_sales" or "total_revenue"
     * add the dimension columns (industry, customer, product, country, etc.) to "group_by"
     * filter out NULL dimension values where it makes sense (e.g., industry IS NOT NULL)
-    * order by the aggregated metric (e.g., "total_sales DESC") and use a small limit (e.g. 50 or 100).
+    * order by the metric's description (e.g., "total_sales DESC") and use a small limit (e.g. 50 or 100).
 - If the question is about "lowest", sort ASC instead of DESC.
 """
     resp = client.chat.completions.create(
@@ -621,7 +691,29 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             sql_lines.append(f"    ON {join_cond}")
         added_actuals.add(actual_tbl)
 
-    # GROUP BY
+    # WHERE (must come BEFORE GROUP BY)
+    conds: List[str] = []
+    for f in json_spec.get("filters", []) or []:
+        lhs = _rewrite_expr(str(f.get("lhs", "")))
+        op = str(f.get("operator", "")).strip().upper()
+        rhs_raw = f.get("rhs")
+        
+        if not lhs or not op:
+            continue
+        
+        # Handle NULL operators (don't need RHS)
+        if op in {"IS NULL", "IS NOT NULL"}:
+            conds.append(f"{lhs} {op}")
+        else:
+            # Need RHS for all other operators
+            rhs = str(rhs_raw).strip() if rhs_raw is not None else ""
+            if rhs and rhs.lower() != "none":
+                conds.append(f"{lhs} {op} {rhs}")
+    
+    if conds:
+        sql_lines.append("\nWHERE " + " AND ".join(conds))
+
+    # GROUP BY (must come AFTER WHERE)
     group_bys = json_spec.get("group_by", []) or []
     gb_parts: List[str] = []
     for gb in group_bys:
@@ -640,31 +732,40 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
     if gb_parts:
         sql_lines.append("\nGROUP BY " + ", ".join(gb_parts))
 
-    # WHERE
-    conds: List[str] = []
-    for f in json_spec.get("filters", []) or []:
-        lhs = _rewrite_expr(str(f.get("lhs", "")))
-        op = str(f.get("operator", "")).strip()
-        rhs = str(f.get("rhs", "")).strip()
-        if lhs and op and rhs:
-            conds.append(f"{lhs} {op} {rhs}")
-    if conds:
-        sql_lines.append("\nWHERE " + " AND ".join(conds))
-
     # ORDER BY
     order_by_parts: List[str] = []
     for ob in json_spec.get("order_by", []) or []:
         if isinstance(ob, str):
-            order_by_parts.append(_rewrite_expr(ob))
+            # Check if it's a SELECT alias first
+            ob_clean = ob.strip().split()[0]  # Remove DESC/ASC
+            if ob_clean in used_col_aliases:
+                order_by_parts.append(ob)
+            else:
+                order_by_parts.append(_rewrite_expr(ob))
         else:
             t_logical = ob.get("table")
             col_raw = ob.get("column")
             direction = ob.get("direction", "DESC").upper()
-            t_actual = _actual_table_name(t_logical) if t_logical else None
-            alias = table_aliases.get(t_actual) if t_actual else None
-            if alias and col_raw and t_actual:
-                col = _actual_column_name(t_actual, col_raw)
-                order_by_parts.append(f'{alias}."{col}" {direction}')
+            
+            # Try to match against SELECT aliases first (case-insensitive)
+            col_lower = str(col_raw).lower().strip() if col_raw else ""
+            matched_alias = None
+            for used_alias in used_col_aliases:
+                if col_lower in used_alias.lower() or used_alias.lower() in col_lower:
+                    matched_alias = used_alias
+                    break
+            
+            if matched_alias:
+                # Use the SELECT alias directly
+                order_by_parts.append(f'"{matched_alias}" {direction}')
+            elif t_logical and col_raw:
+                # Fall back to table.column format
+                t_actual = _actual_table_name(t_logical)
+                alias = table_aliases.get(t_actual)
+                if alias and t_actual:
+                    col = _actual_column_name(t_actual, col_raw)
+                    order_by_parts.append(f'{alias}."{col}" {direction}')
+    
     if order_by_parts:
         sql_lines.append("\nORDER BY " + ", ".join(order_by_parts))
 
@@ -842,6 +943,7 @@ def run_sap_sql_agent(
     db: Session,
     knowledge_context: Optional[str] = None,
     max_retries: int = 2,
+    time_scope: str = "current",
 ) -> SqlAgentResult | None:
     """
     Main entry point used by the dashboard AI endpoint.
@@ -853,7 +955,9 @@ def run_sap_sql_agent(
     - Translates to Postgres SQL and executes
     - Caches SQL per question
 
-    knowledge_context: Optional user preferences (e.g. "For cost queries use EKPO, RBKP, RSEG").
+    Args:
+        knowledge_context: Optional user preferences (e.g. "For cost queries use EKPO, RBKP, RSEG").
+        time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (all periods)
     """
     client = _get_openai_client()
     if not client:
@@ -876,7 +980,7 @@ def run_sap_sql_agent(
             logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
             return None
 
-        spec = _generate_sql_json(question, selected_tables, column_mappings, client)
+        spec = _generate_sql_json(question, selected_tables, column_mappings, client, time_scope=time_scope)
         if not spec:
             logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
             return None
@@ -895,14 +999,30 @@ def run_sap_sql_agent(
         while attempt <= max_retries:
             try:
                 sql = _json_to_sql_postgres(spec, column_mappings)
+                logger.info(f"📝 Generated SQL:\n{sql}")
                 rows = _run_sql(db, sql)
                 
                 # Success!
                 if not rows:
-                    logger.info("sap_sql_agent: SQL returned no rows for question %s", question)
+                    logger.warning(f"⚠️ SQL returned no rows for question: {question}")
+                    logger.warning(f"📊 SQL query:\n{sql}")
+                    
+                    # Try a diagnostic query to check if ANY 2024 data exists
+                    if "2024" in question:
+                        try:
+                            diag_sql = "SELECT COUNT(*) as count FROM \"VBRK\" WHERE \"FKDAT\" >= '2024-01-01' AND \"FKDAT\" < '2025-01-01'"
+                            diag_result = db.execute(text(diag_sql)).fetchone()
+                            count_2024 = diag_result[0] if diag_result else 0
+                            logger.info(f"🔍 Diagnostic: Found {count_2024} VBRK records for 2024")
+                            
+                            if count_2024 == 0:
+                                logger.warning("⚠️ Database has NO 2024 data in VBRK table!")
+                        except Exception as diag_err:
+                            logger.debug(f"Diagnostic check failed: {diag_err}")
                 else:
                     _QUERY_TO_SQL_CACHE[q_key] = sql
                     _SQL_TO_ROWS_CACHE[sql] = rows
+                    logger.info(f"✅ SQL returned {len(rows)} rows")
                 
                 return SqlAgentResult(sql=sql, rows=rows)
             
