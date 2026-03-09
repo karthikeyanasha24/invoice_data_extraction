@@ -34,6 +34,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY
+from .ai_sql_generator import generate_sql, run_sql as execute_sql
 
 logger = logging.getLogger("zodiac-api.sap_sql_agent")
 
@@ -414,6 +415,7 @@ def _generate_sql_json(
     column_mappings: Dict[str, Dict[str, str]],
     client: OpenAI,
     time_scope: str = "current",
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """
     Equivalent of INVOICE_BOT.generate_sql_json, but simplified and Postgres-focused.
@@ -441,11 +443,28 @@ def _generate_sql_json(
 ⏳ **TIME SCOPE: ALL PERIODS**
 - Include ALL data from 1994 to present for comparison
 """
+
+    few_shot_block = ""
+    if few_shot_examples:
+        # Keep prompt lean: only a few short examples
+        cleaned_examples = []
+        for ex in few_shot_examples[:5]:
+            uq = str(ex.get("user_query") or "")[:500]
+            sql_ex = str(ex.get("sql_query") or "")[:1500]
+            if uq and sql_ex:
+                cleaned_examples.append({"user_query": uq, "sql_query": sql_ex})
+        if cleaned_examples:
+            few_shot_block = (
+                "\nRecent successful question→SQL examples (use as patterns, do NOT copy literally):\n"
+                f"{json.dumps(cleaned_examples, indent=2)}\n"
+            )
     
     prompt = f"""
 User question: "{question}"
 
 {date_filter_instruction}
+
+{few_shot_block}
 
 Tables available (subset already selected as relevant):
 {json.dumps({tbl: SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}, indent=2)}
@@ -944,104 +963,37 @@ def run_sap_sql_agent(
     knowledge_context: Optional[str] = None,
     max_retries: int = 2,
     time_scope: str = "current",
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
 ) -> SqlAgentResult | None:
     """
-    Main entry point used by the dashboard AI endpoint.
+    Simplified entry point used by the dashboard AI endpoint.
 
-    It:
-    - Uses LLM to pick tables (dynamically from DB + mapping; supports new tables)
-    - Introspects columns from Postgres
-    - Uses LLM to build a JSON SQL spec
-    - Translates to Postgres SQL and executes
-    - Caches SQL per question
+    New flow:
+      question → generate_sql (LLM, schema-aware) → execute_sql → rows
 
-    Args:
-        knowledge_context: Optional user preferences (e.g. "For cost queries use EKPO, RBKP, RSEG").
-        time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (all periods)
+    The older JSON-spec based pipeline is no longer used here.
     """
-    client = _get_openai_client()
-    if not client:
-        return None
+    try:
+        # Basic in-memory cache for exact questions (cheap, avoids extra LLM calls)
+        q_key = question.strip().lower()
+        if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
+            sql_cached = _QUERY_TO_SQL_CACHE[q_key]
+            rows_cached = _SQL_TO_ROWS_CACHE[sql_cached]
+            return SqlAgentResult(sql=sql_cached, rows=rows_cached)
 
-    q_key = question.strip().lower()
-    if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
-        sql = _QUERY_TO_SQL_CACHE[q_key]
-        rows = _SQL_TO_ROWS_CACHE[sql]
+        # Generate SQL text from the natural-language question
+        sql = generate_sql(question)
+        logger.info(f"📝 Generated SQL (schema-driven):\n{sql}")
+
+        # Execute the SQL safely
+        rows = execute_sql(db, sql)
+
+        # Store in simple in-process cache
+        _QUERY_TO_SQL_CACHE[q_key] = sql
+        _SQL_TO_ROWS_CACHE[sql] = rows
+
         return SqlAgentResult(sql=sql, rows=rows)
 
-    attempt = 0
-    last_error = None
-    spec = None
-    
-    try:
-        selected_tables = _pick_tables(question, client, db, knowledge_context)
-        column_mappings = _introspect_columns(db, selected_tables)
-        if not column_mappings:
-            logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
-            return None
-
-        spec = _generate_sql_json(question, selected_tables, column_mappings, client, time_scope=time_scope)
-        if not spec:
-            logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
-            return None
-
-        # Validate specification
-        is_valid, validation_errors = validate_sql_spec(spec)
-        if not is_valid:
-            logger.warning(f"Invalid SQL spec: {validation_errors}")
-            # Try to auto-fix common issues
-            if validation_errors and len(validation_errors) < 5:
-                logger.info("Attempting to refine specification...")
-                spec = refine_query_on_error(client, question, ", ".join(validation_errors), spec)
-                is_valid, validation_errors = validate_sql_spec(spec)
-        
-        # Retry loop for SQL execution
-        while attempt <= max_retries:
-            try:
-                sql = _json_to_sql_postgres(spec, column_mappings)
-                logger.info(f"📝 Generated SQL:\n{sql}")
-                rows = _run_sql(db, sql)
-                
-                # Success!
-                if not rows:
-                    logger.warning(f"⚠️ SQL returned no rows for question: {question}")
-                    logger.warning(f"📊 SQL query:\n{sql}")
-                    
-                    # Try a diagnostic query to check if ANY 2024 data exists
-                    if "2024" in question:
-                        try:
-                            diag_sql = "SELECT COUNT(*) as count FROM \"VBRK\" WHERE \"FKDAT\" >= '2024-01-01' AND \"FKDAT\" < '2025-01-01'"
-                            diag_result = db.execute(text(diag_sql)).fetchone()
-                            count_2024 = diag_result[0] if diag_result else 0
-                            logger.info(f"🔍 Diagnostic: Found {count_2024} VBRK records for 2024")
-                            
-                            if count_2024 == 0:
-                                logger.warning("⚠️ Database has NO 2024 data in VBRK table!")
-                        except Exception as diag_err:
-                            logger.debug(f"Diagnostic check failed: {diag_err}")
-                else:
-                    _QUERY_TO_SQL_CACHE[q_key] = sql
-                    _SQL_TO_ROWS_CACHE[sql] = rows
-                    logger.info(f"✅ SQL returned {len(rows)} rows")
-                
-                return SqlAgentResult(sql=sql, rows=rows)
-            
-            except Exception as sql_err:
-                last_error = str(sql_err)
-                logger.warning(f"SQL execution failed (attempt {attempt + 1}/{max_retries + 1}): {last_error}")
-                
-                if attempt < max_retries:
-                    # Try to refine the query
-                    logger.info("Refining query specification...")
-                    spec = refine_query_on_error(client, question, last_error, spec)
-                    attempt += 1
-                else:
-                    # Max retries reached
-                    logger.error(f"Max retries reached for question: {question}")
-                    return None
-        
-        return None
-    
     except Exception as e:
         logger.warning("sap_sql_agent failed for question '%s': %s", question, e)
         return None
