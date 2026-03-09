@@ -414,6 +414,7 @@ def _generate_sql_json(
     column_mappings: Dict[str, Dict[str, str]],
     client: OpenAI,
     time_scope: str = "current",
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """
     Equivalent of INVOICE_BOT.generate_sql_json, but simplified and Postgres-focused.
@@ -441,11 +442,28 @@ def _generate_sql_json(
 ⏳ **TIME SCOPE: ALL PERIODS**
 - Include ALL data from 1994 to present for comparison
 """
+
+    few_shot_block = ""
+    if few_shot_examples:
+        # Keep prompt lean: only a few short examples
+        cleaned_examples = []
+        for ex in few_shot_examples[:5]:
+            uq = str(ex.get("user_query") or "")[:500]
+            sql_ex = str(ex.get("sql_query") or "")[:1500]
+            if uq and sql_ex:
+                cleaned_examples.append({"user_query": uq, "sql_query": sql_ex})
+        if cleaned_examples:
+            few_shot_block = (
+                "\nRecent successful question→SQL examples (use as patterns, do NOT copy literally):\n"
+                f"{json.dumps(cleaned_examples, indent=2)}\n"
+            )
     
     prompt = f"""
 User question: "{question}"
 
 {date_filter_instruction}
+
+{few_shot_block}
 
 Tables available (subset already selected as relevant):
 {json.dumps({tbl: SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}, indent=2)}
@@ -944,6 +962,7 @@ def run_sap_sql_agent(
     knowledge_context: Optional[str] = None,
     max_retries: int = 2,
     time_scope: str = "current",
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
 ) -> SqlAgentResult | None:
     """
     Main entry point used by the dashboard AI endpoint.
@@ -980,7 +999,14 @@ def run_sap_sql_agent(
             logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
             return None
 
-        spec = _generate_sql_json(question, selected_tables, column_mappings, client, time_scope=time_scope)
+        spec = _generate_sql_json(
+            question,
+            selected_tables,
+            column_mappings,
+            client,
+            time_scope=time_scope,
+            few_shot_examples=few_shot_examples,
+        )
         if not spec:
             logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
             return None
