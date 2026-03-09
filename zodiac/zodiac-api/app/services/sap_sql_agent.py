@@ -1041,36 +1041,35 @@ def run_sap_sql_agent(
                 is_valid, validation_errors = validate_sql_spec(spec)
         
         # Retry loop for SQL execution
+        rows: List[Dict[str, Any]] = []
+        sql = ""
         while attempt <= max_retries:
             try:
                 sql = _json_to_sql_postgres(spec, column_mappings)
                 logger.info(f"📝 Generated SQL:\n{sql}")
                 rows = _run_sql(db, sql)
-                
-                # Success!
-                if not rows:
-                    logger.warning(f"⚠️ SQL returned no rows for question: {question}")
-                    logger.warning(f"📊 SQL query:\n{sql}")
-                    
-                    # Try a diagnostic query to check if ANY 2024 data exists
-                    if "2024" in question:
-                        try:
-                            diag_sql = "SELECT COUNT(*) as count FROM \"VBRK\" WHERE \"FKDAT\" >= '2024-01-01' AND \"FKDAT\" < '2025-01-01'"
-                            diag_result = db.execute(text(diag_sql)).fetchone()
-                            count_2024 = diag_result[0] if diag_result else 0
-                            logger.info(f"🔍 Diagnostic: Found {count_2024} VBRK records for 2024")
-                            
-                            if count_2024 == 0:
-                                logger.warning("⚠️ Database has NO 2024 data in VBRK table!")
-                        except Exception as diag_err:
-                            logger.debug(f"Diagnostic check failed: {diag_err}")
-                else:
+
+                if rows:
                     _QUERY_TO_SQL_CACHE[q_key] = sql
                     _SQL_TO_ROWS_CACHE[sql] = rows
                     logger.info(f"✅ SQL returned {len(rows)} rows")
-                
-                return SqlAgentResult(sql=sql, rows=rows)
-            
+                    return SqlAgentResult(sql=sql, rows=rows)
+
+                # Query returned no rows — retry with simpler query
+                logger.warning(f"⚠️ SQL returned no rows for question: {question}")
+                logger.warning(f"📊 SQL query:\n{sql}")
+                if attempt < max_retries:
+                    logger.warning("Query returned 0 rows — refining SQL...")
+                    spec = refine_query_on_error(
+                        client,
+                        question,
+                        "Query returned no rows. Remove unnecessary joins or filters.",
+                        spec,
+                    )
+                    attempt += 1
+                    continue
+                break
+
             except Exception as sql_err:
                 last_error = str(sql_err)
                 logger.warning(f"SQL execution failed (attempt {attempt + 1}/{max_retries + 1}): {last_error}")
@@ -1084,9 +1083,29 @@ def run_sap_sql_agent(
                     # Max retries reached
                     logger.error(f"Max retries reached for question: {question}")
                     return None
-        
+
+        # Fallback for sales questions when LLM query returned no rows
+        if not rows and "sales" in question.lower():
+            logger.info("Running fallback sales query")
+            try:
+                fallback_sql = """
+    SELECT
+        m."maktx" AS product_name,
+        SUM(NULLIF(v."netwr",'')::numeric) AS total_sales
+    FROM "vbrp" AS v
+    LEFT JOIN "MAKT" AS m ON v."matnr" = m."matnr"
+    GROUP BY m."maktx"
+    ORDER BY total_sales DESC
+    LIMIT 20
+                """.strip()
+                fallback_rows = _run_sql(db, fallback_sql)
+                if fallback_rows:
+                    return SqlAgentResult(sql=fallback_sql, rows=fallback_rows)
+            except Exception as fb_err:
+                logger.debug(f"Fallback sales query failed: {fb_err}")
+
         return None
-    
+
     except Exception as e:
         logger.warning("sap_sql_agent failed for question '%s': %s", question, e)
         return None
