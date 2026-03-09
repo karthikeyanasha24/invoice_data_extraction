@@ -16,8 +16,10 @@
         "next": "^16.0.7",
         "react": "19.1.0",
         "react-dom": "19.1.0",
+        "react-markdown": "^10.1.0",
         "react-simple-maps": "^3.0.0",
         "recharts": "^3.6.0",
+        "remark-gfm": "^4.0.1",
         "tailwind-merge": "^2.0.0",
         "vkbeautify": "^0.99.3"
     },

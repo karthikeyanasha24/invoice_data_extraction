@@ -20,8 +20,8 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
     logger.info("=" * 50)
     logger.info("💾 FILE SAVE OPERATION")
     logger.info("=" * 50)
-    logger.info(f"📁 Filename: {filename}")
-    logger.info(f"📂 Subdirectory: {subdirectory}")
+    logger.info(f"[SAVE] Filename: {filename}")
+    logger.info(f"[FILE] Subdirectory: {subdirectory}")
     logger.info(f"📊 File size: {len(file_content)} bytes")
     logger.info(f"🔄 Allow overwrite: {allow_overwrite}")
     logger.info(
@@ -68,12 +68,12 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             # Return the full blob response for URL extraction
             if isinstance(blob_response, dict):
                 logger.info(f"✅ File saved successfully!")
-                logger.info(f"📁 Saved as: {filename}")
+                logger.info(f"[SAVE] Saved as: {filename}")
                 logger.info(f"📍 Storage path: {blob_response}")
                 return blob_response
             else:
                 logger.info(f"✅ File saved successfully!")
-                logger.info(f"📁 Saved as: {filename}")
+                logger.info(f"[SAVE] Saved as: {filename}")
                 logger.info(f"📍 Storage path: {str(blob_response)}")
                 return str(blob_response)
         except Exception as e:
@@ -102,11 +102,11 @@ async def save_file_to_storage(file_content: bytes, filename: str, subdirectory:
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
             EDI_DIR.mkdir(parents=True, exist_ok=True)
             file_path = target_dir / filename
-            # logger.info(f"👤 Running as user: {os.getlogin()}")
-            logger.info(f"📂 Attempting to write to: {file_path}")
-            logger.info(f"🔒 Write access? {os.access(target_dir, os.W_OK)}")
-            logger.info(f"📁 Saving to local storage: {file_path}")
-            logger.info(f"📂 Target directory: {target_dir}")
+            # logger.info(f"[USER] Running as user: {os.getlogin()}")
+            logger.info(f"[FILE] Attempting to write to: {file_path}")
+            logger.info(f"[ACCESS] Write access? {os.access(target_dir, os.W_OK)}")
+            logger.info(f"[SAVE] Saving to local storage: {file_path}")
+            logger.info(f"[FILE] Target directory: {target_dir}")
             logger.info(f"📄 Full path: {file_path}")
             logger.info(f"Current path : {os.getcwd()}")
 
@@ -142,7 +142,7 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
     logger.info("=" * 50)
     logger.info("📖 FILE READ OPERATION")
     logger.info("=" * 50)
-    logger.info(f"📁 File path: {file_path}")
+    logger.info(f"[SAVE] File path: {file_path}")
     logger.info(f"🌐 Blob XML path: {blob_xml_path}")
     logger.info(f"🌐 Blob EDI path: {blob_edi_path}")
     logger.info(
@@ -258,11 +258,11 @@ async def read_file_from_storage(file_path: Union[str, dict], blob_xml_path: str
                 logger.warning(f"⚠️ Blob response: {file_path}")
                 # Extract the pathname for local file access
                 local_path = file_path.get('pathname', str(file_path))
-                logger.info(f"📁 Using extracted pathname: {local_path}")
+                logger.info(f"[SAVE] Using extracted pathname: {local_path}")
             else:
                 local_path = file_path
 
-            logger.info(f"📁 Reading from local storage: {local_path}")
+            logger.info(f"[SAVE] Reading from local storage: {local_path}")
             logger.info(f"🔍 File exists: {os.path.exists(local_path)}")
 
             with open(local_path, "rb") as buffer:

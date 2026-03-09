@@ -1,7 +1,7 @@
 'use client';
 
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Download, Maximize2 } from 'lucide-react';
+import { Download, Maximize2, Calendar, TrendingUp } from 'lucide-react';
 
 type ChartData = {
   chart_type: string;
@@ -15,6 +15,8 @@ type ChartData = {
   colors?: string[];
   show_legend?: boolean;
   show_grid?: boolean;
+  stacked?: boolean;
+  period_info?: string;
 };
 
 interface AIChartRendererProps {
@@ -29,6 +31,31 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
   
   console.log('📊 AIChartRenderer: Rendering', charts.length, 'chart(s)');
   console.log('📊 Chart data:', charts);
+
+  // Animation class for smooth entrance
+  const fadeInClass = "opacity-0 animate-[fadeIn_0.5s_ease-in_forwards]";
+
+  // Currency formatter utility
+  const formatCurrency = (value: number): string => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  // Check if a key/column likely represents currency/money
+  const isCurrencyField = (key: string): boolean => {
+    const lowerKey = key.toLowerCase();
+    return lowerKey.includes('sales') || 
+           lowerKey.includes('revenue') || 
+           lowerKey.includes('amount') || 
+           lowerKey.includes('total') || 
+           lowerKey.includes('value') || 
+           lowerKey.includes('price') ||
+           lowerKey.includes('cost');
+  };
 
   const downloadChart = (chartTitle: string) => {
     // TODO: Implement SVG export
@@ -59,32 +86,59 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
 
     switch (chart.chart_type) {
       case 'bar':
+      case 'stacked_bar':
         if (!chart.x_key || !chart.y_keys || chart.y_keys.length === 0) {
           console.error('📊 Bar chart missing required keys:', { x_key: chart.x_key, y_keys: chart.y_keys });
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
+        const barHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
+        const isStacked = chart.stacked || chart.chart_type === 'stacked_bar';
         return (
           <ResponsiveContainer width="100%" height={400}>
             <BarChart data={chart.data}>
-              {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
-              <XAxis dataKey={chart.x_key} stroke="#64748b" style={{ fontSize: '12px' }} />
-              <YAxis stroke="#64748b" style={{ fontSize: '12px' }} />
+              {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.3} />}
+              <XAxis 
+                dataKey={chart.x_key} 
+                stroke="#64748b" 
+                style={{ fontSize: '11px', fontWeight: 500 }}
+                tick={{ fill: '#475569' }}
+              />
+              <YAxis 
+                stroke="#64748b" 
+                style={{ fontSize: '11px', fontWeight: 500 }}
+                tick={{ fill: '#475569' }}
+                tickFormatter={barHasCurrency ? formatCurrency : undefined}
+              />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#FFFFFF',
                   border: '1px solid #cbd5e1',
                   borderRadius: '12px',
                   fontSize: '12px',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                  padding: '12px',
                 }}
+                formatter={(value: any, name: string) => {
+                  const formattedValue = isCurrencyField(name) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                  return [formattedValue, name.replace(/_/g, ' ')];
+                }}
+                cursor={{ fill: 'rgba(59, 130, 246, 0.1)' }}
               />
-              {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
+              {chart.show_legend && (
+                <Legend 
+                  wrapperStyle={{ fontSize: '11px', paddingTop: '16px' }}
+                  iconType="circle"
+                />
+              )}
               {chart.y_keys.map((key, idx) => (
                 <Bar
                   key={key}
                   dataKey={key}
                   fill={colors[idx % colors.length]}
                   radius={[4, 4, 0, 0]}
+                  stackId={isStacked ? 'stack' : undefined}
+                  animationDuration={800}
+                  animationEasing="ease-out"
                 />
               ))}
             </BarChart>
@@ -132,12 +186,17 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
           console.error('📊 Area chart missing required keys:', { x_key: chart.x_key, y_keys: chart.y_keys });
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
+        const areaHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
         return (
           <ResponsiveContainer width="100%" height={400}>
             <AreaChart data={chart.data}>
               {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
               <XAxis dataKey={chart.x_key} stroke="#64748b" style={{ fontSize: '12px' }} />
-              <YAxis stroke="#64748b" style={{ fontSize: '12px' }} />
+              <YAxis 
+                stroke="#64748b" 
+                style={{ fontSize: '12px' }}
+                tickFormatter={areaHasCurrency ? formatCurrency : undefined}
+              />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#FFFFFF',
@@ -145,6 +204,10 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   borderRadius: '12px',
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                }}
+                formatter={(value: any, name: string) => {
+                  const formattedValue = isCurrencyField(name) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                  return [formattedValue, name.replace(/_/g, ' ')];
                 }}
               />
               {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
@@ -166,6 +229,12 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
         const nameKey = chart.name_key || 'name';
         const valueKey = chart.value_key || 'value';
         
+        console.log('📊 Pie chart config:', { nameKey, valueKey, dataLength: chart.data.length });
+        if (chart.data.length > 0) {
+          console.log('📊 First data item:', chart.data[0]);
+          console.log('📊 Available keys:', Object.keys(chart.data[0]));
+        }
+        
         // Validate pie chart data has required keys
         if (chart.data.length > 0 && !(nameKey in chart.data[0] && valueKey in chart.data[0])) {
           console.error('📊 Pie chart data missing required keys:', { 
@@ -173,6 +242,42 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
             valueKey, 
             availableKeys: Object.keys(chart.data[0]) 
           });
+          
+          // Try to auto-fix by finding matching keys
+          const availableKeys = Object.keys(chart.data[0]);
+          const autoNameKey = availableKeys.find(k => k.toLowerCase().includes('name') || k === 'name') || availableKeys[0];
+          const autoValueKey = availableKeys.find(k => k.toLowerCase().includes('value') || k === 'value') || availableKeys[1];
+          
+          if (autoNameKey && autoValueKey) {
+            console.log('🔧 Auto-fixing pie chart keys:', { autoNameKey, autoValueKey });
+            return (
+              <ResponsiveContainer width="100%" height={400}>
+                <PieChart>
+                  <Pie
+                    data={chart.data}
+                    dataKey={autoValueKey}
+                    nameKey={autoNameKey}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={100}
+                    label={(entry) => entry[autoNameKey]}
+                    labelLine={true}
+                  >
+                    {chart.data.map((entry, idx) => (
+                      <Cell key={`cell-${idx}`} fill={colors[idx % colors.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value: any) => {
+                      return isCurrencyField(autoValueKey) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                    }}
+                  />
+                  {chart.show_legend && <Legend />}
+                </PieChart>
+              </ResponsiveContainer>
+            );
+          }
+          
           return <div className="text-sm text-red-500">Chart configuration error: data missing name or value keys</div>;
         }
         
@@ -201,6 +306,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                 }}
+                formatter={(value: any) => {
+                  return isCurrencyField(valueKey) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                }}
               />
               {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
             </PieChart>
@@ -211,12 +319,13 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
         if (!chart.data[0]) {
           return <div className="text-sm text-slate-500">No data available for table</div>;
         }
+        const columnKeys = Object.keys(chart.data[0]);
         return (
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100">
-                  {Object.keys(chart.data[0]).map((key) => (
+                  {columnKeys.map((key) => (
                     <th key={key} className="px-3 py-2 text-left font-semibold text-slate-700 text-xs uppercase tracking-wide">
                       {key.replace(/_/g, ' ')}
                     </th>
@@ -226,15 +335,26 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
               <tbody>
                 {chart.data.map((row, idx) => (
                   <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                    {Object.values(row).map((value: any, cellIdx) => (
-                      <td key={cellIdx} className="px-3 py-2 text-slate-900 text-sm">
-                        {value === null || value === undefined 
-                          ? '-' 
-                          : typeof value === 'number' 
-                            ? value.toLocaleString() 
-                            : String(value)}
-                      </td>
-                    ))}
+                    {columnKeys.map((key, cellIdx) => {
+                      const value = row[key];
+                      let displayValue = '-';
+                      
+                      if (value !== null && value !== undefined) {
+                        if (typeof value === 'number') {
+                          displayValue = isCurrencyField(key) 
+                            ? formatCurrency(value)
+                            : value.toLocaleString();
+                        } else {
+                          displayValue = String(value);
+                        }
+                      }
+                      
+                      return (
+                        <td key={cellIdx} className="px-3 py-2 text-slate-900 text-sm">
+                          {displayValue}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -249,22 +369,56 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
 
   return (
     <div className="space-y-4">
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .chart-container {
+          animation: fadeIn 0.5s ease-out forwards;
+        }
+        .chart-container:nth-child(1) { animation-delay: 0.1s; }
+        .chart-container:nth-child(2) { animation-delay: 0.2s; }
+        .chart-container:nth-child(3) { animation-delay: 0.3s; }
+        .chart-container:nth-child(4) { animation-delay: 0.4s; }
+      `}</style>
       {charts.map((chart, index) => {
         try {
+          const chartTypeIcon = chart.chart_type === 'table' ? '📋' : chart.chart_type === 'pie' ? '🥧' : chart.chart_type === 'line' ? '📈' : chart.chart_type === 'area' || chart.chart_type === 'stacked_area' ? '📉' : '📊';
+          
           return (
-            <div key={index} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100 flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-semibold text-slate-900">{chart.title || 'Untitled Chart'}</h4>
+            <div 
+              key={index} 
+              className="chart-container rounded-xl border border-slate-200 bg-white shadow-md hover:shadow-xl transition-all duration-300 overflow-hidden opacity-0"
+              style={{ animationDelay: `${index * 0.1}s` }}
+            >
+              <div className="px-4 py-3 border-b border-slate-200 bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-lg">{chartTypeIcon}</span>
+                    <h4 className="text-sm font-bold text-slate-900">{chart.title || 'Untitled Chart'}</h4>
+                    {chart.period_info && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 border border-blue-200">
+                        <Calendar className="h-3 w-3" />
+                        {chart.period_info}
+                      </span>
+                    )}
+                    {chart.stacked && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700 border border-purple-200">
+                        <TrendingUp className="h-3 w-3" />
+                        Stacked
+                      </span>
+                    )}
+                  </div>
                   {chart.description && (
-                    <p className="text-xs text-slate-600 mt-0.5">{chart.description}</p>
+                    <p className="text-xs text-slate-600 ml-7">{chart.description}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => downloadChart(chart.title)}
-                    className="p-1.5 rounded-md text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors"
+                    className="p-1.5 rounded-lg text-slate-500 hover:bg-white hover:text-blue-600 hover:shadow-sm transition-all"
                     title="Download chart"
                     aria-label="Download chart"
                   >
@@ -272,7 +426,7 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   </button>
                   <button
                     type="button"
-                    className="p-1.5 rounded-md text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors"
+                    className="p-1.5 rounded-lg text-slate-500 hover:bg-white hover:text-blue-600 hover:shadow-sm transition-all"
                     title="Fullscreen"
                     aria-label="Fullscreen"
                   >

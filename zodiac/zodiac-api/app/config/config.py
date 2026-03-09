@@ -15,7 +15,19 @@ BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ENABLE_MULTI_MODEL = os.getenv("ENABLE_MULTI_MODEL", "false").lower() == "true"
+
+# AI Analysis Model Configuration
+# For insights/summaries, use a more powerful model. Options:
+#   "gpt-4o" - OpenAI GPT-4 Optimized (best reasoning, $$$)
+#   "gpt-4o-mini" - OpenAI GPT-4 Mini (fast, balanced, $$)
+#   "claude-3-5-sonnet" - Anthropic Claude 3.5 (excellent analysis, $$$)
+#   "gemini-1.5-pro" - Google Gemini 1.5 Pro (great insights, $$)
+#   "gemini-1.5-flash" - Google Gemini Flash (fast, $)
+#   "openrouter/anthropic/claude-3.5-sonnet" - Via OpenRouter
+AI_INSIGHTS_MODEL = os.getenv("AI_INSIGHTS_MODEL", "gpt-4o-mini")
+AI_FAST_MODEL = os.getenv("AI_FAST_MODEL", "gpt-4o-mini")  # For fast ops (action classification, table selection)
 # Import Vercel Blob for production file storage
 try:
     import vercel_blob
@@ -39,6 +51,11 @@ AI_CONTEXT_SOURCE = os.getenv("AI_CONTEXT_SOURCE", "zodiac").lower().strip()
 # Examples: SAP HANA "hana://user:pass@host:30015", SQL Server "mssql+pyodbc://...", Oracle "oracle+cx_oracle://..."
 SAP_DATABASE_URL = os.getenv("SAP_DATABASE_URL") or os.getenv("SAP_DB_URL")
 USE_SAP_DB_FOR_AI = AI_CONTEXT_SOURCE == "sap" and bool(SAP_DATABASE_URL)
+
+# AI Query Optimization Settings
+ENABLE_QUERY_PATTERN_MATCHING = os.getenv("ENABLE_QUERY_PATTERN_MATCHING", "true").lower() == "true"
+AI_SCHEMA_CACHE_TTL_HOURS = int(os.getenv("AI_SCHEMA_CACHE_TTL_HOURS", "24"))
+FORCE_NEW_ACTION_FOR_DATA_QUERIES = os.getenv("FORCE_NEW_ACTION_FOR_DATA_QUERIES", "true").lower() == "true"
 
 
 def initialize_storage():

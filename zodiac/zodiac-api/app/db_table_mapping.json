@@ -2991,5 +2991,14 @@
       "api_key_allow_list": "zodiac users – api key allow list",
       "is_customer_user": "zodiac users – is customer user"
     }
+  },
+  "T016T": {
+    "meta": {
+      "description": "Industry text/descriptions (converts brsch industry codes to readable names)"
+    },
+    "columns": {
+      "brsch": "T016T – brsch (industry code)",
+      "brtxt": "T016T – brtxt (industry description/name)"
+    }
   }
 }

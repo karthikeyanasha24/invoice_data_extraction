@@ -12,6 +12,8 @@ import {
 import AIChartRenderer from './ai/AIChartRenderer';
 import MultiModelComparison from './ai/MultiModelComparison';
 import { useVoiceRecording } from '../hooks/useVoiceRecording';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 /* ─── Constants ──────────────────────────────────────────────── */
 
@@ -42,6 +44,22 @@ type AiAnalysisMeta = {
   action?: string; reason?: string; sql?: string;
   rows_preview?: Record<string, unknown>[];
   compare?: unknown; charts?: any[]; multiModel?: any;
+  time_scope?: string;
+  date_range?: { min_date: string; max_date: string };
+  period_info?: string;
+  performance?: {
+    action_decision_ms?: number;
+    pattern_matching_ms?: number;
+    cache_lookup_ms?: number;
+    sql_execution_ms?: number;
+    summarization_ms?: number;
+    chart_generation_ms?: number;
+    total_ms?: number;
+    used_pattern?: boolean;
+    used_cache?: boolean;
+    row_count?: number;
+    chart_count?: number;
+  };
 };
 
 type Message = {
@@ -167,6 +185,7 @@ function ChatPanel({
   setUseContext,
   useMultiModel,
   setUseMultiModel,
+  fullWidth = false,
 }: {
   section: 'realtime' | 'historical';
   messages: Message[];
@@ -178,6 +197,7 @@ function ChatPanel({
   setUseContext: (v: boolean) => void;
   useMultiModel: boolean;
   setUseMultiModel: (v: boolean) => void;
+  fullWidth?: boolean;
 }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -206,6 +226,9 @@ function ChatPanel({
   );
   const hasCharts = messagesWithCharts.length > 0;
 
+  // In full-width mode, charts appear in a side panel at md+ breakpoint
+  const chartPanelBreakpoint = fullWidth ? 'md' : 'lg';
+
   return (
     <div className="flex flex-col h-full">
       {/* Suggested prompts */}
@@ -227,7 +250,7 @@ function ChatPanel({
       <div className="flex-1 overflow-hidden min-h-0 flex gap-0">
 
         {/* Messages column */}
-        <div className={`flex flex-col overflow-hidden ${hasCharts ? 'w-full lg:w-[45%]' : 'w-full'}`}>
+        <div className={`flex flex-col overflow-hidden ${hasCharts ? `w-full ${chartPanelBreakpoint === 'md' ? 'md:w-[45%]' : 'lg:w-[45%]'}` : 'w-full'}`}>
           <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-10 select-none">
@@ -251,26 +274,67 @@ function ChatPanel({
                   <span className="text-[10px] font-mono text-slate-400 px-1">
                     {m.role === 'user' ? 'YOU' : 'AI'}{m.ts ? ` · ${new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
                   </span>
-                  <div className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                  <div className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words ${
                     m.role === 'user'
                       ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-tr-sm shadow-md'
                       : 'bg-slate-50 border border-slate-200 text-slate-800 rounded-tl-sm'
                   }`}>
-                    {m.content}
+                    {m.role === 'user' ? (
+                      <div className="whitespace-pre-wrap">{m.content}</div>
+                    ) : (
+                      <div className="prose prose-sm max-w-none
+                        prose-headings:mt-3 prose-headings:mb-2 prose-headings:font-semibold prose-headings:text-slate-900
+                        prose-h3:text-base prose-h4:text-sm
+                        prose-p:my-1.5 prose-p:text-slate-700
+                        prose-strong:text-slate-900 prose-strong:font-bold prose-strong:bg-yellow-100 prose-strong:px-1 prose-strong:rounded
+                        prose-ul:my-2 prose-ul:ml-4 prose-li:my-0.5 prose-li:text-slate-700
+                        prose-ol:my-2 prose-ol:ml-4
+                        prose-code:text-xs prose-code:bg-slate-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-blue-700
+                        prose-pre:bg-slate-800 prose-pre:text-slate-100 prose-pre:rounded-lg prose-pre:p-3
+                        prose-blockquote:border-l-4 prose-blockquote:border-blue-500 prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-slate-600
+                        prose-table:text-xs
+                      ">
+                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                   {/* Show SQL and data info for assistant messages */}
                   {m.role === 'assistant' && m.meta && (
-                    <div className="max-w-[92%] mt-1 text-[10px] font-mono text-slate-400 px-1">
-                      {m.meta.action && <span>Action: {m.meta.action}</span>}
-                      {m.meta.sql && <span> • SQL executed</span>}
-                      {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} rows</span>}
-                      {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
+                    <div className="max-w-[92%] mt-1 text-[10px] font-mono text-slate-400 px-1 space-y-0.5">
+                      {/* Period Information */}
+                      {m.meta.period_info && (
+                        <div className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1 rounded-md mb-1">
+                          <CalendarRange className="h-3 w-3" />
+                          <span className="font-semibold">{m.meta.period_info}</span>
+                          {m.meta.date_range && (
+                            <span className="text-blue-600">
+                              ({m.meta.date_range.min_date} to {m.meta.date_range.max_date})
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div>
+                        {m.meta.action && <span>Action: {m.meta.action}</span>}
+                        {m.meta.sql && <span> • SQL executed</span>}
+                        {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} rows</span>}
+                        {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
+                      </div>
+                      {m.meta.performance && (
+                        <div className="text-slate-500">
+                          ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
+                          {m.meta.performance.used_pattern && <span className="text-green-600"> • pattern-matched</span>}
+                          {m.meta.performance.used_cache && <span className="text-blue-600"> • cached</span>}
+                          {m.meta.performance.sql_execution_ms && (
+                            <span> • sql: {m.meta.performance.sql_execution_ms}ms</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   {m.meta?.multiModel && <MultiModelComparison result={m.meta.multiModel} />}
-                  {/* On mobile, show charts inline below message */}
+                  {/* On small screens, show charts inline below message */}
                   {m.meta?.charts && m.meta.charts.length > 0 && (
-                    <div className="lg:hidden w-full mt-2">
+                    <div className={`${chartPanelBreakpoint === 'md' ? 'md:hidden' : 'lg:hidden'} w-full mt-2`}>
                       <AIChartRenderer charts={m.meta.charts} />
                     </div>
                   )}
@@ -292,9 +356,9 @@ function ChatPanel({
           </div>
         </div>
 
-        {/* Charts panel — desktop only, shows all charts from conversation */}
+        {/* Charts panel — shows at md+ for fullWidth, lg+ otherwise */}
         {hasCharts && (
-          <div className="hidden lg:flex flex-col w-[55%] border-l border-slate-100 bg-gradient-to-br from-slate-50 to-white overflow-hidden">
+          <div className={`${chartPanelBreakpoint === 'md' ? 'hidden md:flex' : 'hidden lg:flex'} flex-col w-[55%] border-l border-slate-100 bg-gradient-to-br from-slate-50 to-white overflow-hidden`}>
             <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
               <BarChart3 className="h-4 w-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">Visualizations</h3>
@@ -334,7 +398,7 @@ function ChatPanel({
         </div>
       )}
 
-      {/* Input area — no extra padding at bottom */}
+      {/* Input area */}
       <div className="px-3 pt-2 pb-2 border-t border-slate-100">
         {/* Toggles row */}
         <div className="flex items-center gap-3 mb-1.5">
@@ -413,6 +477,11 @@ export default function DashboardAIAnalysis() {
   const [dataLoading, setDataLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
+  
+  // Time scope modal state
+  const [showTimeScopeModal, setShowTimeScopeModal] = useState(false);
+  const [pendingQuery, setPendingQuery] = useState<{ section: 'realtime' | 'historical'; text: string } | null>(null);
+  const [timeScope, setTimeScope] = useState<'current' | 'historical' | 'both'>('current');
 
   /* ── Data fetch ─────────────────────────────────────────── */
 
@@ -435,7 +504,7 @@ export default function DashboardAIAnalysis() {
 
   /* ── Send helpers ───────────────────────────────────────── */
 
-  const sendMessage = async (section: 'realtime' | 'historical', text: string) => {
+  const sendMessage = async (section: 'realtime' | 'historical', text: string, selectedTimeScope?: 'current' | 'historical' | 'both') => {
     const isRT = section === 'realtime';
     const setLoading = isRT ? setRealtimeLoading : setHistoricalLoading;
     const setMsgs = isRT ? setRealtimeMessages : setHistoricalMessages;
@@ -447,20 +516,28 @@ export default function DashboardAIAnalysis() {
     setLoading(true);
 
     const contextKeys = useContext ? AI_CONTEXT_KEYS : [];
+    const scopeToUse = selectedTimeScope || timeScope;
 
     try {
       if (useMultiModel) {
-        const res = await dashboardApi.postAIAnalysisMultiModel(text, contextKeys, d);
+        const res = await dashboardApi.postAIAnalysisMultiModel(text, contextKeys, d, scopeToUse);
         setMsgs((prev) => [...prev, {
           role: 'assistant', content: res.synthesized_answer,
-          meta: { multiModel: res }, section, ts: Date.now(),
+          meta: { 
+            multiModel: res,
+            time_scope: res.time_scope,
+            date_range: res.date_range,
+            period_info: res.period_info,
+          }, 
+          section, 
+          ts: Date.now(),
         }]);
       } else {
         const history = currentMsgs.map((m) => ({ role: m.role, content: m.content }));
-        const res = await dashboardApi.postAIAnalysisChat(text, history, contextKeys, d);
-        
+        const res = await dashboardApi.postAIAnalysisChat(text, history, contextKeys, d, scopeToUse);
+
         console.log('📊 AI Analysis Response:', res);
-        
+
         const reply = res?.reply ?? 'No response received.';
         const meta: AiAnalysisMeta = {
           action: res?.action,
@@ -469,12 +546,17 @@ export default function DashboardAIAnalysis() {
           rows_preview: res?.rows_preview,
           compare: res?.compare,
           charts: res?.charts,
+          time_scope: res?.time_scope,
+          date_range: res?.date_range,
+          period_info: res?.period_info,
         };
-        
+
+        console.log('📊 AI Analysis Response:', res);
+        console.log('📊 Period Info:', meta.period_info, meta.date_range);
         console.log('📊 Extracted Charts:', meta.charts);
         console.log('📊 Has Charts:', Boolean(meta.charts && meta.charts.length > 0));
-        
-        const hasMeta = Boolean(meta.action || meta.sql || (meta.rows_preview?.length) || (meta.charts?.length));
+
+        const hasMeta = Boolean(meta.action || meta.sql || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info);
         setMsgs((prev) => [...prev, {
           role: 'assistant', content: reply,
           meta: hasMeta ? meta : undefined, section, ts: Date.now(),
@@ -503,6 +585,104 @@ export default function DashboardAIAnalysis() {
 
   return (
     <div className="w-full -m-4 sm:-m-6 min-h-screen bg-gray-50 font-sans flex flex-col">
+      {/* Time Scope Selection Modal */}
+      {showTimeScopeModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTimeScopeModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
+                <CalendarRange className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Select Data Scope</h3>
+                <p className="text-xs text-slate-500">Choose which period to analyze</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              {/* Current Period Option */}
+              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
+                <input
+                  type="radio"
+                  name="timeScope"
+                  value="current"
+                  checked={timeScope === 'current'}
+                  onChange={(e) => setTimeScope(e.target.value as any)}
+                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Clock className="h-4 w-4 text-blue-600" />
+                    <span className="font-semibold text-slate-900">Current Period</span>
+                  </div>
+                  <p className="text-xs text-slate-600">Analyze recent data (default: last 30 days)</p>
+                </div>
+              </label>
+
+              {/* Historical Period Option */}
+              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
+                <input
+                  type="radio"
+                  name="timeScope"
+                  value="historical"
+                  checked={timeScope === 'historical'}
+                  onChange={(e) => setTimeScope(e.target.value as any)}
+                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <BarChart3 className="h-4 w-4 text-indigo-600" />
+                    <span className="font-semibold text-slate-900">Historical Data</span>
+                  </div>
+                  <p className="text-xs text-slate-600">Long-term trends and patterns (1994-2010)</p>
+                </div>
+              </label>
+
+              {/* Both Option */}
+              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
+                <input
+                  type="radio"
+                  name="timeScope"
+                  value="both"
+                  checked={timeScope === 'both'}
+                  onChange={(e) => setTimeScope(e.target.value as any)}
+                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <GitBranch className="h-4 w-4 text-purple-600" />
+                    <span className="font-semibold text-slate-900">Both Periods</span>
+                  </div>
+                  <p className="text-xs text-slate-600">Compare historical and current data</p>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowTimeScopeModal(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (pendingQuery) {
+                    sendMessage(pendingQuery.section, pendingQuery.text, timeScope);
+                    setShowTimeScopeModal(false);
+                    setPendingQuery(null);
+                  }
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 text-white font-semibold hover:shadow-lg transition-all flex items-center justify-center gap-2"
+              >
+                <Sparkles className="h-4 w-4" />
+                Analyze
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
         body { font-family: 'DM Sans', sans-serif; }
@@ -516,8 +696,6 @@ export default function DashboardAIAnalysis() {
         .tab-pill:not(.active):hover { background: rgba(241, 245, 249, 0.8); }
         .fade-in { animation: fadeUp 0.3s ease both; }
         @keyframes fadeUp { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform: none; } }
-        .chat-container { height: calc(100vh - 56px - 2rem); }
-        @media (max-width: 768px) { .chat-container { height: auto; min-height: 500px; } }
       `}</style>
 
       {/* ── Header ── */}
@@ -577,15 +755,15 @@ export default function DashboardAIAnalysis() {
       </header>
 
       {/* ── Main content ── */}
-      <main className="flex-1 w-full px-4 md:px-6 lg:px-8 py-4 overflow-hidden">
+      <main className="flex-1 w-full px-4 md:px-6 lg:px-8 py-4 overflow-y-auto">
 
         {/* ═══════════════════════════
             REAL-TIME SECTION
         ═══════════════════════════ */}
         {activeSection === 'realtime' && (
-          <div className="fade-in h-full flex flex-col gap-4">
+          <div className="fade-in flex flex-col gap-4">
 
-            {/* Section title + KPIs — compact */}
+            {/* Section title + KPIs */}
             <div className="flex-shrink-0 space-y-3">
               <div className="flex items-center gap-3">
                 <LivePulse />
@@ -613,11 +791,11 @@ export default function DashboardAIAnalysis() {
               </div>
             </div>
 
-            {/* Lower area: data panels + AI chat in a responsive grid */}
-            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_1fr_2fr] gap-3 overflow-hidden">
+            {/* Data panels row: Inbound + Outbound side by side */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 
               {/* Inbound SAT */}
-              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0">
+              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col">
                 <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
                   <div className="flex items-center gap-2">
                     <ArrowUpFromLine className="h-3.5 w-3.5 text-slate-500" />
@@ -625,7 +803,7 @@ export default function DashboardAIAnalysis() {
                   </div>
                   <LivePulse />
                 </div>
-                <div className="p-3 space-y-3 flex-1 overflow-y-auto">
+                <div className="p-3 space-y-3 overflow-y-auto max-h-72 md:max-h-80">
                   {dataLoading ? (
                     <>{Array(3).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
                   ) : inboundData?.summary ? (
@@ -656,7 +834,7 @@ export default function DashboardAIAnalysis() {
               </div>
 
               {/* Outbound funnel */}
-              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0">
+              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col">
                 <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
                   <div className="flex items-center gap-2">
                     <ArrowDownToLine className="h-3.5 w-3.5 text-slate-500" />
@@ -664,7 +842,7 @@ export default function DashboardAIAnalysis() {
                   </div>
                   <GitBranch className="h-3.5 w-3.5 text-slate-400" />
                 </div>
-                <div className="p-3 space-y-2.5 flex-1 overflow-y-auto">
+                <div className="p-3 space-y-2.5 overflow-y-auto max-h-72 md:max-h-80">
                   {dataLoading ? (
                     <>{Array(5).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
                   ) : f ? (
@@ -695,33 +873,38 @@ export default function DashboardAIAnalysis() {
                   )}
                 </div>
               </div>
+            </div>
 
-              {/* AI Chat — takes up 2x column on lg */}
-              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0 lg:min-h-full">
-                <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
-                  <Sparkles className="h-3.5 w-3.5 text-blue-600" />
-                  <h2 className="text-xs font-semibold text-slate-900">AI Analysis</h2>
-                  <span className="ml-auto text-[10px] font-mono text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">Real-time</span>
-                </div>
-                <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-                  <ChatPanel
-                    section="realtime"
-                    messages={realtimeMessages}
-                    loading={realtimeLoading}
-                    prompts={REALTIME_PROMPTS}
-                    onSend={(t) => sendMessage('realtime', t)}
-                    placeholder="Ask about live invoices, SAT docs, failures…"
-                    useContext={useContext}
-                    setUseContext={setUseContext}
-                    useMultiModel={useMultiModel}
-                    setUseMultiModel={setUseMultiModel}
-                  />
-                </div>
+            {/* AI Chat — full width below data panels */}
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col" style={{ minHeight: '420px' }}>
+              <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+                <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                <h2 className="text-xs font-semibold text-slate-900">AI Analysis</h2>
+                <LivePulse />
+                <span className="ml-auto text-[10px] font-mono text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">Real-time</span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                <ChatPanel
+                  section="realtime"
+                  messages={realtimeMessages}
+                  loading={realtimeLoading}
+                  prompts={REALTIME_PROMPTS}
+                  onSend={(t) => {
+                    setPendingQuery({ section: 'realtime', text: t });
+                    setShowTimeScopeModal(true);
+                  }}
+                  placeholder="Ask about live invoices, SAT docs, failures…"
+                  useContext={useContext}
+                  setUseContext={setUseContext}
+                  useMultiModel={useMultiModel}
+                  setUseMultiModel={setUseMultiModel}
+                  fullWidth
+                />
               </div>
             </div>
 
             {error && (
-              <div className="flex-shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
+              <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
                 {error}
               </div>
             )}
@@ -880,7 +1063,10 @@ export default function DashboardAIAnalysis() {
                     messages={historicalMessages}
                     loading={historicalLoading}
                     prompts={HISTORICAL_PROMPTS}
-                    onSend={(t) => sendMessage('historical', t)}
+                    onSend={(t) => {
+                      setPendingQuery({ section: 'historical', text: t });
+                      setShowTimeScopeModal(true);
+                    }}
                     placeholder="Ask about trends, forecasts, period comparisons…"
                     useContext={useContext}
                     setUseContext={setUseContext}
