@@ -711,9 +711,10 @@ If result is empty, say so and suggest a refined question.
         has_cost_tables_note = knowledge and ("ekpo" in knowledge_str or "rbkp" in knowledge_str or "rseg" in knowledge_str)
         if cost_related and has_cost_tables_note:
             fallback_reply = (
-                "I used your cost tables (e.g. EKPO, RBKP, RSEG) for this question, but the query returned no rows. "
-                "Those tables may be empty in the database for the current period, or the question may need different filters. "
-                "You can try asking for costs by vendor, by material, or by purchase order; if data exists, I’ll show it."
+                "I generated and ran a live SQL query against your cost tables (e.g. EKPO, RBKP, RSEG), "
+                "but for this exact combination of filters and time period it returned no rows. "
+                "The tables themselves do contain cost data (as your dashboards show), so this slice is likely filtered out. "
+                "Try broadening the date range (for example, all periods) or simplifying the question, such as total spend by vendor or by material."
             )
             mem.last_user_query = user_query
             save_memory(db, mem)
