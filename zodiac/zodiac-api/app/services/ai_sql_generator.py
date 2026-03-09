@@ -65,3 +65,4 @@ def run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
     result = db.execute(text(sql)).mappings().all()
     return [dict(row) for row in result]
 
+
