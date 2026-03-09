@@ -251,6 +251,49 @@ When given a question, generate SQL and explain the results concisely."""
         return []
 
 
+def get_few_shot_examples(
+    db: Session,
+    limit: int = 3,
+    user_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch recent successful query→SQL examples for few-shot prompting.
+    Prefers high feedback_score, then recent. Used to train the model by example.
+
+    Returns:
+        List of {"user_query": str, "sql_query": str} for injection into prompts.
+    """
+    try:
+        ensure_training_data_table(db)
+        where = "WHERE sql_query IS NOT NULL AND LENGTH(sql_query) > 20"
+        params: Dict[str, Any] = {"limit": limit}
+        if user_id is not None:
+            where += " AND user_id = :user_id"
+            params["user_id"] = user_id
+
+        rows = db.execute(
+            text(
+                f"""
+                SELECT user_query, sql_query
+                FROM ai_training_data
+                {where}
+                ORDER BY COALESCE(feedback_score, 0) DESC, created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).fetchall()
+
+        return [
+            {"user_query": row[0] or "", "sql_query": row[1] or ""}
+            for row in rows
+            if row[0] and row[1]
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to fetch few-shot examples: {e}")
+        return []
+
+
 def get_training_stats(db: Session, user_id: Optional[int] = None) -> Dict[str, Any]:
     """
     Get statistics about training data collection.
