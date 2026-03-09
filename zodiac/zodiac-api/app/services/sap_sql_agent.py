@@ -46,7 +46,31 @@ except ImportError:  # pragma: no cover - runtime dependency
     _openai_available = False
 
 
-# --- Static metadata ---------------------------------------------------------------------------
+# --- Schema config (extensible: edit schema_ai_config.json when adding tables) ---
+
+def _load_schema_config() -> Dict[str, Any]:
+    """Load schema_ai_config.json for extensible rules. Returns {} on failure."""
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "schema_ai_config.json"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            return cfg if isinstance(cfg, dict) else {}
+    except Exception as e:
+        logger.warning("Could not load schema_ai_config.json: %s", e)
+    return {}
+
+
+_SCHEMA_CONFIG: Dict[str, Any] = {}
+def _get_schema_config() -> Dict[str, Any]:
+    global _SCHEMA_CONFIG
+    if not _SCHEMA_CONFIG:
+        _SCHEMA_CONFIG = _load_schema_config()
+    return _SCHEMA_CONFIG
+
+
+# --- Static metadata (fallback when mapping/config lack entries) ---------------------------------------------------------------------------
 
 SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     # Sales / Billing
@@ -272,19 +296,19 @@ def _introspect_columns(db: Session, table_names: List[str]) -> Dict[str, Dict[s
 
 def _get_table_descriptions(db: Session) -> Dict[str, str]:
     """
-    Build table descriptions by merging:
-    1) SAP_TABLE_DESCRIPTIONS (known tables with semantic descriptions)
-    2) db_table_mapping.json meta (for tables in DB, when mapping exists)
-    3) Generic fallback for any other DB table
+    Build table descriptions. Priority (mapping-first, adaptive for new tables):
+    1) db_table_mapping.json meta.description
+    2) schema_ai_config.json table_semantic_hints
+    3) SAP_TABLE_DESCRIPTIONS (fallback)
+    4) Generic fallback
 
-    This allows new tables added to the DB + mapping to be automatically
-    discoverable by the model without code changes.
+    Skip tables from schema_ai_config skip_tables.
     """
     insp = inspect(db.bind)
     db_table_names = insp.get_table_names()
-    # Skip non-SAP / internal tables for AI analysis
-    skip = {"ai_analysis_memory", "zodiac_users", "zodiac_customers", "customers", "user_customers"}
-    db_table_names = [t for t in db_table_names if t.lower() not in skip]
+    cfg = _get_schema_config()
+    skip_set = {s.lower() for s in (cfg.get("skip_tables") or [])}
+    db_table_names = [t for t in db_table_names if t.lower() not in skip_set]
 
     mapping_file: Dict[str, Any] = {}
     try:
@@ -299,19 +323,28 @@ def _get_table_descriptions(db: Session) -> Dict[str, str]:
     except Exception:
         pass
 
+    table_hints = (cfg.get("table_semantic_hints") or {})
     out: Dict[str, str] = {}
     for actual_name in db_table_names:
-        # Prefer SAP_TABLE_DESCRIPTIONS (supports both VBRP and vbrp)
+        # 1) Mapping meta (from db_table_mapping.json - updated by refresh_schema_for_ai.py)
+        entry = mapping_file.get(actual_name) or mapping_file.get(actual_name.upper())
+        if isinstance(entry, dict) and entry.get("meta", {}).get("description"):
+            desc = str(entry["meta"]["description"])
+            if desc and desc != f"{actual_name} table":
+                out[actual_name] = desc
+                continue
+        # 2) Config table_semantic_hints (extensible - add new tables here)
+        desc = table_hints.get(actual_name) or table_hints.get(actual_name.upper())
+        if desc:
+            out[actual_name] = desc
+            continue
+        # 3) Hardcoded fallback
         desc = SAP_TABLE_DESCRIPTIONS.get(actual_name) or SAP_TABLE_DESCRIPTIONS.get(actual_name.upper())
         if desc:
             out[actual_name] = desc
             continue
-        # Else use mapping meta
-        entry = mapping_file.get(actual_name) or mapping_file.get(actual_name.upper())
-        if isinstance(entry, dict) and entry.get("meta", {}).get("description"):
-            out[actual_name] = str(entry["meta"]["description"])
-        else:
-            out[actual_name] = f"{actual_name} table – check columns for available fields."
+        # 4) Generic
+        out[actual_name] = f"{actual_name} table – check columns for available fields."
     return out
 
 
@@ -415,6 +448,7 @@ def _generate_sql_json(
     client: OpenAI,
     time_scope: str = "current",
     few_shot_examples: Optional[List[Dict[str, str]]] = None,
+    table_descriptions: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Equivalent of INVOICE_BOT.generate_sql_json, but simplified and Postgres-focused.
@@ -457,6 +491,27 @@ def _generate_sql_json(
                 "\nRecent successful question→SQL examples (use as patterns, do NOT copy literally):\n"
                 f"{json.dumps(cleaned_examples, indent=2)}\n"
             )
+
+    # Table descriptions: config/mapping-first, fallback to SAP_TABLE_DESCRIPTIONS
+    tbl_desc = table_descriptions or {}
+    tables_block = {tbl: tbl_desc.get(tbl) or tbl_desc.get(tbl.upper()) or SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}
+
+    # Config-driven: column_semantic_hints + join_rules (extensible when adding new tables)
+    cfg = _get_schema_config()
+    col_hints = cfg.get("column_semantic_hints") or {}
+    join_rules = cfg.get("join_rules") or []
+    col_hints_block = ""
+    if col_hints:
+        col_hints_block = (
+            "\nColumn semantics (use when choosing columns – from schema_ai_config.json):\n"
+            + "\n".join(f"- {k}: {v}" for k, v in list(col_hints.items())[:25])
+            + "\n"
+        )
+    join_rules_block = ""
+    if join_rules:
+        join_rules_block = "\nConfigured join rules (schema_ai_config.json – use these when joining):\n" + "\n".join(
+            f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:20]
+        ) + "\n"
     
     prompt = f"""
 User question: "{question}"
@@ -466,13 +521,14 @@ User question: "{question}"
 {few_shot_block}
 
 Tables available (subset already selected as relevant):
-{json.dumps({tbl: SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}, indent=2)}
+{json.dumps(tables_block, indent=2)}
 
 Column mappings (table -> column -> short description):
 {json.dumps(column_mappings, indent=2)}
-
+{col_hints_block}
 Known join patterns between these tables:
 {SAP_JOIN_HINTS}
+{join_rules_block}
 
 Task:
 - Choose relevant columns from these tables.
@@ -501,6 +557,9 @@ Task:
   "group_by": [
     {{ "table": "T016T", "column": "brtxt" }}
   ],
+  "having": [
+    {{ "lhs": "total_sales", "operator": ">", "rhs": "0" }}
+  ],
   "order_by": [
     "total_sales DESC"
   ],
@@ -526,6 +585,11 @@ Rules:
     * filter out NULL dimension values where it makes sense (e.g., industry IS NOT NULL)
     * order by the metric's description (e.g., "total_sales DESC") and use a small limit (e.g. 50 or 100).
 - If the question is about "lowest", sort ASC instead of DESC.
+- **CRITICAL for lowest/highest/top/bottom by dimension**: Exclude zero/empty aggregates.
+  When grouping by customer, country, product, industry, etc. and showing SUM of sales/amounts,
+  add "having": [{{ "lhs": "<metric_description>", "operator": ">", "rhs": "0" }}]
+  so we only show entities that have actual activity. E.g. for "lowest sales by customer and country",
+  add having on total_sales > 0 — otherwise we get customers with $0 (no sales), which is wrong.
 """
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -539,6 +603,34 @@ Rules:
         m = re.search(r"\{.*\}", content, re.DOTALL)
         spec = json.loads(m.group(0)) if m else {}
     return spec or {}
+
+
+def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
+    """
+    When question asks for lowest/highest/top/bottom by dimension with aggregates,
+    auto-inject HAVING metric > 0 so we exclude entities with $0 (wrong for rankings).
+    Modifies spec in place.
+    """
+    q_lower = (question or "").lower()
+    if not any(kw in q_lower for kw in ("lowest", "highest", "top", "bottom", "minimum", "maximum", "best", "worst")):
+        return
+    if spec.get("having"):
+        return
+    group_bys = spec.get("group_by") or []
+    if not group_bys:
+        return
+    columns = spec.get("columns") or []
+    sum_col = None
+    for col in columns:
+        if str(col.get("agg") or "").upper() in ("SUM", "AVG"):
+            sum_col = col
+            break
+    if not sum_col:
+        return
+    human = sum_col.get("description") or f"{sum_col.get('table', '')}_{sum_col.get('name', '')}"
+    human_safe = re.sub(r"[^\w]", "_", str(human))[:60] or "total"
+    spec["having"] = [{"lhs": human_safe, "operator": ">", "rhs": "0"}]
+    logger.info("Auto-injected HAVING %s > 0 for ranking query", human_safe)
 
 
 def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, Dict[str, str]]) -> str:
@@ -625,24 +717,22 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         col_name = _actual_column_name(actual_tbl, col_name_raw)
         agg = str(col.get("agg") or "").upper()
 
-        # Heuristic casting for known SAP "numeric stored as text" fields so
-        # aggregates like SUM() work instead of failing with "function sum(text)".
+        # Config-driven casting: schema_ai_config.json defines numeric_columns and trim_numeric_tables.
+        # Add new tables/columns there when schema changes; no code changes needed.
+        cfg = _get_schema_config()
+        numeric_cols = {c.upper() for c in (cfg.get("numeric_columns") or [])}
+        trim_tables = {t.upper() for t in (cfg.get("trim_numeric_tables") or [])}
         actual_upper = actual_tbl.upper()
         col_upper = str(col_name).upper()
-        needs_numeric_cast = False
-        if actual_upper == "EKPO" and col_upper in {"NETWR", "MENGE"}:
-            needs_numeric_cast = True
-        elif actual_upper == "RBKP" and col_upper in {"RMWWR"}:
-            needs_numeric_cast = True
-        elif actual_upper == "RSEG" and col_upper in {"WRBTR", "DMBTR", "MENGE"}:
-            needs_numeric_cast = True
-        elif actual_upper == "BSEG" and col_upper in {"DMBTR", "WRBTR"}:
-            needs_numeric_cast = True
+        needs_numeric_cast = col_upper in numeric_cols
+        use_trim_pattern = actual_upper in trim_tables and needs_numeric_cast
 
         if agg in {"SUM", "AVG", "COUNT", "MIN", "MAX"}:
             if needs_numeric_cast and agg != "COUNT":
-                # Safest form: turn '' into NULL then cast to numeric
-                expr = f"{agg}(NULLIF({alias}.\"{col_name}\",'')::numeric)"
+                if use_trim_pattern:
+                    expr = f"{agg}(NULLIF(TRIM({alias}.\"{col_name}\"::text), '')::numeric)"
+                else:
+                    expr = f"{agg}(NULLIF({alias}.\"{col_name}\",'')::numeric)"
             else:
                 expr = f"{agg}({alias}.\"{col_name}\")"
         else:
@@ -746,7 +836,19 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             rhs = str(rhs_raw).strip() if rhs_raw is not None else ""
             if rhs and rhs.lower() != "none":
                 conds.append(f"{lhs} {op} {rhs}")
-    
+
+    # When using VBRP+VBRK+KNA1 for customer (per verified scripts), exclude NULL joins
+    vbrk_actual = next((a for a in added_actuals if a.upper() == "VBRK"), None)
+    kna1_actual = next((a for a in added_actuals if a.upper() == "KNA1"), None)
+    if vbrk_actual and kna1_actual:
+        va = table_aliases.get(vbrk_actual)
+        ka = table_aliases.get(kna1_actual)
+        vbeln_col = _actual_column_name(vbrk_actual, "VBELN")
+        kunnr_col = _actual_column_name(kna1_actual, "KUNNR")
+        if va and ka and vbeln_col and kunnr_col:
+            conds.append(f'{va}."{vbeln_col}" IS NOT NULL')
+            conds.append(f'{ka}."{kunnr_col}" IS NOT NULL')
+
     if conds:
         sql_lines.append("\nWHERE " + " AND ".join(conds))
 
@@ -768,6 +870,34 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         gb_parts.append(f'{alias}."{col}"')
     if gb_parts:
         sql_lines.append("\nGROUP BY " + ", ".join(gb_parts))
+
+    # HAVING (after GROUP BY, before ORDER BY)
+    having_parts: List[str] = []
+    for h in json_spec.get("having", []) or []:
+        if not isinstance(h, dict):
+            continue
+        lhs = str(h.get("lhs", "")).strip()
+        op = str(h.get("operator", "")).strip().upper()
+        rhs_raw = h.get("rhs")
+        if not lhs or not op:
+            continue
+        # HAVING uses SELECT aliases; match by name (case-insensitive, or prefix)
+        lhs_lower = lhs.lower()
+        matched = lhs if lhs in used_col_aliases else None
+        if not matched:
+            for a in used_col_aliases:
+                if a.lower() == lhs_lower or lhs_lower in a.lower():
+                    matched = a
+                    break
+        lhs_expr = f'"{matched}"' if matched else lhs
+        if op in {"IS NULL", "IS NOT NULL"}:
+            having_parts.append(f"{lhs_expr} {op}")
+        else:
+            rhs = str(rhs_raw).strip() if rhs_raw is not None else ""
+            if rhs and rhs.lower() != "none":
+                having_parts.append(f"{lhs_expr} {op} {rhs}")
+    if having_parts:
+        sql_lines.append("\nHAVING " + " AND ".join(having_parts))
 
     # ORDER BY
     order_by_parts: List[str] = []
@@ -951,6 +1081,7 @@ Common issues:
 - Incorrect table references
 - Missing GROUP BY for aggregated columns
 - Query returned no rows: remove date filters, use all periods (no FKDAT/BUDAT/BEDAT filters), simplify to fewer joins
+- Results include $0 / zero aggregates: add "having": [{{ "lhs": "<metric_alias>", "operator": ">", "rhs": "0" }}] to exclude entities with no activity
 
 Return a CORRECTED JSON specification with the same structure.
 """
@@ -1019,6 +1150,7 @@ def run_sap_sql_agent(
             logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
             return None
 
+        table_descriptions = _get_table_descriptions(db)
         spec = _generate_sql_json(
             question,
             selected_tables,
@@ -1026,10 +1158,13 @@ def run_sap_sql_agent(
             client,
             time_scope=time_scope,
             few_shot_examples=few_shot_examples,
+            table_descriptions=table_descriptions,
         )
         if not spec:
             logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
             return None
+
+        _ensure_having_for_aggregates(spec, question)
 
         # Validate specification
         is_valid, validation_errors = validate_sql_spec(spec)
