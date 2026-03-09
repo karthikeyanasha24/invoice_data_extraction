@@ -12,7 +12,7 @@ from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
 from .sap_sql_agent import run_sap_sql_agent, _serialize_value  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
-from .training_data_collector import log_query_execution
+from .training_data_collector import log_query_execution, get_few_shot_examples
 from .query_cache import find_similar_cached_query, cache_query_result
 from .multi_llm_client import get_multi_llm_client, get_best_available_model, smart_chat_completion
 
@@ -488,10 +488,24 @@ Answer concisely using MARKDOWN formatting:
             sql_db = sap_db or db
             knowledge = mem.knowledge()
             knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
+            # Fetch few-shot examples (user-specific first, then global)
+            few_shots: List[Dict[str, str]] = []
+            try:
+                few_shots = get_few_shot_examples(db, limit=3, user_id=user_id)
+                if not few_shots:
+                    few_shots = get_few_shot_examples(db, limit=3, user_id=None)
+            except Exception as fs_err:
+                logger.warning(f"Failed to load few-shot examples: {fs_err}")
             datasets: List[Tuple[str, List[Dict[str, Any]]]] = []
             sqls: List[str] = []
             for sq in subqueries[:3]:
-                r = run_sap_sql_agent(sq, sql_db, knowledge_context=knowledge_context, time_scope=time_scope)
+                r = run_sap_sql_agent(
+                    sq,
+                    sql_db,
+                    knowledge_context=knowledge_context,
+                    time_scope=time_scope,
+                    few_shot_examples=few_shots or None,
+                )
                 if not r or not r.rows:
                     datasets.append((sq, []))
                     sqls.append(r.sql if r else "")
@@ -646,6 +660,14 @@ If result is empty, say so and suggest a refined question.
     # Try pattern matching first for faster execution
     sql_db = sap_db or db
     pattern_result = None
+    # Few-shot examples for guiding SQL generation
+    few_shots: List[Dict[str, str]] = []
+    try:
+        few_shots = get_few_shot_examples(db, limit=3, user_id=user_id)
+        if not few_shots:
+            few_shots = get_few_shot_examples(db, limit=3, user_id=None)
+    except Exception as fs_err:
+        logger.warning(f"Failed to load few-shot examples: {fs_err}")
     try:
         from .query_optimizer import try_pattern_optimization
         pattern_start = time.time()
@@ -676,14 +698,26 @@ If result is empty, say so and suggest a refined question.
             logger.warning(f"⚠️ Pattern SQL execution failed: {exec_err}, falling back to agent")
             knowledge = mem.knowledge()
             knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
-            result = run_sap_sql_agent(user_query, sql_db, knowledge_context=knowledge_context, time_scope=time_scope)
+            result = run_sap_sql_agent(
+                user_query,
+                sql_db,
+                knowledge_context=knowledge_context,
+                time_scope=time_scope,
+                few_shot_examples=few_shots or None,
+            )
             timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
             timings["used_pattern"] = False
     else:
         # Use full SQL agent
         knowledge = mem.knowledge()
         knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
-        result = run_sap_sql_agent(user_query, sql_db, knowledge_context=knowledge_context, time_scope=time_scope)
+        result = run_sap_sql_agent(
+            user_query,
+            sql_db,
+            knowledge_context=knowledge_context,
+            time_scope=time_scope,
+            few_shot_examples=few_shots or None,
+        )
         timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
         timings["used_pattern"] = False
     
