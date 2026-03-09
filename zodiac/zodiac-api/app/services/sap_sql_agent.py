@@ -34,7 +34,6 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY
-from .ai_sql_generator import generate_sql, run_sql as execute_sql
 
 logger = logging.getLogger("zodiac-api.sap_sql_agent")
 
@@ -966,34 +965,109 @@ def run_sap_sql_agent(
     few_shot_examples: Optional[List[Dict[str, str]]] = None,
 ) -> SqlAgentResult | None:
     """
-    Simplified entry point used by the dashboard AI endpoint.
+    Main entry point used by the dashboard AI endpoint.
 
-    New flow:
-      question → generate_sql (LLM, schema-aware) → execute_sql → rows
+    It:
+    - Uses LLM to pick tables (dynamically from DB + mapping; supports new tables)
+    - Introspects columns from Postgres
+    - Uses LLM to build a JSON SQL spec
+    - Translates to Postgres SQL and executes
+    - Caches SQL per question
 
-    The older JSON-spec based pipeline is no longer used here.
+    Args:
+        knowledge_context: Optional user preferences (e.g. "For cost queries use EKPO, RBKP, RSEG").
+        time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (all periods)
     """
-    try:
-        # Basic in-memory cache for exact questions (cheap, avoids extra LLM calls)
-        q_key = question.strip().lower()
-        if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
-            sql_cached = _QUERY_TO_SQL_CACHE[q_key]
-            rows_cached = _SQL_TO_ROWS_CACHE[sql_cached]
-            return SqlAgentResult(sql=sql_cached, rows=rows_cached)
+    client = _get_openai_client()
+    if not client:
+        return None
 
-        # Generate SQL text from the natural-language question
-        sql = generate_sql(question)
-        logger.info(f"📝 Generated SQL (schema-driven):\n{sql}")
-
-        # Execute the SQL safely
-        rows = execute_sql(db, sql)
-
-        # Store in simple in-process cache
-        _QUERY_TO_SQL_CACHE[q_key] = sql
-        _SQL_TO_ROWS_CACHE[sql] = rows
-
+    q_key = question.strip().lower()
+    if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
+        sql = _QUERY_TO_SQL_CACHE[q_key]
+        rows = _SQL_TO_ROWS_CACHE[sql]
         return SqlAgentResult(sql=sql, rows=rows)
 
+    attempt = 0
+    last_error = None
+    spec = None
+    
+    try:
+        selected_tables = _pick_tables(question, client, db, knowledge_context)
+        column_mappings = _introspect_columns(db, selected_tables)
+        if not column_mappings:
+            logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
+            return None
+
+        spec = _generate_sql_json(
+            question,
+            selected_tables,
+            column_mappings,
+            client,
+            time_scope=time_scope,
+            few_shot_examples=few_shot_examples,
+        )
+        if not spec:
+            logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
+            return None
+
+        # Validate specification
+        is_valid, validation_errors = validate_sql_spec(spec)
+        if not is_valid:
+            logger.warning(f"Invalid SQL spec: {validation_errors}")
+            # Try to auto-fix common issues
+            if validation_errors and len(validation_errors) < 5:
+                logger.info("Attempting to refine specification...")
+                spec = refine_query_on_error(client, question, ", ".join(validation_errors), spec)
+                is_valid, validation_errors = validate_sql_spec(spec)
+        
+        # Retry loop for SQL execution
+        while attempt <= max_retries:
+            try:
+                sql = _json_to_sql_postgres(spec, column_mappings)
+                logger.info(f"📝 Generated SQL:\n{sql}")
+                rows = _run_sql(db, sql)
+                
+                # Success!
+                if not rows:
+                    logger.warning(f"⚠️ SQL returned no rows for question: {question}")
+                    logger.warning(f"📊 SQL query:\n{sql}")
+                    
+                    # Try a diagnostic query to check if ANY 2024 data exists
+                    if "2024" in question:
+                        try:
+                            diag_sql = "SELECT COUNT(*) as count FROM \"VBRK\" WHERE \"FKDAT\" >= '2024-01-01' AND \"FKDAT\" < '2025-01-01'"
+                            diag_result = db.execute(text(diag_sql)).fetchone()
+                            count_2024 = diag_result[0] if diag_result else 0
+                            logger.info(f"🔍 Diagnostic: Found {count_2024} VBRK records for 2024")
+                            
+                            if count_2024 == 0:
+                                logger.warning("⚠️ Database has NO 2024 data in VBRK table!")
+                        except Exception as diag_err:
+                            logger.debug(f"Diagnostic check failed: {diag_err}")
+                else:
+                    _QUERY_TO_SQL_CACHE[q_key] = sql
+                    _SQL_TO_ROWS_CACHE[sql] = rows
+                    logger.info(f"✅ SQL returned {len(rows)} rows")
+                
+                return SqlAgentResult(sql=sql, rows=rows)
+            
+            except Exception as sql_err:
+                last_error = str(sql_err)
+                logger.warning(f"SQL execution failed (attempt {attempt + 1}/{max_retries + 1}): {last_error}")
+                
+                if attempt < max_retries:
+                    # Try to refine the query
+                    logger.info("Refining query specification...")
+                    spec = refine_query_on_error(client, question, last_error, spec)
+                    attempt += 1
+                else:
+                    # Max retries reached
+                    logger.error(f"Max retries reached for question: {question}")
+                    return None
+        
+        return None
+    
     except Exception as e:
         logger.warning("sap_sql_agent failed for question '%s': %s", question, e)
         return None
