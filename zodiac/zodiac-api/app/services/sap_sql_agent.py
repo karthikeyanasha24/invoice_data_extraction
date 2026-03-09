@@ -624,8 +624,27 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         alias = table_aliases[actual_tbl]
         col_name = _actual_column_name(actual_tbl, col_name_raw)
         agg = str(col.get("agg") or "").upper()
+
+        # Heuristic casting for known SAP "numeric stored as text" fields so
+        # aggregates like SUM() work instead of failing with "function sum(text)".
+        actual_upper = actual_tbl.upper()
+        col_upper = str(col_name).upper()
+        needs_numeric_cast = False
+        if actual_upper == "EKPO" and col_upper in {"NETWR", "MENGE"}:
+            needs_numeric_cast = True
+        elif actual_upper == "RBKP" and col_upper in {"RMWWR"}:
+            needs_numeric_cast = True
+        elif actual_upper == "RSEG" and col_upper in {"WRBTR", "DMBTR", "MENGE"}:
+            needs_numeric_cast = True
+        elif actual_upper == "BSEG" and col_upper in {"DMBTR", "WRBTR"}:
+            needs_numeric_cast = True
+
         if agg in {"SUM", "AVG", "COUNT", "MIN", "MAX"}:
-            expr = f"{agg}({alias}.\"{col_name}\")"
+            if needs_numeric_cast and agg != "COUNT":
+                # Safest form: turn '' into NULL then cast to numeric
+                expr = f"{agg}(NULLIF({alias}.\"{col_name}\",'')::numeric)"
+            else:
+                expr = f"{agg}({alias}.\"{col_name}\")"
         else:
             expr = f'{alias}."{col_name}"'
         human = col.get("description") or f"{actual_tbl}_{col_name}"
@@ -1092,4 +1111,3 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-
