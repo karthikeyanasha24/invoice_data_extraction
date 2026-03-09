@@ -12,7 +12,8 @@ from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
 from .sap_sql_agent import run_sap_sql_agent, _serialize_value  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
-from .training_data_collector import log_query_execution
+from .training_data_collector import log_query_execution, get_few_shot_examples
+from .sql_example_library import get_sql_examples_for_question
 from .query_cache import find_similar_cached_query, cache_query_result
 from .multi_llm_client import get_multi_llm_client, get_best_available_model, smart_chat_completion
 
@@ -491,7 +492,15 @@ Answer concisely using MARKDOWN formatting:
             datasets: List[Tuple[str, List[Dict[str, Any]]]] = []
             sqls: List[str] = []
             for sq in subqueries[:3]:
-                r = run_sap_sql_agent(sq, sql_db, knowledge_context=knowledge_context, time_scope=time_scope)
+                few_shot = get_sql_examples_for_question(
+                    sq, additional_examples=get_few_shot_examples(db, 2)
+                )
+                r = run_sap_sql_agent(
+                    sq, sql_db,
+                    knowledge_context=knowledge_context,
+                    time_scope=time_scope,
+                    few_shot_examples=few_shot,
+                )
                 if not r or not r.rows:
                     datasets.append((sq, []))
                     sqls.append(r.sql if r else "")
@@ -676,14 +685,30 @@ If result is empty, say so and suggest a refined question.
             logger.warning(f"⚠️ Pattern SQL execution failed: {exec_err}, falling back to agent")
             knowledge = mem.knowledge()
             knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
-            result = run_sap_sql_agent(user_query, sql_db, knowledge_context=knowledge_context, time_scope=time_scope)
+            few_shot = get_sql_examples_for_question(
+                user_query, additional_examples=get_few_shot_examples(db, 2)
+            )
+            result = run_sap_sql_agent(
+                user_query, sql_db,
+                knowledge_context=knowledge_context,
+                time_scope=time_scope,
+                few_shot_examples=few_shot,
+            )
             timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
             timings["used_pattern"] = False
     else:
         # Use full SQL agent
         knowledge = mem.knowledge()
         knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
-        result = run_sap_sql_agent(user_query, sql_db, knowledge_context=knowledge_context, time_scope=time_scope)
+        few_shot = get_sql_examples_for_question(
+            user_query, additional_examples=get_few_shot_examples(db, 2)
+        )
+        result = run_sap_sql_agent(
+            user_query, sql_db,
+            knowledge_context=knowledge_context,
+            time_scope=time_scope,
+            few_shot_examples=few_shot,
+        )
         timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
         timings["used_pattern"] = False
     
