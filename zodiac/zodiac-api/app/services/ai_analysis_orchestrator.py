@@ -12,7 +12,17 @@ from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
 from .sap_sql_agent import run_sap_sql_agent, _serialize_value  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
-from .training_data_collector import log_query_execution, get_few_shot_examples
+
+# Training data helpers – be robust if older deployments are missing few-shot support
+try:  # pragma: no cover - defensive import for mixed deployments
+    from .training_data_collector import log_query_execution, get_few_shot_examples
+except ImportError:  # Fallback: keep logging, but skip few-shot examples
+    from .training_data_collector import log_query_execution  # type: ignore
+
+    def get_few_shot_examples(*_args, **_kwargs):
+        """Fallback stub when get_few_shot_examples is not available in deployment."""
+        return []
+
 from .query_cache import find_similar_cached_query, cache_query_result
 from .multi_llm_client import get_multi_llm_client, get_best_available_model, smart_chat_completion
 
