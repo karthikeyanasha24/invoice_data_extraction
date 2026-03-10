@@ -417,12 +417,15 @@ Task:
     # Auto-include description/text tables for better labels
     q_lower = question.lower()
     if "industry" in q_lower or "industries" in q_lower:
-        # Ensure T016T is included for industry descriptions
+        # Ensure T016T is included ONLY when question asks about industry (T016T has brsch/brtxt, not VBELN)
         t016t_match = db_tables_lower.get("t016t")
         if t016t_match and t016t_match not in tables and any(t.upper() == "KNA1" for t in tables):
             tables.append(t016t_match)
             logger.info(f"✨ Auto-added T016T for industry descriptions")
-    
+    else:
+        # Remove T016T if question does not ask about industry (prevents wrong joins like t.VBELN)
+        tables = [t for t in tables if t.upper() != "T016T"]
+
     if "product" in q_lower or "material" in q_lower:
         # Ensure MAKT is included for product descriptions
         makt_match = db_tables_lower.get("makt")
@@ -534,11 +537,11 @@ Task:
 - Choose relevant columns from these tables.
 - Propose joins between tables using ONLY the business keys listed above (do NOT invent other join columns).
 - Remember that VBRP typically does NOT have KUNNR; to reach the customer, you MUST join via VBRK then KNA1.
-- **CRITICAL FOR INDUSTRY**: If the question asks for "industry" or "by industry":
-  * Include T016T table in your selection
-  * SELECT T016T.brtxt (description) NOT KNA1.brsch (code)
-  * Add join: {{ "left": "KNA1", "right": "T016T", "on": "KNA1.brsch = T016T.brsch" }}
-  * Use T016T.brtxt in GROUP BY if grouping by industry
+- **T016T (industry)**: ONLY include T016T when the question explicitly asks for "industry" or "by industry".
+  * T016T has ONLY columns brsch and brtxt (no VBELN, no KUNNR).
+  * Join: KNA1.brsch = T016T.brsch (NOT on VBELN).
+  * SELECT T016T.brtxt for industry name (not KNA1.brsch which is just a code).
+  * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
@@ -701,9 +704,10 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         actual = _actual_table_name(tbl)
         table_aliases[actual] = _fmt_alias(actual)
 
-    # SELECT
+    # SELECT (also build alias -> aggregate expression for HAVING; PostgreSQL does not allow SELECT aliases in HAVING)
     select_parts: List[str] = []
     used_col_aliases: set[str] = set()
+    alias_to_agg_expr: Dict[str, str] = {}
 
     for col in columns:
         logical_tbl = col.get("table")
@@ -745,6 +749,8 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
                 suffix += 1
             human_safe = f"{human_safe}_{suffix}"
         used_col_aliases.add(human_safe)
+        if agg in {"SUM", "AVG", "COUNT", "MIN", "MAX"}:
+            alias_to_agg_expr[human_safe] = expr
         select_parts.append(f'    {expr} AS "{human_safe}"')
 
     if not select_parts:
@@ -768,17 +774,21 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
 
     added_actuals = {base_actual}
 
-    # Helper to rewrite "VBRP.VBELN" → "p.\"VBELN\"" using aliases and actual names
+    # Helper to rewrite "VBRP.VBELN" → "v.\"vbeln\"" using aliases and actual DB column names.
+    # Postgres identifiers are case-sensitive when quoted; DB usually has lowercase columns.
     def _rewrite_expr(expr: str) -> str:
         out = expr
-        for logical, actual in logical_to_actual.items():
-            alias = table_aliases.get(actual)
+        # Replace Table.Column with alias."actual_column" (uses real DB column casing)
+        def _repl(m: re.Match) -> str:
+            tbl_part = m.group(1)
+            col_part = m.group(2)
+            actual_tbl = _actual_table_name(tbl_part)
+            alias = table_aliases.get(actual_tbl)
             if not alias:
-                continue
-            out = re.sub(rf"\b{logical}\.", f"{alias}.", out)
-        # If already uses actual names, also replace them
-        for actual, alias in table_aliases.items():
-            out = re.sub(rf"\b{actual}\.", f"{alias}.", out)
+                return m.group(0)
+            actual_col = _actual_column_name(actual_tbl, col_part)
+            return f'{alias}."{actual_col}"'
+        out = re.sub(r'\b(\w+)\.(\w+)\b', _repl, out)
         return out
 
     # Add joins from spec
@@ -797,26 +807,32 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             sql_lines.append(f"    ON {_rewrite_expr(on_expr)}")
         added_actuals.add(right_actual)
 
-    # Add any missing tables with heuristic joins on common keys
-    COMMON_KEYS = ["VBELN", "KUNNR", "KUNAG", "MATNR", "EBELN", "LIFNR", "BELNR"]
+    # Add any missing tables with heuristic joins on common keys (skip if no common key; else invalid SQL)
+    COMMON_KEYS = ["VBELN", "KUNNR", "KUNAG", "MATNR", "EBELN", "LIFNR", "BELNR", "BRSCH"]
     for logical_tbl in all_tables:
         actual_tbl = _actual_table_name(logical_tbl)
         if actual_tbl in added_actuals:
             continue
         alias = table_aliases[actual_tbl]
-        sql_lines.append(f'\nLEFT JOIN "{actual_tbl}" AS {alias}')
-        # Try to join on a shared key with base table (case-insensitive column resolution)
+        # Try to join on a shared key with an already-added table
         join_cond = None
         for key in COMMON_KEYS:
-            base_col = _actual_column_name(base_actual, key)
             other_col = _actual_column_name(actual_tbl, key)
-            if base_col and other_col:
-                join_cond_candidate = f'{base_alias}."{base_col}" = {alias}."{other_col}"'
-                join_cond = join_cond_candidate
+            if not other_col:
+                continue
+            for added in added_actuals:
+                base_col = _actual_column_name(added, key)
+                if base_col:
+                    add_alias = table_aliases.get(added)
+                    if add_alias:
+                        join_cond = f'{add_alias}."{base_col}" = {alias}."{other_col}"'
+                        break
+            if join_cond:
                 break
         if join_cond:
+            sql_lines.append(f'\nLEFT JOIN "{actual_tbl}" AS {alias}')
             sql_lines.append(f"    ON {join_cond}")
-        added_actuals.add(actual_tbl)
+            added_actuals.add(actual_tbl)
 
     # WHERE (must come BEFORE GROUP BY)
     conds: List[str] = []
@@ -872,6 +888,7 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         sql_lines.append("\nGROUP BY " + ", ".join(gb_parts))
 
     # HAVING (after GROUP BY, before ORDER BY)
+    # PostgreSQL does NOT allow SELECT aliases in HAVING; use the full aggregate expression instead.
     having_parts: List[str] = []
     for h in json_spec.get("having", []) or []:
         if not isinstance(h, dict):
@@ -881,7 +898,7 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         rhs_raw = h.get("rhs")
         if not lhs or not op:
             continue
-        # HAVING uses SELECT aliases; match by name (case-insensitive, or prefix)
+        # Match alias by name (case-insensitive)
         lhs_lower = lhs.lower()
         matched = lhs if lhs in used_col_aliases else None
         if not matched:
@@ -889,7 +906,12 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
                 if a.lower() == lhs_lower or lhs_lower in a.lower():
                     matched = a
                     break
-        lhs_expr = f'"{matched}"' if matched else lhs
+        # Use aggregate expression if available; otherwise fall back to alias (may fail in PG)
+        lhs_expr = alias_to_agg_expr.get(matched) if matched else None
+        if not lhs_expr and matched:
+            lhs_expr = f'"{matched}"'
+        elif not lhs_expr:
+            lhs_expr = lhs
         if op in {"IS NULL", "IS NOT NULL"}:
             having_parts.append(f"{lhs_expr} {op}")
         else:
@@ -954,6 +976,10 @@ def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
         return out
     except Exception as e:
         logger.warning("sap_sql_agent SQL execution failed: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
         return []
 
 
@@ -1077,11 +1103,13 @@ Error message:
 
 Common issues:
 - Missing join conditions
-- Invalid column names
+- Invalid column names (use exact DB column names; Postgres columns are usually lowercase)
 - Incorrect table references
 - Missing GROUP BY for aggregated columns
-- Query returned no rows: remove date filters, use all periods (no FKDAT/BUDAT/BEDAT filters), simplify to fewer joins
-- Results include $0 / zero aggregates: add "having": [{{ "lhs": "<metric_alias>", "operator": ">", "rhs": "0" }}] to exclude entities with no activity
+- T016T has only brsch/brtxt columns — NEVER join T016T on VBELN; only join KNA1.brsch = T016T.brsch when question asks about industry
+- Do NOT include T016T unless the question asks about industry
+- Query returned no rows: remove date filters, use all periods, simplify to fewer joins
+- Results include $0 / zero aggregates: add "having": [{{ "lhs": "<metric_alias>", "operator": ">", "rhs": "0" }}]
 
 Return a CORRECTED JSON specification with the same structure.
 """
@@ -1195,6 +1223,10 @@ def run_sap_sql_agent(
                 logger.warning(f"⚠️ SQL returned no rows for question: {question}")
                 logger.warning(f"📊 SQL query:\n{sql}")
                 if attempt < max_retries:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
                     logger.warning("Query returned 0 rows — refining SQL...")
                     spec = refine_query_on_error(
                         client,
@@ -1212,7 +1244,10 @@ def run_sap_sql_agent(
                 logger.warning(f"SQL execution failed (attempt {attempt + 1}/{max_retries + 1}): {last_error}")
                 
                 if attempt < max_retries:
-                    # Try to refine the query
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
                     logger.info("Refining query specification...")
                     spec = refine_query_on_error(client, question, last_error, spec)
                     attempt += 1
@@ -1224,6 +1259,10 @@ def run_sap_sql_agent(
         # ADAPTIVE: If 0 rows and we used "current" (recent) scope, retry once with ALL periods.
         # Works for any question — sales, costs, compare — no hardcoding.
         if not rows and time_scope == "current":
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.info("Retrying with time_scope='both' (all periods) — adaptive fallback")
             retry_result = run_sap_sql_agent(
                 question,
