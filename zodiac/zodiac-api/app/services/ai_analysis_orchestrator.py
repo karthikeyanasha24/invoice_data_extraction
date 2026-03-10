@@ -392,6 +392,14 @@ def run_ai_analysis_orchestrator(
         action, reason = _decide_action(client, user_query, mem)
         timings["action_decision_ms"] = int((time.time() - action_start) * 1000)
 
+    # For reliability and to avoid reusing stale context, strongly prefer fresh "new" executions.
+    # We keep "knowledge" and "compare" behaviors, but treat generic "reuse" and "follow-up"
+    # classifications as "new" so each business question runs its own SQL.
+    if action in {"reuse", "follow-up"}:
+        logger.info(f"🔁 Overriding action '{action}' to 'new' for fresh SQL execution")
+        action = "new"
+        reason = (reason or "") + "|forced_new_for_fresh_results"
+
     # Pure chit-chat (greetings, thanks, etc.) – do NOT hit the database.
     if _is_small_chitchat(user_query):
         prompt = f"""
@@ -806,7 +814,9 @@ Task:
             period_info=period_info
         )
 
-    # Summarize rows with LLM (same as sap_sql_agent summarizer, but we add memory/knowledge/context)
+    # Summarize rows with LLM.
+    # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
+    # We do NOT allow the model to invent numbers or reuse stale narrative context.
     preview = _rows_preview(result.rows, limit=20)
     
     # Summarize results with BEST available model for deep, reliable insights
@@ -822,13 +832,7 @@ Task:
         insights_model = get_best_available_model()
     
     prompt = f"""
-You are an expert SAP sales/finance analyst with deep business intelligence expertise.
-
-Dashboard context (optional):
-{context_str[:6000]}
-
-Saved knowledge/notes (optional):
-{json.dumps(mem.knowledge(), indent=2, default=str)[:4000]}
+You are an expert SAP sales/finance analyst.
 
 User question:
 {user_query}
@@ -838,55 +842,22 @@ SQL executed:
 {result.sql}
 ```
 
-Result preview as JSON:
+Result preview as JSON (this is the ONLY source of truth for numbers):
 {json.dumps(preview, default=str)}
 
-Task - Provide DEEP BUSINESS INSIGHTS using MARKDOWN formatting:
+STRICT RULES (do NOT break these):
+- All numeric values, rankings, and comparisons MUST come directly from the rows above.
+- Do NOT reuse or copy text from any previous answer or dashboard.
+- Do NOT invent totals, averages, or percentages that cannot be computed from these rows.
+- If a value is not visible in the rows, say that you cannot see it instead of guessing.
 
-🗓️ **CRITICAL**: ALWAYS include period/date context at the start:
-- State the time period being analyzed (e.g., "Analysis Period: January-March 2024", "Data from 1994-2010", "Last 30 days")
-- For each metric, mention the period (e.g., "Q1 2024 sales: $5M", "2023 total revenue")
-- Use date badges: 📅 2024, 📊 Q1 2024, 🗓️ Jan-Mar 2024
-
-1. **📅 Period Overview & Executive Summary** (MANDATORY FIRST)
-   - 🗓️ **Analysis Period**: Clearly state date range
-   - **Time Scope**: {time_scope} data
-   - **Key Finding**: Most critical insight with period context
-   - Use **bold** for key numbers with $ for currency
-
-2. **📊 Detailed Analysis** (organized with #### subheadings)
-   - Break down by TIME PERIOD first (year, quarter, month)
-   - Then by other dimensions (geography, category, etc.)
-   - For each metric, include: **[Period]** Amount
-   - Identify trends, patterns, and anomalies OVER TIME
-   - Compare periods (YoY, MoM, QoQ)
-   - **Bold** all important metrics
-
-3. **🔍 Key Insights** (as bullet points with period context)
-   - Highlight what's surprising or notable WITH DATES
-   - Explain "why" this matters for the business
-   - Call out risks or opportunities BY PERIOD
-   - Include growth rates and time-based comparisons
-
-4. **💡 Actionable Recommendations** (as > blockquote)
-   - What should leadership do WITH TIMING
-   - Prioritize by impact and urgency
-   - Include time-bound goals
-
-Formatting rules:
-- 🗓️ ALWAYS start with period context
-- ### Main heading with period
-- #### Subheadings with date ranges where applicable
-- **Bold** for ALL important numbers, percentages, names, DATES
-- Use bullet points (-) for lists
-- Use > blockquote for the most important recommendation
-- ALWAYS use $ for monetary values
-- Highlight extremes: highest, lowest, best, worst performers
-- Include percentages and comparisons where meaningful
-- 📅 Use date emojis for period indicators
-- Format dates clearly: Q1 2024, Jan-Mar 2024, FY2023
-
-Be thorough and insightful (10-25 sentences). This is for executive decision-making.
+Write a clear MARKDOWN answer:
+1. **Executive summary** (2–4 sentences; if there are date columns, mention the overall period covered).
+2. **Detailed points**:
+   - Use bullet points.
+   - Highlight top/bottom items that are visible in the rows.
+   - Use **bold** for key figures and always prefix currency values with $.
+3. **Short recommendation** (1–2 sentences) in a blockquote.
 """
     
     try:
