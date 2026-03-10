@@ -200,6 +200,129 @@ ORDER BY total_quantity DESC
 LIMIT 20
 '''.strip(),
     },
+    {
+        "user_query": "Actual costs by cost center and cost element for 2024",
+        "sql_query": '''
+SELECT
+    c."kostl" AS cost_center,
+    c."kstar" AS cost_element,
+    SUM(NULLIF(TRIM(c."wtgbtr"::text), '')::numeric) AS total_amount
+FROM "COEP" c
+WHERE c."gjahr" = '2024'
+  AND NULLIF(TRIM(c."wtgbtr"::text), '') IS NOT NULL
+GROUP BY c."kostl", c."kstar"
+ORDER BY total_amount DESC
+LIMIT 50
+'''.strip(),
+    },
+    {
+        "user_query": "GL balances by account and period",
+        "sql_query": '''
+SELECT
+    f."racct" AS gl_account,
+    f."ryear" AS fiscal_year,
+    f."poper" AS period,
+    SUM(NULLIF(TRIM(f."hsl"::text), '')::numeric) AS total_balance
+FROM "FAGLFLEXA" f
+WHERE NULLIF(TRIM(f."hsl"::text), '') IS NOT NULL
+GROUP BY f."racct", f."ryear", f."poper"
+ORDER BY f."ryear" DESC, f."poper" DESC, total_balance DESC
+LIMIT 100
+'''.strip(),
+    },
+    {
+        "user_query": "PO totals by vendor, currency and year",
+        "sql_query": '''
+SELECT
+    e."lifnr" AS vendor,
+    e."waers" AS currency,
+    EXTRACT(YEAR FROM e."bedat")::int AS year,
+    SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS total_po_value
+FROM "EKKO" e
+JOIN "EKPO" p ON e."ebeln" = p."ebeln"
+WHERE NULLIF(TRIM(p."netwr"::text), '') IS NOT NULL
+GROUP BY e."lifnr", e."waers", EXTRACT(YEAR FROM e."bedat")
+ORDER BY year DESC, total_po_value DESC
+LIMIT 100
+'''.strip(),
+    },
+    {
+        "user_query": "Vendor invoices total amount by vendor and currency",
+        "sql_query": '''
+SELECT
+    r."lifnr" AS vendor,
+    r."waers" AS currency,
+    SUM(NULLIF(TRIM(r."rmwwr"::text), '')::numeric) AS total_invoice_amount
+FROM "RBKP" r
+WHERE NULLIF(TRIM(r."rmwwr"::text), '') IS NOT NULL
+GROUP BY r."lifnr", r."waers"
+ORDER BY total_invoice_amount DESC
+LIMIT 100
+'''.strip(),
+    },
+    {
+        "user_query": "Purchase requisitions by plant, material group and status",
+        "sql_query": '''
+SELECT
+    e."werks" AS plant,
+    e."matkl" AS material_group,
+    e."bsart" AS doc_type,
+    COUNT(*) AS requisition_count,
+    SUM(NULLIF(TRIM(e."menge"::text), '')::numeric) AS total_quantity
+FROM "EBAN" e
+GROUP BY e."werks", e."matkl", e."bsart"
+ORDER BY requisition_count DESC
+LIMIT 100
+'''.strip(),
+    },
+    {
+        "user_query": "Customer payments by customer and period",
+        "sql_query": '''
+SELECT
+    k."name1" AS customer_name,
+    b."kunnr" AS customer_number,
+    b."gjahr" AS fiscal_year,
+    b."monat" AS period,
+    SUM(NULLIF(TRIM(b."dmbtr"::text), '')::numeric) AS total_amount
+FROM "BSAD" b
+LEFT JOIN "KNA1" k ON b."kunnr" = k."kunnr"
+WHERE NULLIF(TRIM(b."dmbtr"::text), '') IS NOT NULL
+GROUP BY k."name1", b."kunnr", b."gjahr", b."monat"
+ORDER BY b."gjahr" DESC, b."monat" DESC, total_amount DESC
+LIMIT 100
+'''.strip(),
+    },
+    {
+        "user_query": "Sales orders by customer, status and order date",
+        "sql_query": '''
+SELECT
+    k."name1" AS customer_name,
+    v."vbeln" AS sales_order,
+    v."audat" AS order_date,
+    v."vbtyp" AS doc_type,
+    v."faksk" AS billing_block,
+    v."lifsk" AS delivery_block,
+    v."netwr" AS order_value
+FROM "VBAK" v
+LEFT JOIN "KNA1" k ON v."kunnr" = k."kunnr"
+ORDER BY v."audat" DESC, v."vbeln" DESC
+LIMIT 200
+'''.strip(),
+    },
+    {
+        "user_query": "Outbound delivery quantities by product",
+        "sql_query": '''
+SELECT
+    COALESCE(m."maktx", l."matnr") AS product_name,
+    SUM(NULLIF(TRIM(l."lfimg"::text), '')::numeric) AS total_quantity
+FROM "LIPS" l
+LEFT JOIN "MAKT" m ON l."matnr" = m."matnr"
+WHERE NULLIF(TRIM(l."lfimg"::text), '') IS NOT NULL
+GROUP BY COALESCE(m."maktx", l."matnr")
+ORDER BY total_quantity DESC
+LIMIT 100
+'''.strip(),
+    },
 ]
 
 
@@ -237,6 +360,14 @@ def get_sql_examples_for_question(
         (["highest", "sales", "product", "product sales"], 8),
         (["top", "products", "quantity", "sold"], 9),
         (["deliveries", "delivery", "customer"], 10),
+        (["actual", "costs", "cost center", "cost element"], 11),
+        (["gl balances", "gl account", "period"], 12),
+        (["po totals", "vendor", "currency", "year"], 13),
+        (["vendor invoices", "total amount", "rbkp"], 14),
+        (["purchase requisitions", "eban", "plant", "material group", "status"], 15),
+        (["customer payments", "bsad", "cleared items"], 16),
+        (["sales orders", "vbak", "order date", "status"], 17),
+        (["outbound delivery quantities", "lips", "product"], 18),
     ]
 
     for kw, idx in keywords_map:
