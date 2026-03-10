@@ -22,7 +22,12 @@
     "PREIS",
     "RLWRT",
     "BPMNG",
-    "ERFMG"
+    "ERFMG",
+    "LBKUM",
+    "SALK3",
+    "WTGBTR",
+    "WOGBTR",
+    "WKGBTR"
   ],
   "trim_numeric_tables": [
     "VBRP",
@@ -68,12 +73,36 @@
     "RBKP": "Vendor invoice header – vendor (LIFNR), amount (RMWWR), date (BUDAT).",
     "RSEG": "Vendor invoice item – amounts (WRBTR, DMBTR), quantities.",
     "LFA1": "Vendor master – vendor names, addresses.",
+    "LFB1": "Vendor company code – accounting and payment terms per vendor.",
+    "LFM1": "Vendor purchasing org – purchasing data per vendor.",
     "LIKP": "Outbound delivery header – delivery documents, ship-to.",
     "LIPS": "Outbound delivery item – products, quantities.",
     "VBAK": "Sales order header – customer, order dates.",
     "VBAP": "Sales order item – products, quantities, values.",
     "BSAD": "Customer cleared items – AR line items, amounts (DMBTR, WRBTR).",
-    "BSEG": "Accounting document segment – amounts, customers, vendors."
+    "BSEG": "Accounting document segment – amounts, customers, vendors.",
+    "FAGLFLEXA": "New G/L line items – account, profit center, segment, amounts.",
+    "COEP": "CO line items – actual cost postings by cost center, profit center and cost element.",
+    "COSP": "CO plan totals – planned costs by cost center, period and cost element.",
+    "CEPC": "Profit center master – profit centers and their attributes.",
+    "CSKS": "Cost center master – cost centers and their attributes.",
+    "CRHD": "Work centers – capacities and assignments by plant.",
+    "AUFK": "Order master – internal orders / production orders (by plant, type, status).",
+    "CKHS": "Costing header status – status of cost estimates per company code.",
+    "CKIS": "Costing items – detailed cost components for a cost estimate.",
+    "CKMLCR": "Material ledger: cumulative values – actual costing per material/plant.",
+    "CKMLHD": "Material ledger: header – identifies material ledger objects.",
+    "CKMLPP": "Material ledger: periodic values – period-based actual costs.",
+    "KEKO": "Cost estimate header – standard cost estimate per material/plant.",
+    "KEPH": "Cost estimate items – cost breakdown per cost estimate.",
+    "STKO": "BOM header – bill of material definitions.",
+    "STPO": "BOM items – components per BOM.",
+    "MARC": "Material-plant data – MRP, stock, and logistics settings per plant.",
+    "MARM": "Material units of measure – conversion factors and GTINs.",
+    "MEAN": "Material EAN/UPC codes – barcode mapping for materials.",
+    "MKPF": "Material document header – goods movement header (posting date).",
+    "RESB": "Reservations – reserved quantities by material, plant, and order.",
+    "LSEG": "Warehouse document segment – WM quantities and locations."
   },
   "join_rules": [
     {"left": "VBRP", "right": "VBRK", "on": "VBRP.VBELN = VBRK.VBELN", "note": "Billing item to header"},
@@ -86,6 +115,12 @@
     {"left": "RBKP", "right": "LFA1", "on": "RBKP.LIFNR = LFA1.LIFNR", "note": "Vendor invoice to vendor master"},
     {"left": "EKKO", "right": "LFA1", "on": "EKKO.LIFNR = LFA1.LIFNR", "note": "PO to vendor"},
     {"left": "LIKP", "right": "LIPS", "on": "LIKP.VBELN = LIPS.VBELN", "note": "Delivery header to items"},
-    {"left": "VBAK", "right": "VBAP", "on": "VBAK.VBELN = VBAP.VBELN", "note": "Sales order header to items"}
+    {"left": "VBAK", "right": "VBAP", "on": "VBAK.VBELN = VBAP.VBELN", "note": "Sales order header to items"},
+    {"left": "BSAD", "right": "KNA1", "on": "BSAD.KUNNR = KNA1.KUNNR", "note": "AR cleared items to customer"},
+    {"left": "BSEG", "right": "KNA1", "on": "BSEG.KUNNR = KNA1.KUNNR", "note": "Accounting line to customer"},
+    {"left": "BSEG", "right": "LFA1", "on": "BSEG.LIFNR = LFA1.LIFNR", "note": "Accounting line to vendor"},
+    {"left": "COEP", "right": "CSKS", "on": "COEP.KOSTL = CSKS.KOSTL", "note": "CO line items to cost center"},
+    {"left": "COEP", "right": "CEPC", "on": "COEP.PRCTR = CEPC.PRCTR", "note": "CO line items to profit center"},
+    {"left": "FAGLFLEXA", "right": "CEPC", "on": "FAGLFLEXA.PRCTR = CEPC.PRCTR", "note": "GL line items to profit center"}
   ]
 }
