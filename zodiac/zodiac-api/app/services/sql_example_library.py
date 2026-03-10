@@ -75,6 +75,131 @@ ORDER BY total_po_value DESC
 LIMIT 20
 '''.strip(),
     },
+    {
+        "user_query": "Sales by country and industry",
+        "sql_query": '''
+SELECT
+    k."land1" AS country,
+    t."brtxt" AS industry_name,
+    SUM(NULLIF(TRIM(vbrp."netwr"::text), '')::numeric) AS total_sales,
+    COUNT(DISTINCT vbrk."kunag") AS customer_count
+FROM "vbrp" vbrp
+LEFT JOIN "VBRK" vbrk ON vbrp."vbeln" = vbrk."vbeln"
+LEFT JOIN "KNA1" k ON vbrk."kunag" = k."kunnr"
+LEFT JOIN "T016T" t ON k."brsch" = t."brsch"
+WHERE vbrk."vbeln" IS NOT NULL AND k."kunnr" IS NOT NULL
+  AND NULLIF(TRIM(vbrp."netwr"::text), '') IS NOT NULL
+GROUP BY k."land1", t."brtxt"
+ORDER BY total_sales DESC
+LIMIT 20
+'''.strip(),
+    },
+    {
+        "user_query": "Which industry has highest revenues",
+        "sql_query": '''
+SELECT
+    t."brtxt" AS industry_name,
+    SUM(NULLIF(TRIM(vbrp."netwr"::text), '')::numeric) AS total_revenue,
+    COUNT(DISTINCT vbrk."kunag") AS customer_count
+FROM "vbrp" vbrp
+LEFT JOIN "VBRK" vbrk ON vbrp."vbeln" = vbrk."vbeln"
+LEFT JOIN "KNA1" k ON vbrk."kunag" = k."kunnr"
+LEFT JOIN "T016T" t ON k."brsch" = t."brsch"
+WHERE vbrk."vbeln" IS NOT NULL AND k."kunnr" IS NOT NULL
+  AND NULLIF(TRIM(vbrp."netwr"::text), '') IS NOT NULL
+GROUP BY t."brtxt"
+ORDER BY total_revenue DESC
+LIMIT 20
+'''.strip(),
+    },
+    {
+        "user_query": "Top 10 customers by revenue",
+        "sql_query": '''
+SELECT
+    k."name1" AS customer_name,
+    k."land1" AS country,
+    vbrk."waerk" AS currency,
+    SUM(NULLIF(TRIM(vbrp."netwr"::text), '')::numeric) AS total_revenue
+FROM "vbrp" vbrp
+LEFT JOIN "VBRK" vbrk ON vbrp."vbeln" = vbrk."vbeln"
+LEFT JOIN "KNA1" k ON vbrk."kunag" = k."kunnr"
+WHERE vbrk."vbeln" IS NOT NULL AND k."kunnr" IS NOT NULL
+  AND NULLIF(TRIM(vbrp."netwr"::text), '') IS NOT NULL
+GROUP BY k."name1", k."land1", vbrk."waerk"
+ORDER BY total_revenue DESC
+LIMIT 10
+'''.strip(),
+    },
+    {
+        "user_query": "Highest sales by customer and product and country",
+        "sql_query": '''
+SELECT
+    k."name1" AS customer_name,
+    COALESCE(m."maktx", vbrp."matnr") AS product_name,
+    k."land1" AS country,
+    vbrk."waerk" AS currency,
+    SUM(NULLIF(TRIM(vbrp."netwr"::text), '')::numeric) AS total_sales
+FROM "vbrp" vbrp
+LEFT JOIN "VBRK" vbrk ON vbrp."vbeln" = vbrk."vbeln"
+LEFT JOIN "KNA1" k ON vbrk."kunag" = k."kunnr"
+LEFT JOIN "MAKT" m ON vbrp."matnr" = m."matnr"
+WHERE vbrk."vbeln" IS NOT NULL AND k."kunnr" IS NOT NULL
+  AND NULLIF(TRIM(vbrp."netwr"::text), '') IS NOT NULL
+GROUP BY k."name1", COALESCE(m."maktx", vbrp."matnr"), k."land1", vbrk."waerk"
+ORDER BY total_sales DESC
+LIMIT 20
+'''.strip(),
+    },
+    {
+        "user_query": "Highest sales by product",
+        "sql_query": '''
+SELECT
+    COALESCE(m."maktx", vbrp."matnr") AS product_name,
+    vbrk."waerk" AS currency,
+    SUM(NULLIF(TRIM(vbrp."netwr"::text), '')::numeric) AS total_sales
+FROM "vbrp" vbrp
+LEFT JOIN "VBRK" vbrk ON vbrp."vbeln" = vbrk."vbeln"
+LEFT JOIN "MAKT" m ON vbrp."matnr" = m."matnr"
+WHERE vbrk."vbeln" IS NOT NULL AND NULLIF(TRIM(vbrp."netwr"::text), '') IS NOT NULL
+GROUP BY COALESCE(m."maktx", vbrp."matnr"), vbrk."waerk"
+ORDER BY total_sales DESC
+LIMIT 20
+'''.strip(),
+    },
+    {
+        "user_query": "Top products by quantity sold",
+        "sql_query": '''
+SELECT
+    COALESCE(m."maktx", vbrp."matnr") AS product_name,
+    SUM(NULLIF(TRIM(vbrp."smeng"::text), '')::numeric) AS total_quantity_sold
+FROM "vbrp" vbrp
+LEFT JOIN "MAKT" m ON vbrp."matnr" = m."matnr"
+WHERE NULLIF(TRIM(vbrp."smeng"::text), '') IS NOT NULL
+GROUP BY COALESCE(m."maktx", vbrp."matnr")
+HAVING SUM(NULLIF(TRIM(vbrp."smeng"::text), '')::numeric) > 0
+ORDER BY total_quantity_sold DESC
+LIMIT 20
+'''.strip(),
+    },
+    {
+        "user_query": "Deliveries by customer",
+        "sql_query": '''
+SELECT
+    k."kunnr" AS customer_number,
+    k."name1" AS customer_name,
+    SUM(NULLIF(TRIM(l."lfimg"::text), '')::numeric) AS total_quantity
+FROM "LIKP" l1
+LEFT JOIN "LIPS" l ON l1."vbeln" = l."vbeln"
+LEFT JOIN "KNA1" k ON l1."kunnr" = k."kunnr"
+WHERE l1."vbeln" IS NOT NULL
+  AND k."kunnr" IS NOT NULL
+  AND NULLIF(TRIM(l."lfimg"::text), '') IS NOT NULL
+GROUP BY k."kunnr", k."name1"
+HAVING SUM(NULLIF(TRIM(l."lfimg"::text), '')::numeric) > 0
+ORDER BY total_quantity DESC
+LIMIT 20
+'''.strip(),
+    },
 ]
 
 
@@ -104,7 +229,14 @@ def get_sql_examples_for_question(
         (["lowest", "bottom", "minimum", "customer", "country"], 0),
         (["compare", "sales", "invoice", "difference", "currency"], 1),
         (["vendor", "invoice", "rbkp", "supplier"], 2),
-        (["po", "purchase", "cost", "vendor", "ekko", "ekpo"], 3),
+        (["po", "purchase", "cost", "ekko", "ekpo"], 3),
+        (["sales", "country", "industry"], 4),
+        (["industry", "highest", "revenue", "revenues"], 5),
+        (["top", "10", "customers", "revenue", "customer"], 6),
+        (["highest", "sales", "customer", "product", "country"], 7),
+        (["highest", "sales", "product", "product sales"], 8),
+        (["top", "products", "quantity", "sold"], 9),
+        (["deliveries", "delivery", "customer"], 10),
     ]
 
     for kw, idx in keywords_map:
