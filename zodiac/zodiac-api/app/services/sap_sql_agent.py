@@ -678,15 +678,22 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         return alias
 
     # The mapping keys in column_mappings are the actual DB table names.
-    # Build a map from upper-case logical name -> actual DB table name.
+    # Build a map from logical name (any case) -> actual DB table name.
     logical_to_actual: Dict[str, str] = {}
     for logical in SAP_TABLE_DESCRIPTIONS.keys():
         for actual in column_mappings.keys():
             if actual.lower() == logical.lower():
                 logical_to_actual[logical] = actual
+                logical_to_actual[logical.lower()] = actual
+                logical_to_actual[logical.upper()] = actual
 
     def _actual_table_name(logical: str) -> str:
-        return logical_to_actual.get(logical, logical)
+        key = logical
+        if key not in logical_to_actual:
+            key = logical.lower()
+        if key not in logical_to_actual:
+            key = logical.upper()
+        return logical_to_actual.get(key, logical)
 
     # Build a case-insensitive column name map per table so we can always
     # use the real DB column identifiers even if the JSON spec uses upper-case.
@@ -912,6 +919,8 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             lhs_expr = f'"{matched}"'
         elif not lhs_expr:
             lhs_expr = lhs
+        # Ensure any raw table.column inside HAVING is rewritten to the correct alias/column
+        lhs_expr = _rewrite_expr(lhs_expr)
         if op in {"IS NULL", "IS NOT NULL"}:
             having_parts.append(f"{lhs_expr} {op}")
         else:
