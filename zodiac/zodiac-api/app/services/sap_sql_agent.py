@@ -544,6 +544,11 @@ Task:
   * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
+- **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X", and tables MAKT + EKPO/RSEG exist, include:
+  * MAKT to filter by description, e.g. MAKT.MAKTX ILIKE '%harley%jacket%'.
+  * EKPO (or RSEG) for the monetary amounts and quantities (NETWR / WRBTR and MENGE).
+  * Compute total cost as SUM(amount) and, where possible, unit cost as SUM(amount) / SUM(quantity).
+  * Group by material and MAKT.MAKTX so we only show rows actually matching the requested product text.
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
 {{
@@ -1173,12 +1178,6 @@ def run_sap_sql_agent(
     if not client:
         return None
 
-    q_key = question.strip().lower()
-    if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
-        sql = _QUERY_TO_SQL_CACHE[q_key]
-        rows = _SQL_TO_ROWS_CACHE[sql]
-        return SqlAgentResult(sql=sql, rows=rows)
-
     attempt = 0
     last_error = None
     spec = None
@@ -1226,8 +1225,6 @@ def run_sap_sql_agent(
                 rows = _run_sql(db, sql)
 
                 if rows:
-                    _QUERY_TO_SQL_CACHE[q_key] = sql
-                    _SQL_TO_ROWS_CACHE[sql] = rows
                     logger.info(f"✅ SQL returned {len(rows)} rows")
                     return SqlAgentResult(sql=sql, rows=rows)
 
