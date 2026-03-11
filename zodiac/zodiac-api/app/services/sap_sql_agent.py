@@ -486,6 +486,12 @@ Task:
 - For sales/revenue: prefer VBRP or vbrp + VBRK + KNA1 + MAKT.
 - For purchasing/vendor invoices: prefer EKKO + EKPO + LFA1, or RBKP + RSEG + LFA1.
 - For logistics/deliveries: prefer LIKP + LIPS.
+- For STANDARD COST / UNIT COST of a specific product (e.g. "cost of the jacket", "cost of material X"):
+  * FIRST try KEKO + MAKT. KEKO.stprs = standard price. Join: KEKO.MATNR = MAKT.MATNR. Filter: MAKT.MAKTX ILIKE '%jacket%'.
+  * If KEKO is not available, try CKIS + KEKO + MAKT for detailed cost breakdown.
+  * EKPO/RSEG are for PURCHASE ORDER costs (bulk procurement), not unit standard costs — use KEKO first.
+- For G/L cost/expense analysis by profit center or account: prefer FAGLFLEXA.
+- For CO actual costs by cost center: prefer COEP + CSKS.
 - Return STRICT JSON only:
 {{
   "selected_tables": [
@@ -535,6 +541,25 @@ Task:
         if makt_match and makt_match not in tables:
             tables.append(makt_match)
             logger.info(f"✨ Auto-added MAKT for product descriptions")
+
+    # For "cost of X" / "price of X" / "standard cost" style questions,
+    # ensure KEKO (standard cost estimate) and MAKT are included.
+    # KEKO is the most reliable source for unit cost per material — prefer over EKPO/RSEG.
+    _cost_of_product_signals = any(
+        phrase in q_lower for phrase in (
+            "cost of", "price of", "standard cost", "unit cost", "how much is",
+            "what is the cost", "how much does", "what does it cost",
+        )
+    )
+    if _cost_of_product_signals:
+        keko_match = db_tables_lower.get("keko")
+        makt_match = db_tables_lower.get("makt")
+        if keko_match and keko_match not in tables:
+            tables.append(keko_match)
+            logger.info(f"✨ Auto-added KEKO for product standard cost query")
+        if makt_match and makt_match not in tables:
+            tables.append(makt_match)
+            logger.info(f"✨ Auto-added MAKT for product name lookup (cost query)")
     
     if not tables:
         # Fallback: try vbrp/VBRP, VBRK, or first available
@@ -610,13 +635,13 @@ def _generate_sql_json(
     if col_hints:
         col_hints_block = (
             "\nColumn semantics (use when choosing columns – from schema_ai_config.json):\n"
-            + "\n".join(f"- {k}: {v}" for k, v in list(col_hints.items())[:25])
+            + "\n".join(f"- {k}: {v}" for k, v in list(col_hints.items())[:60])  # increased: was 25
             + "\n"
         )
     join_rules_block = ""
     if join_rules:
         join_rules_block = "\nConfigured join rules (schema_ai_config.json – use these when joining):\n" + "\n".join(
-            f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:20]
+            f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:30]  # increased: was 20
         ) + "\n"
     
     prompt = f"""
@@ -647,11 +672,16 @@ Task:
   * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
-- **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X", and tables MAKT + EKPO/RSEG exist, include:
-  * MAKT to filter by description, e.g. MAKT.MAKTX ILIKE '%harley%jacket%'.
-  * EKPO (or RSEG) for the monetary amounts and quantities (NETWR / WRBTR and MENGE).
-  * Compute total cost as SUM(amount) and, where possible, unit cost as SUM(amount) / SUM(quantity).
-  * Group by material and MAKT.MAKTX so we only show rows actually matching the requested product text.
+- **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X":
+  * PREFERRED: use KEKO + MAKT for the STANDARD COST (unit cost from the cost estimate).
+    - Filter: MAKT.MAKTX ILIKE '%jacket%'  (or whatever product)
+    - Join: KEKO.MATNR = MAKT.MATNR
+    - Select: MAKT.MAKTX, KEKO.stprs (standard price), KEKO.peinh (price unit), KEKO.matnr
+    - No GROUP BY needed; just show the rows.
+  * ALTERNATIVE (if KEKO not available or returns nothing): use EKPO + MAKT.
+    - MAKT.MAKTX ILIKE '%jacket%', join EKPO.MATNR = MAKT.MATNR, SUM(EKPO.NETWR) / NULLIF(SUM(EKPO.MENGE), 0) as unit_cost.
+  * LAST RESORT: use VBRP + MAKT to show the SALES PRICE as a proxy (note: this is selling price, not cost).
+    - Group by MAKT.MAKTX, compute SUM(VBRP.NETWR) / NULLIF(SUM(VBRP.FKIMG), 0) as avg_sales_price.
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
 {{
