@@ -1173,11 +1173,9 @@ def run_sap_sql_agent(
     if not client:
         return None
 
+    # Disable per-question SQL/rows cache to ensure every question
+    # generates and executes fresh SQL against the database.
     q_key = question.strip().lower()
-    if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
-        sql = _QUERY_TO_SQL_CACHE[q_key]
-        rows = _SQL_TO_ROWS_CACHE[sql]
-        return SqlAgentResult(sql=sql, rows=rows)
 
     attempt = 0
     last_error = None
