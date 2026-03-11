@@ -634,11 +634,23 @@ If result is empty, say so and suggest a refined question.
         )
 
     # new: run SAP SQL agent, store sql+rows and return summary.
-    # Check cache first for similar queries
+    # Check cache first for similar queries (tight threshold to avoid wrong reuse)
     try:
         cache_start = time.time()
-        cached_result = find_similar_cached_query(db, user_query, threshold=0.78)
+        cached_result = find_similar_cached_query(db, user_query, threshold=0.92)
         timings["cache_lookup_ms"] = int((time.time() - cache_start) * 1000)
+        
+        # Bypass cache if current query has distinct analytical terms not in cached query
+        # Prevents "average margin on low products" from reusing "lowest sales by product"
+        if cached_result:
+            q_words = set((user_query or "").lower().split())
+            c_words = set((cached_result.get("query_text") or "").lower().split())
+            distinct_terms = {"margin", "average", "avg", "compare", "versus", "difference", "profit", "cost"}
+            q_has = distinct_terms & q_words
+            c_has = distinct_terms & c_words
+            if q_has and q_has != c_has:
+                logger.info(f"Cache bypass: distinct analytical terms differ (q={q_has}, cached={c_has})")
+                cached_result = None
         
         if cached_result:
             logger.info(f"✅ Serving from cache (similarity={cached_result.get('similarity', 0):.3f})")
@@ -666,7 +678,7 @@ If result is empty, say so and suggest a refined question.
     try:
         from .query_optimizer import try_pattern_optimization
         pattern_start = time.time()
-        pattern_result = try_pattern_optimization(user_query, db)
+        pattern_result = try_pattern_optimization(user_query, sql_db)
         timings["pattern_matching_ms"] = int((time.time() - pattern_start) * 1000)
         
         if pattern_result:
