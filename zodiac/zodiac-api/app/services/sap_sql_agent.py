@@ -111,6 +111,71 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     "MKPF": "Material document header (goods movement header, posting date).",
     "RESB": "Reservation/dependent requirements (material reservations, requirements).",
     "LSEG": "Document segment (document item data).",
+    # Pricing / Conditions
+    "KONV": (
+        "Pricing conditions document – stores condition records for pricing (sales price, "
+        "discounts, surcharges). "
+        "Key columns: knumv (pricing doc number, join key to VBRK.KNUMV / VBAK.KNUMV), "
+        "kschl (condition type, e.g. PR00=standard price, K007=customer discount, RA01=rebate), "
+        "kbetr (condition amount/rate), waers (currency), kawrt (condition base value), "
+        "kappl (application: V=sales, M=purchasing), kposn (condition item). "
+        "Use for: sales price conditions, discount analysis, pricing by material/customer group."
+    ),
+    # Sales Document Flow
+    "VBFA": (
+        "Sales document flow – links predecessor and successor documents (order→delivery→billing). "
+        "Key columns: vbelv (predecessor doc, e.g. sales order), vbeln (successor doc, e.g. delivery/billing), "
+        "vbtyp_n (successor type: J=delivery, M=billing, C=order), posnv (predecessor item), "
+        "posnn (successor item), matnr (material). "
+        "Use for: tracing order-to-invoice flow, finding all deliveries for an order."
+    ),
+    # Controlling / Profitability
+    "COEP": (
+        "CO actual line items – cost postings by cost center, profit center, cost element. "
+        "Key columns: kostl (cost center), prctr (profit center), kstar (cost element), "
+        "wkgbtr (actual amount in controlling area currency), wtgbtr (amount in transaction currency), "
+        "belnr (document number), gjahr (fiscal year), poper (posting period). "
+        "Use for: actual cost analysis by cost center or profit center."
+    ),
+    "COSP": (
+        "CO plan totals – planned costs by cost center and cost element. "
+        "Key columns: kostl (cost center), kstar (cost element), gjahr (fiscal year), "
+        "wkg001..wkg016 (planned amounts per period). "
+        "Use for: budget vs actual comparisons, planned cost analysis."
+    ),
+    "CEPC": (
+        "Profit center master data – profit center attributes. "
+        "Key columns: prctr (profit center), datbi (valid-to date), kokrs (controlling area), "
+        "ktext (short description), ltext (long description), verak (person responsible). "
+        "Use for: profit center lookups and labels."
+    ),
+    "CSKS": (
+        "Cost center master data – cost center attributes. "
+        "Key columns: kostl (cost center), datbi (valid-to), kokrs (controlling area), "
+        "ktext (short text), verak (person responsible). "
+        "Use for: cost center lookups and labels."
+    ),
+    # Product Costing
+    "CKIS": (
+        "Costing items – detailed cost components for a cost estimate per material. "
+        "Key columns: kalnr (costing number, join to KEKO.KALNR), "
+        "posnr (item), wertn (total cost value in controlling area currency), "
+        "wrtfw (value in foreign currency), kstar (cost element), matnr (material). "
+        "Use for: material cost breakdown, standard cost components."
+    ),
+    "KEKO": (
+        "Cost estimate header – standard cost estimate per material/plant. "
+        "Key columns: matnr (material), werks (plant), kalnr (costing number, join to CKIS.KALNR), "
+        "kalka (costing type), kadat (costing date), stprs (standard price), peinh (price unit). "
+        "Use for: standard cost lookup, cost estimate headers."
+    ),
+    # Internal Orders / Production Orders
+    "AUFK": (
+        "Order master – internal orders and production orders. "
+        "Key columns: aufnr (order number), auart (order type), ktext (description), "
+        "kostl (responsible cost center), prctr (profit center), werks (plant). "
+        "Use for: order analysis, production order lookups."
+    ),
 }
 
 
@@ -178,6 +243,24 @@ PURCHASING / VENDOR:
   * RBKP.LIFNR = LFA1.LIFNR
 
 - EBAN (purchase req) <-> EKPO (PO items) – optional, via EBAN–EKPO reference fields if present
+
+PRICING CONDITIONS (KONV):
+- KONV (pricing conditions) <-> VBRK (billing header)
+  * VBRK.KNUMV = KONV.KNUMV
+  * Filter KONV.KSCHL for specific condition types (e.g. PR00=standard price, K007=discount)
+
+- KONV (pricing conditions) <-> VBAK (sales order header)
+  * VBAK.KNUMV = KONV.KNUMV
+
+SALES DOCUMENT FLOW (VBFA):
+- VBFA.VBELV = predecessor document number (e.g. sales order VBELN)
+  * VBFA.VBELN = successor document (delivery or billing)
+  * Filter VBFA.VBTYP_N for type: 'J'=delivery, 'M'=billing document, 'C'=order
+
+CONTROLLING / PROFITABILITY (COEP, CEPC, CSKS):
+- COEP <-> CSKS (cost center master):  COEP.KOSTL = CSKS.KOSTL
+- COEP <-> CEPC (profit center master): COEP.PRCTR = CEPC.PRCTR
+- FAGLFLEXA <-> CEPC: FAGLFLEXA.PRCTR = CEPC.PRCTR
 
 MATERIAL DOCUMENT:
 - MKPF <-> MSEG (if MSEG exists): MKPF.MBLNR = MSEG.MBLNR, MKPF.MJAHR = MSEG.MJAHR
@@ -367,6 +450,21 @@ def _pick_tables(
     table_descriptions = _get_table_descriptions(db)
     if not table_descriptions:
         table_descriptions = SAP_TABLE_DESCRIPTIONS  # fallback
+
+    # HARD RULE: if the user explicitly names one or more tables
+    # (e.g. "FAGLFLEXA", "from FAGLFLEXA", "KONV"), respect that and bypass
+    # the LLM table selector. This is critical for queries like
+    # "Total cost by profit center from FAGLFLEXA" and
+    # "Sales price conditions (KONV) by material and customer group".
+    q_lower = (question or "").lower()
+    explicit_tables: List[str] = []
+    for tbl_name in table_descriptions.keys():
+        name_lower = tbl_name.lower()
+        if name_lower and name_lower in q_lower:
+            explicit_tables.append(tbl_name)
+    if explicit_tables:
+        logger.info("sap_sql_agent: using explicitly requested tables from question: %s", explicit_tables)
+        return explicit_tables
 
     knowledge_block = ""
     if knowledge_context and knowledge_context.strip():
@@ -690,13 +788,30 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
 
     # The mapping keys in column_mappings are the actual DB table names.
     # Build a map from logical name (any case) -> actual DB table name.
+    #
+    # IMPORTANT: We build from ALL tables in column_mappings (not just SAP_TABLE_DESCRIPTIONS)
+    # so that any table in the DB (e.g. KONV, VBFA, AUFK, CKIS) is resolvable even if it
+    # wasn't hardcoded in SAP_TABLE_DESCRIPTIONS.
     logical_to_actual: Dict[str, str] = {}
+
+    # First pass: explicit SAP_TABLE_DESCRIPTIONS keys (backward compat, prefer these for aliases)
     for logical in SAP_TABLE_DESCRIPTIONS.keys():
         for actual in column_mappings.keys():
             if actual.lower() == logical.lower():
                 logical_to_actual[logical] = actual
                 logical_to_actual[logical.lower()] = actual
                 logical_to_actual[logical.upper()] = actual
+
+    # Second pass: every table that exists in column_mappings but wasn't mapped above.
+    # This handles tables like KONV, VBFA, CEPC, COEP, CKIS etc. that are in the DB but
+    # not in the hardcoded SAP_TABLE_DESCRIPTIONS dict.
+    for actual in column_mappings.keys():
+        if actual not in logical_to_actual:
+            logical_to_actual[actual] = actual
+        if actual.lower() not in logical_to_actual:
+            logical_to_actual[actual.lower()] = actual
+        if actual.upper() not in logical_to_actual:
+            logical_to_actual[actual.upper()] = actual
 
     def _actual_table_name(logical: str) -> str:
         key = logical
@@ -983,24 +1098,21 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
 
 
 def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
+    """Execute SQL and return rows. Raises exception on failure so the retry loop
+    receives the REAL Postgres error (e.g. 'column X does not exist') instead of
+    a misleading 'no rows' message that causes the LLM to generate a wrong refinement."""
     if not sql or not sql.strip():
         return []
-    try:
-        result = db.execute(text(sql))
-        rows = result.fetchall()
-        keys = result.keys()
-        out: List[Dict[str, Any]] = []
-        for row in rows:
-            row_dict = {k: _serialize_value(v) for k, v in zip(keys, row)}
-            out.append(row_dict)
-        return out
-    except Exception as e:
-        logger.warning("sap_sql_agent SQL execution failed: %s", e)
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        return []
+    # Intentionally NOT catching exceptions here.  Callers (run_sap_sql_agent) have a
+    # try/except that captures the real error message and passes it to refine_query_on_error.
+    result = db.execute(text(sql))
+    rows = result.fetchall()
+    keys = result.keys()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        row_dict = {k: _serialize_value(v) for k, v in zip(keys, row)}
+        out.append(row_dict)
+    return out
 
 
 def _summarize_results(question: str, sql: str, rows: List[Dict[str, Any]], client: OpenAI) -> str:
