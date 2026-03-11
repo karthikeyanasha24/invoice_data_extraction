@@ -1384,12 +1384,18 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
         use_trim_pattern = actual_upper in trim_tables and needs_numeric_cast
 
         if agg in {"SUM", "AVG", "COUNT", "MIN", "MAX"}:
-            if needs_numeric_cast and agg != "COUNT":
-                if use_trim_pattern:
-                    expr = f"{agg}(NULLIF(TRIM({alias}.\"{col_name}\"::text), '')::numeric)"
-                else:
-                    expr = f"{agg}(NULLIF({alias}.\"{col_name}\",'')::numeric)"
+            if agg == "COUNT":
+                expr = f"{agg}({alias}.\"{col_name}\")"
+            elif use_trim_pattern:
+                # trim_numeric_tables: SAP tables where amounts are stored as VARCHAR/CHAR in PostgreSQL.
+                # These need TRIM + NULLIF + ::numeric cast to handle empty strings.
+                expr = f"{agg}(NULLIF(TRIM({alias}.\"{col_name}\"::text), '')::numeric)"
             else:
+                # All other tables (EKPO, RBKP, RSEG, FAGLFLEXA, CKMLCR, COEP, BSAD, etc.)
+                # have proper numeric/decimal column types in PostgreSQL.
+                # Do NOT apply NULLIF(col, '') — that compares numeric to text and crashes with
+                # "operator does not exist: numeric = text".
+                # Just aggregate directly; PostgreSQL handles NULLs automatically.
                 expr = f"{agg}({alias}.\"{col_name}\")"
         else:
             expr = f'{alias}."{col_name}"'
