@@ -634,43 +634,9 @@ If result is empty, say so and suggest a refined question.
         )
 
     # new: run SAP SQL agent, store sql+rows and return summary.
-    # Check cache first for similar queries (tight threshold to avoid wrong reuse)
-    try:
-        cache_start = time.time()
-        cached_result = find_similar_cached_query(db, user_query, threshold=0.92)
-        timings["cache_lookup_ms"] = int((time.time() - cache_start) * 1000)
-        
-        # Bypass cache if current query has distinct analytical terms not in cached query
-        # Prevents "average margin on low products" from reusing "lowest sales by product"
-        if cached_result:
-            q_words = set((user_query or "").lower().split())
-            c_words = set((cached_result.get("query_text") or "").lower().split())
-            distinct_terms = {"margin", "average", "avg", "compare", "versus", "difference", "profit", "cost"}
-            q_has = distinct_terms & q_words
-            c_has = distinct_terms & c_words
-            if q_has and q_has != c_has:
-                logger.info(f"Cache bypass: distinct analytical terms differ (q={q_has}, cached={c_has})")
-                cached_result = None
-        
-        if cached_result:
-            logger.info(f"✅ Serving from cache (similarity={cached_result.get('similarity', 0):.3f})")
-            total_time = int((time.time() - perf_start) * 1000)
-            return OrchestratorResult(
-                reply=cached_result["result_summary"],
-                action="cached",
-                reason=f"cache_hit_similarity_{cached_result.get('similarity', 0):.2f}",
-                sql=cached_result.get("sql_query", ""),
-                rows_preview=cached_result.get("result_preview"),
-                memory_updated=False,
-                charts=cached_result.get("charts"),
-                performance={**timings, "total_ms": total_time, "used_cache": True},
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info
-            )
-    except Exception as cache_err:
-        logger.warning(f"Cache lookup failed: {cache_err}")
-        timings["cache_lookup_ms"] = 0
+    # IMPORTANT: semantic cache is disabled for analysis answers to guarantee fresh,
+    # question-specific SQL execution for every data query.
+    timings["cache_lookup_ms"] = 0
     
     # Try pattern matching first for faster execution
     sql_db = sap_db or db
@@ -830,6 +796,50 @@ Task:
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
     preview = _rows_preview(result.rows, limit=20)
+
+    # Extra safety: if the user asks about a very specific term (like "Harley leather jacket"
+    # or "cost of the jacket") and that term never appears in any row (material/product/description),
+    # we should clearly say that the precise item-level answer is not available instead of
+    # talking about unrelated aggregates (e.g. vendor totals).
+    q_tokens = {t for t in re.split(r"\W+", (user_query or "").lower()) if t}
+    focus_terms = {t for t in q_tokens if len(t) >= 4}
+    row_text = " ".join(json.dumps(r, default=str).lower() for r in preview) if preview else ""
+    missing_focus = focus_terms and not any(term in row_text for term in focus_terms)
+    asks_for_cost = any(w in q_tokens for w in {"cost", "price", "margin"})
+    if asks_for_cost and missing_focus:
+        safe_reply = (
+            "I ran a fresh SQL query, but the returned rows do not contain the specific item or text you asked about "
+            f"(for example: {', '.join(sorted(list(focus_terms)))}). "
+            "The result set only has higher-level aggregates (such as vendor or total costs), "
+            "so I cannot give an accurate cost for that exact jacket or product from this data. "
+            "You may need a query that filters by the product code or material number for that jacket."
+        )
+        timings["summarization_ms"] = 0
+        timings["insights_model"] = None
+        mem.last_user_query = user_query
+        mem.last_sql = result.sql
+        mem.last_rows_json = json.dumps(preview, default=str)
+        mem.last_reply = safe_reply
+        mem.last_charts_json = "[]"
+        save_memory(db, mem)
+        total_time = int((time.time() - perf_start) * 1000)
+        timings["total_ms"] = total_time
+        timings["row_count"] = len(result.rows)
+        timings["chart_count"] = 0
+        timings["used_cache"] = False
+        return OrchestratorResult(
+            reply=safe_reply,
+            action="new",
+            reason=reason or "specific_item_not_present_in_rows",
+            sql=result.sql,
+            rows_preview=preview,
+            memory_updated=True,
+            charts=None,
+            performance=timings,
+            time_scope=time_scope,
+            date_range=date_range,
+            period_info=period_info,
+        )
     
     # Summarize results with BEST available model for deep, reliable insights
     summary_start = time.time()
