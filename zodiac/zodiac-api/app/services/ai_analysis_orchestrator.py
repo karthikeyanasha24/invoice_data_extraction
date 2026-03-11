@@ -634,69 +634,30 @@ If result is empty, say so and suggest a refined question.
         )
 
     # new: run SAP SQL agent, store sql+rows and return summary.
-    # IMPORTANT: semantic cache is disabled for analysis answers to guarantee fresh,
-    # question-specific SQL execution for every data query.
+    # IMPORTANT: semantic cache and pattern shortcuts are disabled for analysis answers
+    # to guarantee fresh, question-specific SQL execution for every data query.
     timings["cache_lookup_ms"] = 0
-    
-    # Try pattern matching first for faster execution
+    timings["pattern_matching_ms"] = 0
+    timings["used_pattern"] = False
+
     sql_db = sap_db or db
-    pattern_result = None
-    try:
-        from .query_optimizer import try_pattern_optimization
-        pattern_start = time.time()
-        pattern_result = try_pattern_optimization(user_query, sql_db)
-        timings["pattern_matching_ms"] = int((time.time() - pattern_start) * 1000)
-        
-        if pattern_result:
-            logger.info(f"✅ Using pattern optimization: {pattern_result.get('pattern_used')}")
-            timings["used_pattern"] = True
-    except Exception as pattern_err:
-        logger.warning(f"Pattern matching failed: {pattern_err}")
-        timings["pattern_matching_ms"] = 0
-        timings["used_pattern"] = False
-    
-    # Execute SQL query (either from pattern or from SQL agent)
     sql_start = time.time()
-    
-    if pattern_result and pattern_result.get("sql"):
-        # Execute pattern-generated SQL directly
-        try:
-            from .sap_sql_agent import _run_sql, SqlAgentResult
-            sql = pattern_result["sql"]
-            rows = _run_sql(sql_db, sql)
-            result = SqlAgentResult(sql=sql, rows=rows)
-            timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-            logger.info(f"✅ Pattern SQL executed: {len(rows)} rows in {timings['sql_execution_ms']}ms")
-        except Exception as exec_err:
-            logger.warning(f"⚠️ Pattern SQL execution failed: {exec_err}, falling back to agent")
-            knowledge = mem.knowledge()
-            knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
-            few_shot = get_sql_examples_for_question(
-                user_query, additional_examples=get_few_shot_examples(db, 2)
-            )
-            result = run_sap_sql_agent(
-                user_query, sql_db,
-                knowledge_context=knowledge_context,
-                time_scope=time_scope,
-                few_shot_examples=few_shot,
-            )
-            timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-            timings["used_pattern"] = False
-    else:
-        # Use full SQL agent
-        knowledge = mem.knowledge()
-        knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
-        few_shot = get_sql_examples_for_question(
-            user_query, additional_examples=get_few_shot_examples(db, 2)
-        )
-        result = run_sap_sql_agent(
-            user_query, sql_db,
-            knowledge_context=knowledge_context,
-            time_scope=time_scope,
-            few_shot_examples=few_shot,
-        )
-        timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-        timings["used_pattern"] = False
+
+    # Always go through the SAP SQL agent using live schema instead of predefined patterns.
+    knowledge = mem.knowledge()
+    knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
+
+    # For reliability, avoid few-shot SQL examples here – they tended to bias the
+    # agent toward generic vendor/revenue patterns instead of respecting the exact
+    # question (e.g. explicit FAGLFLEXA/KONV usage or product text like "Harley leather jacket").
+    result = run_sap_sql_agent(
+        user_query,
+        sql_db,
+        knowledge_context=knowledge_context,
+        time_scope=time_scope,
+        few_shot_examples=None,
+    )
+    timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
     
     if not result or not result.rows:
         q_lower = (user_query or "").lower()
