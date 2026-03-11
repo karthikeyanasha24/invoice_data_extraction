@@ -268,11 +268,16 @@ def _introspect_columns(db: Session, table_names: List[str]) -> Dict[str, Dict[s
         # Non-fatal; we just fall back to heuristics
         mapping_file = {}
 
+    # Build a case-insensitive lookup of actual DB tables once
+    db_tables = {t.lower(): t for t in insp.get_table_names()}
+
     for tbl in table_names:
         # Find matching table in DB, case-insensitive
-        db_tables = {t.lower(): t for t in insp.get_table_names()}
         actual_name = db_tables.get(tbl.lower())
         if not actual_name:
+            # This is critical for debugging questions that reference tables
+            # like KONV or FAGLFLEXA that might not actually exist in the DB.
+            logger.warning("sap_sql_agent: selected table '%s' is not present in the database", tbl)
             continue
 
         cols: Dict[str, str] = {}
@@ -362,23 +367,6 @@ def _pick_tables(
     table_descriptions = _get_table_descriptions(db)
     if not table_descriptions:
         table_descriptions = SAP_TABLE_DESCRIPTIONS  # fallback
-
-    # 1) HARD RULE: if the user explicitly names one or more tables
-    # (e.g. "from FAGLFLEXA", "KONV", "RBKP"), respect that and bypass
-    # the LLM table selector. This is critical for queries like
-    # "Total cost by profit center from FAGLFLEXA" and
-    # "Sales price conditions (KONV) by material and customer group".
-    q_lower = (question or "").lower()
-    explicit_tables: List[str] = []
-    for tbl in table_descriptions.keys():
-        name_lower = tbl.lower()
-        # match whole word or "from <table>" style mentions
-        if name_lower and name_lower in q_lower:
-            explicit_tables.append(tbl)
-
-    if explicit_tables:
-        logger.info("✨ Using explicitly requested tables from question: %s", explicit_tables)
-        return explicit_tables
 
     knowledge_block = ""
     if knowledge_context and knowledge_context.strip():
@@ -484,7 +472,7 @@ def _generate_sql_json(
         date_filter_instruction = """
 ⏳ **TIME SCOPE: HISTORICAL DATA (1994-2010)**
 - MUST add date filters to ONLY include data from 1994-01-01 to 2010-12-31
-- Example: {"lhs": "VBRK.FKDAT", "operator": ">=", "rhs": "'1994-01-01'"}, {"lhs": "VBRK.FKDAT", "operator": "<=", "rhs": "'2010-12-31'"}
+- Example: {{"lhs": "VBRK.FKDAT", "operator": ">=", "rhs": "'1994-01-01'"}}, {{"lhs": "VBRK.FKDAT", "operator": "<=", "rhs": "'2010-12-31'"}}
 """
     elif time_scope == "current":
         date_filter_instruction = """
@@ -561,6 +549,11 @@ Task:
   * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
+- **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X", and tables MAKT + EKPO/RSEG exist, include:
+  * MAKT to filter by description, e.g. MAKT.MAKTX ILIKE '%harley%jacket%'.
+  * EKPO (or RSEG) for the monetary amounts and quantities (NETWR / WRBTR and MENGE).
+  * Compute total cost as SUM(amount) and, where possible, unit cost as SUM(amount) / SUM(quantity).
+  * Group by material and MAKT.MAKTX so we only show rows actually matching the requested product text.
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
 {{
@@ -1190,22 +1183,23 @@ def run_sap_sql_agent(
     if not client:
         return None
 
-    q_key = question.strip().lower()
-    if q_key in _QUERY_TO_SQL_CACHE and _QUERY_TO_SQL_CACHE[q_key] in _SQL_TO_ROWS_CACHE:
-        sql = _QUERY_TO_SQL_CACHE[q_key]
-        rows = _SQL_TO_ROWS_CACHE[sql]
-        return SqlAgentResult(sql=sql, rows=rows)
-
     attempt = 0
     last_error = None
     spec = None
     
     try:
         selected_tables = _pick_tables(question, client, db, knowledge_context)
+        logger.info("sap_sql_agent: question='%s' | selected_tables=%s", question, selected_tables)
+
         column_mappings = _introspect_columns(db, selected_tables)
         if not column_mappings:
             logger.warning("sap_sql_agent: no column mappings found for selected tables %s", selected_tables)
             return None
+
+        logger.info(
+            "sap_sql_agent: usable_tables_after_introspection=%s",
+            list(column_mappings.keys()),
+        )
 
         table_descriptions = _get_table_descriptions(db)
         spec = _generate_sql_json(
@@ -1243,8 +1237,6 @@ def run_sap_sql_agent(
                 rows = _run_sql(db, sql)
 
                 if rows:
-                    _QUERY_TO_SQL_CACHE[q_key] = sql
-                    _SQL_TO_ROWS_CACHE[sql] = rows
                     logger.info(f"✅ SQL returned {len(rows)} rows")
                     return SqlAgentResult(sql=sql, rows=rows)
 
@@ -1330,4 +1322,3 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-
