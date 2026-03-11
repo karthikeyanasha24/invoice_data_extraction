@@ -39,7 +39,20 @@
     "STPRS",
     "WERTN",
     "WRTFW",
-    "RFWRT"
+    "RFWRT",
+    "DMBTR",
+    "WRBTR",
+    "RMWWR",
+    "SALK3",
+    "PVPRS",
+    "STPRS",
+    "WKGBTR",
+    "WTGBTR",
+    "WOGBTR",
+    "KBETR",
+    "KAWRT",
+    "PREIS",
+    "NETPR"
   ],
   "trim_numeric_tables": [
     "VBRP",
@@ -55,7 +68,7 @@
     "MENGE": "Quantity \u2013 use for quantity aggregation",
     "MATNR": "Material number \u2013 join to MAKT for product names",
     "KUNNR": "Customer number \u2013 join to KNA1 for customer details",
-    "KUNAG": "Sold-to customer \u2013 links to KNA1.KUNNR",
+    "KUNAG": "Sold-to customer on VBRK – use VBRK.KUNAG directly for 'by customer' grouping (avoids empty results from incomplete KNA1 data). Join to KNA1.KUNNR only when customer NAME is needed.",
     "KUNRG": "Payer customer \u2013 links to KNA1.KUNNR",
     "LIFNR": "Vendor number \u2013 join to LFA1 for vendor names",
     "VBELN": "Document number \u2013 common join key (billing, delivery, sales)",
@@ -65,13 +78,16 @@
     "FKDAT": "Billing date (YYYYMMDD) \u2013 for sales date filters",
     "BUDAT": "Posting date (YYYYMMDD) \u2013 for vendor invoice date filters",
     "BEDAT": "Purchasing document date (YYYYMMDD) \u2013 for PO date filters",
-    "LAND1": "Country code",
+    "LAND1": "Country code – VBRK.LAND1 is PREFERRED for country on billing queries (no extra join needed); KNA1.LAND1 is the alternative via join",
     "NAME1": "Name (customer/vendor)",
     "MAKTX": "Material description \u2013 use for product labels",
     "BRSCH": "Industry code \u2013 join T016T for industry name",
     "BRTXT": "Industry description \u2013 use for industry labels",
-    "WAERS": "Currency code",
-    "WAERK": "Currency (alternate)",
+    "WAERS": "Currency code – used in EKKO, RBKP, EKPO, RSEG, KONV, CKMLCR",
+    "WAERK": "Currency code for VBRK (billing header) – NOT WAERS. Always use WAERK for billing currency.",
+    "RTCUR": "Transaction currency in FAGLFLEXA – NOT WAERS. Use RTCUR for FAGLFLEXA currency.",
+    "RWCUR": "Second local currency in FAGLFLEXA – alternative to RTCUR.",
+    "HWAER": "Company code currency in KEKO (costing) – NOT WAERS. Use HWAER for KEKO currency.",
     "PRCTR": "Profit center \u2013 use for GROUP BY profit center analysis (FAGLFLEXA.prctr or COEP.PRCTR)",
     "HSL": "Amount in local (company code) currency \u2013 primary aggregation column for FAGLFLEXA cost/revenue",
     "WSL": "Amount in transaction/second local currency (FAGLFLEXA)",
@@ -89,12 +105,27 @@
     "KSTAR": "Cost element \u2013 used in COEP and FAGLFLEXA for cost breakdown",
     "WERTN": "Total cost value in CKIS (costing items) \u2013 use SUM(wertn) for total standard cost",
     "STPRS": "Standard price in KEKO (cost estimate header) \u2013 unit standard cost",
-    "KALNR": "Costing number \u2013 join key: KEKO.KALNR = CKIS.KALNR"
+    "KALNR": "Costing number \u2013 join key: KEKO.KALNR = CKIS.KALNR = CKMLCR.KALNR = CKMLHD.KALNR",
+    "IDNRK": "Component material number in STPO (BOM items) \u2013 join to MAKT.MATNR for description",
+    "STLNR": "BOM number \u2013 join key: STKO.STLNR = STPO.STLNR",
+    "STLTY": "BOM type (M=material, E=equipment, etc.) \u2013 used with STLNR as composite key",
+    "BDATJ": "Fiscal year in CKMLCR/CKMLPP \u2013 use for year filter on actual costing",
+    "KSCHL": "Condition type in KONV: PR00=base price, K007=customer disc, RA01=rebate, VPRS=COGS cost, MWST=tax",
+    "KAPPL": "Condition application in KONV: V=sales pricing, M=purchasing",
+    "KDATU": "Condition validity date in KONV (YYYYMMDD) \u2013 use for active condition filters",
+    "KAWRT": "Condition base value in KONV \u2013 the base amount the condition applies to",
+    "AUGDT": "Clearing date in BSAD (AR cleared items) \u2013 when the invoice was cleared/paid",
+    "SHKZG": "Debit/credit indicator: S=debit (charge), H=credit (payment/refund)",
+    "DMBTR": "Amount in local currency (BSAD, BSEG) \u2013 use for AR analysis",
+    "WRBTR": "Amount in transaction currency (BSAD, BSEG) \u2013entials",
+    "RMWWR": "Gross invoice amount in RBKP (vendor invoice header) \u2013 total invoice value",
+    "SALK3": "Stock value in CKMLCR \u2013 total inventory value for the period",
+    "PVPRS": "Moving average price in CKMLCR \u2013 actual periodic price"
   },
   "table_semantic_hints": {
     "VBRP": "Billing document item \u2013 sales by product, amounts, quantities. Join VBRK for header, KNA1 for customer.",
     "vbrp": "Same as VBRP \u2013 billing item for sales analysis.",
-    "VBRK": "Billing document header \u2013 invoice dates, customer (KUNAG), currency.",
+    "VBRK": "Billing document header \u2013 invoice dates, customer (KUNAG=sold-to), currency (WAERK), country (LAND1 – use this directly for country grouping), kdgrp (customer group), vkorg (sales org), vtweg (distribution channel). PREFERRED for 'by country' queries: use VBRK.LAND1 directly. PREFERRED for 'by customer' queries: group by VBRK.KUNAG.",
     "KNA1": "Customer master \u2013 names, country (LAND1), industry (brsch). Use T016T for industry text.",
     "MAKT": "Material descriptions \u2013 MAKTX for product names. Join on MATNR.",
     "T016T": "Industry descriptions \u2013 BRTXT for industry names. Join KNA1.brsch = T016T.brsch.",
@@ -134,7 +165,24 @@
     "MEAN": "Material EAN/UPC codes \u2013 barcode mapping for materials.",
     "MKPF": "Material document header \u2013 goods movement header (posting date).",
     "RESB": "Reservations \u2013 reserved quantities by material, plant, and order.",
-    "LSEG": "Warehouse document segment \u2013 WM quantities and locations."
+    "LSEG": "Warehouse document segment \u2013 WM quantities and locations.",
+    "CKMLCR": "Material ledger cumulative values \u2013 periodic actual costs. Key columns: kalnr (join to CKMLHD for matnr), stprs (standard/periodic price), salk3 (stock value), waers, poper (period), bdatj (year). CRITICAL: no matnr column \u2013 must join CKMLHD on kalnr to get matnr.",
+    "CKMLHD": "Material ledger header \u2013 bridge table linking kalnr (costing number) to matnr (material) and bwkey (plant). Essential for joining CKMLCR to material descriptions.",
+    "STKO": "BOM header \u2013 stlnr (BOM number), stlty (type: M=material), datuv (valid-from). NOTE: no matnr on STKO itself; use STPO.idnrk for component materials.",
+    "STPO": "BOM component items \u2013 idnrk (component material = join to MAKT.matnr for name), stlnr (BOM number), menge (quantity), meins (UoM). Use idnrk to find component descriptions.",
+    "BSAD": "Customer cleared AR items \u2013 kunnr (customer), dmbtr (local currency amount), wrbtr (transaction currency amount), waers, budat (posting date), shkzg (S=debit/H=credit). Use for: AR aging, payment analysis.",
+    "EBAN": "Purchase requisitions \u2013 banfn (req number), matnr (material), menge (quantity), preis (price), waers, lifnr (vendor), lfdat (required delivery date), erdat (creation date), ebeln (assigned PO if converted). Use for: open PR analysis, procurement pipeline.",
+    "KONV": "Pricing conditions \u2013 knumv (join to VBRK.knumv), kschl (condition type: PR00=price, K007=discount, VPRS=COGS, RA01=rebate), kbetr (amount/rate), waers, kawrt (base value), kappl (V=sales/M=purchasing). IMPORTANT: VPRS = cost-of-goods condition for margin calculations. Join via VBRK.knumv = KONV.knumv.",
+    "VBFA": "Sales document flow \u2013 vbelv (predecessor), vbeln (successor), vbtyp_n (type: J=delivery, M=billing, C=order). Use to trace order \u2192 delivery \u2192 invoice chain.",
+    "VBAK": "Sales order header \u2013 vbeln (order number), kunnr (customer), audat (order date), knumv (pricing doc, join to KONV), vkorg (sales org), netwr (net order value). Use for: order analysis.",
+    "VBAP": "Sales order items \u2013 vbeln (order), posnr (item), matnr (material), kwmeng (order quantity), netwr (item net value), werks (plant). Use for: order line details.",
+    "AUFK": "Order master (internal/production orders) \u2013 aufnr, auart (type), ktext (description), kostl (cost center), prctr (profit center), werks (plant). Use for: production order analysis.",
+    "CEPC": "Profit center master \u2013 prctr, kokrs (controlling area), ktext (short text). Use for: profit center labels.",
+    "CSKS": "Cost center master \u2013 kostl, kokrs, ktext (short text). Use for: cost center labels.",
+    "COEP": "CO actual line items \u2013 kostl (cost center), prctr (profit center), kstar (cost element), wkgbtr (actual amount in CO currency), wtgbtr (transaction currency), gjahr, poper. Use for: actual cost breakdown.",
+    "COSP": "CO planned totals \u2013 kostl, kstar, gjahr, versn (version). Use for: budget vs actuals.",
+    "KEKO": "Cost estimate header \u2013 matnr, werks, kalnr (join to CKIS), kalka (costing type), hwaer (currency \u2013 NOT waers). NOTE: KEKO has NO stprs column. Standard cost = SUM(CKIS.wertn). Use CKMLCR.stprs for periodic price.",
+    "CKIS": "Costing items \u2013 kalnr (join to KEKO), wertn (cost value \u2013 SUM for total cost), kstar (cost element), matnr. Use for: cost breakdown by component/element."
   },
   "join_rules": [
     {
@@ -262,6 +310,54 @@
       "right": "MAKT",
       "on": "KEKO.MATNR = MAKT.MATNR",
       "note": "Cost estimate to material description"
+    },
+    {
+      "left": "CKMLCR",
+      "right": "CKMLHD",
+      "on": "CKMLCR.KALNR = CKMLHD.KALNR",
+      "note": "Material ledger values to header (provides matnr)"
+    },
+    {
+      "left": "CKMLHD",
+      "right": "MAKT",
+      "on": "CKMLHD.MATNR = MAKT.MATNR",
+      "note": "Material ledger header to material description"
+    },
+    {
+      "left": "STKO",
+      "right": "STPO",
+      "on": "STKO.STLNR = STPO.STLNR AND STKO.STLTY = STPO.STLTY",
+      "note": "BOM header to BOM component items"
+    },
+    {
+      "left": "STPO",
+      "right": "MAKT",
+      "on": "STPO.IDNRK = MAKT.MATNR",
+      "note": "BOM component (idnrk) to material description"
+    },
+    {
+      "left": "VBRK",
+      "right": "KONV",
+      "on": "VBRK.KNUMV = KONV.KNUMV",
+      "note": "Billing header to pricing conditions"
+    },
+    {
+      "left": "VBAK",
+      "right": "KONV",
+      "on": "VBAK.KNUMV = KONV.KNUMV",
+      "note": "Sales order to pricing conditions"
+    },
+    {
+      "left": "EBAN",
+      "right": "LFA1",
+      "on": "EBAN.LIFNR = LFA1.LIFNR",
+      "note": "Purchase requisition to vendor"
+    },
+    {
+      "left": "EBAN",
+      "right": "MAKT",
+      "on": "EBAN.MATNR = MAKT.MATNR",
+      "note": "Purchase requisition to material description"
     }
   ]
 }
