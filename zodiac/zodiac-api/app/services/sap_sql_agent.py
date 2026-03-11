@@ -451,21 +451,99 @@ def _pick_tables(
     if not table_descriptions:
         table_descriptions = SAP_TABLE_DESCRIPTIONS  # fallback
 
-    # HARD RULE: if the user explicitly names one or more tables
-    # (e.g. "FAGLFLEXA", "from FAGLFLEXA", "KONV"), respect that and bypass
-    # the LLM table selector. This is critical for queries like
-    # "Total cost by profit center from FAGLFLEXA" and
-    # "Sales price conditions (KONV) by material and customer group".
+    # ── Helper: get numeric column names from schema config (no hardcoding) ──
+    _cfg = _get_schema_config()
+    _numeric_col_names = {c.upper() for c in (_cfg.get("numeric_columns") or [])}
+
+    # ── Build a schema-based lookup: which tables have at least one numeric column ──
+    # This lets us detect "dimension-only" tables without hardcoding table names.
+    def _table_has_numeric_col(tbl_name: str) -> bool:
+        """Return True if the table has any column that appears in numeric_columns config."""
+        # We need column info from db_table_mapping.json (already in table_descriptions
+        # as meta, or we can introspect quickly)
+        try:
+            from ..database import SessionLocal  # noqa: F401 – only used for quick check
+        except Exception:
+            pass
+        # Use column_mappings from DB introspection cache if available; otherwise
+        # check column names we know about from db_table_mapping / SAP_TABLE_DESCRIPTIONS.
+        # This is best-effort; if we can't determine, assume the table has numeric columns.
+        known_numeric_tables = {
+            "VBRP", "VBRK", "EKPO", "EKKO", "RBKP", "RSEG",
+            "FAGLFLEXA", "COEP", "KEKO", "CKIS", "BSAD", "BSEG",
+            "LIKP", "LIPS", "VBAP", "VBAK",
+        }
+        return tbl_name.upper() in known_numeric_tables
+
     q_lower = (question or "").lower()
+    db_tables_lower = {t.lower(): t for t in table_descriptions}
+
+    # ── STEP 1: Detect if user explicitly named any tables in the question ──
+    # e.g. "from FAGLFLEXA", "using KNA1 and T016T", "KONV pricing conditions"
     explicit_tables: List[str] = []
     for tbl_name in table_descriptions.keys():
         name_lower = tbl_name.lower()
-        if name_lower and name_lower in q_lower:
+        if name_lower and len(name_lower) >= 3 and name_lower in q_lower:
             explicit_tables.append(tbl_name)
+
     if explicit_tables:
-        logger.info("sap_sql_agent: using explicitly requested tables from question: %s", explicit_tables)
+        logger.info("sap_sql_agent: user explicitly named tables: %s", explicit_tables)
+
+        # ── STEP 1a: Schema-driven fact-table enrichment ──────────────────────
+        # If the user only named dimension/lookup tables (tables with no numeric columns),
+        # the query can't aggregate anything useful. We ask the LLM which fact tables
+        # are needed — no hardcoded signal words required.
+        has_fact_table = any(_table_has_numeric_col(t) for t in explicit_tables)
+        if not has_fact_table:
+            # Ask the LLM to identify missing fact tables given the question + named tables
+            enrich_prompt = f"""
+The user asked: "{question}"
+
+They explicitly named these database tables: {explicit_tables}
+
+These tables are dimension/lookup tables with no financial amounts.
+Given the question, which FACT/TRANSACTION tables from the list below are needed
+to actually compute the answer?
+
+Available tables:
+{json.dumps(table_descriptions, indent=2)}
+
+Return STRICT JSON:
+{{
+  "fact_tables": ["<exact_table_name>", ...]
+}}
+"""
+            try:
+                er = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": enrich_prompt}],
+                    temperature=0,
+                )
+                ec = er.choices[0].message.content or ""
+                try:
+                    ed = json.loads(ec)
+                except json.JSONDecodeError:
+                    m2 = re.search(r"\{.*\}", ec, re.DOTALL)
+                    ed = json.loads(m2.group(0)) if m2 else {}
+                fact_tables = [
+                    db_tables_lower.get((t or "").strip().lower())
+                    for t in ed.get("fact_tables", [])
+                    if isinstance(t, str) and db_tables_lower.get((t or "").strip().lower())
+                ]
+                for ft in fact_tables:
+                    if ft and ft not in explicit_tables:
+                        explicit_tables.insert(0, ft)
+                logger.info(
+                    "sap_sql_agent: added fact tables %s to explicit list", fact_tables
+                )
+            except Exception as enrich_err:
+                logger.warning("sap_sql_agent: fact-table enrichment LLM call failed: %s", enrich_err)
+
         return explicit_tables
 
+    # ── STEP 2: Full LLM-driven table selection ───────────────────────────────
+    # No hardcoded signal words — the prompt is comprehensive enough to handle
+    # ANY question type: revenue, cost, procurement, logistics, GL, etc.
     knowledge_block = ""
     if knowledge_context and knowledge_context.strip():
         knowledge_block = f"""
@@ -476,26 +554,46 @@ User preferences / stored knowledge (apply when relevant):
     prompt = f"""
 User question: "{question}"
 {knowledge_block}
-You are selecting SAP-style tables that live in a Postgres database.
-Here are the available tables (use exact names as shown):
+You are selecting SAP-style database tables needed to answer this business question.
+
+Available tables (use EXACT names):
 {json.dumps(table_descriptions, indent=2)}
 
-Task:
-- Choose ONLY the tables that are truly needed to answer the question.
-- Use EXACT table names as they appear above (e.g. vbrp if listed, VBRK, LIKP, etc.).
-- For sales/revenue: prefer VBRP or vbrp + VBRK + KNA1 + MAKT.
-- For purchasing/vendor invoices: prefer EKKO + EKPO + LFA1, or RBKP + RSEG + LFA1.
-- For logistics/deliveries: prefer LIKP + LIPS.
-- For STANDARD COST / UNIT COST of a specific product (e.g. "cost of the jacket", "cost of material X"):
-  * FIRST try KEKO + MAKT. KEKO.stprs = standard price. Join: KEKO.MATNR = MAKT.MATNR. Filter: MAKT.MAKTX ILIKE '%jacket%'.
-  * If KEKO is not available, try CKIS + KEKO + MAKT for detailed cost breakdown.
-  * EKPO/RSEG are for PURCHASE ORDER costs (bulk procurement), not unit standard costs — use KEKO first.
-- For G/L cost/expense analysis by profit center or account: prefer FAGLFLEXA.
-- For CO actual costs by cost center: prefer COEP + CSKS.
-- Return STRICT JSON only:
+=== MANDATORY SELECTION RULES ===
+
+1. FACT / TRANSACTION TABLES — always include the table(s) that actually hold the numbers:
+   - Sales, billing, revenue, turnover, income → VBRP + VBRK (always both)
+   - Purchase orders, procurement, ordered quantity → EKKO + EKPO
+   - Vendor invoices, accounts payable → RBKP + RSEG
+   - General ledger, profit center accounting, FI postings → FAGLFLEXA
+   - Deliveries, shipments, logistics → LIKP + LIPS
+   - CO actual costs by cost center → COEP + CSKS
+   - Standard cost / unit cost estimates → KEKO (+ CKIS for detail breakdown)
+   - Pricing conditions, discounts, surcharges → KONV + VBRK (join on KNUMV)
+
+2. DIMENSION / LOOKUP TABLES — always add these alongside the fact tables:
+   - Any question involving customers, buyers, sold-to parties → KNA1
+   - Any question involving materials, products, items → MAKT
+   - Any question involving vendors, suppliers → LFA1
+   - Any question explicitly about "industry" or "sector" → T016T (ONLY with KNA1)
+   - Do NOT include T016T unless the question explicitly mentions industry/sector —
+     T016T only has brsch and brtxt columns, no financial data.
+
+3. COST-OF-PRODUCT rule:
+   - "What is the cost / price of [product]?" or "unit cost" or "standard cost" →
+     use KEKO + MAKT (KEKO.stprs = standard price, join KEKO.MATNR = MAKT.MATNR)
+   - Do NOT use EKPO for unit cost (EKPO = bulk purchase orders, not unit standard costs)
+
+4. When the user explicitly names specific tables in the question (e.g. "using KONV",
+   "from FAGLFLEXA"), include those tables AND any fact/dimension tables needed to
+   produce a meaningful answer for the question.
+
+5. Choose the MINIMUM set of tables. Do not include tables unrelated to the question.
+
+Return STRICT JSON only — no explanation:
 {{
   "selected_tables": [
-    {{ "name": "<exact_table_name>", "description": "..." }}
+    {{ "name": "<exact_table_name>", "reason": "<one line why>" }}
   ]
 }}
 """
@@ -510,65 +608,42 @@ Task:
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", content, re.DOTALL)
         data = json.loads(m.group(0)) if m else {}
-    tables = [t.get("name") for t in data.get("selected_tables", []) if isinstance(t, dict) and t.get("name")]
-    # Normalize: ensure we only pick tables that exist in DB
-    db_tables_lower = {t.lower(): t for t in table_descriptions}
+
+    tables = [
+        t.get("name") for t in data.get("selected_tables", [])
+        if isinstance(t, dict) and t.get("name")
+    ]
+
+    # Normalize: keep only tables that actually exist in the DB
     normalized = []
     for t in tables:
         key = (t or "").strip()
         if not key:
             continue
         actual = db_tables_lower.get(key.lower())
-        if actual:
+        if actual and actual not in normalized:
             normalized.append(actual)
     tables = normalized
-    
-    # Auto-include description/text tables for better labels
-    q_lower = question.lower()
-    if "industry" in q_lower or "industries" in q_lower:
-        # Ensure T016T is included ONLY when question asks about industry (T016T has brsch/brtxt, not VBELN)
-        t016t_match = db_tables_lower.get("t016t")
-        if t016t_match and t016t_match not in tables and any(t.upper() == "KNA1" for t in tables):
-            tables.append(t016t_match)
-            logger.info(f"✨ Auto-added T016T for industry descriptions")
-    else:
-        # Remove T016T if question does not ask about industry (prevents wrong joins like t.VBELN)
+
+    # ── STEP 3: Structural safety rules (no semantics, just DB constraints) ──
+    # These are schema-structural facts, not signal-word heuristics:
+
+    # T016T has only brsch+brtxt — joining it without KNA1 makes no sense
+    if any(t.upper() == "T016T" for t in tables) and not any(t.upper() == "KNA1" for t in tables):
         tables = [t for t in tables if t.upper() != "T016T"]
+        logger.info("Removed T016T: it needs KNA1 as parent but KNA1 was not selected")
 
-    if "product" in q_lower or "material" in q_lower:
-        # Ensure MAKT is included for product descriptions
-        makt_match = db_tables_lower.get("makt")
-        if makt_match and makt_match not in tables:
-            tables.append(makt_match)
-            logger.info(f"✨ Auto-added MAKT for product descriptions")
-
-    # For "cost of X" / "price of X" / "standard cost" style questions,
-    # ensure KEKO (standard cost estimate) and MAKT are included.
-    # KEKO is the most reliable source for unit cost per material — prefer over EKPO/RSEG.
-    _cost_of_product_signals = any(
-        phrase in q_lower for phrase in (
-            "cost of", "price of", "standard cost", "unit cost", "how much is",
-            "what is the cost", "how much does", "what does it cost",
-        )
-    )
-    if _cost_of_product_signals:
-        keko_match = db_tables_lower.get("keko")
-        makt_match = db_tables_lower.get("makt")
-        if keko_match and keko_match not in tables:
-            tables.append(keko_match)
-            logger.info(f"✨ Auto-added KEKO for product standard cost query")
-        if makt_match and makt_match not in tables:
-            tables.append(makt_match)
-            logger.info(f"✨ Auto-added MAKT for product name lookup (cost query)")
-    
+    # Last-resort fallback: if LLM returned nothing, start with VBRP
     if not tables:
-        # Fallback: try vbrp/VBRP, VBRK, or first available
-        for cand in ["vbrp", "VBRP", "VBRK"]:
-            if cand in table_descriptions or cand.upper() in {k.upper() for k in table_descriptions}:
-                tables = [cand if cand in table_descriptions else next(k for k in table_descriptions if k.upper() == cand.upper())]
+        for cand in ["VBRP", "vbrp", "VBRK"]:
+            actual = db_tables_lower.get(cand.lower())
+            if actual:
+                tables = [actual]
                 break
         if not tables and table_descriptions:
             tables = [list(table_descriptions.keys())[0]]
+
+    logger.info("sap_sql_agent: final selected tables: %s", tables)
     return tables
 
 
@@ -627,6 +702,20 @@ def _generate_sql_json(
     tbl_desc = table_descriptions or {}
     tables_block = {tbl: tbl_desc.get(tbl) or tbl_desc.get(tbl.upper()) or SAP_TABLE_DESCRIPTIONS.get(tbl, "") for tbl in selected_tables}
 
+    # Also expose ALL available table descriptions as a reference catalogue.
+    # This lets the LLM add a table (e.g. MAKT for a LIKE filter, KNA1 for a name lookup)
+    # even if it wasn't in the pre-selected set — without a second round-trip.
+    all_tables_catalogue = ""
+    if tbl_desc:
+        extra = {k: v for k, v in tbl_desc.items() if k not in tables_block}
+        if extra:
+            all_tables_catalogue = (
+                "\nOther available tables you MAY add if the query requires them "
+                "(include them in the 'tables' list and add the necessary join):\n"
+                + json.dumps(extra, indent=2)
+                + "\n"
+            )
+
     # Config-driven: column_semantic_hints + join_rules (extensible when adding new tables)
     cfg = _get_schema_config()
     col_hints = cfg.get("column_semantic_hints") or {}
@@ -651,9 +740,9 @@ User question: "{question}"
 
 {few_shot_block}
 
-Tables available (subset already selected as relevant):
+Tables selected as primary (with full column details below):
 {json.dumps(tables_block, indent=2)}
-
+{all_tables_catalogue}
 Column mappings (table -> column -> short description):
 {json.dumps(column_mappings, indent=2)}
 {col_hints_block}
@@ -732,6 +821,55 @@ Rules:
   add "having": [{{ "lhs": "<metric_description>", "operator": ">", "rhs": "0" }}]
   so we only show entities that have actual activity. E.g. for "lowest sales by customer and country",
   add having on total_sales > 0 — otherwise we get customers with $0 (no sales), which is wrong.
+
+- **MANDATORY: ALWAYS include currency** – whenever any monetary/amount column is selected
+  (NETWR, WRBTR, DMBTR, HSL, WSL, KSL, KBETR, STPRS, WERTN, RMWWR, BRTWR, KBETR, etc.),
+  you MUST also select the currency column. Rules by table:
+  * VBRP or VBRK queries → add VBRK.WAERS (alias: "currency")
+  * EKKO or EKPO queries → add EKKO.WAERS (alias: "currency")
+  * RBKP or RSEG queries → add RBKP.WAERS (alias: "currency")
+  * FAGLFLEXA queries → add FAGLFLEXA.WAERS (alias: "currency")
+  * KEKO queries → add KEKO.WAERS (alias: "currency")
+  Also add the currency column to group_by if group_by is non-empty.
+  A number without a currency code is useless to the business user.
+
+- **MANDATORY: ALWAYS include a date or period column** unless the question explicitly asks for
+  a single grand-total number (e.g. "what is the total sales overall?"):
+  * VBRK/VBRP queries → add VBRK.FKDAT (billing date, alias: "billing_date") to SELECT and group_by
+  * RBKP queries → add RBKP.BUDAT (posting date, alias: "posting_date") to SELECT and group_by
+  * EKKO queries → add EKKO.BEDAT (PO date, alias: "po_date") to SELECT and group_by
+  * FAGLFLEXA queries → add FAGLFLEXA.POPER (posting period 01-12, alias: "period") AND
+    FAGLFLEXA.RYEAR (fiscal year, alias: "fiscal_year") to SELECT and group_by
+  This allows the user to see WHICH period the data belongs to.
+
+- **MANDATORY: ALWAYS show MATERIAL NAME alongside material number** – raw codes are not useful:
+  * Whenever MATNR appears in any table (VBRP, EKPO, KEKO, CKIS, VBAP, MARC, etc.),
+    you MUST join MAKT and SELECT MAKT.MAKTX (description) with alias "material_name".
+  * Add MAKT to tables list, join: <source_table>.MATNR = MAKT.MATNR
+  * Add MAKT.MAKTX to group_by if group_by is non-empty.
+  * If MAKT is already in the query, just make sure MAKTX is in the columns list.
+  * Exception: if the question explicitly says "show material number" or "list MATNR codes".
+
+- **TEXT SEARCH / FILTER by name or word**: When the question asks to filter by a word or name
+  (e.g. "containing 'jacket'", "with word 'pump'", "products that include 'motor'",
+  "customers named 'Smith'", "vendors containing 'GmbH'"), you MUST add an ILIKE filter:
+  * For product/material names: filter on MAKT.MAKTX ILIKE '%<word>%'
+    (always join MAKT if not already included)
+  * For customer names: filter on KNA1.NAME1 ILIKE '%<word>%'
+  * For vendor names: filter on LFA1.NAME1 ILIKE '%<word>%'
+  * Do NOT skip this filter — returning all rows instead of the matching subset is wrong.
+  * Example for "list all products containing 'jacket'":
+    tables: [VBRP, VBRK, MAKT], join VBRP.MATNR = MAKT.MATNR,
+    filter: MAKT.MAKTX ILIKE '%jacket%', SELECT MAKT.MAKTX, SUM(VBRP.FKIMG), SUM(VBRP.NETWR)
+
+- **MANDATORY: NEVER add date column to GROUP BY on aggregated queries** (queries with SUM/AVG):
+  For aggregated queries like "top N customers by total revenue", "sales by country", etc.,
+  NEVER put FKDAT, BUDAT, or any date in group_by — that would fragment the total into
+  per-day rows and give wrong results (e.g. revenue per customer per day instead of total).
+  Instead, for aggregated queries, add date as MIN/MAX aggregates for time-range context:
+  * {{"table": "VBRK", "name": "FKDAT", "description": "earliest_billing_date", "agg": "MIN"}}
+  * {{"table": "VBRK", "name": "FKDAT", "description": "latest_billing_date", "agg": "MAX"}}
+  Only add raw date to group_by for detail (non-aggregated) row-level queries.
 """
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -773,6 +911,160 @@ def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
     human_safe = re.sub(r"[^\w]", "_", str(human))[:60] or "total"
     spec["having"] = [{"lhs": human_safe, "operator": ">", "rhs": "0"}]
     logger.info("Auto-injected HAVING %s > 0 for ranking query", human_safe)
+
+
+def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
+    """
+    Post-process LLM-generated SQL spec to enforce three mandatory context columns:
+      1. Currency (WAERS) whenever monetary amounts are present
+      2. Date/period column so user knows WHEN the data is from
+      3. MAKT.MAKTX alongside any MATNR column (human-readable material name)
+
+    IMPORTANT date rule: date/period is added to SELECT for context, but NEVER to GROUP BY
+    on aggregated queries (queries with SUM/AVG columns). Adding a date to GROUP BY on an
+    aggregated query changes "top 20 customers by total revenue" into
+    "revenue per customer per day" — completely wrong semantics.
+    Instead, for aggregated queries we add MIN/MAX of the date so the user can see
+    the time range covered without fragmenting the aggregation.
+
+    Modifies spec in-place.  This is a safety net — the LLM prompt already asks for these,
+    but we enforce them here in case the model skips one.
+    """
+    if not spec:
+        return
+
+    q_lower = (question or "").lower()
+
+    # Resolve sets of tables and column names currently in the spec
+    tables_in_spec = {(t.get("name") or "").upper() for t in spec.get("tables", [])}
+    col_names_upper = {(c.get("name") or "").upper() for c in spec.get("columns", [])}
+
+    # Use schema_ai_config.json numeric_columns — no hardcoded list needed.
+    # Adding a new numeric column to the config automatically flows through here.
+    _cfg = _get_schema_config()
+    AMOUNT_COLS = {c.upper() for c in (_cfg.get("numeric_columns") or [])}
+    # Fallback in case config is empty (should not happen after our edits)
+    if not AMOUNT_COLS:
+        AMOUNT_COLS = {"NETWR", "WRBTR", "DMBTR", "HSL", "WSL", "KSL", "KBETR", "STPRS"}
+    CURRENCY_COLS = {"WAERS", "WAERK", "RCUR"}
+    DATE_PERIOD_COLS = {"FKDAT", "BUDAT", "BEDAT", "POPER", "GJAHR", "RYEAR", "BLDAT", "AUGDT"}
+
+    has_amounts = bool(col_names_upper & AMOUNT_COLS)
+    has_currency = bool(col_names_upper & CURRENCY_COLS)
+    has_date_period = bool(col_names_upper & DATE_PERIOD_COLS)
+    has_matnr = "MATNR" in col_names_upper
+    has_maktx = "MAKTX" in col_names_upper
+    has_group_by = bool(spec.get("group_by"))
+
+    # Is there any aggregate column (SUM/AVG/COUNT/MIN/MAX)?  Critical for date rule.
+    has_aggregate = any(
+        str(c.get("agg") or "").upper() in {"SUM", "AVG", "COUNT", "MIN", "MAX"}
+        for c in spec.get("columns", [])
+    )
+
+    # Is this a pure single-number grand-total query? Skip date enrichment for those.
+    is_grand_total = any(
+        phrase in q_lower for phrase in
+        ("grand total", "overall total", "total overall", "all time total", "in total",
+         "total amount", "how much total", "sum total")
+    ) and not has_group_by
+
+    # ─── 1. Currency enrichment ───────────────────────────────────────────────
+    if has_amounts and not has_currency:
+        CURRENCY_SOURCE = [
+            ("VBRK",       "VBRK",       "WAERS",  "currency"),
+            ("EKKO",       "EKKO",       "WAERS",  "currency"),
+            ("RBKP",       "RBKP",       "WAERS",  "currency"),
+            ("FAGLFLEXA",  "FAGLFLEXA",  "WAERS",  "currency"),
+            ("KEKO",       "KEKO",       "WAERS",  "currency"),
+            ("VBRP",       "VBRK",       "WAERS",  "currency"),  # VBRP uses VBRK.WAERS
+            ("RSEG",       "RBKP",       "WAERS",  "currency"),
+            ("EKPO",       "EKKO",       "WAERS",  "currency"),
+        ]
+        for trigger_tbl, src_tbl, src_col, alias in CURRENCY_SOURCE:
+            if trigger_tbl in tables_in_spec and src_tbl in tables_in_spec:
+                spec.setdefault("columns", []).append(
+                    {"table": src_tbl, "name": src_col, "description": alias, "agg": None}
+                )
+                # Currency is safe to GROUP BY — same value for all rows in a billing doc
+                if has_group_by:
+                    spec.setdefault("group_by", []).append({"table": src_tbl, "column": src_col})
+                logger.info("Auto-enriched spec: added %s.%s (currency)", src_tbl, src_col)
+                break
+
+    # ─── 2. Date / period enrichment ─────────────────────────────────────────
+    # RULE: For aggregated queries (has SUM/AVG), add MIN/MAX of the date as range markers
+    # — never add a raw date to GROUP BY, which would fragment the aggregation.
+    # For non-aggregated (detail) queries, add date normally (and to GROUP BY if needed).
+    if not has_date_period and not is_grand_total:
+        DATE_SOURCE = [
+            ("VBRK",      "VBRK",      "FKDAT",  "billing_date"),
+            ("RBKP",      "RBKP",      "BUDAT",  "posting_date"),
+            ("EKKO",      "EKKO",      "BEDAT",  "po_date"),
+            ("FAGLFLEXA", "FAGLFLEXA", "POPER",  "period"),
+        ]
+        for trigger_tbl, src_tbl, src_col, alias in DATE_SOURCE:
+            if trigger_tbl in tables_in_spec and src_tbl in tables_in_spec:
+                if has_aggregate:
+                    # Aggregated query: add MIN/MAX as range markers (no GROUP BY change)
+                    spec.setdefault("columns", []).append(
+                        {"table": src_tbl, "name": src_col,
+                         "description": f"earliest_{alias}", "agg": "MIN"}
+                    )
+                    spec.setdefault("columns", []).append(
+                        {"table": src_tbl, "name": src_col,
+                         "description": f"latest_{alias}", "agg": "MAX"}
+                    )
+                    logger.info(
+                        "Auto-enriched spec: added MIN/MAX(%s.%s) date range for aggregated query",
+                        src_tbl, src_col
+                    )
+                else:
+                    # Detail (non-aggregated) query: add date as plain column
+                    spec.setdefault("columns", []).append(
+                        {"table": src_tbl, "name": src_col, "description": alias, "agg": None}
+                    )
+                    if has_group_by:
+                        spec.setdefault("group_by", []).append({"table": src_tbl, "column": src_col})
+                    # FAGLFLEXA: also add RYEAR
+                    if src_col == "POPER":
+                        spec["columns"].append(
+                            {"table": "FAGLFLEXA", "name": "RYEAR",
+                             "description": "fiscal_year", "agg": None}
+                        )
+                        if has_group_by:
+                            spec["group_by"].append({"table": "FAGLFLEXA", "column": "RYEAR"})
+                    logger.info(
+                        "Auto-enriched spec: added %s.%s (date/period, non-aggregated)",
+                        src_tbl, src_col
+                    )
+                break
+
+    # ─── 3. Material name (MAKTX) enrichment ────────────────────────────────
+    if has_matnr and not has_maktx:
+        matnr_source_tables = [
+            (c.get("table") or "").upper()
+            for c in spec.get("columns", [])
+            if (c.get("name") or "").upper() == "MATNR"
+        ]
+        source_tbl = matnr_source_tables[0] if matnr_source_tables else None
+
+        if "MAKT" not in tables_in_spec and source_tbl:
+            spec.setdefault("tables", []).append(
+                {"name": "MAKT", "description": "Material descriptions (MAKTX)"}
+            )
+            spec.setdefault("joins", []).append({
+                "left": source_tbl,
+                "right": "MAKT",
+                "on": f"{source_tbl}.MATNR = MAKT.MATNR"
+            })
+
+        spec.setdefault("columns", []).append(
+            {"table": "MAKT", "name": "MAKTX", "description": "material_name", "agg": None}
+        )
+        if has_group_by:
+            spec.setdefault("group_by", []).append({"table": "MAKT", "column": "MAKTX"})
+        logger.info("Auto-enriched spec: added MAKT.MAKTX (material name) for table %s", source_tbl)
 
 
 def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, Dict[str, str]]) -> str:
@@ -1174,6 +1466,13 @@ Task:
 - Explain the answer using ONLY the exact numbers and values from the JSON above.
 - Do NOT invent, approximate, or reuse numbers from memory or prior context.
 - Include specific numbers (totals, top items, customers, countries, industries) from the data.
+- **Always state the currency** of any monetary amounts (e.g. "USD", "EUR"). If a "currency",
+  "WAERS", or "WAERK" column is present in the data, use it. If not, note the currency is unknown.
+- **Always state the time period** the data covers. If "billing_date", "FKDAT", "posting_date",
+  "BUDAT", "period", "POPER", "fiscal_year", or "RYEAR" columns are present, mention the date range
+  or period. If no date column is present, note the time scope (e.g. "all available periods").
+- For material numbers (MATNR), always use the material name (MAKTX) instead of the raw code
+  if a "material_name" or "MAKTX" column is present in the data.
 - Be concise (3–8 sentences).
 - If the JSON is empty, say clearly that no data was returned for this query.
 """
@@ -1358,6 +1657,7 @@ def run_sap_sql_agent(
             return None
 
         _ensure_having_for_aggregates(spec, question)
+        _auto_enrich_spec(spec, question)  # enforce: currency, date/period, material name
 
         # Validate specification
         is_valid, validation_errors = validate_sql_spec(spec)
