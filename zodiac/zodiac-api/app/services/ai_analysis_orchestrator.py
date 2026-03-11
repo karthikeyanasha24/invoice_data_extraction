@@ -815,7 +815,7 @@ Task:
                 reply=reply or "I used your dashboard context, but it doesn’t include enough detail to answer that exactly.",
                 action="new",
                 reason=reason or "fallback_to_context_only",
-                sql="",
+                sql=result.sql if result else "",
                 rows_preview=None,
                 memory_updated=True,
                 time_scope=time_scope,
@@ -828,6 +828,7 @@ Task:
                 reply="I couldn’t generate a SQL query or find enough dashboard context to answer that. Try rephrasing with more detail (customer, product, country, and time period).",
                 action="new",
                 reason=reason or "sap_sql_agent_no_result",
+                sql=result.sql if result else "",
                 time_scope=time_scope,
                 date_range=date_range,
                 period_info=period_info
