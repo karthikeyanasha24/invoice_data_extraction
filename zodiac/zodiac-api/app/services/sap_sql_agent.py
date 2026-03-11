@@ -93,7 +93,20 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     # Finance / Accounting
     "BSAD": "Customer open and cleared items (AR line items, payments).",
     "BSEG": "Accounting document segment (line items for GL, customers, vendors).",
-    "FAGLFLEXA": "General ledger: totals/line items for new G/L accounting.",
+    "FAGLFLEXA": (
+        "New G/L actual line items – GL cost/revenue postings with profit center, cost center, account. "
+        "Key columns: prctr (profit center), racct (GL account), rbukrs (company code), "
+        "hsl (amount in LOCAL currency – primary aggregation column), "
+        "wsl (transaction currency amount), tsl (transaction currency alternative), "
+        "ksl (controlling area currency), osl (object currency), "
+        "ryear (fiscal year), gjahr (fiscal year alt), poper (posting period 01-12), "
+        "drcrk (debit/credit: S=debit/expense, H=credit/revenue), budat (posting date), "
+        "cost_elem (cost element), rcntr (cost center), rtcur (transaction currency – NOT waers), "
+        "rwcur (second local currency), belnr (document number), segment (segment). "
+        "IMPORTANT: currency is rtcur NOT waers. Amount in local currency is hsl. "
+        "For 'total cost by profit center': SELECT prctr, SUM(hsl) FROM FAGLFLEXA GROUP BY prctr. "
+        "Use for: GL balances, cost by profit center/cost center/account, P&L analysis."
+    ),
     # Logistics – Outbound
     "LIKP": "Outbound delivery header (delivery documents, shipping dates, quantities, ship-to). Use for: deliveries, logistics.",
     "LIPS": "Outbound delivery item (products, quantities, reference to sales order). Use for: delivery line details.",
@@ -159,15 +172,39 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     "CKIS": (
         "Costing items – detailed cost components for a cost estimate per material. "
         "Key columns: kalnr (costing number, join to KEKO.KALNR), "
-        "posnr (item), wertn (total cost value in controlling area currency), "
-        "wrtfw (value in foreign currency), kstar (cost element), matnr (material). "
-        "Use for: material cost breakdown, standard cost components."
+        "posnr (item), wertn (total cost value – USE SUM(wertn) for standard cost), "
+        "wrtfw (value in foreign currency), kstar (cost element), matnr (material), "
+        "kostl (cost center), menge (quantity). "
+        "Join pattern: KEKO.matnr → KEKO.kalnr = CKIS.kalnr → SUM(CKIS.wertn) "
+        "Use for: material cost breakdown by cost element, standard cost components per material/plant."
+    ),
+    "CKMLCR": (
+        "Material ledger cumulative values – actual (periodic) costs per material/plant. "
+        "Key columns: kalnr (join to CKMLHD.kalnr for matnr), bdatj (fiscal year), "
+        "poper (posting period), stprs (periodic unit price / standard price), "
+        "salk3 (total stock value), waers (currency – this table uses waers), "
+        "pvprs (preliminary price). "
+        "IMPORTANT: CKMLCR has NO matnr column directly. "
+        "To get material: JOIN CKMLHD on CKMLCR.kalnr = CKMLHD.kalnr → use CKMLHD.matnr. "
+        "Full join: CKMLCR JOIN CKMLHD ON CKMLCR.kalnr = CKMLHD.kalnr "
+        "           JOIN MAKT ON CKMLHD.matnr = MAKT.matnr "
+        "Use for: actual cost by material/period, inventory valuation, standard price per period."
+    ),
+    "CKMLHD": (
+        "Material ledger header – identifies the material ledger object (kalnr) per material/plant. "
+        "Key columns: kalnr (costing number = join key to CKMLCR/KEKO), "
+        "matnr (material number), bwkey (valuation area/plant). "
+        "Use as bridge table: CKMLCR.kalnr = CKMLHD.kalnr → CKMLHD.matnr = MAKT.matnr."
     ),
     "KEKO": (
         "Cost estimate header – standard cost estimate per material/plant. "
         "Key columns: matnr (material), werks (plant), kalnr (costing number, join to CKIS.KALNR), "
-        "kalka (costing type), kadat (costing date), stprs (standard price), peinh (price unit). "
-        "Use for: standard cost lookup, cost estimate headers."
+        "kalka (costing type, '01'=standard cost), kadat (costing date), hwaer (currency – NOT waers), "
+        "poper (period), bdatj (year). "
+        "NOTE: KEKO itself does NOT have stprs. Standard price is in CKMLCR.stprs (actual) or CKIS.wertn (estimate). "
+        "Join KEKO.KALNR = CKIS.KALNR for cost breakdown. "
+        "Join KEKO.KALNR = CKMLCR.KALNR for periodic actual costs. "
+        "Use for: standard cost lookup, cost estimate headers, material cost by plant."
     ),
     # Internal Orders / Production Orders
     "AUFK": (
@@ -175,6 +212,42 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
         "Key columns: aufnr (order number), auart (order type), ktext (description), "
         "kostl (responsible cost center), prctr (profit center), werks (plant). "
         "Use for: order analysis, production order lookups."
+    ),
+    # Bill of Materials
+    "STKO": (
+        "BOM header – bill of materials header. "
+        "Key columns: stlty (BOM type: M=material), stlnr (BOM number, join to STPO.stlnr), "
+        "stlal (alternative BOM), datuv (valid-from date), stktx (description). "
+        "NOTE: STKO does NOT have matnr. To link to a material, the MAST table is needed "
+        "(material-BOM link), but if MAST is unavailable, query STPO directly. "
+        "Use for: BOM header information."
+    ),
+    "STPO": (
+        "BOM items – components in a bill of materials. "
+        "Key columns: stlnr (BOM number, join to STKO.stlnr), "
+        "idnrk (component material number – join to MAKT.matnr for component description), "
+        "menge (component quantity), meins (unit of measure), preis (price), waers (currency). "
+        "IMPORTANT: idnrk = the component/child material number. "
+        "Join STPO.idnrk = MAKT.matnr to get component descriptions. "
+        "Use for: BOM component analysis, what materials go into a product."
+    ),
+    # AR – Accounts Receivable
+    "BSAD": (
+        "Customer cleared items (AR) – fully posted AR line items. "
+        "Key columns: kunnr (customer, join to KNA1), bukrs (company code), "
+        "dmbtr (amount in local currency), wrbtr (amount in transaction currency), "
+        "waers (currency), budat (posting date), bldat (document date), "
+        "gjahr (fiscal year), belnr (document number), shkzg (debit/credit: S=debit, H=credit). "
+        "Use for: AR aging, customer payment analysis, outstanding receivables."
+    ),
+    # Purchasing Requisition
+    "EBAN": (
+        "Purchase requisition items – purchase request documents. "
+        "Key columns: banfn (requisition number), bnfpo (item), matnr (material), "
+        "menge (quantity), meins (UoM), preis (price), waers (currency), "
+        "lifnr (preferred vendor), ekgrp (purchasing group), lfdat (delivery date), "
+        "erdat (creation date), ebeln (assigned PO number if converted). "
+        "Use for: open purchase requisitions, spend request analysis."
     ),
 }
 
@@ -247,7 +320,21 @@ PURCHASING / VENDOR:
 PRICING CONDITIONS (KONV):
 - KONV (pricing conditions) <-> VBRK (billing header)
   * VBRK.KNUMV = KONV.KNUMV
-  * Filter KONV.KSCHL for specific condition types (e.g. PR00=standard price, K007=discount)
+  * IMPORTANT: You MUST join via VBRK (not VBRP) because KNUMV is on VBRK header, not VBRP item.
+  * Typical pattern: SELECT ... FROM vbrp JOIN VBRK ON vbrp.VBELN=VBRK.VBELN JOIN KONV ON VBRK.KNUMV=KONV.KNUMV
+
+- Common KONV.KSCHL condition types (filter by these for specific analysis):
+  * 'PR00' = Base price / list price
+  * 'K007' = Customer discount (%)
+  * 'K004' = Material discount
+  * 'RA01' = Customer rebate
+  * 'VPRS' = Cost-of-goods-sold (COGS) – use this for margin/profitability!
+  * 'MWST'/'MWAS' = Tax
+  * 'HD00' = Freight/handling
+
+- For DISCOUNT analysis: filter KONV.KSCHL IN ('K007','K004','RA01') and use KONV.KBETR
+- For PRICING: filter KONV.KSCHL = 'PR00' and use KONV.KBETR
+- For COGS / COST: filter KONV.KSCHL = 'VPRS' and use KONV.KBETR
 
 - KONV (pricing conditions) <-> VBAK (sales order header)
   * VBAK.KNUMV = KONV.KNUMV
@@ -264,6 +351,44 @@ CONTROLLING / PROFITABILITY (COEP, CEPC, CSKS):
 
 MATERIAL DOCUMENT:
 - MKPF <-> MSEG (if MSEG exists): MKPF.MBLNR = MSEG.MBLNR, MKPF.MJAHR = MSEG.MJAHR
+- NOTE: MSEG (material document items) is NOT in this database. Use MKPF for header-level goods movement queries only.
+
+PRODUCT COSTING (STANDARD COST):
+- KEKO (cost estimate header) <-> CKIS (costing items)
+  * KEKO.KALNR = CKIS.KALNR
+  * SUM(CKIS.WERTN) gives total standard cost per material
+
+- KEKO (cost estimate) <-> MAKT (material description)
+  * KEKO.MATNR = MAKT.MATNR
+
+MATERIAL LEDGER (ACTUAL COST):
+- CKMLCR has NO matnr column. Must join via CKMLHD:
+  * CKMLCR.KALNR = CKMLHD.KALNR  (get the material)
+  * CKMLHD.MATNR = MAKT.MATNR    (get description)
+  * CKMLCR.STPRS = periodic standard price, CKMLCR.SALK3 = stock value
+  * Filter by CKMLCR.BDATJ (year), CKMLCR.POPER (period 01-12)
+
+- CKMLHD.BWKEY = plant/valuation area (can filter by plant)
+
+BILL OF MATERIALS (BOM):
+- STKO (BOM header) <-> STPO (BOM components)
+  * STKO.STLNR = STPO.STLNR  (and STKO.STLTY = STPO.STLTY)
+
+- STPO (component) <-> MAKT (component description)
+  * STPO.IDNRK = MAKT.MATNR  (idnrk is the component/child material number)
+
+- NOTE: STKO has NO matnr column. The parent material link requires MAST table which is NOT in DB.
+  For "components of material X" queries, you cannot directly filter by parent matnr without MAST.
+  Instead, use STPO directly to list components, or query CKIS for cost components.
+
+AR / ACCOUNTS RECEIVABLE:
+- BSAD (customer cleared items) <-> KNA1: BSAD.KUNNR = KNA1.KUNNR
+- BSEG (accounting line items) <-> KNA1: BSEG.KUNNR = KNA1.KUNNR
+- BSAD.DMBTR = amount in local currency, BSAD.SHKZG = S(debit)/H(credit)
+
+PURCHASE REQUISITION:
+- EBAN (requisition) <-> LFA1 (vendor): EBAN.LIFNR = LFA1.LIFNR
+- EBAN (requisition) <-> EKPO (PO): EBAN.EBELN = EKPO.EBELN AND EBAN.EBELP = EKPO.EBELP
 
 VERY IMPORTANT:
 - VBRP / vbrp usually does NOT have KUNNR directly. To reach the customer, go:
@@ -280,6 +405,27 @@ VERY IMPORTANT:
   * ALTERNATIVE: KNA1.LAND1 via join VBRK.KUNAG = KNA1.KUNNR (only if customer name also needed)
 
 - For cost-related or COGS queries, use EKPO (purchase values), RBKP/RSEG (vendor invoice amounts), BSEG (accounting).
+
+- MARGIN / PROFITABILITY queries:
+  * Revenue = SUM(vbrp.NETWR) from billing items
+  * COGS option 1 (KONV): JOIN VBRK ON vbrp.VBELN=VBRK.VBELN, JOIN KONV ON VBRK.KNUMV=KONV.KNUMV
+    WHERE KONV.KSCHL='VPRS' → SUM(KONV.KBETR) = cost
+  * COGS option 2 (purchase cost): JOIN EKPO ON vbrp.MATNR=EKPO.MATNR → SUM(EKPO.NETWR/EKPO.MENGE * vbrp.FKIMG)
+  * Gross margin % = (revenue - cost) / revenue * 100
+  * Simple margin: SELECT matnr, SUM(netwr) as revenue, ... GROUP BY matnr from vbrp/VBRK
+
+- CURRENCY NOTE (very important):
+  * VBRK currency column = WAERK (NOT waers)
+  * FAGLFLEXA currency column = RTCUR (NOT waers)
+  * KEKO currency column = HWAER (NOT waers)
+  * EKKO, RBKP, RSEG, EKPO, KONV, CKMLCR → WAERS (the usual one)
+  * Always match the actual currency column name to the table you are querying
+
+- FISCAL YEAR / PERIOD filters:
+  * For VBRK/VBRP: use VBRK.FKDAT (billing date, YYYYMMDD format) for date range filters
+  * For FAGLFLEXA: use FAGLFLEXA.RYEAR (fiscal year as 4-digit string) and FAGLFLEXA.POPER (period 01-12)
+  * For EKKO/RBKP: use BUDAT or BEDAT (YYYYMMDD)
+  * For CKMLCR: use BDATJ (year) and POPER (period)
 """
 
 
@@ -790,11 +936,12 @@ Task:
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
 - **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X":
-  * PREFERRED: use KEKO + MAKT for the STANDARD COST (unit cost from the cost estimate).
+  * PREFERRED: use KEKO + CKIS + MAKT for the STANDARD COST.
     - Filter: MAKT.MAKTX ILIKE '%jacket%'  (or whatever product)
-    - Join: KEKO.MATNR = MAKT.MATNR
-    - Select: MAKT.MAKTX, KEKO.stprs (standard price), KEKO.peinh (price unit), KEKO.matnr
-    - No GROUP BY needed; just show the rows.
+    - Join: KEKO.MATNR = MAKT.MATNR, KEKO.KALNR = CKIS.KALNR
+    - Select: MAKT.MAKTX, KEKO.matnr, SUM(CKIS.wertn) as standard_cost
+    - Note: KEKO does NOT have stprs column; standard cost total is SUM(CKIS.WERTN).
+    - Alternative for unit price: use CKMLCR.stprs joined via CKMLCR.kalnr = CKMLHD.kalnr, CKMLHD.matnr = MAKT.matnr
   * ALTERNATIVE (if KEKO not available or returns nothing): use EKPO + MAKT.
     - MAKT.MAKTX ILIKE '%jacket%', join EKPO.MATNR = MAKT.MATNR, SUM(EKPO.NETWR) / NULLIF(SUM(EKPO.MENGE), 0) as unit_cost.
   * LAST RESORT: use VBRP + MAKT to show the SALES PRICE as a proxy (note: this is selling price, not cost).
@@ -852,12 +999,14 @@ Rules:
 
 - **MANDATORY: ALWAYS include currency** – whenever any monetary/amount column is selected
   (NETWR, WRBTR, DMBTR, HSL, WSL, KSL, KBETR, STPRS, WERTN, RMWWR, BRTWR, KBETR, etc.),
-  you MUST also select the currency column. Rules by table:
-  * VBRP or VBRK queries → add VBRK.WAERS (alias: "currency")
+  you MUST also select the currency column. Rules by table (IMPORTANT – these are exact column names!):
+  * VBRP or VBRK queries → add VBRK.WAERK (alias: "currency")   ← WAERK not WAERS for VBRK!
   * EKKO or EKPO queries → add EKKO.WAERS (alias: "currency")
   * RBKP or RSEG queries → add RBKP.WAERS (alias: "currency")
-  * FAGLFLEXA queries → add FAGLFLEXA.WAERS (alias: "currency")
-  * KEKO queries → add KEKO.WAERS (alias: "currency")
+  * FAGLFLEXA queries → add FAGLFLEXA.RTCUR (alias: "currency") ← RTCUR not WAERS for FAGLFLEXA!
+  * KEKO queries → add KEKO.HWAER (alias: "currency")            ← HWAER not WAERS for KEKO!
+  * KONV queries → add KONV.WAERS (alias: "currency")
+  * CKMLCR queries → add CKMLCR.WAERS (alias: "currency")
   Also add the currency column to group_by if group_by is non-empty.
   A number without a currency code is useless to the business user.
 
@@ -985,7 +1134,7 @@ def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
     # Fallback in case config is empty (should not happen after our edits)
     if not AMOUNT_COLS:
         AMOUNT_COLS = {"NETWR", "WRBTR", "DMBTR", "HSL", "WSL", "KSL", "KBETR", "STPRS"}
-    CURRENCY_COLS = {"WAERS", "WAERK", "RCUR"}
+    CURRENCY_COLS = {"WAERS", "WAERK", "RCUR", "RTCUR", "RWCUR", "HWAER", "FWAER_KPF"}
     DATE_PERIOD_COLS = {"FKDAT", "BUDAT", "BEDAT", "POPER", "GJAHR", "RYEAR", "BLDAT", "AUGDT"}
 
     has_amounts = bool(col_names_upper & AMOUNT_COLS)
@@ -1011,14 +1160,17 @@ def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
     # ─── 1. Currency enrichment ───────────────────────────────────────────────
     if has_amounts and not has_currency:
         CURRENCY_SOURCE = [
-            ("VBRK",       "VBRK",       "WAERS",  "currency"),
+            # trigger_tbl, src_tbl, src_col (actual DB column name!), alias
+            ("VBRK",       "VBRK",       "WAERK",  "currency"),   # VBRK uses WAERK not WAERS
             ("EKKO",       "EKKO",       "WAERS",  "currency"),
             ("RBKP",       "RBKP",       "WAERS",  "currency"),
-            ("FAGLFLEXA",  "FAGLFLEXA",  "WAERS",  "currency"),
-            ("KEKO",       "KEKO",       "WAERS",  "currency"),
-            ("VBRP",       "VBRK",       "WAERS",  "currency"),  # VBRP uses VBRK.WAERS
+            ("FAGLFLEXA",  "FAGLFLEXA",  "RTCUR",  "currency"),   # FAGLFLEXA uses RTCUR not WAERS
+            ("KEKO",       "KEKO",       "HWAER",  "currency"),   # KEKO uses HWAER not WAERS
+            ("VBRP",       "VBRK",       "WAERK",  "currency"),   # VBRP pulls currency from VBRK.WAERK
             ("RSEG",       "RBKP",       "WAERS",  "currency"),
             ("EKPO",       "EKKO",       "WAERS",  "currency"),
+            ("KONV",       "KONV",       "WAERS",  "currency"),   # KONV has WAERS
+            ("CKMLCR",     "CKMLCR",     "WAERS",  "currency"),   # CKMLCR has WAERS
         ]
         for trigger_tbl, src_tbl, src_col, alias in CURRENCY_SOURCE:
             if trigger_tbl in tables_in_spec and src_tbl in tables_in_spec:
