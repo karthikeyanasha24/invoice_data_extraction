@@ -27,7 +27,19 @@
     "SALK3",
     "WTGBTR",
     "WOGBTR",
-    "WKGBTR"
+    "WKGBTR",
+    "KBETR",
+    "KAWRT",
+    "HSL",
+    "WSL",
+    "KSL",
+    "TSL",
+    "OSL",
+    "MSL",
+    "STPRS",
+    "WERTN",
+    "WRTFW",
+    "RFWRT"
   ],
   "trim_numeric_tables": [
     "VBRP",
@@ -59,7 +71,26 @@
     "BRSCH": "Industry code – join T016T for industry name",
     "BRTXT": "Industry description – use for industry labels",
     "WAERS": "Currency code",
-    "WAERK": "Currency (alternate)"
+    "WAERK": "Currency (alternate)",
+    "PRCTR": "Profit center – use for GROUP BY profit center analysis (FAGLFLEXA.prctr or COEP.PRCTR)",
+    "HSL": "Amount in local (company code) currency – primary aggregation column for FAGLFLEXA cost/revenue",
+    "WSL": "Amount in transaction/second local currency (FAGLFLEXA)",
+    "KSL": "Amount in controlling area currency (FAGLFLEXA)",
+    "TSL": "Amount in transaction currency (FAGLFLEXA)",
+    "RACCT": "G/L account number (FAGLFLEXA) – use for account-level analysis",
+    "RBUKRS": "Company code (FAGLFLEXA) – use for company code filter or grouping",
+    "RYEAR": "Fiscal year (FAGLFLEXA) – use for year filter: FAGLFLEXA.ryear = '2023'",
+    "GJAHR": "Fiscal year – use for year filter in FAGLFLEXA, RBKP, BSEG etc.",
+    "POPER": "Posting period 01-12 (FAGLFLEXA) – use for monthly/period filter",
+    "DRCRK": "Debit/credit indicator in FAGLFLEXA: S=debit (cost), H=credit",
+    "KNUMV": "Pricing document number – join key: VBRK.KNUMV = KONV.KNUMV or VBAK.KNUMV = KONV.KNUMV",
+    "KSCHL": "Condition type in KONV (e.g. PR00=base price, K007=customer discount, RA01=rebate)",
+    "KBETR": "Condition rate/amount in KONV – the actual price or discount value",
+    "KOSTL": "Cost center – join to CSKS for description (COEP.KOSTL = CSKS.KOSTL)",
+    "KSTAR": "Cost element – used in COEP and FAGLFLEXA for cost breakdown",
+    "WERTN": "Total cost value in CKIS (costing items) – use SUM(wertn) for total standard cost",
+    "STPRS": "Standard price in KEKO (cost estimate header) – unit standard cost",
+    "KALNR": "Costing number – join key: KEKO.KALNR = CKIS.KALNR"
   },
   "table_semantic_hints": {
     "VBRP": "Billing document item – sales by product, amounts, quantities. Join VBRK for header, KNA1 for customer.",
@@ -81,7 +112,9 @@
     "VBAP": "Sales order item – products, quantities, values.",
     "BSAD": "Customer cleared items – AR line items, amounts (DMBTR, WRBTR).",
     "BSEG": "Accounting document segment – amounts, customers, vendors.",
-    "FAGLFLEXA": "New G/L line items – account, profit center, segment, amounts.",
+    "FAGLFLEXA": "New G/L line items (FAGLFLEXA) – actual GL postings with profit center, account, cost center, amounts. Key columns: prctr (profit center), racct (GL account), rbukrs (company code), hsl (amount in local currency – USE THIS for cost/amount aggregation), wsl (transaction currency amount), ryear/gjahr (fiscal year), poper (posting period 01-12), drcrk (S=debit/H=credit), budat (posting date), cost_elem (cost element), rcntr (cost center), kokrs (controlling area). For 'total cost by profit center': SELECT prctr, SUM(hsl) FROM FAGLFLEXA GROUP BY prctr.",
+    "KONV": "Pricing conditions (KONV) – pricing, discounts, surcharges per sales document. Key columns: knumv (pricing doc number, join to VBRK.KNUMV or VBAK.KNUMV), kschl (condition type: PR00=price, K007=discount, RA01=rebate), kbetr (condition amount/rate), waers (currency), kappl (V=sales/M=purchasing). To get price conditions: JOIN VBRK on VBRK.KNUMV = KONV.KNUMV.",
+    "VBFA": "Sales document flow (VBFA) – predecessor/successor document links. Key: vbelv=predecessor doc, vbeln=successor doc, vbtyp_n=type (J=delivery, M=billing doc, C=order). Use to trace order→delivery→invoice chain.",
     "COEP": "CO line items – actual cost postings by cost center, profit center and cost element.",
     "COSP": "CO plan totals – planned costs by cost center, period and cost element.",
     "CEPC": "Profit center master – profit centers and their attributes.",
@@ -121,6 +154,11 @@
     {"left": "BSEG", "right": "LFA1", "on": "BSEG.LIFNR = LFA1.LIFNR", "note": "Accounting line to vendor"},
     {"left": "COEP", "right": "CSKS", "on": "COEP.KOSTL = CSKS.KOSTL", "note": "CO line items to cost center"},
     {"left": "COEP", "right": "CEPC", "on": "COEP.PRCTR = CEPC.PRCTR", "note": "CO line items to profit center"},
-    {"left": "FAGLFLEXA", "right": "CEPC", "on": "FAGLFLEXA.PRCTR = CEPC.PRCTR", "note": "GL line items to profit center"}
+    {"left": "FAGLFLEXA", "right": "CEPC", "on": "FAGLFLEXA.PRCTR = CEPC.PRCTR", "note": "GL line items to profit center"},
+    {"left": "VBRK", "right": "KONV", "on": "VBRK.KNUMV = KONV.KNUMV", "note": "Billing header to pricing conditions"},
+    {"left": "VBAK", "right": "KONV", "on": "VBAK.KNUMV = KONV.KNUMV", "note": "Sales order header to pricing conditions"},
+    {"left": "KEKO", "right": "CKIS", "on": "KEKO.KALNR = CKIS.KALNR", "note": "Cost estimate header to cost items"},
+    {"left": "KEKO", "right": "MAKT", "on": "KEKO.MATNR = MAKT.MATNR", "note": "Cost estimate to material description"},
+    {"left": "COEP", "right": "CSKS", "on": "COEP.KOSTL = CSKS.KOSTL", "note": "CO actuals to cost center master"}
   ]
 }
