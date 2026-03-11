@@ -543,6 +543,7 @@ Task:
   * SELECT T016T.brtxt for industry name (not KNA1.brsch which is just a code).
   * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
+- **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
 - Add filters only if clearly needed from the question (for dates, customers, countries, industries, products, etc.).
 - Return STRICT JSON with this structure:
 {{
@@ -1018,9 +1019,11 @@ Here is a sample of the result rows as JSON:
 {data_json}
 
 Task:
-- Explain the answer to the user's question in clear business language.
-- Include specific numbers (totals, top items, customers, countries, industries) when helpful.
+- Explain the answer using ONLY the exact numbers and values from the JSON above.
+- Do NOT invent, approximate, or reuse numbers from memory or prior context.
+- Include specific numbers (totals, top items, customers, countries, industries) from the data.
 - Be concise (3–8 sentences).
+- If the JSON is empty, say clearly that no data was returned for this query.
 """
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
