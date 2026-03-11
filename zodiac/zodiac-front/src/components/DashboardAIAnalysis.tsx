@@ -319,6 +319,16 @@ function ChatPanel({
                         {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} rows</span>}
                         {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
                       </div>
+                      {m.meta.sql && (
+                        <details className="mt-0.5">
+                          <summary className="cursor-pointer text-[10px] text-blue-600 underline">
+                            View SQL query
+                          </summary>
+                          <pre className="mt-1 max-h-40 overflow-auto text-[10px] bg-slate-900 text-slate-50 rounded p-2 whitespace-pre-wrap">
+                            {m.meta.sql}
+                          </pre>
+                        </details>
+                      )}
                       {m.meta.performance && (
                         <div className="text-slate-500">
                           ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
@@ -537,6 +547,9 @@ export default function DashboardAIAnalysis() {
         const res = await dashboardApi.postAIAnalysisChat(text, history, contextKeys, d, scopeToUse);
 
         console.log('📊 AI Analysis Response:', res);
+        if (res?.sql) {
+          console.log('🧠 Generated SQL:', res.sql);
+        }
 
         const reply = res?.reply ?? 'No response received.';
         const meta: AiAnalysisMeta = {
@@ -551,7 +564,6 @@ export default function DashboardAIAnalysis() {
           period_info: res?.period_info,
         };
 
-        console.log('📊 AI Analysis Response:', res);
         console.log('📊 Period Info:', meta.period_info, meta.date_range);
         console.log('📊 Extracted Charts:', meta.charts);
         console.log('📊 Has Charts:', Boolean(meta.charts && meta.charts.length > 0));
