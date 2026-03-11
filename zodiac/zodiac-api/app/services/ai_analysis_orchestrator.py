@@ -678,29 +678,76 @@ If result is empty, say so and suggest a refined question.
             except Exception:
                 pass
         
-        # If user asked about costs and we have cost-table knowledge, explain that the query ran but returned no rows.
-        cost_related = "cost" in q_lower or "costing" in q_lower or "vendor" in q_lower
-        has_cost_tables_note = knowledge and ("ekpo" in knowledge_str or "rbkp" in knowledge_str or "rseg" in knowledge_str)
-        if cost_related and has_cost_tables_note:
-            fallback_reply = (
-                "I generated and ran a live SQL query against your cost tables (e.g. EKPO, RBKP, RSEG), "
-                "but for this exact combination of filters and time period it returned no rows. "
-                "The tables themselves do contain cost data (as your dashboards show), so this slice is likely filtered out. "
-                "Try broadening the date range (for example, all periods) or simplifying the question, such as total spend by vendor or by material."
+        # If user asked about costs and primary query returned no rows, try two intelligent fallbacks:
+        # 1) Search KEKO (standard cost estimate) for the product by name — most accurate unit cost source
+        # 2) Search VBRP + MAKT (sales data) to show the selling price as a useful proxy
+        # Only if BOTH return nothing do we show a helpful "not found" explanation.
+        cost_related = any(w in q_lower for w in ("cost", "costing", "price", "how much", "what is the cost"))
+        # Detect if the question is about a specific product (not a bulk cost analysis)
+        _product_keywords = [w for w in re.split(r"\W+", user_query) if len(w) >= 4 and w.lower() not in
+                              {"cost", "price", "know", "what", "from", "show", "tell", "does", "have", "much", "this", "that"}]
+        is_product_specific = bool(_product_keywords)
+
+        if cost_related and is_product_specific:
+            # Build a natural-language product search term from the question keywords
+            product_hint = " ".join(_product_keywords[:4])
+
+            # --- Fallback 1: KEKO standard cost for this product ---
+            keko_question = f"standard cost from KEKO for product matching {product_hint}"
+            logger.info(f"🔄 Primary cost query returned no rows. Trying KEKO fallback for: {product_hint}")
+            keko_result = run_sap_sql_agent(
+                keko_question, sql_db,
+                knowledge_context=knowledge_context,
+                max_retries=1,
+                time_scope="both",
             )
-            mem.last_user_query = user_query
-            save_memory(db, mem)
-            return OrchestratorResult(
-                reply=fallback_reply,
-                action="new",
-                reason=reason or "cost_query_no_rows",
-                sql=result.sql if result else "",
-                rows_preview=None,
-                memory_updated=True,
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info
-            )
+            if keko_result and keko_result.rows:
+                logger.info(f"✅ KEKO fallback returned {len(keko_result.rows)} rows")
+                result = keko_result  # use this result going forward; falls through to summarization below
+            else:
+                # --- Fallback 2: VBRP + MAKT to show sales price as a reference ---
+                vbrp_question = f"sales price and total sales from VBRP for product matching {product_hint}"
+                logger.info(f"🔄 KEKO returned no rows. Trying VBRP sales price fallback for: {product_hint}")
+                vbrp_result = run_sap_sql_agent(
+                    vbrp_question, sql_db,
+                    knowledge_context=knowledge_context,
+                    max_retries=1,
+                    time_scope="both",
+                )
+                if vbrp_result and vbrp_result.rows:
+                    logger.info(f"✅ VBRP fallback returned {len(vbrp_result.rows)} rows — presenting as sales price proxy")
+                    result = vbrp_result
+                    # Inject a note so the summarizer knows this is sales price, not purchase cost
+                    user_query = (
+                        f"{user_query}\n\n"
+                        "[Note to AI: The database has no purchase order (EKPO) or standard cost (KEKO) records "
+                        "for this product. The data below is from SALES (VBRP) and shows the SELLING PRICE, "
+                        "not the purchase cost. Please clearly state this distinction in your answer.]"
+                    )
+                else:
+                    # Nothing found in any table — give a clear, helpful explanation
+                    fallback_reply = (
+                        f"I searched for **{product_hint}** across the cost tables (EKPO, RBKP, RSEG), "
+                        "the standard cost estimates (KEKO), and the sales billing data (VBRP), "
+                        "but found no matching records in any of these tables.\n\n"
+                        "This can happen when:\n"
+                        "- The product name spelling differs from what's in the database (try a shorter term, e.g. *jacket* instead of *leather jacket*)\n"
+                        "- The material has no purchase orders or cost estimates recorded\n"
+                        "- You can also ask: **\"Show all products containing 'jacket' from MAKT\"** to find the exact material name"
+                    )
+                    mem.last_user_query = user_query
+                    save_memory(db, mem)
+                    return OrchestratorResult(
+                        reply=fallback_reply,
+                        action="new",
+                        reason=reason or "cost_query_all_fallbacks_empty",
+                        sql=result.sql if result else "",
+                        rows_preview=None,
+                        memory_updated=True,
+                        time_scope=time_scope,
+                        date_range=date_range,
+                        period_info=period_info
+                    )
         # Fallback: answer from context_str alone, without relying on live SQL rows
         if context_str.strip():
             prompt = f"""
