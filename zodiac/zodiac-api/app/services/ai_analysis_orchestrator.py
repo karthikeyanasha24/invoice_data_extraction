@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
@@ -748,8 +749,39 @@ If result is empty, say so and suggest a refined question.
                         date_range=date_range,
                         period_info=period_info
                     )
+        # ── Generic retry: if query named specific tables or asked for customer/listing data
+        # and returned 0 rows, retry once with a simplified rephrasing so the agent can
+        # choose a different strategy (e.g. drop KNA1, use VBRK.kunag directly, etc.)
+        if result and result.sql and not context_str.strip():
+            _simplify_hints = []
+            if any(w in q_lower for w in ("customer", "by customer", "customers")):
+                _simplify_hints.append(
+                    "Try grouping by VBRK.kunag (customer number) directly instead of joining KNA1. "
+                    "If KNA1 has no matching records, skip the KNA1 join entirely."
+                )
+            if any(w in q_lower for w in ("country", "by country", "land1")):
+                _simplify_hints.append(
+                    "Use VBRK.land1 for country instead of KNA1.land1 — VBRK has its own land1 column."
+                )
+            if _simplify_hints:
+                _simplified_q = (
+                    user_query + "\n\n[Note: Previous SQL returned 0 rows. "
+                    + " ".join(_simplify_hints)
+                    + " Remove any IS NOT NULL filters that convert LEFT JOINs to INNER JOINs.]"
+                )
+                logger.info("🔄 Retrying with simplified strategy for zero-row result: %s", _simplify_hints)
+                retry_result = run_sap_sql_agent(
+                    _simplified_q, sql_db,
+                    knowledge_context=knowledge_context,
+                    max_retries=1,
+                    time_scope="both",
+                )
+                if retry_result and retry_result.rows:
+                    logger.info(f"✅ Simplified retry returned {len(retry_result.rows)} rows")
+                    result = retry_result
+
         # Fallback: answer from context_str alone, without relying on live SQL rows
-        if context_str.strip():
+        if not (result and result.rows) and context_str.strip():
             prompt = f"""
 You are a business analyst assistant.
 
@@ -791,14 +823,16 @@ Task:
                 period_info=period_info
             )
         # If we have neither a useful SQL result nor context, return a clear error.
-        return OrchestratorResult(
-            reply="I couldn’t generate a SQL query or find enough dashboard context to answer that. Try rephrasing with more detail (customer, product, country, and time period).",
-            action="new",
-            reason=reason or "sap_sql_agent_no_result",
-            time_scope=time_scope,
-            date_range=date_range,
-            period_info=period_info
-        )
+        if not (result and result.rows):
+            return OrchestratorResult(
+                reply="I couldn’t generate a SQL query or find enough dashboard context to answer that. Try rephrasing with more detail (customer, product, country, and time period).",
+                action="new",
+                reason=reason or "sap_sql_agent_no_result",
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info
+            )
+        # result now has rows (from the simplified retry) — fall through to summarization below.
 
     # Summarize rows with LLM.
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
@@ -1013,5 +1047,4 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
     if payload.get("performance"):
         logger.debug(f"Performance data: {payload['performance']}")
     return payload
-
 
