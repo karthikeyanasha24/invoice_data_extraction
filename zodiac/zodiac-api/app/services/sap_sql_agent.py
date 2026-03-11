@@ -276,7 +276,8 @@ VERY IMPORTANT:
   * SELECT T016T.brtxt as industry_name (not KNA1.brsch)
 
 - When you need COUNTRY of a customer:
-  * KNA1.LAND1 (country code)
+  * PREFERRED: VBRK.LAND1 (country code directly on billing header — no extra join needed)
+  * ALTERNATIVE: KNA1.LAND1 via join VBRK.KUNAG = KNA1.KUNNR (only if customer name also needed)
 
 - For cost-related or COGS queries, use EKPO (purchase values), RBKP/RSEG (vendor invoice amounts), BSEG (accounting).
 """
@@ -489,12 +490,26 @@ def _pick_tables(
     if explicit_tables:
         logger.info("sap_sql_agent: user explicitly named tables: %s", explicit_tables)
 
-        # ── STEP 1a: Schema-driven fact-table enrichment ──────────────────────
-        # If the user only named dimension/lookup tables (tables with no numeric columns),
-        # the query can't aggregate anything useful. We ask the LLM which fact tables
-        # are needed — no hardcoded signal words required.
+        # ── STEP 1a: Detect if this is a pure listing/filter query ────────────
+        # Pure listing queries (e.g. "show all products containing 'jacket' from MAKT",
+        # "list all customers in Germany") do NOT need fact/transaction tables.
+        # Only add fact tables when the question asks for aggregation/amounts.
+        _aggregation_signals = (
+            "total", "sum", "revenue", "sales", "spend", "cost", "amount",
+            "how much", "count", "how many", "average", "avg",
+            "highest", "lowest", "top", "best", "worst", "most", "least",
+            "maximum", "minimum", "by customer", "by product", "by country",
+            "by vendor", "by material", "margin", "profit", "price",
+            "ranking", "rank", "compare",
+        )
+        _is_aggregation_query = any(sig in q_lower for sig in _aggregation_signals)
+
+        # ── STEP 1b: Schema-driven fact-table enrichment ──────────────────────
+        # Only enrich with fact tables if the question clearly needs aggregation.
+        # For pure listing/filter queries (containing, with word, list/show + single table),
+        # the dimension table alone is sufficient — do NOT add VBRP/VBRK unnecessarily.
         has_fact_table = any(_table_has_numeric_col(t) for t in explicit_tables)
-        if not has_fact_table:
+        if not has_fact_table and _is_aggregation_query:
             # Ask the LLM to identify missing fact tables given the question + named tables
             enrich_prompt = f"""
 The user asked: "{question}"
@@ -505,13 +520,15 @@ These tables are dimension/lookup tables with no financial amounts.
 Given the question, which FACT/TRANSACTION tables from the list below are needed
 to actually compute the answer?
 
+If the question is ONLY asking to LIST or FILTER records (e.g. "show all products containing X",
+"list all customers with Y") and does NOT need totals/sums/counts, return:
+{{"fact_tables": []}}
+
+Otherwise return the needed fact tables:
+{{"fact_tables": ["<exact_table_name>", ...]}}
+
 Available tables:
 {json.dumps(table_descriptions, indent=2)}
-
-Return STRICT JSON:
-{{
-  "fact_tables": ["<exact_table_name>", ...]
-}}
 """
             try:
                 er = client.chat.completions.create(
@@ -538,6 +555,11 @@ Return STRICT JSON:
                 )
             except Exception as enrich_err:
                 logger.warning("sap_sql_agent: fact-table enrichment LLM call failed: %s", enrich_err)
+        elif not has_fact_table and not _is_aggregation_query:
+            logger.info(
+                "sap_sql_agent: pure listing/filter query — using dimension table(s) %s as-is (no fact-table enrichment)",
+                explicit_tables,
+            )
 
         return explicit_tables
 
@@ -753,7 +775,13 @@ Known join patterns between these tables:
 Task:
 - Choose relevant columns from these tables.
 - Propose joins between tables using ONLY the business keys listed above (do NOT invent other join columns).
-- Remember that VBRP typically does NOT have KUNNR; to reach the customer, you MUST join via VBRK then KNA1.
+- **IMPORTANT – Customer queries**: VBRP/vbrp does NOT have KUNNR/KUNAG. To get customer data:
+  * PREFERRED (works even without full KNA1 data): use VBRK.KUNAG directly as customer identifier.
+    Group by VBRK.KUNAG for "by customer" aggregations if KNA1 has incomplete data.
+  * For customer NAME: join VBRK.KUNAG = KNA1.KUNNR and use KNA1.NAME1. Use LEFT JOIN (not INNER).
+  * Never add IS NOT NULL filter on KNA1 — that converts LEFT JOIN to INNER JOIN and kills results.
+- **IMPORTANT – Country queries**: VBRK has its own LAND1 column (country). Prefer VBRK.LAND1 directly
+  instead of joining to KNA1.LAND1 — this avoids empty results when KNA1 data is incomplete.
 - **T016T (industry)**: ONLY include T016T when the question explicitly asks for "industry" or "by industry".
   * T016T has ONLY columns brsch and brtxt (no VBELN, no KUNNR).
   * Join: KNA1.brsch = T016T.brsch (NOT on VBELN).
@@ -939,6 +967,17 @@ def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
     tables_in_spec = {(t.get("name") or "").upper() for t in spec.get("tables", [])}
     col_names_upper = {(c.get("name") or "").upper() for c in spec.get("columns", [])}
 
+    # Build a map from UPPERCASE table name → actual name as used in spec (preserving LLM case)
+    # This is used when adding enrichment columns so the table name in the added column matches
+    # exactly what the LLM put in spec["tables"], avoiding validate_sql_spec case mismatches.
+    _spec_table_actual_name: Dict[str, str] = {
+        (t.get("name") or "").upper(): (t.get("name") or "")
+        for t in spec.get("tables", []) if t.get("name")
+    }
+    def _spec_tbl(uppercase_key: str) -> str:
+        """Return the table name as it appears in spec (preserving LLM case) or fallback to uppercase_key."""
+        return _spec_table_actual_name.get(uppercase_key, uppercase_key)
+
     # Use schema_ai_config.json numeric_columns — no hardcoded list needed.
     # Adding a new numeric column to the config automatically flows through here.
     _cfg = _get_schema_config()
@@ -983,13 +1022,16 @@ def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
         ]
         for trigger_tbl, src_tbl, src_col, alias in CURRENCY_SOURCE:
             if trigger_tbl in tables_in_spec and src_tbl in tables_in_spec:
+                # Use the exact table name casing from spec (not hardcoded uppercase)
+                # to avoid validate_sql_spec false-positive case-mismatch errors.
+                actual_src_tbl = _spec_tbl(src_tbl)
                 spec.setdefault("columns", []).append(
-                    {"table": src_tbl, "name": src_col, "description": alias, "agg": None}
+                    {"table": actual_src_tbl, "name": src_col, "description": alias, "agg": None}
                 )
                 # Currency is safe to GROUP BY — same value for all rows in a billing doc
                 if has_group_by:
-                    spec.setdefault("group_by", []).append({"table": src_tbl, "column": src_col})
-                logger.info("Auto-enriched spec: added %s.%s (currency)", src_tbl, src_col)
+                    spec.setdefault("group_by", []).append({"table": actual_src_tbl, "column": src_col})
+                logger.info("Auto-enriched spec: added %s.%s (currency)", actual_src_tbl, src_col)
                 break
 
     # ─── 2. Date / period enrichment ─────────────────────────────────────────
@@ -1005,38 +1047,41 @@ def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
         ]
         for trigger_tbl, src_tbl, src_col, alias in DATE_SOURCE:
             if trigger_tbl in tables_in_spec and src_tbl in tables_in_spec:
+                # Use the exact table name casing from spec
+                actual_src_tbl = _spec_tbl(src_tbl)
                 if has_aggregate:
                     # Aggregated query: add MIN/MAX as range markers (no GROUP BY change)
                     spec.setdefault("columns", []).append(
-                        {"table": src_tbl, "name": src_col,
+                        {"table": actual_src_tbl, "name": src_col,
                          "description": f"earliest_{alias}", "agg": "MIN"}
                     )
                     spec.setdefault("columns", []).append(
-                        {"table": src_tbl, "name": src_col,
+                        {"table": actual_src_tbl, "name": src_col,
                          "description": f"latest_{alias}", "agg": "MAX"}
                     )
                     logger.info(
                         "Auto-enriched spec: added MIN/MAX(%s.%s) date range for aggregated query",
-                        src_tbl, src_col
+                        actual_src_tbl, src_col
                     )
                 else:
                     # Detail (non-aggregated) query: add date as plain column
                     spec.setdefault("columns", []).append(
-                        {"table": src_tbl, "name": src_col, "description": alias, "agg": None}
+                        {"table": actual_src_tbl, "name": src_col, "description": alias, "agg": None}
                     )
                     if has_group_by:
-                        spec.setdefault("group_by", []).append({"table": src_tbl, "column": src_col})
+                        spec.setdefault("group_by", []).append({"table": actual_src_tbl, "column": src_col})
                     # FAGLFLEXA: also add RYEAR
                     if src_col == "POPER":
+                        actual_faglflexa = _spec_tbl("FAGLFLEXA")
                         spec["columns"].append(
-                            {"table": "FAGLFLEXA", "name": "RYEAR",
+                            {"table": actual_faglflexa, "name": "RYEAR",
                              "description": "fiscal_year", "agg": None}
                         )
                         if has_group_by:
-                            spec["group_by"].append({"table": "FAGLFLEXA", "column": "RYEAR"})
+                            spec["group_by"].append({"table": actual_faglflexa, "column": "RYEAR"})
                     logger.info(
                         "Auto-enriched spec: added %s.%s (date/period, non-aggregated)",
-                        src_tbl, src_col
+                        actual_src_tbl, src_col
                     )
                 break
 
@@ -1308,17 +1353,10 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
             if rhs and rhs.lower() != "none":
                 conds.append(f"{lhs} {op} {rhs}")
 
-    # When using VBRP+VBRK+KNA1 for customer (per verified scripts), exclude NULL joins
-    vbrk_actual = next((a for a in added_actuals if a.upper() == "VBRK"), None)
-    kna1_actual = next((a for a in added_actuals if a.upper() == "KNA1"), None)
-    if vbrk_actual and kna1_actual:
-        va = table_aliases.get(vbrk_actual)
-        ka = table_aliases.get(kna1_actual)
-        vbeln_col = _actual_column_name(vbrk_actual, "VBELN")
-        kunnr_col = _actual_column_name(kna1_actual, "KUNNR")
-        if va and ka and vbeln_col and kunnr_col:
-            conds.append(f'{va}."{vbeln_col}" IS NOT NULL')
-            conds.append(f'{ka}."{kunnr_col}" IS NOT NULL')
+    # NOTE: Do NOT auto-add IS NOT NULL conditions here.
+    # The auto-IS-NOT-NULL for KNA1 was converting LEFT JOINs to INNER JOINs,
+    # causing 0 rows whenever KNA1 data is incomplete (e.g. partial test datasets).
+    # The LLM prompt instructs explicit NULL filtering when needed for a specific query.
 
     if conds:
         sql_lines.append("\nWHERE " + " AND ".join(conds))
@@ -1511,23 +1549,24 @@ def validate_sql_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if not columns:
         errors.append("No columns specified")
     
-    # Validate columns reference existing tables
+    # Validate columns reference existing tables (case-insensitive: LLM may mix VBRK/vbrk)
     table_names = {t.get("name") for t in tables if isinstance(t, dict) and t.get("name")}
+    table_names_lower = {(n or "").lower() for n in table_names}
     for col in columns:
         if isinstance(col, dict):
             col_table = col.get("table")
-            if col_table and col_table not in table_names:
+            if col_table and (col_table not in table_names) and (col_table.lower() not in table_names_lower):
                 errors.append(f"Column references unknown table: {col_table}")
-    
-    # Validate joins reference existing tables
+
+    # Validate joins reference existing tables (case-insensitive)
     joins = spec.get("joins", [])
     for j in joins:
         if isinstance(j, dict):
             left = j.get("left")
             right = j.get("right")
-            if left and left not in table_names:
+            if left and (left not in table_names) and (left.lower() not in table_names_lower):
                 errors.append(f"Join references unknown left table: {left}")
-            if right and right not in table_names:
+            if right and (right not in table_names) and (right.lower() not in table_names_lower):
                 errors.append(f"Join references unknown right table: {right}")
     
     is_valid = len(errors) == 0
