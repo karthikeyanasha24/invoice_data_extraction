@@ -452,7 +452,7 @@ Answer concisely using MARKDOWN formatting:
 - Use **bold** for key numbers and terms
 - Use bullet points for lists
 - Use > blockquotes for key insights
-- Always add $ for currency values
+- Use the correct currency symbol ($ for USD, ₩ for KRW, € for EUR, £ for GBP, or 3-letter code for others). Never use $ for non-USD values.
 """
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -516,7 +516,7 @@ Write a DEEP comparison analysis using MARKDOWN formatting:
 - Include % change and absolute differences
 - Use bullet points to organize findings
 - Add > blockquote for the most important strategic insight
-- ALWAYS use $ for monetary values
+- Use the correct currency symbol per the data: $ for USD, ₩ for KRW, € for EUR, £ for GBP, or 3-letter code otherwise. Never use $ for non-USD values.
 - Explain WHY the differences matter for business strategy
 If data is missing for a dataset, mention it clearly.
 """
@@ -591,7 +591,7 @@ Result preview JSON:
 Explain the answer using MARKDOWN formatting (3-8 sentences):
 - Use **bold** for key numbers
 - Use bullet points if listing items
-- Use $ for monetary values
+- Use the correct currency symbol: $ for USD, ₩ for KRW, € for EUR, £ for GBP, or 3-letter code for others. Never use $ for non-USD amounts.
 If result is empty, say so and suggest a refined question.
 """
         resp = client.chat.completions.create(
@@ -871,7 +871,15 @@ Write a clear MARKDOWN answer:
 2. **Detailed points**:
    - Use bullet points.
    - Highlight top/bottom items that are visible in the rows.
-   - Use **bold** for key figures and always prefix currency values with $.
+   - Use **bold** for key figures.
+   - CRITICAL: Use the correct currency symbol based on the 'currency' column in the data rows.
+     * USD → $  (e.g. $95,200)
+     * KRW → ₩  (e.g. ₩2,700,000,000) — NEVER show KRW amounts with $
+     * EUR → €  (e.g. €50,000)
+     * GBP → £  (e.g. £30,000)
+     * Any other currency → prefix with the 3-letter code (e.g. AUD 12,000)
+     * If multiple currencies exist in the data, show each with its own correct symbol.
+     * Do NOT default to $ unless the currency column actually says "USD".
 3. **Short recommendation** (1–2 sentences) in a blockquote.
 """
     
