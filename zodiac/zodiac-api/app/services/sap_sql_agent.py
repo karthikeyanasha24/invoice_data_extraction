@@ -70,6 +70,168 @@ def _get_schema_config() -> Dict[str, Any]:
     return _SCHEMA_CONFIG
 
 
+# --- SQL Catalog: pre-built queries for common patterns ---
+
+_SQL_CATALOG: Optional[List[Dict[str, Any]]] = None
+
+def _load_sql_catalog() -> List[Dict[str, Any]]:
+    """Load sql_catalog.json once at startup. Returns [] on failure."""
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "sql_catalog.json"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                catalog = json.load(f)
+            if isinstance(catalog, list):
+                logger.info("sql_catalog: loaded %d entries", len(catalog))
+                return catalog
+    except Exception as e:
+        logger.warning("Could not load sql_catalog.json: %s", e)
+    return []
+
+def _get_sql_catalog() -> List[Dict[str, Any]]:
+    global _SQL_CATALOG
+    if _SQL_CATALOG is None:
+        _SQL_CATALOG = _load_sql_catalog()
+    return _SQL_CATALOG
+
+
+def _lookup_sql_catalog(question: str) -> Optional[str]:
+    """
+    Fast-path: score every catalog entry against the question using keyword matching.
+    Returns the best SQL string if a high-confidence match is found, else None.
+
+    Scoring:
+      +2 per keyword that appears in the question (whole-word match)
+      +1 per keyword that appears anywhere in the question (substring)
+      +4 per question_pattern that is a close match (all significant words present)
+      +entry.priority bonus
+      -3 per neg_keyword that appears in the question
+
+    We only return a match if:
+      (a) score >= 5  (strong confidence)
+      (b) The question does NOT look like a specific/parametric query
+          (i.e. it doesn't contain quoted strings, specific years like 2023/2024,
+           or 6+ char non-generic words that look like codes or product names)
+    """
+    catalog = _get_sql_catalog()
+    if not catalog:
+        return None
+
+    q_lower = question.lower()
+    q_words = set(re.split(r"\W+", q_lower))
+    q_words.discard("")
+
+    # ── Detect parametric questions — skip catalog for these ──────────────────
+    # If question has quoted strings → specific filter needed, skip catalog
+    if re.search(r"['\"]", question):
+        return None
+    # "containing X", "with description X", "named X" etc. → text-search / specific filter → LLM
+    if re.search(
+        r"\b(containing|with word|with description|named|called|that include|that has"
+        r"|for customer|for vendor|for material|for product)\b",
+        q_lower,
+    ):
+        return None
+    # SAP compound codes like DE01, US10, AT03, CC01 → specific entity → LLM
+    if re.search(r"\b[A-Z]{1,3}\d{2,4}\b", question):
+        return None
+    # If question specifies a concrete year (2000-2030) → might need date filter
+    # BUT: "by year" or "per year" or "trend by year" is generic — allow it
+    year_match = re.findall(r"\b(19\d{2}|20[0-2]\d)\b", question)
+    if year_match and not any(p in q_lower for p in ("by year", "per year", "each year", "trend")):
+        return None
+    # If question contains a specific numeric ID / cost center code (standalone 3–6 digit number)
+    if re.search(r"\b\d{3,6}\b", question):
+        return None
+    # If question contains a title-case proper noun (word starting uppercase mid-sentence)
+    # e.g. "sales for customer Siemens" — "Siemens" is a specific name
+    # Heuristic: ignore words at the very start; flag if ANY word after position 0 starts uppercase
+    # and is NOT a known SAP keyword / acronym
+    words_in_question = question.split()
+    _known_uppercase = {"SAP","GL","PO","AP","AR","BOM","YoY","KPI","UOM","MRP","ABC","GR","IR",
+                        "MARA","MBEW","MARD","MSEG","SKA1","SKAT","MAST","EKBE","KNB1","TCURR",
+                        "T001W","T001","T016T","LFA1","LFB1","LFM1","KNA1","BSEG","FAGLFLEXA",
+                        "EKKO","EKPO","RBKP","RSEG","VBRK","MAKT","MARC","BSAD","COEP","CSKS",
+                        "CEPC","CKIS","KEKO","CKMLCR","KONV","LSEG","LIKP","LIPS","STKO","STPO",
+                        "MKPF","RESB","EBAN","AUFK","VBAK","VBAP","VBFA","VBEP","MVKE","KNVV"}
+    for w in words_in_question[1:]:  # skip first word (might be a normal capitalised start)
+        w_clean = re.sub(r"\W", "", w)
+        if (w_clean and w_clean[0].isupper() and not w_clean.isupper()
+                and w_clean not in _known_uppercase and len(w_clean) >= 3):
+            return None  # title-case proper noun → LLM
+    # If question contains a specific material/vendor code pattern (≥6 uppercase chars)
+    code_pattern = re.findall(r"\b[A-Z0-9_-]{6,}\b", question)
+    _common_abbreviations = {"FAGLFLEXA","EKKO","EKPO","RBKP","RSEG","VBRK","MAKT","MARC",
+                              "BSAD","COEP","CSKS","CEPC","CKIS","KEKO","CKMLCR","KONV",
+                              "LSEG","LIKP","LIPS","STKO","STPO","MKPF","RESB","EBAN",
+                              "AUFK","VBAK","VBAP","VBFA","VBEP","MVKE","KNVV","KNVP",
+                              "CRHD","COSP","KEPH","CKHS","CKMLHD","CKMLPP","CKIT",
+                              "MARA","MBEW","MARD","MSEG","SKA1","SKAT","MAST","EKBE",
+                              "KNB1","TCURR","T001W","T001","T016T","LFA1","LFB1","LFM1",
+                              "KNA1","BSEG"}
+    specific_codes = [c for c in code_pattern if c not in _common_abbreviations]
+    if specific_codes:
+        return None
+
+    # ── Score every catalog entry ─────────────────────────────────────────────
+    best_score = 0
+    best_entry = None
+
+    for entry in catalog:
+        score = 0.0
+
+        # Keyword scoring
+        for kw in (entry.get("keywords") or []):
+            kw_l = kw.lower().strip()
+            if not kw_l:
+                continue
+            kw_words = kw_l.split()
+            if len(kw_words) == 1:
+                if kw_l in q_words:
+                    score += 2          # exact whole-word match
+                elif kw_l in q_lower:
+                    score += 1          # substring match
+            else:
+                # multi-word keyword (e.g. "profit center")
+                if kw_l in q_lower:
+                    score += 3
+
+        # Neg-keyword penalty
+        for nk in (entry.get("neg_keywords") or []):
+            if nk.lower() in q_lower:
+                score -= 3
+
+        # Question-pattern boost: count significant words matched
+        for pattern in (entry.get("question_patterns") or []):
+            p_words = [w for w in re.split(r"\W+", pattern.lower()) if len(w) >= 4]
+            if p_words and all(w in q_lower for w in p_words):
+                score += 4
+                break  # one pattern match is enough for the boost
+
+        # Priority tie-breaker
+        score += (entry.get("priority") or 0) * 0.1
+
+        if score > best_score:
+            best_score = score
+            best_entry = entry
+
+    if best_score >= 5 and best_entry:
+        logger.info(
+            "sql_catalog: matched [%s] (score=%.1f) for question: %r",
+            best_entry["id"], best_score, question[:80],
+        )
+        return best_entry.get("sql") or None
+
+    logger.debug(
+        "sql_catalog: no confident match (best=%.1f, entry=%s) for: %r",
+        best_score,
+        best_entry["id"] if best_entry else "none",
+        question[:80],
+    )
+    return None
+
+
 # --- Static metadata (fallback when mapping/config lack entries) ---------------------------------------------------------------------------
 
 SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
@@ -1103,18 +1265,65 @@ Rules:
   * {{"table": "VBRK", "name": "FKDAT", "description": "latest_billing_date", "agg": "MAX"}}
   Only add raw date to group_by for detail (non-aggregated) row-level queries.
 """
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
+    messages: List[Dict[str, str]] = [{"role": "user", "content": prompt}]
+    spec: Dict[str, Any] = {}
+
+    for _attempt in range(3):  # up to 3 attempts; extra rounds fix markdown-wrapped / truncated JSON
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,  # type: ignore[arg-type]
+            temperature=0,
+        )
+        content = resp.choices[0].message.content or ""
+
+        # ── Try direct parse ──────────────────────────────────────────────────
+        parsed: Optional[Dict[str, Any]] = None
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            # LLM sometimes wraps in ```json ... ``` fences — strip and retry
+            stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.DOTALL)
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                # Last-resort: grab the first {...} block
+                m = re.search(r"\{.*\}", stripped, re.DOTALL)
+                if m:
+                    try:
+                        parsed = json.loads(m.group(0))
+                    except json.JSONDecodeError:
+                        pass
+
+        if parsed:
+            logger.info("_generate_sql_json: parsed spec on attempt %d", _attempt + 1)
+            return parsed
+
+        # ── Parse failed: log and ask the model to fix its output ────────────
+        logger.warning(
+            "_generate_sql_json: JSON parse failed (attempt %d/3). Response preview: %r",
+            _attempt + 1,
+            content[:400],
+        )
+        if _attempt < 2:
+            messages = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response could not be parsed as JSON. "
+                        "Return ONLY the raw JSON object — no markdown fences (no ```), "
+                        "no explanatory text before or after, no comments. "
+                        "Start your response with { and end with }."
+                    ),
+                },
+            ]
+
+    logger.error(
+        "_generate_sql_json: all 3 attempts failed to produce valid JSON for question: %r",
+        question,
     )
-    content = resp.choices[0].message.content or ""
-    try:
-        spec = json.loads(content)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", content, re.DOTALL)
-        spec = json.loads(m.group(0)) if m else {}
-    return spec or {}
+    return {}
 
 
 def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
@@ -1876,10 +2085,36 @@ def run_sap_sql_agent(
     if not client:
         return None
 
+    # ── CATALOG FAST-PATH ────────────────────────────────────────────────────
+    # Try the pre-built SQL catalog first — no LLM calls, instant, reliable.
+    # Falls through to the LLM path if no confident match or SQL returns 0 rows.
+    try:
+        catalog_sql = _lookup_sql_catalog(question)
+        if catalog_sql:
+            catalog_rows = _run_sql(db, catalog_sql)
+            if catalog_rows:
+                logger.info(
+                    "sql_catalog: FAST-PATH hit — %d rows returned for: %r",
+                    len(catalog_rows), question[:80],
+                )
+                return SqlAgentResult(sql=catalog_sql, rows=catalog_rows)
+            else:
+                logger.info(
+                    "sql_catalog: matched but returned 0 rows — falling through to LLM path for: %r",
+                    question[:80],
+                )
+    except Exception as _cat_err:
+        logger.warning("sql_catalog: fast-path error (%s) — falling through to LLM path", _cat_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    # ── END CATALOG FAST-PATH ────────────────────────────────────────────────
+
     attempt = 0
     last_error = None
     spec = None
-    
+
     try:
         selected_tables = _pick_tables(question, client, db, knowledge_context)
         logger.info("sap_sql_agent: question='%s' | selected_tables=%s", question, selected_tables)
@@ -1905,7 +2140,12 @@ def run_sap_sql_agent(
             table_descriptions=table_descriptions,
         )
         if not spec:
-            logger.warning("sap_sql_agent: empty JSON spec for question %s", question)
+            logger.error(
+                "sap_sql_agent: LLM returned empty/invalid JSON spec after 3 attempts "
+                "for question '%s' — cannot generate SQL. "
+                "Check _generate_sql_json logs above for the raw LLM output.",
+                question,
+            )
             return None
 
         _ensure_having_for_aggregates(spec, question)
