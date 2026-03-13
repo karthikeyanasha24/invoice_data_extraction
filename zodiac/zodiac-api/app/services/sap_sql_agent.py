@@ -86,8 +86,19 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     "KNVV": "Customer sales data (sales area, pricing, related attributes).",
     "KNVP": "Customer partners (payer, ship-to, bill-to relationships).",
     "MAKT": "Material descriptions (product names).",
-    "MARC": "Plant data for material (plant-level material attributes).",
-    "MARM": "Units of measure for material (UOM conversion).",
+    "MARC": (
+        "Plant data for material – plant-level material master attributes (MRP, procurement, planning). "
+        "Key columns: matnr (material number), werks (plant), "
+        "xchar (batch management: 'X'=batch-managed), maabc (ABC indicator: A/B/C), "
+        "dismm (MRP type: PD=deterministic, VB=reorder point, etc.), "
+        "ekgrp (purchasing group), prctr (profit center), bwtty (valuation category), "
+        "plifz (planned delivery time in days), minbe (reorder point qty), "
+        "eisbe (safety stock qty), stlan (BOM usage), plnnr (task list number). "
+        "Use for: plant-level material parameters, batch-managed materials (WHERE xchar='X'), "
+        "ABC classification, MRP settings, profit center assignments by material/plant. "
+        "Join: MARC.MATNR = MAKT.MATNR for descriptions."
+    ),
+    "MARM": "Units of measure for material (UOM conversion). Key columns: matnr, meinh (UOM), umrez (numerator), umren (denominator).",
     "MEAN": "International Article Numbers (EAN/UPC) for materials.",
     "MVKE": "Sales data for materials (sales org, distribution channel, pricing group).",
     # Finance / Accounting
@@ -121,8 +132,26 @@ SAP_TABLE_DESCRIPTIONS: Dict[str, str] = {
     "RBKP": "Vendor invoice header (invoice document, vendor, amount, currency). Use for: vendor invoice analysis.",
     "RSEG": "Vendor invoice item (invoice line items, materials, quantities, amounts).",
     # Material Document / Reservations
-    "MKPF": "Material document header (goods movement header, posting date).",
-    "RESB": "Reservation/dependent requirements (material reservations, requirements).",
+    "MKPF": (
+        "Material document header – goods movement header record. "
+        "Key columns: mblnr (document number), mjahr (year), vgart (movement category), "
+        "bldat (document date), budat (posting date), usnam (user). "
+        "CRITICAL LIMITATION: MKPF is the HEADER only. "
+        "MSEG (material document items, which has matnr/quantity/movement type) is NOT in this database. "
+        "Therefore: you CANNOT query 'stock movements by material' or 'total quantity issued by material' "
+        "using MKPF alone. MKPF can only give you movement counts/dates, NOT quantities per material. "
+        "For material-level reservation quantities, use RESB instead."
+    ),
+    "RESB": (
+        "Reservations and dependent requirements – records of reserved material quantities. "
+        "Key columns: matnr (material), werks (plant), lgort (storage location), "
+        "bdmng (required/reserved quantity), enmng (quantity already withdrawn/issued), "
+        "meins (unit of measure), bdter (requirements date), aufnr (order number, join to AUFK), "
+        "bwart (movement type), matkl (material group). "
+        "Use for: total reserved qty by material (SUM bdmng), issued qty (SUM enmng), "
+        "open reservations (bdmng - enmng), reservations by plant, reservations by order. "
+        "Join: RESB.MATNR = MAKT.MATNR for material descriptions."
+    ),
     "LSEG": "Document segment (document item data).",
     # Pricing / Conditions
     "KONV": (
@@ -350,8 +379,24 @@ CONTROLLING / PROFITABILITY (COEP, CEPC, CSKS):
 - FAGLFLEXA <-> CEPC: FAGLFLEXA.PRCTR = CEPC.PRCTR
 
 MATERIAL DOCUMENT:
-- MKPF <-> MSEG (if MSEG exists): MKPF.MBLNR = MSEG.MBLNR, MKPF.MJAHR = MSEG.MJAHR
-- NOTE: MSEG (material document items) is NOT in this database. Use MKPF for header-level goods movement queries only.
+- MKPF is the goods movement HEADER only. MSEG (material document items with matnr/quantity) is NOT in this database.
+- MKPF CANNOT answer "movements by material" or "quantity issued by material" — use RESB for that.
+- MKPF is useful only for: counting movement documents by date, user, or movement category.
+
+RESERVATIONS (RESB):
+- RESB <-> MAKT (material name): RESB.MATNR = MAKT.MATNR
+- RESB <-> AUFK (order): RESB.AUFNR = AUFK.AUFNR
+- RESB.BDMNG = total reserved (required) quantity
+- RESB.ENMNG = quantity already withdrawn (issued)
+- Open qty = RESB.BDMNG - RESB.ENMNG
+- Use: SUM(RESB.BDMNG) for total reserved, SUM(RESB.ENMNG) for total issued, by matnr/werks
+
+PLANT MATERIAL MASTER (MARC):
+- MARC <-> MAKT: MARC.MATNR = MAKT.MATNR
+- MARC.XCHAR = 'X' means batch-managed material
+- MARC.MAABC = ABC indicator (A=high value, B=medium, C=low)
+- MARC.DISMM = MRP type (PD=demand-driven, VB=reorder point)
+- MARC.PRCTR = profit center assigned to this plant/material
 
 PRODUCT COSTING (STANDARD COST):
 - KEKO (cost estimate header) <-> CKIS (costing items)
