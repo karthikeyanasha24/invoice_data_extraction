@@ -776,13 +776,18 @@ Available tables (use EXACT names):
 
 1. FACT / TRANSACTION TABLES — always include the table(s) that actually hold the numbers:
    - Sales, billing, revenue, turnover, income → VBRP + VBRK (always both)
-   - Purchase orders, procurement, ordered quantity → EKKO + EKPO
-   - Vendor invoices, accounts payable → RBKP + RSEG
-   - General ledger, profit center accounting, FI postings → FAGLFLEXA
+   - Purchase orders, procurement, ordered quantity, purchase cost → EKKO + EKPO
+   - Vendor invoices, vendor spend, accounts payable, supplier payment, total spend by vendor,
+     highest spend vendor, AP, invoice amount → RBKP + RSEG (RBKP = header, RSEG = line items)
+   - General ledger, profit center accounting, FI postings, GL balance → FAGLFLEXA
    - Deliveries, shipments, logistics → LIKP + LIPS
    - CO actual costs by cost center → COEP + CSKS
    - Standard cost / unit cost estimates → KEKO (+ CKIS for detail breakdown)
    - Pricing conditions, discounts, surcharges → KONV + VBRK (join on KNUMV)
+   - Material reservations, reserved quantity, issued quantity → RESB
+   - Plant-level material parameters, MRP, ABC classification → MARC
+   - Internal orders, project orders → AUFK + COEP
+   - AR receivables, overdue items, payment clearing → BSAD + BSEG
 
 2. DIMENSION / LOOKUP TABLES — always add these alongside the fact tables:
    - Any question involving customers, buyers, sold-to parties → KNA1
@@ -794,14 +799,19 @@ Available tables (use EXACT names):
 
 3. COST-OF-PRODUCT rule:
    - "What is the cost / price of [product]?" or "unit cost" or "standard cost" →
-     use KEKO + MAKT (KEKO.stprs = standard price, join KEKO.MATNR = MAKT.MATNR)
+     use KEKO + MAKT (join KEKO.MATNR = MAKT.MATNR)
    - Do NOT use EKPO for unit cost (EKPO = bulk purchase orders, not unit standard costs)
 
-4. When the user explicitly names specific tables in the question (e.g. "using KONV",
-   "from FAGLFLEXA"), include those tables AND any fact/dimension tables needed to
-   produce a meaningful answer for the question.
+4. VENDOR SPEND rule (very important):
+   - "Highest spend by vendor", "top vendors by invoice", "total vendor spend",
+     "vendor invoice totals" → RBKP + LFA1 (LFA1 = vendor name)
+   - RBKP.rmwwr = invoice amount (gross), RBKP.lifnr = vendor number (join LFA1.lifnr)
+   - GROUP BY LFA1.name1, SUM(RBKP.rmwwr) ORDER BY total_spend DESC
 
-5. Choose the MINIMUM set of tables. Do not include tables unrelated to the question.
+5. When the user explicitly names specific tables in the question (e.g. "using KONV",
+   "from FAGLFLEXA", "using EKPO"), ALWAYS use exactly those tables — do not substitute.
+
+6. Choose the MINIMUM set of tables. Do not include tables unrelated to the question.
 
 Return STRICT JSON only — no explanation:
 {{
