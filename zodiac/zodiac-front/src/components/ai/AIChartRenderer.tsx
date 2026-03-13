@@ -35,26 +35,72 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
   // Animation class for smooth entrance
   const fadeInClass = "opacity-0 animate-[fadeIn_0.5s_ease-in_forwards]";
 
-  // Currency formatter utility
-  const formatCurrency = (value: number): string => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value);
+  // Currency symbol map for SAP currency codes
+  const CURRENCY_SYMBOLS: Record<string, string> = {
+    USD: '$', EUR: '€', GBP: '£', KRW: '₩', JPY: '¥', CNY: '¥',
+    INR: '₹', AUD: 'A$', CAD: 'CA$', CHF: 'CHF ', SEK: 'SEK ',
+    NOK: 'NOK ', DKK: 'DKK ', BRL: 'R$', MXN: 'MX$', SGD: 'S$',
+    HKD: 'HK$', NZD: 'NZ$', ZAR: 'R ', TRY: '₺', RUB: '₽',
+    // Legacy SAP currencies
+    DEM: 'DEM ', FRF: 'FRF ', PTE: 'PTE ', ITL: 'ITL ', ESP: 'ESP ',
+    ATS: 'ATS ', BEF: 'BEF ', NLG: 'NLG ', GRD: 'GRD ', FIM: 'FIM ',
+  };
+
+  // Format a numeric value with the correct currency symbol
+  // currencyCode: ISO 4217 code (e.g. "USD", "KRW") — uses $ only when actually USD
+  const formatCurrency = (value: number, currencyCode?: string): string => {
+    const code = (currencyCode || 'USD').toUpperCase();
+    const symbol = CURRENCY_SYMBOLS[code] ?? (code + ' ');
+    const formatted = Math.abs(value) >= 1_000_000
+      ? (value / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M'
+      : Math.abs(value) >= 1_000
+      ? Math.round(value).toLocaleString('en-US')
+      : value.toFixed(2);
+    return `${symbol}${formatted}`;
   };
 
   // Check if a key/column likely represents currency/money
   const isCurrencyField = (key: string): boolean => {
     const lowerKey = key.toLowerCase();
-    return lowerKey.includes('sales') || 
-           lowerKey.includes('revenue') || 
-           lowerKey.includes('amount') || 
-           lowerKey.includes('total') || 
-           lowerKey.includes('value') || 
+    return lowerKey.includes('sales') ||
+           lowerKey.includes('revenue') ||
+           lowerKey.includes('amount') ||
+           lowerKey.includes('total') ||
+           lowerKey.includes('value') ||
            lowerKey.includes('price') ||
-           lowerKey.includes('cost');
+           lowerKey.includes('cost') ||
+           lowerKey.includes('spend') ||
+           lowerKey.includes('balance') ||
+           lowerKey.includes('netwr') ||
+           lowerKey.includes('rmwwr');
+  };
+
+  // Extract currency code from a chart data row (looks for a 'currency' or 'waerk'/'waers' column)
+  const getCurrencyFromRow = (row: any): string | undefined => {
+    if (!row) return undefined;
+    const keys = Object.keys(row);
+    const currKey = keys.find(k =>
+      k.toLowerCase() === 'currency' ||
+      k.toLowerCase() === 'waerk' ||
+      k.toLowerCase() === 'waers' ||
+      k.toLowerCase() === 'rtcur' ||
+      k.toLowerCase() === 'hwaer'
+    );
+    return currKey ? String(row[currKey]) : undefined;
+  };
+
+  // Extract the dominant currency from all chart data rows
+  const getDominantCurrency = (data: any[]): string | undefined => {
+    if (!data || data.length === 0) return undefined;
+    // Count occurrences of each currency code
+    const counts: Record<string, number> = {};
+    for (const row of data) {
+      const c = getCurrencyFromRow(row);
+      if (c) counts[c] = (counts[c] || 0) + 1;
+    }
+    if (Object.keys(counts).length === 0) return undefined;
+    // Return the most common currency
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
   };
 
   const downloadChart = (chartTitle: string) => {
@@ -92,22 +138,23 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
         const barHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
+        const barCurrency = getDominantCurrency(chart.data);
         const isStacked = chart.stacked || chart.chart_type === 'stacked_bar';
         return (
           <ResponsiveContainer width="100%" height={400}>
             <BarChart data={chart.data}>
               {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.3} />}
-              <XAxis 
-                dataKey={chart.x_key} 
-                stroke="#64748b" 
+              <XAxis
+                dataKey={chart.x_key}
+                stroke="#64748b"
                 style={{ fontSize: '11px', fontWeight: 500 }}
                 tick={{ fill: '#475569' }}
               />
-              <YAxis 
-                stroke="#64748b" 
+              <YAxis
+                stroke="#64748b"
                 style={{ fontSize: '11px', fontWeight: 500 }}
                 tick={{ fill: '#475569' }}
-                tickFormatter={barHasCurrency ? formatCurrency : undefined}
+                tickFormatter={barHasCurrency ? (v) => formatCurrency(Number(v), barCurrency) : undefined}
               />
               <Tooltip
                 contentStyle={{
@@ -118,8 +165,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
                   padding: '12px',
                 }}
-                formatter={(value: any, name: string) => {
-                  const formattedValue = isCurrencyField(name) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                formatter={(value: any, name: string, props: any) => {
+                  const rowCurrency = getCurrencyFromRow(props?.payload) ?? barCurrency;
+                  const formattedValue = isCurrencyField(name) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
                   return [formattedValue, name.replace(/_/g, ' ')];
                 }}
                 cursor={{ fill: 'rgba(59, 130, 246, 0.1)' }}
@@ -187,15 +235,16 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
         const areaHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
+        const areaCurrency = getDominantCurrency(chart.data);
         return (
           <ResponsiveContainer width="100%" height={400}>
             <AreaChart data={chart.data}>
               {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
               <XAxis dataKey={chart.x_key} stroke="#64748b" style={{ fontSize: '12px' }} />
-              <YAxis 
-                stroke="#64748b" 
+              <YAxis
+                stroke="#64748b"
                 style={{ fontSize: '12px' }}
-                tickFormatter={areaHasCurrency ? formatCurrency : undefined}
+                tickFormatter={areaHasCurrency ? (v) => formatCurrency(Number(v), areaCurrency) : undefined}
               />
               <Tooltip
                 contentStyle={{
@@ -205,8 +254,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                 }}
-                formatter={(value: any, name: string) => {
-                  const formattedValue = isCurrencyField(name) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                formatter={(value: any, name: string, props: any) => {
+                  const rowCurrency = getCurrencyFromRow(props?.payload) ?? areaCurrency;
+                  const formattedValue = isCurrencyField(name) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
                   return [formattedValue, name.replace(/_/g, ' ')];
                 }}
               />
@@ -268,8 +318,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: any) => {
-                      return isCurrencyField(autoValueKey) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                    formatter={(value: any, _name: any, props: any) => {
+                      const rowCurrency = getCurrencyFromRow(props?.payload);
+                      return isCurrencyField(autoValueKey) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
                     }}
                   />
                   {chart.show_legend && <Legend />}
@@ -306,8 +357,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                 }}
-                formatter={(value: any) => {
-                  return isCurrencyField(valueKey) ? formatCurrency(Number(value)) : Number(value).toLocaleString();
+                formatter={(value: any, _name: any, props: any) => {
+                  const rowCurrency = getCurrencyFromRow(props?.payload);
+                  return isCurrencyField(valueKey) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
                 }}
               />
               {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
@@ -338,17 +390,21 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                     {columnKeys.map((key, cellIdx) => {
                       const value = row[key];
                       let displayValue = '-';
-                      
+
                       if (value !== null && value !== undefined) {
                         if (typeof value === 'number') {
-                          displayValue = isCurrencyField(key) 
-                            ? formatCurrency(value)
-                            : value.toLocaleString();
+                          if (isCurrencyField(key)) {
+                            // Use the currency column from the SAME row, not a hardcoded USD
+                            const rowCurrency = getCurrencyFromRow(row);
+                            displayValue = formatCurrency(value, rowCurrency);
+                          } else {
+                            displayValue = value.toLocaleString();
+                          }
                         } else {
                           displayValue = String(value);
                         }
                       }
-                      
+
                       return (
                         <td key={cellIdx} className="px-3 py-2 text-slate-900 text-sm">
                           {displayValue}
