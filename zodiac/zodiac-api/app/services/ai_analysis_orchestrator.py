@@ -666,10 +666,28 @@ If result is empty, say so and suggest a refined question.
         # 2) Search VBRP + MAKT (sales data) to show the selling price as a useful proxy
         # Only if BOTH return nothing do we show a helpful "not found" explanation.
         cost_related = any(w in q_lower for w in ("cost", "costing", "price", "how much", "what is the cost"))
-        # Detect if the question is about a specific product (not a bulk cost analysis)
-        _product_keywords = [w for w in re.split(r"\W+", user_query) if len(w) >= 4 and w.lower() not in
-                              {"cost", "price", "know", "what", "from", "show", "tell", "does", "have", "much", "this", "that"}]
-        is_product_specific = bool(_product_keywords)
+        # Detect if the question is about a SPECIFIC named product (not a bulk aggregation query).
+        # Exclude: SAP table names, generic aggregation words, SQL keywords.
+        _GENERIC_WORDS = {
+            "cost", "price", "know", "what", "from", "show", "tell", "does", "have", "much",
+            "this", "that", "total", "purchased", "quantity", "each", "material", "materials",
+            "using", "ekpo", "ekko", "rbkp", "rseg", "vbrp", "vbrk", "makt", "faglflexa",
+            "keko", "ckis", "coep", "bsad", "ckmlcr", "marc", "resb", "konv", "likp", "lips",
+            "highest", "lowest", "average", "count", "list", "products", "vendors", "customers",
+            "across", "plants", "years", "periods", "fiscal", "plant", "year", "month",
+            "purchase", "purchasing", "sales", "billing", "invoice", "orders", "order", "items",
+            "standard", "actual", "planned", "data", "table", "tables", "query", "show", "give",
+        }
+        # Named-table queries (e.g. "using EKPO") are NEVER product-specific cost searches
+        _named_table = any(
+            w.upper() in {"EKPO", "EKKO", "RBKP", "RSEG", "VBRP", "VBRK", "FAGLFLEXA",
+                          "KEKO", "CKIS", "COEP", "BSAD", "CKMLCR", "MARC", "RESB"}
+            for w in re.split(r"\W+", user_query)
+        )
+        _product_keywords = [w for w in re.split(r"\W+", user_query)
+                             if len(w) >= 4 and w.lower() not in _GENERIC_WORDS]
+        # A query is product-specific only when it names a specific item AND doesn't name SAP tables
+        is_product_specific = bool(_product_keywords) and not _named_table
 
         if cost_related and is_product_specific:
             # Build a natural-language product search term from the question keywords
@@ -709,14 +727,16 @@ If result is empty, say so and suggest a refined question.
                     )
                 else:
                     # Nothing found in any table — give a clear, helpful explanation
+                    search_term = _product_keywords[0] if _product_keywords else product_hint
                     fallback_reply = (
                         f"I searched for **{product_hint}** across the cost tables (EKPO, RBKP, RSEG), "
                         "the standard cost estimates (KEKO), and the sales billing data (VBRP), "
                         "but found no matching records in any of these tables.\n\n"
                         "This can happen when:\n"
-                        "- The product name spelling differs from what's in the database (try a shorter term, e.g. *jacket* instead of *leather jacket*)\n"
+                        f"- The product name spelling differs from what's in the database "
+                        f"(try a shorter or exact term, e.g. search MAKT for the correct material description)\n"
                         "- The material has no purchase orders or cost estimates recorded\n"
-                        "- You can also ask: **\"Show all products containing 'jacket' from MAKT\"** to find the exact material name"
+                        f"- You can also ask: **\"Show all products containing '{search_term}' from MAKT\"** to find the exact material name"
                     )
                     mem.last_user_query = user_query
                     save_memory(db, mem)
