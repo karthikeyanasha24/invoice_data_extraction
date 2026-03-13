@@ -362,28 +362,10 @@ def run_ai_analysis_orchestrator(
     client = _get_client(effective_key)
     mem = load_memory(db, user_id)
     
-    # ULTRA-FAST PATH: If exact same query was just asked, reuse immediately from memory
-    if mem.last_user_query and mem.last_user_query.strip().lower() == user_query.strip().lower():
-        last_rows = mem.last_rows()
-        last_charts = mem.last_charts()
-        if last_rows and mem.last_sql:
-            logger.info(f"⚡ INSTANT REUSE: exact same query as last request ({len(last_rows)} rows, {len(last_charts)} charts)")
-            # Use cached reply or regenerate from data
-            cached_reply = mem.last_reply or "Based on the previous analysis, here are the results:"
-            return OrchestratorResult(
-                reply=cached_reply,
-                action="reuse-instant",
-                reason="exact_query_repeat",
-                sql=mem.last_sql,
-                rows_preview=_rows_preview(last_rows, limit=30),
-                charts=last_charts if last_charts else None,
-                memory_updated=False,
-                performance={"total_ms": 50, "used_cache": True, "instant_reuse": True},
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info
-            )
-    
+    # NOTE: ULTRA-FAST PATH (reuse-instant) intentionally removed.
+    # Every query must run fresh SQL against the correct table — returning cached data for a
+    # different question caused wrong results (e.g. FAGLFLEXA query returning VBRK rows).
+
     # If user clearly says "Remember:" or "Save this:", always treat as knowledge (don't run SQL).
     if _is_explicit_knowledge_instruction(user_query):
         action, reason = "knowledge", "explicit_save_instruction"
@@ -780,55 +762,23 @@ If result is empty, say so and suggest a refined question.
                     logger.info(f"✅ Simplified retry returned {len(retry_result.rows)} rows")
                     result = retry_result
 
-        # Fallback: answer from context_str alone, without relying on live SQL rows
-        if not (result and result.rows) and context_str.strip():
-            prompt = f"""
-You are a business analyst assistant.
+        # NOTE: context_str fallback intentionally removed.
+        # Answering a new question from old dashboard context caused completely wrong results
+        # (e.g. a FAGLFLEXA query being answered with cached VBRK/sales data).
+        # Each query must get its own fresh SQL result. If SQL returns 0 rows, tell the user clearly.
 
-You have the following SALES and INVOICE context (plain text, already computed from the database):
-
-{context_str[:8000]}
-
-User question:
-{user_query}
-
-Task:
-- Answer ONLY using the context above (do NOT invent numbers that are not implied there).
-- Use MARKDOWN formatting:
-  * **Bold** for important numbers
-  * Bullet points for lists
-  * > Blockquotes for key insights
-  * $ for monetary values
-- If the context already includes information about top products, customers, revenues, etc., reuse those numbers.
-- If something is missing, say clearly what is missing instead of guessing.
-"""
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-                max_tokens=800,
-            )
-            reply = (resp.choices[0].message.content or "").strip()
-            mem.last_user_query = user_query
-            save_memory(db, mem)
-            return OrchestratorResult(
-                reply=reply or "I used your dashboard context, but it doesn’t include enough detail to answer that exactly.",
-                action="new",
-                reason=reason or "fallback_to_context_only",
-                sql=result.sql if result else "",
-                rows_preview=None,
-                memory_updated=True,
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info
-            )
-        # If we have neither a useful SQL result nor context, return a clear error.
+        # If we have no SQL result, return a clear error.
         if not (result and result.rows):
+            sql_attempted = result.sql if result else ""
             return OrchestratorResult(
-                reply="I couldn’t generate a SQL query or find enough dashboard context to answer that. Try rephrasing with more detail (customer, product, country, and time period).",
+                reply=(
+                    "No data was found for that query. "
+                    + ("The SQL ran but returned 0 rows — the table may not have matching records for those filters. " if sql_attempted else "A SQL query could not be generated for this request. ")
+                    + "Try rephrasing with a specific table name, material, customer, plant, or time period."
+                ),
                 action="new",
                 reason=reason or "sap_sql_agent_no_result",
-                sql=result.sql if result else "",
+                sql=sql_attempted,
                 time_scope=time_scope,
                 date_range=date_range,
                 period_info=period_info
