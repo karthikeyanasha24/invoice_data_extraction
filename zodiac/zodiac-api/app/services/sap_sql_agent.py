@@ -1350,6 +1350,18 @@ def _is_last_best_sales_query(question: str) -> bool:
     )
 
 
+def _is_link_faglflexa_customers_products_query(question: str) -> bool:
+    """True if the question asks to link FAGLFLEXA profit center costs to customers and/or products."""
+    if not (question or "").strip():
+        return False
+    q = (question or "").lower()
+    if "faglflexa" not in q:
+        return False
+    return (
+        "link" in q or "profit center" in q or "costs back to" in q
+    ) and ("customer" in q or "product" in q or "major" in q)
+
+
 def _build_minimal_last_sales_spec(
     question: str,
     selected_tables: List[str],
@@ -1521,8 +1533,60 @@ def run_adaptive_sap_sql_agent(
         return None
 
     try:
+        # Direct path for "Link FAGLFLEXA profit center costs back to customers/products" — ensure FAGLFLEXA + sales tables
+        if _is_link_faglflexa_customers_products_query(question):
+            selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
+            logger.info("run_adaptive_sap_sql_agent: using direct FAGLFLEXA-link path, tables=%s", selected_tables)
+            column_mappings = _introspect_columns(db, selected_tables)
+            if not column_mappings:
+                selected_tables = ["FAGLFLEXA"]
+                column_mappings = _introspect_columns(db, selected_tables)
+            if column_mappings and (any(t.upper() == "FAGLFLEXA" for t in column_mappings.keys())):
+                table_descriptions = _get_table_descriptions(db)
+                spec = _generate_sql_json_adaptive(
+                    question,
+                    list(column_mappings.keys()),
+                    column_mappings,
+                    client,
+                    time_scope=time_scope,
+                    few_shot_examples=few_shot_examples,
+                    table_descriptions=table_descriptions,
+                )
+                if not spec:
+                    spec = _build_minimal_faglflexa_spec(question, list(column_mappings.keys()), column_mappings)
+                if spec:
+                    try:
+                        from .invoice_bot_helpers import (
+                            fix_date_filters,
+                            inject_product_name_filter_if_needed,
+                            inject_material_number_filter_if_needed,
+                            inject_makt_single_language_if_needed,
+                            ensure_delivery_chain_in_spec,
+                            inject_country_filter_if_needed,
+                        )
+                        fix_date_filters(spec)
+                        inject_product_name_filter_if_needed(question, spec)
+                        inject_material_number_filter_if_needed(question, spec)
+                        inject_makt_single_language_if_needed(spec)
+                        ensure_delivery_chain_in_spec(spec)
+                        inject_country_filter_if_needed(question, spec)
+                    except Exception as e:
+                        logger.warning("invoice_bot_helpers spec post-processing failed: %s", e)
+                    _ensure_having_for_aggregates(spec, question)
+                    _auto_enrich_spec(spec, question)
+                    is_valid, validation_errors = validate_sql_spec(spec)
+                    if is_valid:
+                        sql = _json_to_sql_postgres(spec, column_mappings)
+                        if sql:
+                            rows = _run_sql(db, sql)
+                            if rows:
+                                logger.info("run_adaptive_sap_sql_agent: direct FAGLFLEXA-link returned %d rows", len(rows))
+                                return SqlAgentResult(sql=sql, rows=rows)
+                    else:
+                        logger.warning("run_adaptive_sap_sql_agent: direct FAGLFLEXA-link spec validation failed: %s", validation_errors)
+            # Fall through to normal path if direct path didn't return
         # Direct path for "last/best/recent sales" — skip LLM, use fixed tables + minimal spec so these always work
-        if _is_last_best_sales_query(question):
+        elif _is_last_best_sales_query(question):
             selected_tables = ["VBRK", "VBRP", "KNA1"]
             logger.info("run_adaptive_sap_sql_agent: using direct last-sales path, tables=%s", selected_tables)
             column_mappings = _introspect_columns(db, selected_tables)
