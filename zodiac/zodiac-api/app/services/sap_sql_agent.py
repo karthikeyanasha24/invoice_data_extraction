@@ -1535,6 +1535,17 @@ def _is_cost_by_profit_center_query(question: str) -> bool:
     )
 
 
+def _is_purchase_order_question(question: str) -> bool:
+    """True if the question is about purchase orders / PO totals / vendor spend (for schema-driven table fallback)."""
+    if not (question or "").strip():
+        return False
+    q = (question or "").lower()
+    return any(x in q for x in (
+        "purchase order", "order totals", "po totals", "purchase order totals",
+        "vendor spend", "purchased", "procurement", "purchase totals", "by material",
+    )) or ("purchase" in q and ("total" in q or "by material" in q or "totals" in q))
+
+
 def _is_ekpo_purchasing_query(question: str) -> bool:
     """True if the question asks for purchased quantity/cost by material, plant, or vendor using EKPO."""
     if not (question or "").strip():
@@ -1542,7 +1553,7 @@ def _is_ekpo_purchasing_query(question: str) -> bool:
     q = (question or "").lower()
     purchase_related = any(x in q for x in (
         "ekpo", "purchase", "purchased", "buy", "bought", "procure", "procurement", "po ",
-        "purchase order", "order totals", "po totals"
+        "purchase order", "order totals", "po totals", "vendor spend"
     ))
     dimension_or_value = any(x in q for x in (
         "quantity", "quantities", "cost", "costs", "material", "materials", "plant", "werks",
@@ -3211,6 +3222,53 @@ def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
     return out
 
 
+def run_purchase_order_fallback(db: Session, question: str) -> Optional[SqlAgentResult]:
+    """
+    When the main agent fails to generate SQL for a purchase-order question, run a direct
+    EKPO aggregate: total quantity and total cost by material. Uses introspected table/column names.
+    """
+    if not _is_purchase_order_question(question):
+        return None
+    try:
+        insp = inspect(db.bind)
+        all_tables = insp.get_table_names()
+        ekpo_table = None
+        for t in all_tables:
+            if (t or "").upper() == "EKPO":
+                ekpo_table = t
+                break
+        if not ekpo_table:
+            logger.warning("run_purchase_order_fallback: EKPO table not found")
+            return None
+        cols = [c["name"] for c in insp.get_columns(ekpo_table)]
+        cols_lower = {c.lower(): c for c in cols}
+        matnr_col = cols_lower.get("matnr")
+        menge_col = cols_lower.get("menge")
+        netpr_col = cols_lower.get("netpr")
+        if not all((matnr_col, menge_col, netpr_col)):
+            logger.warning("run_purchase_order_fallback: EKPO missing matnr/menge/netpr columns: %s", cols)
+            return None
+        # Quote identifiers for Postgres (case-sensitive)
+        def q(s: str) -> str:
+            return f'"{s}"' if s and s != s.lower() else (s or "")
+        sql = (
+            f'SELECT {q(matnr_col)} AS material, '
+            f'SUM({q(menge_col)}) AS total_quantity, '
+            f'SUM({q(menge_col)} * {q(netpr_col)}) AS total_cost '
+            f'FROM {q(ekpo_table)} '
+            f'GROUP BY {q(matnr_col)} '
+            f'ORDER BY total_cost DESC NULLS LAST LIMIT 100'
+        )
+        rows = _run_sql(db, sql)
+        if not rows:
+            return None
+        logger.info("run_purchase_order_fallback: executed EKPO aggregate, %d rows", len(rows))
+        return SqlAgentResult(sql=sql + ";", rows=rows)
+    except Exception as e:
+        logger.warning("run_purchase_order_fallback failed: %s", e)
+        return None
+
+
 def _summarize_results(question: str, sql: str, rows: List[Dict[str, Any]], client: OpenAI) -> str:
     """
     Ask the LLM to summarize the tabular result in natural language.
@@ -3395,12 +3453,21 @@ def run_schema_driven_sql_agent(
     try:
         schema = get_schema_dict(db)
         if not schema:
+            logger.warning("schema_driven_agent: no schema loaded")
             return None
         schema_text = schema_to_text(schema)
         available_tables = list(schema.keys())
         tables = schema_select_tables(question, schema_text, client, available_tables)
+        # Purchase-order intent fallback: if LLM returned no tables but question is about purchase orders, force EKPO + MAKT
+        if not tables and _is_purchase_order_question(question):
+            available_upper = {t.upper(): t for t in available_tables}
+            tables = [available_upper[t] for t in ("EKPO", "MAKT") if t in available_upper]
+            if tables:
+                logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
         if not tables:
+            logger.warning("schema_driven_agent: no tables selected for question: %s", (question or "")[:80])
             return None
+        logger.info("schema_driven_agent: selected_tables=%s", tables)
         schema_subset = schema_to_text(schema, table_subset=tables)
         # Optional: similar past queries as few-shot examples
         similar: Optional[List[tuple]] = None
@@ -3408,7 +3475,9 @@ def run_schema_driven_sql_agent(
             similar = [(ex.get("user_query") or "", ex.get("sql_query") or "") for ex in few_shot_examples if ex.get("sql_query")]
         sql = schema_generate_sql(question, tables, schema_subset, client, similar_examples=similar)
         if not sql:
+            logger.warning("schema_driven_agent: no SQL generated for question: %s", (question or "")[:80])
             return None
+        logger.info("schema_driven_agent: generated_sql (first 300 chars): %s", (sql or "")[:300])
         is_valid, err = schema_validate_sql(sql, schema)
         if not is_valid:
             logger.warning("schema_driven_agent: SQL validation failed: %s", err)
