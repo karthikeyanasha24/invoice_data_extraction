@@ -749,6 +749,9 @@ If result is empty, say so and suggest a refined question.
                              if len(w) >= 4 and w.lower() not in _GENERIC_WORDS]
         # A query is product-specific only when it names a specific item AND doesn't name SAP tables
         is_product_specific = bool(_product_keywords) and not _named_table
+        # Do NOT treat "profit center" / "cost by profit center" as a product name — it's an accounting dimension
+        if "profit center" in q_lower or "profit centre" in q_lower or "cost by profit" in q_lower:
+            is_product_specific = False
 
         if cost_related and is_product_specific:
             # Build a natural-language product search term from the question keywords
