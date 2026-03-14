@@ -1153,6 +1153,48 @@ def _safe_json_extract_adaptive(text: str) -> Dict[str, Any]:
     return {}
 
 
+def _get_query_intent_tokens(question: str) -> set:
+    """
+    Extract intent tokens from a natural language query for dynamic table fallback.
+    Maps synonyms and common phrasings to canonical intents so any wording is handled.
+    """
+    if not (question or "").strip():
+        return set()
+    q = (question or "").lower()
+    # Normalize: replace common synonyms so "sold" -> sales, "spend" -> cost, etc.
+    synonyms = [
+        ("revenue", "sales", "billing", "invoices", "sold", "sell", "sale", "billed", "invoice", "revenues"),
+        ("cost", "costs", "spend", "spending", "expense", "expenses", "amount", "amounts", "price", "prices"),
+        ("purchase", "purchased", "buy", "bought", "procure", "procurement", "po ", "pos "),
+        ("customer", "customers", "client", "clients", "buyer", "buyers"),
+        ("vendor", "vendors", "supplier", "suppliers"),
+        ("profit center", "profit centre", "profitcenter", "prctr"),
+        ("cost center", "cost centre", "csks", "costcenter"),
+        ("delivery", "deliveries", "delivered", "ship", "shipped", "shipment"),
+        ("margin", "margins", "profit", "profitability", "gross margin"),
+        ("industry", "industries", "sector", "brsch"),
+        ("material", "materials", "product", "products", "item", "items", "sku"),
+        ("quantity", "quantities", "qty", "volume"),
+        ("year", "years", "annual", "fiscal", "yoy", "y/y"),
+        ("top ", "best ", "highest ", "largest ", "biggest ", "leading "),
+        ("total ", "sum ", "aggregate", "breakdown", "by "),
+    ]
+    tokens = set()
+    for canonical_group in synonyms:
+        group = canonical_group if isinstance(canonical_group, tuple) else (canonical_group,)
+        key = group[0]
+        for term in group:
+            if term in q:
+                tokens.add(key.replace(" ", "_"))
+                break
+    # Single-word intents
+    if any(x in q for x in ("vbrk", "vbrp", "ekpo", "ekko", "makt", "mara", "kna1", "faglflexa", "likp", "lips")):
+        tokens.add("table_mentioned")
+    if any(x in q for x in ("how much", "what is", "what are", "show me", "give me", "list ", "get ", "tell me")):
+        tokens.add("ask_value")
+    return tokens
+
+
 def _pick_tables_adaptive(
     question: str,
     client: OpenAI,
@@ -1169,6 +1211,12 @@ def _pick_tables_adaptive(
         table_descriptions = SAP_TABLE_DESCRIPTIONS
 
     prompt = f"""
+Interpret the user's intent flexibly. Treat paraphrases and synonyms as equivalent:
+- revenue = sales = billing = invoices = sold = billed; cost = spend = expense = amount;
+- purchase = bought = procured; customer = client; vendor = supplier;
+- "how much" / "what is" / "show me" / "list" / "give me" = request for data;
+- "by" = "per" = "for each" = breakdown dimension. Never return empty selected_tables just because wording is informal or different.
+
 User query: "{question}"
 
 Available tables:
@@ -1219,6 +1267,7 @@ Task:
 - **BOM (STKO, STPO, MAST)**: use STKO, STPO, MAST, MARA, MAKT when question asks components, BOM, explosion, or "Harley jacket BOM".
 - **Cost by cost center (CSKS, COEP)**: use COEP, CSKS (cost center master); join COEP to CSKS; CEPC for profit center master.
 - **Internal orders (AUFK)**: use AUFK, COEP, COSP when question asks internal order, order cost, or project.
+- When in doubt, prefer including tables that might be relevant (e.g. VBRK+VBRP+KNA1 for anything about sales/customers/revenue) so the next step can refine the query. Prefer a reasonable answer over returning no tables.
 - Only return JSON in this format:
 
 {{
@@ -1286,6 +1335,8 @@ def _generate_sql_json_adaptive(
     tables_block = {t: tbl_desc.get(t, f"Table {t}") for t in selected_tables}
 
     prompt = f"""
+Interpret the user's intent flexibly: revenue/sales/billing/invoices mean the same; cost/spend/amount/expense mean the same; infer the correct columns and joins from context even if the user used informal or partial wording. Always return a valid spec when the tables can answer the question.
+
 User query: "{question}"
 
 Tables available:
@@ -1334,6 +1385,7 @@ Column mappings (table -> column -> description):
 **Standard cost (KEKO, CKMLCR):** KEKO/KEPH/CKIS for cost breakdown; CKMLCR for stprs, salk3 by material. Join MARA, MAKT for material name.
 **BOM (STKO, STPO, MAST):** MAST links material to BOM (STLNR); STKO header, STPO has IDNRK (component), MENGE; join STPO.IDNRK to MARA/MAKT for component name.
 **FAGLFLEXA segment / rcntr / rfarea / pprctr:** Use FAGLFLEXA columns segment, rcntr (cost center), rfarea (functional area), pprctr (partner profit center) when question asks for these dimensions; group by prctr and the requested dimension.
+**Vague or short questions:** If the user asks something generic (e.g. "show me sales", "revenue", "what did we sell"), produce a reasonable default: e.g. billing docs with customer, date, amount; order by amount or date DESC; limit 100. Never return empty columns.
 **All columns and filters must use only column names from the mappings above.**
 
 Return JSON only:
@@ -1368,12 +1420,16 @@ def _is_last_best_sales_query(question: str) -> bool:
     if not (question or "").strip():
         return False
     q = (question or "").lower()
-    if "sales" not in q:
-        return False
-    return (
+    # Dynamic: sales, revenue, billing, sold, invoices + recency/top/best
+    sales_related = any(x in q for x in ("sales", "revenue", "billing", "sold", "invoices", "billed"))
+    recency_or_top = any(x in q for x in (
+        "last ", "best ", "recent ", "latest ", "top ", "show me ", "show ", "what are the ",
+        "how much did we ", "recent sales", "last sales", "best sales", "top sales"
+    ))
+    return (sales_related and recency_or_top) or (
         any(x in q for x in (
             "last sales", "best sales", "recent sales", "latest sales", "show me sales",
-            "show sales", "last best sales", "top sales", "recent sales"
+            "show sales", "last best sales", "top sales", "recent sales", "what are our sales"
         ))
         or (("last" in q or "best" in q or "recent" in q or "latest" in q) and "sales" in q)
     )
@@ -1384,11 +1440,11 @@ def _is_link_faglflexa_customers_products_query(question: str) -> bool:
     if not (question or "").strip():
         return False
     q = (question or "").lower()
-    if "faglflexa" not in q:
-        return False
-    return (
-        "link" in q or "profit center" in q or "costs back to" in q
-    ) and ("customer" in q or "product" in q or "major" in q)
+    # Dynamic: accept "link", "profit center costs back to", "attribute costs to", "cost by profit center and customer"
+    has_fagl = "faglflexa" in q or ("profit center" in q and "cost" in q)
+    has_link_intent = any(x in q for x in ("link", "back to", "attribute", "connect", "tie "))
+    has_customer_product = any(x in q for x in ("customer", "product", "major", "client"))
+    return has_fagl and (has_link_intent or ("profit center" in q and has_customer_product))
 
 
 def _is_cost_by_profit_center_query(question: str) -> bool:
@@ -1396,16 +1452,22 @@ def _is_cost_by_profit_center_query(question: str) -> bool:
     if not (question or "").strip():
         return False
     q = (question or "").lower()
-    if "profit center" not in q and "profit centre" not in q:
+    has_pc = any(x in q for x in ("profit center", "profit centre", "prctr", "profitcenter"))
+    if not has_pc:
         return False
-    return any(
-        x in q for x in (
-            "cost by profit center", "total cost by profit center", "cost by profit centre",
-            "total cost by profit centre", "balance by profit center",
-            "compare cost", "costs between", "two profit center", "monthly cost trend",
-            "cost trend", "profit center and gl account", "cost by profit center and gl"
+    # Dynamic: any cost/balance/amount + profit center, or explicit phrases
+    has_cost_balance = any(x in q for x in ("cost", "costs", "balance", "amount", "total ", "breakdown", "trend", "compare", "gl account"))
+    return (
+        has_cost_balance
+        or any(
+            x in q for x in (
+                "cost by profit center", "total cost by profit center", "cost by profit centre",
+                "costs per profit center", "balance by profit center", "compare cost",
+                "costs between", "two profit center", "monthly cost trend", "cost trend",
+                "profit center and gl account", "cost by profit center and gl", "by profit center"
+            )
         )
-    ) or ("cost" in q and "profit center" in q) or ("total cost" in q and "profit center" in q)
+    )
 
 
 def _is_ekpo_purchasing_query(question: str) -> bool:
@@ -1413,13 +1475,16 @@ def _is_ekpo_purchasing_query(question: str) -> bool:
     if not (question or "").strip():
         return False
     q = (question or "").lower()
-    return (
-        ("ekpo" in q or "purchase" in q or "purchased" in q)
-        and (
-            "quantity" in q or "cost" in q or "material" in q or "plant" in q or "werks" in q
-            or "netpr" in q or "top 10 products" in q or "jacket" in q or "harley" in q
-        )
-    )
+    purchase_related = any(x in q for x in (
+        "ekpo", "purchase", "purchased", "buy", "bought", "procure", "procurement", "po "
+    ))
+    dimension_or_value = any(x in q for x in (
+        "quantity", "quantities", "cost", "costs", "material", "materials", "plant", "werks",
+        "netpr", "top 10", "top 20", "jacket", "harley", "for each material", "by material",
+        "by plant", "average", "unit price", "total ", "list products", "list materials",
+        "cheap", "high volume", "spend by", "vendor"
+    ))
+    return purchase_related and dimension_or_value
 
 
 def _build_minimal_last_sales_spec(
@@ -2011,15 +2076,35 @@ def run_adaptive_sap_sql_agent(
             elif any(x in q_lower for x in ("jacket", "harley")) and any(x in q_lower for x in ("revenue", "sales", "customer", "cost", "margin", "invoice")):
                 selected_tables = ["VBRK", "VBRP", "KNA1", "MAKT"]
             else:
-                # Country/customer sales: Korean, Indian, German customers, revenue from X
-                try:
-                    from .invoice_bot_helpers import _extract_country_iso_from_query
-                    if _extract_country_iso_from_query(question):
-                        selected_tables = ["VBRK", "VBRP", "KNA1"]
-                    elif any(x in q_lower for x in ("sales", "revenue", "customer", "invoice", "billed", "industry")):
-                        selected_tables = ["VBRK", "VBRP", "KNA1"]
-                except Exception:
-                    pass
+                # Dynamic intent-based fallback: map intent tokens to tables so any phrasing is handled
+                intents = _get_query_intent_tokens(question)
+                if "profit_center" in intents or "cost_center" in intents:
+                    selected_tables = ["FAGLFLEXA"] if "customer" not in intents and "product" not in intents else ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
+                elif "revenue" in intents or "sales" in intents or "customer" in intents:
+                    selected_tables = ["VBRK", "VBRP", "KNA1"]
+                    if "material" in intents or "product" in intents or "industry" in intents:
+                        selected_tables = ["VBRK", "VBRP", "KNA1", "MAKT"]
+                    if "industry" in intents:
+                        selected_tables = ["VBRK", "VBRP", "KNA1", "T016T"]
+                elif "purchase" in intents or "vendor" in intents:
+                    selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
+                elif "delivery" in intents:
+                    selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
+                elif "margin" in intents or "profit" in intents:
+                    selected_tables = ["VBRK", "VBRP", "EKPO", "MAKT"]
+                elif "cost" in intents and ("material" in intents or "product" in intents):
+                    selected_tables = ["EKPO", "EKKO", "MAKT", "MARA"]
+                elif "ask_value" in intents and not selected_tables:
+                    selected_tables = ["VBRK", "VBRP", "KNA1"]
+                if not selected_tables:
+                    try:
+                        from .invoice_bot_helpers import _extract_country_iso_from_query
+                        if _extract_country_iso_from_query(question):
+                            selected_tables = ["VBRK", "VBRP", "KNA1"]
+                        elif any(x in q_lower for x in ("sales", "revenue", "customer", "invoice", "billed", "industry")):
+                            selected_tables = ["VBRK", "VBRP", "KNA1"]
+                    except Exception:
+                        pass
             if selected_tables:
                 logger.info("run_adaptive_sap_sql_agent: using fallback tables for short query: %s", selected_tables)
         if not selected_tables:
@@ -3358,4 +3443,3 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-
