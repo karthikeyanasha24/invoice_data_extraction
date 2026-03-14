@@ -1267,6 +1267,14 @@ Task:
 - **BOM (STKO, STPO, MAST)**: use STKO, STPO, MAST, MARA, MAKT when question asks components, BOM, explosion, or "Harley jacket BOM".
 - **Cost by cost center (CSKS, COEP)**: use COEP, CSKS (cost center master); join COEP to CSKS; CEPC for profit center master.
 - **Internal orders (AUFK)**: use AUFK, COEP, COSP when question asks internal order, order cost, or project.
+- **CKMLPP (variances)**: use CKMLPP with CKMLCR, MARA, MAKT when question asks planned vs actual cost variance or material variances.
+- **MVKE (material hierarchy, prodh, region)**: use MVKE with VBRK, VBRP, MAKT when question asks revenue by material hierarchy or product hierarchy or region.
+- **KNVP (partner roles)**: use KNVP with KNA1 when question asks payer, bill-to, ship-to, or customer partner relationships.
+- **VBAP, VBEP (open quantity, backorder, schedule)**: use VBAP, VBEP with LIPS, VBRP when question asks open vs delivered quantity, backorder, or schedule adherence.
+- **Write-offs, credit notes, blocking**: use BSAD, BSEG, KNA1 (and BKPF if available) for write-offs by customer/year; include when question asks credit notes, returns, or blocking.
+- **AR by profit center**: use BSAD/BSEG with account assignment fields or FAGLFLEXA when question asks AR balances by profit center.
+- **Cost of a product (jacket, Harley)**: use EKPO, EKKO, MAKT for purchase cost; or KEKO, KEPH, MAKT for standard cost when question says "standard cost" or "costed".
+- **Materials in sales but not in purchasing (or vice versa)**: use VBRP and EKPO (and MARA, MAKT) to compare material lists; LEFT JOIN and WHERE NULL for "not in" logic.
 - When in doubt, prefer including tables that might be relevant (e.g. VBRK+VBRP+KNA1 for anything about sales/customers/revenue) so the next step can refine the query. Prefer a reasonable answer over returning no tables.
 - Only return JSON in this format:
 
@@ -1385,6 +1393,13 @@ Column mappings (table -> column -> description):
 **Standard cost (KEKO, CKMLCR):** KEKO/KEPH/CKIS for cost breakdown; CKMLCR for stprs, salk3 by material. Join MARA, MAKT for material name.
 **BOM (STKO, STPO, MAST):** MAST links material to BOM (STLNR); STKO header, STPO has IDNRK (component), MENGE; join STPO.IDNRK to MARA/MAKT for component name.
 **FAGLFLEXA segment / rcntr / rfarea / pprctr:** Use FAGLFLEXA columns segment, rcntr (cost center), rfarea (functional area), pprctr (partner profit center) when question asks for these dimensions; group by prctr and the requested dimension.
+**CKMLPP (variances):** Join CKMLPP to CKMLCR/MARA/MAKT; select material, variance fields (planned vs actual); group by material when question asks materials with large variances.
+**MVKE (material hierarchy):** Join MVKE to VBRP on MATNR (and VBELN/VKORG/VTWEG if needed); use PRODH for product hierarchy; group by PRODH or region; SUM(VBRP.NETWR).
+**KNVP (partner roles):** Use KNVP (PARVW = payer, bill-to, ship-to); join KNA1 on KUNNR; select partner function, customer, name.
+**VBAP/VBEP (open quantity, backorder):** Use VBAP (open quantity), VBEP (schedule); join to LIPS for delivered; compare open vs delivered by material or order.
+**Write-offs / credit notes:** Use BSEG or BSAD with BSHKZ or similar; group by customer and year; SUM(amount) for write-offs.
+**Materials in VBRP but not in EKPO (or vice versa):** Select MATNR from VBRP EXCEPT (or LEFT JOIN EKPO WHERE EKPO.MATNR IS NULL) for "in sales not in purchasing"; reverse for "in purchasing never sold". Use MARA/MAKT for material name.
+**Cost of jacket/Harley (purchase cost):** EKPO + MAKT: filter MAKT.MAKTX ILIKE '%jacket%' or '%Harley%'; SUM(NETWR) or SUM(MENGE*NETPR) by material/plant; join EKPO.MATNR = MAKT.MATNR, MAKT.SPRAS = 'E'.
 **Vague or short questions:** If the user asks something generic (e.g. "show me sales", "revenue", "what did we sell"), produce a reasonable default: e.g. billing docs with customer, date, amount; order by amount or date DESC; limit 100. Never return empty columns.
 **All columns and filters must use only column names from the mappings above.**
 
@@ -2030,25 +2045,29 @@ def run_adaptive_sap_sql_agent(
                 "faglflexa" in q_lower and ("customer" in q_lower or "product" in q_lower or "link" in q_lower)
             ):
                 selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
-            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center")):
+            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center", "top 20 profit centers", "top 10 profit centers", "list top", "profit centers by cost")):
                 selected_tables = ["FAGLFLEXA"]
             elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend", "total purchased quantity", "netpr", "matnr werks")):
                 selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
             elif any(x in q_lower for x in ("jacket", "harley") and any(x in q_lower for x in ("purchase", "ekpo", "cost", "quantity"))):
                 selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
-            elif any(x in q_lower for x in ("mkpf", "resb", "stock movement", "reservation", "issued from inventory", "mseg", "on-hand", "slow-moving")):
+            elif any(x in q_lower for x in ("resb", "lips", "discrepancy")) and ("reserved" in q_lower or "delivered" in q_lower or "discrepancy" in q_lower):
+                selected_tables = ["RESB", "LIPS", "MARA", "MAKT", "MKPF"]
+            elif any(x in q_lower for x in ("resb", "reserved")) and ("quantity" in q_lower or "highest" in q_lower or "total quantity" in q_lower):
+                selected_tables = ["RESB", "MARA", "MAKT"]
+            elif any(x in q_lower for x in ("mkpf", "stock movement", "reservation", "issued from inventory", "mseg", "slow-moving", "reserved quantity", "no movements", "posting dates")):
                 selected_tables = ["MKPF", "MSEG", "MARA", "MAKT"]
-            elif any(x in q_lower for x in ("marc", "plant master", "mrp", "configurable", "batch-managed", "marm")):
+            elif any(x in q_lower for x in ("marc", "plant master", "mrp", "configurable", "batch-managed", "marm", "on-hand", "valuation", "planning")):
                 selected_tables = ["MARC", "MARA", "MAKT"]
-            elif any(x in q_lower for x in ("keko", "ckmlcr", "ckis", "standard cost", "stprs", "salk3", "bom", "stko", "stpo", "mast", "component")):
-                selected_tables = ["KEKO", "KEPH", "CKIS", "MARA", "MAKT"]
-            elif any(x in q_lower for x in ("ckmlcr", "costed materials", "stock value")):
+            elif any(x in q_lower for x in ("keko", "ckmlcr", "ckis", "standard cost", "stprs", "salk3", "bom", "stko", "stpo", "mast", "component", "ckmlpp", "variance", "planned vs actual")):
+                selected_tables = ["KEKO", "KEPH", "CKIS", "MARA", "MAKT"] if "ckmlpp" not in q_lower else ["CKMLCR", "CKMLPP", "MARA", "MAKT"]
+            elif any(x in q_lower for x in ("ckmlcr", "costed materials", "stock value", "finished goods")):
                 selected_tables = ["CKMLCR", "MARA", "MAKT"]
-            elif any(x in q_lower for x in ("konv", "condition", "price condition", "discount", "pr00", "base price", "kschl", "knumv")):
-                selected_tables = ["KONV", "VBRK", "VBRP", "MAKT"]
-            elif any(x in q_lower for x in ("bsad", "bseg", "ar ", "receivable", "aging", "write-off", "open ar", "payment terms", "zterm")):
+            elif any(x in q_lower for x in ("konv", "condition", "price condition", "discount", "pr00", "base price", "kschl", "knumv", "rebate", "ra01", "k007", "kappl", "cash discount", "list price", "net price")):
+                selected_tables = ["KONV", "VBRK", "VBRP", "MAKT", "KNA1"]
+            elif any(x in q_lower for x in ("bsad", "bseg", "ar ", "receivable", "aging", "write-off", "open ar", "payment terms", "zterm", "overdue", "bkpf", "write off", "credit note")):
                 selected_tables = ["BSAD", "BSEG", "KNA1"]
-            elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor", "vendor balance", "lfb1", "invoice amount")):
+            elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor", "vendor balance", "lfb1", "invoice amount", "ap aging", "payables", "rmwwr", "matkl", "pareto", "80%", "lead time", "ekorg")):
                 selected_tables = ["LFA1", "EKKO", "EKPO", "RBKP", "RSEG"]
             elif any(x in q_lower for x in ("margin", "profitability", "revenue minus cost", "improving margin", "margin year over year", "margin trend", "products with improving")):
                 selected_tables = ["VBRK", "VBRP", "EKPO", "MAKT"]
@@ -2062,10 +2081,32 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["VBRK", "VBRP", "KNA1", "T016T"]
             elif any(x in q_lower for x in ("customer group", "knvv", "kdgrp", "sales org", "vkorg", "vtweg", "distribution channel")):
                 selected_tables = ["VBRK", "VBRP", "KNA1", "KNVV"]
-            elif any(x in q_lower for x in ("incoterm", "inco1", "inco2")):
+            elif any(x in q_lower for x in ("incoterm", "inco1", "inco2", "revenue split")):
                 selected_tables = ["VBRK", "VBRP"]
-            elif any(x in q_lower for x in ("top 20 customers", "top 20 materials", "top 10", "billed revenue", "invoice value")):
+            elif any(x in q_lower for x in ("top 20 customers", "top 20 materials", "top 10", "billed revenue", "invoice value", "billed documents", "top 20 documents", "average invoice", "average selling price", "netwr", "fkimg")):
                 selected_tables = ["VBRK", "VBRP", "KNA1", "MAKT"]
+            elif any(x in q_lower for x in ("declining revenue", "no sales", "last 12 months", "historical revenue", "no recent")):
+                selected_tables = ["VBRK", "VBRP", "KNA1"]
+            elif any(x in q_lower for x in ("mix", "country", "industry")) and ("revenue" in q_lower or "sales" in q_lower):
+                selected_tables = ["VBRK", "VBRP", "KNA1", "T016T"]
+            elif any(x in q_lower for x in ("mvke", "prodh", "material hierarchy", "region")):
+                selected_tables = ["VBRK", "VBRP", "KNA1", "MAKT"]
+            elif any(x in q_lower for x in ("knvp", "ship-to", "payer", "bill-to", "partner relationship")):
+                selected_tables = ["KNA1", "KNVP"]
+            elif any(x in q_lower for x in ("multiple sales areas", "sales areas")):
+                selected_tables = ["VBRK", "VBRP", "KNA1", "KNVV"]
+            elif any(x in q_lower for x in ("cost of the jacket", "cost of jacket", "cost of harley", "cost of the harley", "know the cost", "cost history", "do you know the cost")) and any(x in q_lower for x in ("jacket", "harley", "product", "material")):
+                selected_tables = ["EKPO", "EKKO", "MAKT", "MARA"]
+            elif any(x in q_lower for x in ("end-to-end", "profitability by customer", "profitability by material", "cross-functional")):
+                selected_tables = ["VBRK", "VBRP", "EKPO", "KNA1", "MAKT"]
+            elif any(x in q_lower for x in ("materials", "in sales", "not in purchasing", "never sold", "appear in sales", "appear in purchasing")):
+                selected_tables = ["VBRP", "EKPO", "MARA", "MAKT"]
+            elif any(x in q_lower for x in ("compare", "two", "cost centers", "between two cost")):
+                selected_tables = ["COEP", "CSKS"]
+            elif any(x in q_lower for x in ("cepc", "profit center master", "link to gl")):
+                selected_tables = ["CEPC", "FAGLFLEXA"]
+            elif any(x in q_lower for x in ("lfb1", "payment terms")) and "vendor" in q_lower:
+                selected_tables = ["LFA1", "LFB1", "RBKP", "RSEG"]
             elif any(x in q_lower for x in ("by currency", "sales by currency", "waerk", "waers")):
                 selected_tables = ["VBRK", "VBRP"]
             elif any(x in q_lower for x in (
@@ -2143,6 +2184,12 @@ def run_adaptive_sap_sql_agent(
                 spec = _build_minimal_faglflexa_spec(question, selected_tables, column_mappings)
                 if spec:
                     logger.info("run_adaptive_sap_sql_agent: using minimal FAGLFLEXA spec after LLM returned empty")
+            if not spec and "EKPO" in (t.upper() for t in selected_tables) and any(
+                x in q_lower for x in ("purchase", "purchased", "quantity", "cost", "material", "jacket", "harley", "vendor", "plant", "netpr")
+            ):
+                spec = _build_minimal_ekpo_spec(question, selected_tables, column_mappings)
+                if spec:
+                    logger.info("run_adaptive_sap_sql_agent: using minimal EKPO spec after LLM returned empty")
             if not spec:
                 return None
 
