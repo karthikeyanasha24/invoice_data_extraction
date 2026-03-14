@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
-from .sap_sql_agent import run_sap_sql_agent, _serialize_value  # type: ignore
+from .sap_sql_agent import run_sap_sql_agent, run_adaptive_sap_sql_agent, _serialize_value  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
 from .training_data_collector import log_query_execution, get_few_shot_examples
 from .sql_example_library import get_sql_examples_for_question
@@ -35,6 +35,9 @@ class OrchestratorResult:
     time_scope: Optional[str] = None
     date_range: Optional[Dict[str, str]] = None
     period_info: Optional[str] = None
+    # Invoice-bot: insights (best + alternatives) and analysis plan (calculations, visualizations, data_notes)
+    insights: Optional[Dict[str, Any]] = None  # { "best_provider", "best_text", "alternatives": [(name, text), ...] }
+    analysis_plan: Optional[Dict[str, Any]] = None  # { "calculations", "visualizations", "data_notes" }
 
 
 def _get_client(api_key: str) -> OpenAI:
@@ -636,15 +639,70 @@ If result is empty, say so and suggest a refined question.
     _few_shot = get_sql_examples_for_question(
         user_query, additional_examples=get_few_shot_examples(db, 2)
     )
-    result = run_sap_sql_agent(
-        user_query,
-        sql_db,
-        knowledge_context=knowledge_context,
-        time_scope=time_scope,
-        few_shot_examples=_few_shot,
-    )
+
+    # Procurement-from-list: "from the list below which are procured internally/externally" → use prior result materials
+    result = None
+    try:
+        from .invoice_bot_helpers import (
+            is_from_list_below_procurement_query,
+            get_material_numbers_from_dataframe,
+            query_procurement_type_for_materials,
+        )
+        from .sap_sql_agent import _run_sql, SqlAgentResult
+        last_rows = mem.last_rows()
+        if is_from_list_below_procurement_query(user_query) and last_rows:
+            matnrs = get_material_numbers_from_dataframe(last_rows)
+            if matnrs:
+                def _run_sql_fn(sql: str):
+                    return _run_sql(sql_db, sql)
+                proc_rows, proc_sql = query_procurement_type_for_materials(_run_sql_fn, matnrs)
+                if proc_rows:
+                    result = SqlAgentResult(sql=proc_sql, rows=proc_rows)
+                    logger.info("Procurement-from-list: %d rows for %d materials", len(proc_rows), len(matnrs))
+    except Exception as proc_err:
+        logger.warning("Procurement-from-list check failed: %s", proc_err)
+
+    if result is None:
+        # Try invoice-bot-style adaptive SQL first (question-specific tables and SQL per query).
+        # If it fails or returns no rows, fall back to current run_sap_sql_agent (catalog + standard prompts).
+        result = run_adaptive_sap_sql_agent(
+            user_query,
+            sql_db,
+            knowledge_context=knowledge_context,
+            time_scope=time_scope,
+            few_shot_examples=_few_shot,
+        )
+    if result is None or not (getattr(result, "rows", None)):
+        logger.info("Adaptive SQL path returned no result; falling back to standard sap_sql_agent")
+        result = run_sap_sql_agent(
+            user_query,
+            sql_db,
+            knowledge_context=knowledge_context,
+            time_scope=time_scope,
+            few_shot_examples=_few_shot,
+        )
     timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
     
+    # Product-performance fallback: when both adaptive and standard return 0 rows, try known-good VBRK/VBRP/MAKT SQL
+    if result and not result.rows:
+        try:
+            from .invoice_bot_helpers import get_product_performance_fallback_sql
+            from .sap_sql_agent import _run_sql
+            fallback_sql = get_product_performance_fallback_sql(user_query)
+            if fallback_sql:
+                fallback_rows = _run_sql(sql_db, fallback_sql)
+                if fallback_rows:
+                    logger.info("Product performance fallback returned %d rows", len(fallback_rows))
+                    result = type(result)(sql=fallback_sql, rows=fallback_rows)
+                else:
+                    fallback_sql_all = get_product_performance_fallback_sql(user_query, with_date_filter=False)
+                    if fallback_sql_all and fallback_sql_all != fallback_sql:
+                        fallback_rows = _run_sql(sql_db, fallback_sql_all)
+                        if fallback_rows:
+                            result = type(result)(sql=fallback_sql_all, rows=fallback_rows)
+        except Exception as fallback_err:
+            logger.warning("Product performance fallback failed: %s", fallback_err)
+
     if not result or not result.rows:
         q_lower = (user_query or "").lower()
         knowledge = mem.knowledge()
@@ -808,6 +866,29 @@ If result is empty, say so and suggest a refined question.
             )
         # result now has rows (from the simplified retry) — fall through to summarization below.
 
+    # Invoice-bot result shaping: dedupe, aggregate by customer, filter by product name, apply display labels
+    try:
+        from .invoice_bot_helpers import (
+            deduplicate_material_price_rows,
+            deduplicate_supplier_per_part_rows,
+            aggregate_by_customer_sales,
+            filter_dataframe_by_product_name_if_requested,
+            apply_procurement_type_display,
+            apply_industry_display,
+            is_sales_by_customer_query,
+        )
+        rows = result.rows
+        rows, _ = deduplicate_material_price_rows(rows)
+        rows, _ = deduplicate_supplier_per_part_rows(rows)
+        if is_sales_by_customer_query(user_query):
+            rows, _ = aggregate_by_customer_sales(rows)
+        rows = filter_dataframe_by_product_name_if_requested(user_query, rows)
+        rows = apply_procurement_type_display(rows)
+        rows = apply_industry_display(rows)
+        result = type(result)(sql=result.sql, rows=rows)
+    except Exception as shape_err:
+        logger.warning("Result shaping failed: %s", shape_err)
+
     # Summarize rows with LLM.
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
@@ -957,6 +1038,54 @@ Write a clear MARKDOWN answer:
         logger.error(f"❌ Chart generation failed: {chart_err}", exc_info=True)
         timings["chart_generation_ms"] = 0
 
+    # Invoice-bot: dynamic analysis plan, insights from all providers, COGS explanation, single-material cost summary
+    analysis_plan_out = None
+    insights_out = None
+    reply_extra: List[str] = []
+    try:
+        from .invoice_bot_helpers import (
+            get_dynamic_analysis_plan,
+            perform_analysis_from_plan,
+            get_insights_from_all_providers,
+            pick_best_analysis,
+            get_cogs_calculation_answer_if_asked,
+            get_single_material_cost_summary,
+        )
+        # Analysis plan (calculations, visualizations, data_notes)
+        plan = get_dynamic_analysis_plan(user_query, result.rows, client)
+        if plan:
+            analysis_plan_out = perform_analysis_from_plan(result.rows, plan, user_query)
+        # Multi-provider insights and best analysis
+        all_insights = get_insights_from_all_providers(
+            user_query, result.rows, client,
+            sql_query=result.sql,
+        )
+        if all_insights:
+            best_provider, best_text, alternatives = pick_best_analysis(user_query, all_insights, client)
+            insights_out = {"best_provider": best_provider, "best_text": best_text, "alternatives": alternatives}
+            if best_text and "No provider" not in best_provider:
+                reply_extra.append(f"\n\n### Insights ({best_provider})\n{best_text}")
+        # COGS explanation when user asks how cost of goods is calculated
+        cogs_answer = get_cogs_calculation_answer_if_asked(user_query, result.rows)
+        if cogs_answer:
+            reply_extra.append(f"\n\n### How cost of goods is calculated\n{cogs_answer}")
+        # Single-material cost summary when result has one material
+        cost_summary = get_single_material_cost_summary(user_query, result.rows)
+        if cost_summary:
+            lines = [f"**Material number:** {cost_summary.get('material_number', '')}"]
+            if cost_summary.get("description"):
+                lines.append(f"**Description:** {cost_summary['description']}")
+            for f in cost_summary.get("fields", []):
+                lines.append(f"**{f.get('label', '')}:** {f.get('value', '')}")
+            if cost_summary.get("note"):
+                lines.append(cost_summary["note"])
+            reply_extra.append("\n\n### Cost for product number\n" + "\n".join(lines))
+    except Exception as inv_err:
+        logger.warning("Invoice-bot analysis/insights/COGS failed: %s", inv_err)
+
+    if reply_extra:
+        reply = (reply or "") + "".join(reply_extra)
+
     mem.last_user_query = user_query
     mem.last_sql = result.sql
     mem.last_rows_json = json.dumps(_rows_preview(result.rows, limit=80), default=str)
@@ -1016,7 +1145,9 @@ Write a clear MARKDOWN answer:
         performance=timings,
         time_scope=time_scope,
         date_range=date_range,
-        period_info=period_info
+        period_info=period_info,
+        insights=insights_out,
+        analysis_plan=analysis_plan_out,
     )
 
 
