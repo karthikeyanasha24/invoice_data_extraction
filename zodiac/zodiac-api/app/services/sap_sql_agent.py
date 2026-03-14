@@ -1203,6 +1203,8 @@ Task:
 - **AR, receivables (BSAD, BSEG)**: use BSAD, BSEG, BKPF with KNA1 when question asks open AR, aging, credit, write-offs, or payment terms.
 - **Vendors, AP (LFA1, RBKP, RSEG)**: use LFA1 (vendor master), EKKO, EKPO for PO spend; RBKP, RSEG for invoice amounts; LFB1 for payment terms.
 - **Margin / profitability (revenue minus cost)**: use VBRK, VBRP (revenue) with EKPO or RSEG (cost) and MAKT; join on material where possible.
+- **Improving margins / margin year over year / products with improving margins**: use VBRK, VBRP (revenue), EKPO (cost), MAKT; group by material and year (GJAHR or FKDAT) to show margin trend.
+- **Compare costs between profit centers / two profit centers**: use FAGLFLEXA only; select prctr, SUM(hsl); group by prctr.
 - **Deliveries (LIKP, LIPS)**: use LIKP, LIPS, VBFA with VBRK, VBRP when question asks delivered quantity, on-time delivery, or delivery performance.
 - **Controlling (AUFK, COEP, COSP, CSKS, CEPC)**: use AUFK (internal orders), COEP/COSP (actual/planned cost), CSKS (cost center), CEPC (profit center master) when question asks cost by order, cost center, or profit center master.
 - Only return JSON in this format:
@@ -1303,6 +1305,7 @@ Column mappings (table -> column -> description):
 **AR / receivables (BSAD, BSEG):** Use BSAD (cleared), BSEG (line items); join to BKPF on BELNR/BUKRS/GJAHR; join KNA1 on KUNNR. Select customer, amount, clearing date; group by customer for totals.
 **Vendors (LFA1, RBKP, RSEG):** Use LFA1 (LIFNR, NAME1), EKPO/EKKO for PO spend; RBKP (invoice header), RSEG (invoice item) for invoice amounts. Join on LIFNR, document keys. Sum by vendor, material, or year.
 **Margin:** Select VBRP.NETWR (revenue), EKPO.NETWR or RSEG amount (cost); join VBRP.MATNR = EKPO.MATNR where possible. Compute margin = revenue - cost; group by material or customer.
+**Improving margins / margin year over year:** Use VBRK, VBRP (revenue by material, year via GJAHR or FKDAT), EKPO or RSEG (cost). Group by material (MATNR) and year; compute margin = SUM(revenue) - SUM(cost) per year. For "improving" or "year over year" return material, year, revenue, cost, margin so the user can see trend; or filter to materials where margin in latest year > prior year. Add MAKT for material name (MAKT.MATNR = VBRP.MATNR).
 **Deliveries (LIKP, LIPS):** Join LIKP to LIPS on VBELN; join to VBRP/VBFA for value. Select delivery doc, customer, material, quantity, value. Order by quantity or value DESC.
 **Controlling (AUFK, COEP, COSP, CSKS):** Use COEP for actual cost by cost object; COSP for planned; join AUFK for order description; CSKS for cost center. Select OBJNR or order, cost element, SUM(amount).
 **All columns and filters must use only column names from the mappings above.**
@@ -1495,29 +1498,43 @@ def _resolve_faglflexa_table_and_mappings(db: Session) -> Tuple[Optional[str], D
     return actual_name or None, column_mappings or {}
 
 
-def _run_faglflexa_cost_by_profit_center_sql(db: Session, table_name: str, last_24_months: bool = False) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
+def _run_faglflexa_cost_by_profit_center_sql(
+    db: Session,
+    table_name: str,
+    last_24_months: bool = False,
+    column_mappings: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
     """
     Run a minimal 'cost by profit center' (and optionally GL account / last 24 months) query.
-    Returns (sql, rows) or None on failure. Tries table_name then lowercase (PostgreSQL often has lowercase tables).
+    Uses actual column names from column_mappings when provided (for correct DB casing).
+    Tries table_name then lowercase (PostgreSQL often has lowercase tables).
     """
+    cols = (column_mappings or {}).get(table_name) or {}
+    def _name(logical: str) -> str:
+        for k in cols.keys():
+            if k.lower() == logical.lower():
+                return k
+        return logical
+
     def _build_and_run(tname: str) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
         try:
+            prctr, racct, hsl, ryear, poper, rtcur = _name("prctr"), _name("racct"), _name("hsl"), _name("ryear"), _name("poper"), _name("rtcur")
             if last_24_months:
                 sql = (
-                    f'SELECT "{tname}"."prctr" AS profit_center, "{tname}"."racct" AS gl_account, '
-                    f'"{tname}"."ryear" AS fiscal_year, "{tname}"."poper" AS posting_period, '
-                    f'SUM("{tname}"."hsl") AS total_cost, "{tname}"."rtcur" AS currency '
-                    f'FROM "{tname}" WHERE "{tname}"."prctr" IS NOT NULL '
-                    f'AND "{tname}"."ryear" IN (EXTRACT(YEAR FROM CURRENT_DATE)::text, (EXTRACT(YEAR FROM CURRENT_DATE) - 1)::text) '
-                    f'GROUP BY "{tname}"."prctr", "{tname}"."racct", "{tname}"."ryear", "{tname}"."poper", "{tname}"."rtcur" '
+                    f'SELECT "{tname}"."{prctr}" AS profit_center, "{tname}"."{racct}" AS gl_account, '
+                    f'"{tname}"."{ryear}" AS fiscal_year, "{tname}"."{poper}" AS posting_period, '
+                    f'SUM("{tname}"."{hsl}") AS total_cost, "{tname}"."{rtcur}" AS currency '
+                    f'FROM "{tname}" WHERE "{tname}"."{prctr}" IS NOT NULL '
+                    f'AND "{tname}"."{ryear}" IN (EXTRACT(YEAR FROM CURRENT_DATE)::text, (EXTRACT(YEAR FROM CURRENT_DATE) - 1)::text) '
+                    f'GROUP BY "{tname}"."{prctr}", "{tname}"."{racct}", "{tname}"."{ryear}", "{tname}"."{poper}", "{tname}"."{rtcur}" '
                     f'ORDER BY total_cost DESC NULLS LAST LIMIT 200'
                 )
             else:
                 sql = (
-                    f'SELECT "{tname}"."prctr" AS profit_center, "{tname}"."racct" AS gl_account, '
-                    f'SUM("{tname}"."hsl") AS total_cost, "{tname}"."ryear" AS fiscal_year, "{tname}"."rtcur" AS currency '
-                    f'FROM "{tname}" WHERE "{tname}"."prctr" IS NOT NULL '
-                    f'GROUP BY "{tname}"."prctr", "{tname}"."racct", "{tname}"."ryear", "{tname}"."rtcur" '
+                    f'SELECT "{tname}"."{prctr}" AS profit_center, "{tname}"."{racct}" AS gl_account, '
+                    f'SUM("{tname}"."{hsl}") AS total_cost, "{tname}"."{ryear}" AS fiscal_year, "{tname}"."{rtcur}" AS currency '
+                    f'FROM "{tname}" WHERE "{tname}"."{prctr}" IS NOT NULL '
+                    f'GROUP BY "{tname}"."{prctr}", "{tname}"."{racct}", "{tname}"."{ryear}", "{tname}"."{rtcur}" '
                     f'ORDER BY total_cost DESC NULLS LAST LIMIT 200'
                 )
             rows = _run_sql(db, sql)
@@ -1677,9 +1694,9 @@ def run_adaptive_sap_sql_agent(
                     else:
                         logger.warning("run_adaptive_sap_sql_agent: direct FAGLFLEXA-link spec validation failed: %s", validation_errors)
             # Raw SQL fallback: return cost by profit center when link spec fails
-            link_table_name, _ = _resolve_faglflexa_table_and_mappings(db)
+            link_table_name, link_mappings = _resolve_faglflexa_table_and_mappings(db)
             if link_table_name:
-                result = _run_faglflexa_cost_by_profit_center_sql(db, link_table_name, last_24_months=False)
+                result = _run_faglflexa_cost_by_profit_center_sql(db, link_table_name, last_24_months=False, column_mappings=link_mappings)
                 if result:
                     sql, rows = result
                     logger.info("run_adaptive_sap_sql_agent: FAGLFLEXA-link raw SQL fallback returned %d rows", len(rows or []))
@@ -1726,7 +1743,7 @@ def run_adaptive_sap_sql_agent(
                         logger.warning("run_adaptive_sap_sql_agent: direct cost-by-profit-center spec validation failed: %s", validation_errors)
             # Raw SQL fallback when spec path fails or we have table from mapping file
             if table_name:
-                result = _run_faglflexa_cost_by_profit_center_sql(db, table_name, last_24_months=last_24)
+                result = _run_faglflexa_cost_by_profit_center_sql(db, table_name, last_24_months=last_24, column_mappings=column_mappings)
                 if result:
                     sql, rows = result
                     logger.info("run_adaptive_sap_sql_agent: FAGLFLEXA raw SQL fallback returned %d rows", len(rows or []))
@@ -1782,7 +1799,7 @@ def run_adaptive_sap_sql_agent(
                 "faglflexa" in q_lower and ("customer" in q_lower or "product" in q_lower or "link" in q_lower)
             ):
                 selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
-            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl")):
+            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center")):
                 selected_tables = ["FAGLFLEXA"]
             elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend")):
                 selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
@@ -1794,7 +1811,7 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["BSAD", "BSEG", "KNA1"]
             elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor")):
                 selected_tables = ["LFA1", "EKKO", "EKPO", "RBKP", "RSEG"]
-            elif any(x in q_lower for x in ("margin", "profitability", "revenue minus cost")):
+            elif any(x in q_lower for x in ("margin", "profitability", "revenue minus cost", "improving margin", "margin year over year", "margin trend", "products with improving")):
                 selected_tables = ["VBRK", "VBRP", "EKPO", "MAKT"]
             elif any(x in q_lower for x in ("deliver", "likp", "lips", "delivered quantity")):
                 selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
