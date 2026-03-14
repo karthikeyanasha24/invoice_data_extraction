@@ -37,6 +37,16 @@ from ..config.config import OPENAI_API_KEY
 
 logger = logging.getLogger("zodiac-api.sap_sql_agent")
 
+# Schema-driven agent (no keyword rules): schema → LLM table selection → LLM SQL
+try:
+    from .schema_loader import get_schema_dict, get_schema_text, schema_to_text, load_schema
+    from .table_selector_llm import select_tables as schema_select_tables
+    from .sql_generator_llm import generate_sql as schema_generate_sql
+    from .sql_validator import validate_sql as schema_validate_sql
+    _SCHEMA_DRIVEN_AVAILABLE = True
+except ImportError:
+    _SCHEMA_DRIVEN_AVAILABLE = False
+
 try:
     from openai import OpenAI
 
@@ -3361,6 +3371,53 @@ Return a CORRECTED JSON specification with the same structure.
     except Exception as e:
         logger.error(f"Query refinement failed: {e}")
         return previous_spec
+
+
+def run_schema_driven_sql_agent(
+    question: str,
+    db: Session,
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
+) -> SqlAgentResult | None:
+    """
+    Schema-driven SQL agent: no keyword rules. Flow is:
+    1) Load schema from DB
+    2) LLM selects relevant tables from schema
+    3) LLM generates PostgreSQL SQL from question + tables + schema
+    4) Validate SQL against schema, execute, return rows.
+
+    Use this first; fall back to run_adaptive_sap_sql_agent / run_sap_sql_agent on failure.
+    """
+    if not _SCHEMA_DRIVEN_AVAILABLE:
+        return None
+    client = _get_openai_client()
+    if not client:
+        return None
+    try:
+        schema = get_schema_dict(db)
+        if not schema:
+            return None
+        schema_text = schema_to_text(schema)
+        available_tables = list(schema.keys())
+        tables = schema_select_tables(question, schema_text, client, available_tables)
+        if not tables:
+            return None
+        schema_subset = schema_to_text(schema, table_subset=tables)
+        # Optional: similar past queries as few-shot examples
+        similar: Optional[List[tuple]] = None
+        if few_shot_examples:
+            similar = [(ex.get("user_query") or "", ex.get("sql_query") or "") for ex in few_shot_examples if ex.get("sql_query")]
+        sql = schema_generate_sql(question, tables, schema_subset, client, similar_examples=similar)
+        if not sql:
+            return None
+        is_valid, err = schema_validate_sql(sql, schema)
+        if not is_valid:
+            logger.warning("schema_driven_agent: SQL validation failed: %s", err)
+            return None
+        rows = _run_sql(db, sql)
+        return SqlAgentResult(sql=sql, rows=rows)
+    except Exception as e:
+        logger.warning("schema_driven_agent failed: %s", e)
+        return None
 
 
 def run_sap_sql_agent(
