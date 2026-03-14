@@ -1188,8 +1188,9 @@ Task:
 - Delivery-specific: when the user asks about delivery or process flow: include LIKP, LIPS, VBFA.
 - For product costing, cost of goods, standard price: use MBEW (STPRS, VERPR, VPRSV, PEINH), KEKO, KEPH, MARA, MAKT.
 - For purchase orders: use EKKO, EKPO, LFA1 (vendor), MARA, MAKT.
+- **"Show me last sales" / "best sales" / "recent sales" / "last best sales" / "top sales"**: always select VBRK, VBRP, and KNA1 (billing documents and customer). Do not return empty selected_tables.
 - **Sales/revenue by country or "X customers only"** (e.g. "Sales by Korean customers only", "revenue from India", "German customers"): use VBRK, VBRP, and KNA1 (customer country = KNA1.LAND1; or use VBRK.LAND1). Always include these tables so the query can filter by country code (e.g. KR, IN, DE).
-- **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). Group by year from VBRK.FKDAT. Do not require a specific table name in the question.
+- **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). Group by year from VBRK.FKDAT or VBRK.GJAHR. Do not require a specific table name in the question.
 - **Cost by profit center, cost by GL account, cost by profit center and GL account, cost by profit center and GL account for last N months**: use FAGLFLEXA only (columns: prctr=profit center, racct or cost_elem=GL account, hsl=amount in local currency, ryear, poper, budat for date). Do NOT use EKPO, RBKP, RSEG, or KEKO for profit center or GL account breakdowns.
 - Only return JSON in this format:
 
@@ -1271,6 +1272,7 @@ Column mappings (table -> column -> description):
 
 **Customer:** Use KNA1.KUNNR (customer number) and KNA1.NAME1 (customer name). Join VBRK.KUNAG = KNA1.KUNNR.
 **Revenue:** Use VBRK, VBRP; join VBRK.VBELN = VBRP.VBELN. VBRP has NETWR, MATNR. Revenue only for billing types A,B,C,D,E,I,L,W (FKTYP).
+**"Show me last sales" / "best sales" / "recent sales" / "last best sales including year":** You MUST return a valid spec. Use tables VBRK and VBRP (and KNA1 if customer name is needed). Columns: VBRK.VBELN (billing_doc), VBRK.FKDAT (billing_date), VBRK.GJAHR (year – include when user asks for "including year"), VBRK.KUNAG or KNA1.NAME1 (customer), VBRP.NETWR (amount, agg null for row-level or SUM for totals). Joins: VBRP to VBRK on VBELN; VBRK to KNA1 on KUNAG=KUNNR. order_by: VBRP.NETWR DESC or VBRK.FKDAT DESC. limit 100. Never return empty columns or tables.
 **Country filter (Korean/Indian/German customers, revenue from India, etc.):** Add filter LAND1 = '<ISO code>': Korean→KR, Indian/India→IN, German/Germany→DE, US→US, UK→GB. Use KNA1.LAND1 when KNA1 is in the query (customer country), or VBRK.LAND1 when only VBRK is used. The system will inject this from the question if you omit it.
 **Sales by year / revenue by year:** Use VBRK.GJAHR (fiscal year) as the year dimension. Add column VBRK.GJAHR with description "year"; add group_by VBRK.GJAHR; select SUM(VBRP.NETWR) as total_sales. If GJAHR is not in the mappings, use SUBSTRING(VBRK.FKDAT::text, 1, 4) as year and group by it.
 **Cost by profit center and GL account (or "cost by profit center", "cost by GL account"):** Use table FAGLFLEXA only. Select prctr (profit center), racct or cost_elem (GL account), SUM(hsl) as total_cost or total_amount. Add group_by prctr and racct (or cost_elem). For "last 24 months" filter on ryear and poper (or budat) to restrict to recent periods; use current year and prior year with poper 01-12.
@@ -1309,6 +1311,89 @@ Return JSON only:
     return {}
 
 
+def _build_minimal_last_sales_spec(
+    question: str,
+    selected_tables: List[str],
+    column_mappings: Dict[str, Dict[str, str]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a minimal valid spec for "last/best/recent sales" when the LLM returns empty.
+    Uses VBRK, VBRP, KNA1 with standard columns so a query can be generated.
+    """
+    q_lower = (question or "").lower()
+    include_year = "year" in q_lower or "including year" in q_lower
+    # Resolve selected_tables to actual keys in column_mappings (case-insensitive)
+    mapping_lower = {k.lower(): k for k in column_mappings.keys()}
+    tables_in_mapping = []
+    for t in selected_tables:
+        actual = mapping_lower.get((t or "").lower())
+        if actual:
+            tables_in_mapping.append(actual)
+
+    if not tables_in_mapping:
+        return None
+
+    # Prefer VBRP, VBRK, KNA1 order for building joins/columns
+    vbrp = next((t for t in tables_in_mapping if t.upper() == "VBRP"), None)
+    vbrk = next((t for t in tables_in_mapping if t.upper() == "VBRK"), None)
+    kna1 = next((t for t in tables_in_mapping if t.upper() == "KNA1"), None)
+    if not vbrp or not vbrk:
+        return None
+
+    def has_col(tbl: str, col: str) -> bool:
+        cols = column_mappings.get(tbl, {})
+        return col.lower() in {c.lower() for c in cols.keys()}
+
+    def col_name(tbl: str, col: str) -> str:
+        cols = column_mappings.get(tbl, {})
+        for k, v in cols.items():
+            if k.lower() == col.lower():
+                return k
+        return col
+
+    columns: List[Dict[str, Any]] = []
+    if vbrp and has_col(vbrp, "netwr"):
+        columns.append({"table": vbrp, "name": col_name(vbrp, "netwr"), "description": "amount", "agg": None})
+    if vbrk and has_col(vbrk, "vbeln"):
+        columns.append({"table": vbrk, "name": col_name(vbrk, "vbeln"), "description": "billing_doc", "agg": None})
+    if vbrk and has_col(vbrk, "fkdat"):
+        columns.append({"table": vbrk, "name": col_name(vbrk, "fkdat"), "description": "billing_date", "agg": None})
+    if include_year and vbrk and has_col(vbrk, "gjahr"):
+        columns.append({"table": vbrk, "name": col_name(vbrk, "gjahr"), "description": "year", "agg": None})
+    if vbrk and has_col(vbrk, "waerk"):
+        columns.append({"table": vbrk, "name": col_name(vbrk, "waerk"), "description": "currency", "agg": None})
+    if kna1 and has_col(kna1, "name1"):
+        columns.append({"table": kna1, "name": col_name(kna1, "name1"), "description": "customer_name", "agg": None})
+    if kna1 and has_col(kna1, "kunnr"):
+        columns.append({"table": kna1, "name": col_name(kna1, "kunnr"), "description": "customer_number", "agg": None})
+
+    if not columns:
+        return None
+
+    joins: List[Dict[str, Any]] = []
+    if vbrp and vbrk and has_col(vbrp, "vbeln") and has_col(vbrk, "vbeln"):
+        joins.append({"left": vbrp, "right": vbrk, "on": f"{vbrp}.vbeln = {vbrk}.vbeln", "type": "left"})
+    if vbrk and kna1 and has_col(vbrk, "kunag") and has_col(kna1, "kunnr"):
+        joins.append({"left": vbrk, "right": kna1, "on": f"{vbrk}.kunag = {kna1}.kunnr", "type": "left"})
+
+    order_col = "netwr" if has_col(vbrp, "netwr") else "fkdat" if vbrk and has_col(vbrk, "fkdat") else None
+    order_table = vbrp if (order_col == "netwr") else vbrk
+    order_by = []
+    if order_col and has_col(order_table, order_col):
+        order_by.append({"table": order_table, "column": col_name(order_table, order_col), "direction": "DESC"})
+
+    spec: Dict[str, Any] = {
+        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "columns": columns,
+        "joins": joins,
+        "filters": [],
+        "order_by": order_by,
+        "group_by": [],
+        "limit": 100,
+    }
+    return spec
+
+
 def run_adaptive_sap_sql_agent(
     question: str,
     db: Session,
@@ -1336,13 +1421,18 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["VBRK", "VBRP"]
             elif any(x in q_lower for x in ("by currency", "sales by currency", "waerk", "waers")):
                 selected_tables = ["VBRK", "VBRP"]
+            elif any(x in q_lower for x in (
+                "last sales", "best sales", "recent sales", "latest sales", "show me sales",
+                "show sales", "last best sales", "top sales", "recent sales"
+            )) or (("last" in q_lower or "best" in q_lower or "recent" in q_lower or "latest" in q_lower) and "sales" in q_lower):
+                selected_tables = ["VBRK", "VBRP", "KNA1"]
             else:
                 # Country/customer sales: Korean, Indian, German customers, revenue from X
                 try:
                     from .invoice_bot_helpers import _extract_country_iso_from_query
                     if _extract_country_iso_from_query(question):
                         selected_tables = ["VBRK", "VBRP", "KNA1"]
-                    elif any(x in q_lower for x in ("sales", "revenue", "customer")) and not selected_tables:
+                    elif any(x in q_lower for x in ("sales", "revenue", "customer")):
                         selected_tables = ["VBRK", "VBRP", "KNA1"]
                 except Exception:
                     pass
@@ -1370,7 +1460,16 @@ def run_adaptive_sap_sql_agent(
             table_descriptions=table_descriptions,
         )
         if not spec:
-            return None
+            # When LLM returns empty, use minimal spec for "last/best/recent sales" so we still answer
+            q_lower = (question or "").lower()
+            if any(x in q_lower for x in ("last sales", "best sales", "recent sales", "show me sales", "top sales")) or (
+                ("last" in q_lower or "best" in q_lower or "recent" in q_lower) and "sales" in q_lower
+            ):
+                spec = _build_minimal_last_sales_spec(question, selected_tables, column_mappings)
+                if spec:
+                    logger.info("run_adaptive_sap_sql_agent: using minimal last-sales spec after LLM returned empty")
+            if not spec:
+                return None
 
         # Invoice-bot spec post-processing: date filters, product name, material number, MAKT language, delivery chain, country
         try:
