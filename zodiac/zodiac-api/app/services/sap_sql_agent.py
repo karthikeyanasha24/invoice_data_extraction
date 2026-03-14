@@ -1274,6 +1274,11 @@ Task:
 - **Write-offs, credit notes, blocking**: use BSAD, BSEG, KNA1 (and BKPF if available) for write-offs by customer/year; include when question asks credit notes, returns, or blocking.
 - **AR by profit center**: use BSAD/BSEG with account assignment fields or FAGLFLEXA when question asks AR balances by profit center.
 - **Cost of a product (jacket, Harley)**: use EKPO, EKKO, MAKT for purchase cost; or KEKO, KEPH, MAKT for standard cost when question says "standard cost" or "costed".
+- **Cost of jacket-related postings by profit center**: use FAGLFLEXA (cost by profit center); add MAKT, VBRP if question asks to filter or attribute to "jacket" products (join where schema allows; otherwise return cost by profit center from FAGLFLEXA).
+- **Purchase order totals by material**: use EKKO, EKPO, MAKT; group by MATNR; SUM(NETWR) or SUM(MENGE) as totals; add MAKT for material name.
+- **Compare sales data with invoice data**: use VBRK, VBRP (billing/sales) and RBKP, RSEG (vendor invoices) or same billing as "invoice"; KNA1 if by customer. Return comparison (e.g. by document, by amount, or side-by-side).
+- **Compare 2023 vs 2024 sales (or two years)**: use VBRK, VBRP; filter GJAHR or year from FKDAT in (2023, 2024); group by year; SUM(NETWR) per year for comparison.
+- **Revenue last 30 days / Sales for 2024**: use VBRK, VBRP; add date filter FKDAT >= current_date - 30 or FKDAT in 2024.
 - **Materials in sales but not in purchasing (or vice versa)**: use VBRP and EKPO (and MARA, MAKT) to compare material lists; LEFT JOIN and WHERE NULL for "not in" logic.
 - When in doubt, prefer including tables that might be relevant (e.g. VBRK+VBRP+KNA1 for anything about sales/customers/revenue) so the next step can refine the query. Prefer a reasonable answer over returning no tables.
 - Only return JSON in this format:
@@ -1400,6 +1405,12 @@ Column mappings (table -> column -> description):
 **Write-offs / credit notes:** Use BSEG or BSAD with BSHKZ or similar; group by customer and year; SUM(amount) for write-offs.
 **Materials in VBRP but not in EKPO (or vice versa):** Select MATNR from VBRP EXCEPT (or LEFT JOIN EKPO WHERE EKPO.MATNR IS NULL) for "in sales not in purchasing"; reverse for "in purchasing never sold". Use MARA/MAKT for material name.
 **Cost of jacket/Harley (purchase cost):** EKPO + MAKT: filter MAKT.MAKTX ILIKE '%jacket%' or '%Harley%'; SUM(NETWR) or SUM(MENGE*NETPR) by material/plant; join EKPO.MATNR = MAKT.MATNR, MAKT.SPRAS = 'E'.
+**Cost of jacket-related postings by profit center:** Use FAGLFLEXA: group by prctr (profit center); SUM(hsl) as total_cost. If MAKT or VBRP is in tables and schema allows linking material to FAGLFLEXA (e.g. via cost element or segment), add filter or join for jacket materials; otherwise return cost by profit center only. Use description "profit_center" and "total_cost".
+**Purchase order totals by material:** EKPO: group by MATNR; select MATNR, SUM(MENGE) as total_quantity, SUM(NETWR) or SUM(MENGE*NETPR) as total_value; join MAKT for MAKTX; order by total_value or total_quantity DESC; limit 100.
+**Compare sales data with invoice data:** Select billing side (VBRK/VBRP: document, customer, SUM(NETWR)) and invoice side (RBKP/RSEG: document, vendor, amount). If same scope, join or union; otherwise return two logical sets (e.g. total sales from VBRP vs total invoice amount from RSEG by period/customer). Use KNA1 for customer name when comparing by customer.
+**Compare 2023 vs 2024 sales (or two specific years):** Filter VBRK.GJAHR in (2023, 2024) or EXTRACT(YEAR FROM VBRK.FKDAT) in (2023, 2024). Group by year; select year, SUM(VBRP.NETWR) as total_sales. Optionally include customer or product for breakdown.
+**Revenue last 30 days:** Filter VBRK.FKDAT >= CURRENT_DATE - INTERVAL '30 days'. Select billing doc, customer, date, amount from VBRK, VBRP, KNA1. Order by FKDAT DESC.
+**Sales for 2024:** Filter VBRK.GJAHR = 2024 or EXTRACT(YEAR FROM VBRK.FKDAT) = 2024. Select as needed; SUM(NETWR) for total.
 **Vague or short questions:** If the user asks something generic (e.g. "show me sales", "revenue", "what did we sell"), produce a reasonable default: e.g. billing docs with customer, date, amount; order by amount or date DESC; limit 100. Never return empty columns.
 **All columns and filters must use only column names from the mappings above.**
 
@@ -1491,15 +1502,16 @@ def _is_ekpo_purchasing_query(question: str) -> bool:
         return False
     q = (question or "").lower()
     purchase_related = any(x in q for x in (
-        "ekpo", "purchase", "purchased", "buy", "bought", "procure", "procurement", "po "
+        "ekpo", "purchase", "purchased", "buy", "bought", "procure", "procurement", "po ",
+        "purchase order", "order totals", "po totals"
     ))
     dimension_or_value = any(x in q for x in (
         "quantity", "quantities", "cost", "costs", "material", "materials", "plant", "werks",
         "netpr", "top 10", "top 20", "jacket", "harley", "for each material", "by material",
-        "by plant", "average", "unit price", "total ", "list products", "list materials",
+        "by plant", "average", "unit price", "total ", "totals", "list products", "list materials",
         "cheap", "high volume", "spend by", "vendor"
     ))
-    return purchase_related and dimension_or_value
+    return purchase_related and (dimension_or_value or "totals" in q or "by material" in q)
 
 
 def _build_minimal_last_sales_spec(
@@ -2047,8 +2059,18 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
             elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center", "top 20 profit centers", "top 10 profit centers", "list top", "profit centers by cost")):
                 selected_tables = ["FAGLFLEXA"]
-            elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend", "total purchased quantity", "netpr", "matnr werks")):
+            elif any(x in q_lower for x in ("jacket", "harley")) and any(x in q_lower for x in ("profit center", "profit centre")) and any(x in q_lower for x in ("cost", "postings")):
+                selected_tables = ["FAGLFLEXA", "MAKT", "VBRP"]
+            elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend", "total purchased quantity", "netpr", "matnr werks", "purchase order totals", "po totals", "order totals by material")):
                 selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
+            elif any(x in q_lower for x in ("compare sales", "sales data", "invoice data") and ("invoice" in q_lower or "compare" in q_lower)):
+                selected_tables = ["VBRK", "VBRP", "RBKP", "RSEG", "KNA1"]
+            elif any(x in q_lower for x in ("compare", "2023", "2024", "vs")) and ("sales" in q_lower or "revenue" in q_lower):
+                selected_tables = ["VBRK", "VBRP", "KNA1"]
+            elif any(x in q_lower for x in ("sales for 2024", "revenue last 30", "last 30 days", "2024 sales")):
+                selected_tables = ["VBRK", "VBRP", "KNA1"]
+            elif any(x in q_lower for x in ("sales by country and industry", "country and industry", "which industry", "highest revenues", "industry has highest")):
+                selected_tables = ["VBRK", "VBRP", "KNA1", "T016T"]
             elif any(x in q_lower for x in ("jacket", "harley") and any(x in q_lower for x in ("purchase", "ekpo", "cost", "quantity"))):
                 selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
             elif any(x in q_lower for x in ("resb", "lips", "discrepancy")) and ("reserved" in q_lower or "delivered" in q_lower or "discrepancy" in q_lower):
@@ -2107,8 +2129,12 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["CEPC", "FAGLFLEXA"]
             elif any(x in q_lower for x in ("lfb1", "payment terms")) and "vendor" in q_lower:
                 selected_tables = ["LFA1", "LFB1", "RBKP", "RSEG"]
-            elif any(x in q_lower for x in ("by currency", "sales by currency", "waerk", "waers")):
-                selected_tables = ["VBRK", "VBRP"]
+            elif any(x in q_lower for x in ("total cost by vendor", "highest spend by vendor", "spend by vendor", "cost by vendor")):
+                selected_tables = ["LFA1", "EKKO", "EKPO", "MAKT"]
+            elif any(x in q_lower for x in ("invoice amounts by customer", "invoice value by customer", "top vendors by invoice")):
+                selected_tables = ["VBRK", "VBRP", "KNA1"] if "customer" in q_lower else ["LFA1", "RBKP", "RSEG"]
+            elif any(x in q_lower for x in ("by currency", "sales by currency", "waerk", "waers", "vendor invoice totals by currency")):
+                selected_tables = ["VBRK", "VBRP"] if "vendor" not in q_lower else ["LFA1", "RBKP", "RSEG"]
             elif any(x in q_lower for x in (
                 "last sales", "best sales", "recent sales", "latest sales", "show me sales",
                 "show sales", "last best sales", "top sales", "recent sales"
@@ -2179,13 +2205,13 @@ def run_adaptive_sap_sql_agent(
                 if spec:
                     logger.info("run_adaptive_sap_sql_agent: using minimal last-sales spec after LLM returned empty")
             if not spec and "FAGLFLEXA" in (t.upper() for t in selected_tables) and any(
-                x in q_lower for x in ("profit center", "faglflexa", "link", "cost by profit", "gl account")
+                x in q_lower for x in ("profit center", "faglflexa", "link", "cost by profit", "gl account", "jacket", "postings")
             ):
                 spec = _build_minimal_faglflexa_spec(question, selected_tables, column_mappings)
                 if spec:
                     logger.info("run_adaptive_sap_sql_agent: using minimal FAGLFLEXA spec after LLM returned empty")
             if not spec and "EKPO" in (t.upper() for t in selected_tables) and any(
-                x in q_lower for x in ("purchase", "purchased", "quantity", "cost", "material", "jacket", "harley", "vendor", "plant", "netpr")
+                x in q_lower for x in ("purchase", "purchased", "quantity", "cost", "material", "jacket", "harley", "vendor", "plant", "netpr", "totals", "order totals")
             ):
                 spec = _build_minimal_ekpo_spec(question, selected_tables, column_mappings)
                 if spec:
