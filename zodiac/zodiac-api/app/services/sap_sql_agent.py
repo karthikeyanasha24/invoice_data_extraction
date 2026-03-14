@@ -1153,6 +1153,35 @@ def _safe_json_extract_adaptive(text: str) -> Dict[str, Any]:
     return {}
 
 
+def _enrich_tables_by_intent(question: str, selected_tables: List[str]) -> List[str]:
+    """
+    Adaptively ensure selected_tables include tables for the question's intent.
+    Uses intent tokens so any wording (e.g. 'cost of jacket-related postings by profit center')
+    gets the right tables without hardcoding exact phrases.
+    """
+    if not (question or "").strip():
+        return selected_tables
+    q = (question or "").lower()
+    intents = _get_query_intent_tokens(question)
+    tables = list(selected_tables) if selected_tables else []
+    tables_upper = {t.upper() for t in tables}
+
+    # Cost / balance by profit center (any phrasing) -> need FAGLFLEXA
+    if ("profit_center" in intents or "cost_center" in intents) and ("cost" in intents or "amount" in q or "balance" in q or "posting" in q):
+        if "FAGLFLEXA" not in tables_upper:
+            tables.insert(0, "FAGLFLEXA")
+            tables_upper.add("FAGLFLEXA")
+    # Product/material/jacket in question with cost or profit center -> need MAKT for description/filter
+    if "material" in intents or "product" in intents or any(w in q for w in ("jacket", "harley", "product", "material")):
+        if "MAKT" not in tables_upper and ("FAGLFLEXA" in tables_upper or "cost" in intents or "profit_center" in intents or "revenue" in intents):
+            tables.append("MAKT")
+            tables_upper.add("MAKT")
+    # Revenue/sales/customer -> ensure VBRK, VBRP, KNA1 when relevant
+    if ("revenue" in intents or "sales" in intents) and "customer" in intents and "VBRK" not in tables_upper:
+        tables.extend(["VBRK", "VBRP", "KNA1"])
+    return tables
+
+
 def _get_query_intent_tokens(question: str) -> set:
     """
     Extract intent tokens from a natural language query for dynamic table fallback.
@@ -1164,7 +1193,7 @@ def _get_query_intent_tokens(question: str) -> set:
     # Normalize: replace common synonyms so "sold" -> sales, "spend" -> cost, etc.
     synonyms = [
         ("revenue", "sales", "billing", "invoices", "sold", "sell", "sale", "billed", "invoice", "revenues"),
-        ("cost", "costs", "spend", "spending", "expense", "expenses", "amount", "amounts", "price", "prices"),
+        ("cost", "costs", "spend", "spending", "expense", "expenses", "amount", "amounts", "price", "prices", "posting", "postings"),
         ("purchase", "purchased", "buy", "bought", "procure", "procurement", "po ", "pos "),
         ("customer", "customers", "client", "clients", "buyer", "buyers"),
         ("vendor", "vendors", "supplier", "suppliers"),
@@ -1274,7 +1303,7 @@ Task:
 - **Write-offs, credit notes, blocking**: use BSAD, BSEG, KNA1 (and BKPF if available) for write-offs by customer/year; include when question asks credit notes, returns, or blocking.
 - **AR by profit center**: use BSAD/BSEG with account assignment fields or FAGLFLEXA when question asks AR balances by profit center.
 - **Cost of a product (jacket, Harley)**: use EKPO, EKKO, MAKT for purchase cost; or KEKO, KEPH, MAKT for standard cost when question says "standard cost" or "costed".
-- **Cost of jacket-related postings by profit center**: use FAGLFLEXA (cost by profit center); add MAKT, VBRP if question asks to filter or attribute to "jacket" products (join where schema allows; otherwise return cost by profit center from FAGLFLEXA).
+- **Cost of jacket-related postings by profit center (or any "cost/postings/balance by profit center" with a product word)**: Always use FAGLFLEXA for the cost/postings; add MAKT (and optionally VBRP) when the question mentions a product (jacket, Harley, material). If the schema does not link FAGLFLEXA to materials, still return FAGLFLEXA cost grouped by profit center (prctr). Never return empty tables for this intent.
 - **Purchase order totals by material**: use EKKO, EKPO, MAKT; group by MATNR; SUM(NETWR) or SUM(MENGE) as totals; add MAKT for material name.
 - **Compare sales data with invoice data**: use VBRK, VBRP (billing/sales) and RBKP, RSEG (vendor invoices) or same billing as "invoice"; KNA1 if by customer. Return comparison (e.g. by document, by amount, or side-by-side).
 - **Compare 2023 vs 2024 sales (or two years)**: use VBRK, VBRP; filter GJAHR or year from FKDAT in (2023, 2024); group by year; SUM(NETWR) per year for comparison.
@@ -1776,14 +1805,26 @@ def _build_minimal_faglflexa_spec(
     """
     Build a minimal valid spec for FAGLFLEXA profit center cost questions when the LLM returns empty.
     Returns FAGLFLEXA-only: profit center, GL account, SUM(hsl). Single-table spec to avoid heuristic joins.
+    Finds the profit-center table by name (FAGLFLEXA) or by column signature (prctr + hsl).
     """
     mapping_lower = {k.lower(): k for k in column_mappings.keys()}
+
+    def _has_col(tbl: str, col: str) -> bool:
+        cols = column_mappings.get(tbl, {})
+        return col.lower() in {c.lower() for c in cols.keys()}
+
+    # Prefer table named FAGLFLEXA; else any table with prctr and hsl (profit center cost signature)
     fagl = None
     for t in selected_tables:
         actual = mapping_lower.get((t or "").lower())
         if actual and actual.upper() == "FAGLFLEXA":
             fagl = actual
             break
+    if not fagl:
+        for tbl in column_mappings:
+            if _has_col(tbl, "prctr") and (_has_col(tbl, "hsl") or _has_col(tbl, "amount")):
+                fagl = tbl
+                break
     if not fagl:
         return None
 
@@ -1917,8 +1958,11 @@ def run_adaptive_sap_sql_agent(
                     logger.info("run_adaptive_sap_sql_agent: FAGLFLEXA-link raw SQL fallback returned %d rows", len(rows or []))
                     return SqlAgentResult(sql=sql, rows=rows or [])
             # Fall through to normal path if direct path didn't return
-        # Direct path for "Total cost by profit center" / "cost by profit center" — FAGLFLEXA only
-        elif _is_cost_by_profit_center_query(question):
+        # Direct path for "Total cost by profit center" / "cost by profit center" — FAGLFLEXA only.
+        # Skip when question mentions a product (jacket, harley, etc.) so normal path + intent enrichment gets FAGLFLEXA+MAKT.
+        elif _is_cost_by_profit_center_query(question) and not any(
+            w in (question or "").lower() for w in ("jacket", "harley", "product", "material", "related", "posting")
+        ):
             q_lower = (question or "").lower()
             last_24 = "last 24" in q_lower or "24 months" in q_lower
             logger.info("run_adaptive_sap_sql_agent: using direct cost-by-profit-center path (last_24=%s)", last_24)
@@ -2174,6 +2218,10 @@ def run_adaptive_sap_sql_agent(
                         pass
             if selected_tables:
                 logger.info("run_adaptive_sap_sql_agent: using fallback tables for short query: %s", selected_tables)
+        # Intent-based enrichment: ensure tables match question intent (any wording)
+        selected_tables = _enrich_tables_by_intent(question, selected_tables or [])
+        if selected_tables:
+            logger.info("run_adaptive_sap_sql_agent: selected_tables after intent enrichment: %s", selected_tables)
         if not selected_tables:
             logger.info("run_adaptive_sap_sql_agent: no tables selected, falling back to standard path")
             return None
