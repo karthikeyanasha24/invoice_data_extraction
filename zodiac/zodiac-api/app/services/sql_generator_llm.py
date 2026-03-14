@@ -54,7 +54,8 @@ Rules:
 - For "cost by profit center" or "postings by profit center": use FAGLFLEXA, group by prctr, SUM(hsl) as total_cost.
 - For "jacket" or product name filter: use MAKT.MAKTX ILIKE '%jacket%' and MAKT.SPRAS = 'E' when MAKT is in tables.
 - For sales/revenue: use VBRK, VBRP; join on VBELN; NETWR is amount; FKDAT is billing date; use KNA1 for customer (KUNAG = KUNNR).
-- For purchases: use EKPO, EKKO; MENGE = quantity, NETPR = price; join MAKT on MATNR for material name.
+- For purchases / purchase order: use EKPO (columns: matnr, menge, netpr). Total quantity = SUM(menge), total cost = SUM(menge * netpr). Always include EKPO for "purchase order totals", "PO totals", "vendor spend by material".
+- For "purchase order totals by material": SELECT EKPO.matnr (or p.matnr) AS material, MAKT.maktx AS material_name, SUM(EKPO.menge) AS total_quantity, SUM(EKPO.menge * EKPO.netpr) AS total_purchase_cost FROM EKPO LEFT JOIN MAKT ON EKPO.matnr = MAKT.matnr AND (MAKT.spras = 'E' OR MAKT.spras IS NULL) GROUP BY EKPO.matnr, MAKT.maktx ORDER BY total_purchase_cost DESC LIMIT 100. Use actual table/column casing from schema (e.g. lowercase if schema shows lowercase).
 - Use double quotes for identifiers only if needed (e.g. "vbrp" when table is lowercase).
 - If the schema cannot fully answer (e.g. no link between FAGLFLEXA and MAKT), still return a valid query for the part that is possible (e.g. cost by profit center from FAGLFLEXA only).
 """
