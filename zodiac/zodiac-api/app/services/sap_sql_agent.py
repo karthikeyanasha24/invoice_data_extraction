@@ -1362,6 +1362,21 @@ def _is_link_faglflexa_customers_products_query(question: str) -> bool:
     ) and ("customer" in q or "product" in q or "major" in q)
 
 
+def _is_cost_by_profit_center_query(question: str) -> bool:
+    """True if the question asks for cost (or balance) by profit center — use FAGLFLEXA only."""
+    if not (question or "").strip():
+        return False
+    q = (question or "").lower()
+    if "profit center" not in q and "profit centre" not in q:
+        return False
+    return any(
+        x in q for x in (
+            "cost by profit center", "total cost by profit center", "cost by profit centre",
+            "total cost by profit centre", "cost by profit center", "balance by profit center"
+        )
+    ) or ("cost" in q and "profit center" in q) or ("total cost" in q and "profit center" in q)
+
+
 def _build_minimal_last_sales_spec(
     question: str,
     selected_tables: List[str],
@@ -1452,17 +1467,15 @@ def _build_minimal_faglflexa_spec(
 ) -> Optional[Dict[str, Any]]:
     """
     Build a minimal valid spec for FAGLFLEXA profit center cost questions when the LLM returns empty.
-    Returns FAGLFLEXA by profit center (and GL account if requested). If VBRK/VBRP/KNA1/MAKT are
-    in selected_tables, include them so the SQL can link costs to customers/products where the schema allows.
+    Returns FAGLFLEXA-only: profit center, GL account, SUM(hsl). Single-table spec to avoid heuristic joins.
     """
     mapping_lower = {k.lower(): k for k in column_mappings.keys()}
-    tables_in_mapping = []
+    fagl = None
     for t in selected_tables:
         actual = mapping_lower.get((t or "").lower())
-        if actual:
-            tables_in_mapping.append(actual)
-
-    fagl = next((t for t in tables_in_mapping if t.upper() == "FAGLFLEXA"), None)
+        if actual and actual.upper() == "FAGLFLEXA":
+            fagl = actual
+            break
     if not fagl:
         return None
 
@@ -1497,13 +1510,11 @@ def _build_minimal_faglflexa_spec(
         return None
 
     joins: List[Dict[str, Any]] = []
-    # Minimal spec: FAGLFLEXA only (profit center + GL + cost). Link to customers/products
-    # requires document-level keys that vary by schema; LLM can add VBRK/VBRP/KNA1/MAKT when it generates spec.
-    # No order_by: with GROUP BY, we need ORDER BY alias (total_cost); builder expects description match.
+    # Single-table spec: FAGLFLEXA only so SQL is SELECT ... FROM FAGLFLEXA GROUP BY ... (no heuristic joins)
     spec: Dict[str, Any] = {
-        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "tables": [{"name": fagl, "description": fagl}],
         "columns": columns,
-        "joins": joins,
+        "joins": [],
         "filters": [],
         "order_by": [{"table": fagl, "column": "total_cost", "direction": "DESC"}] if has_col(fagl, "hsl") else [],
         "group_by": [{"table": fagl, "column": col_name(fagl, "prctr")}] if has_col(fagl, "prctr") else [],
@@ -1585,6 +1596,44 @@ def run_adaptive_sap_sql_agent(
                     else:
                         logger.warning("run_adaptive_sap_sql_agent: direct FAGLFLEXA-link spec validation failed: %s", validation_errors)
             # Fall through to normal path if direct path didn't return
+        # Direct path for "Total cost by profit center" / "cost by profit center" — FAGLFLEXA only, minimal spec
+        elif _is_cost_by_profit_center_query(question):
+            selected_tables = ["FAGLFLEXA"]
+            logger.info("run_adaptive_sap_sql_agent: using direct cost-by-profit-center path, tables=%s", selected_tables)
+            column_mappings = _introspect_columns(db, selected_tables)
+            if column_mappings and any(t.upper() == "FAGLFLEXA" for t in column_mappings.keys()):
+                spec = _build_minimal_faglflexa_spec(question, list(column_mappings.keys()), column_mappings)
+                if spec:
+                    try:
+                        from .invoice_bot_helpers import (
+                            fix_date_filters,
+                            inject_product_name_filter_if_needed,
+                            inject_material_number_filter_if_needed,
+                            inject_makt_single_language_if_needed,
+                            ensure_delivery_chain_in_spec,
+                            inject_country_filter_if_needed,
+                        )
+                        fix_date_filters(spec)
+                        inject_product_name_filter_if_needed(question, spec)
+                        inject_material_number_filter_if_needed(question, spec)
+                        inject_makt_single_language_if_needed(spec)
+                        ensure_delivery_chain_in_spec(spec)
+                        inject_country_filter_if_needed(question, spec)
+                    except Exception as e:
+                        logger.warning("invoice_bot_helpers spec post-processing failed: %s", e)
+                    _ensure_having_for_aggregates(spec, question)
+                    _auto_enrich_spec(spec, question)
+                    is_valid, validation_errors = validate_sql_spec(spec)
+                    if is_valid:
+                        sql = _json_to_sql_postgres(spec, column_mappings)
+                        if sql:
+                            rows = _run_sql(db, sql)
+                            if rows:
+                                logger.info("run_adaptive_sap_sql_agent: direct cost-by-profit-center returned %d rows", len(rows))
+                                return SqlAgentResult(sql=sql, rows=rows)
+                    else:
+                        logger.warning("run_adaptive_sap_sql_agent: direct cost-by-profit-center spec validation failed: %s", validation_errors)
+            # Fall through to normal path if FAGLFLEXA not in DB or minimal spec failed
         # Direct path for "last/best/recent sales" — skip LLM, use fixed tables + minimal spec so these always work
         elif _is_last_best_sales_query(question):
             selected_tables = ["VBRK", "VBRP", "KNA1"]
