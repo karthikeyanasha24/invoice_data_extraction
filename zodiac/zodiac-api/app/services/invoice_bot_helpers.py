@@ -247,6 +247,106 @@ def inject_material_number_filter_if_needed(user_query: str, json_spec: dict) ->
     return json_spec
 
 
+# Country / nationality → ISO 2-letter code (for LAND1 filter). Extend as needed.
+COUNTRY_NAME_TO_ISO: Dict[str, str] = {
+    "korean": "KR", "korea": "KR", "south korea": "KR",
+    "indian": "IN", "india": "IN",
+    "german": "DE", "germany": "DE",
+    "french": "FR", "france": "FR",
+    "american": "US", "usa": "US", "united states": "US", "us": "US",
+    "japanese": "JP", "japan": "JP",
+    "chinese": "CN", "china": "CN",
+    "british": "GB", "uk": "GB", "united kingdom": "GB", "britain": "GB",
+    "australian": "AU", "australia": "AU",
+    "canadian": "CA", "canada": "CA",
+    "italian": "IT", "italy": "IT",
+    "spanish": "ES", "spain": "ES",
+    "dutch": "NL", "netherlands": "NL",
+    "swiss": "CH", "switzerland": "CH",
+    "brazilian": "BR", "brazil": "BR",
+    "russian": "RU", "russia": "RU",
+    "mexican": "MX", "mexico": "MX",
+    "austrian": "AT", "austria": "AT",
+    "belgian": "BE", "belgium": "BE",
+    "irish": "IE", "ireland": "IE",
+    "thai": "TH", "thailand": "TH",
+    "indonesian": "ID", "indonesia": "ID",
+    "malaysian": "MY", "malaysia": "MY",
+    "singaporean": "SG", "singapore": "SG",
+    "vietnamese": "VN", "vietnam": "VN",
+    "philippine": "PH", "philippines": "PH",
+    "south african": "ZA", "south africa": "ZA",
+    "emirati": "AE", "uae": "AE", "emirates": "AE",
+    "saudi": "SA", "saudi arabia": "SA",
+    "israeli": "IL", "israel": "IL",
+    "egyptian": "EG", "egypt": "EG",
+    "nigerian": "NG", "nigeria": "NG",
+    "polish": "PL", "poland": "PL",
+    "czech": "CZ", "czech republic": "CZ",
+    "hungarian": "HU", "hungary": "HU",
+    "romanian": "RO", "romania": "RO",
+    "portuguese": "PT", "portugal": "PT",
+    "greek": "GR", "greece": "GR",
+    "turkish": "TR", "turkey": "TR",
+    "swedish": "SE", "sweden": "SE",
+    "norwegian": "NO", "norway": "NO",
+    "danish": "DK", "denmark": "DK",
+    "finnish": "FI", "finland": "FI",
+}
+
+
+def _extract_country_iso_from_query(user_query: str) -> Optional[str]:
+    """If the query mentions a country or nationality, return 2-letter ISO code; else None."""
+    if not user_query or not isinstance(user_query, str):
+        return None
+    q = (user_query or "").strip().lower()
+    # Prefer longer phrases first (e.g. "south korea" before "korea")
+    for phrase, code in sorted(COUNTRY_NAME_TO_ISO.items(), key=lambda x: -len(x[0])):
+        if re.search(r"\b" + re.escape(phrase) + r"\b", q):
+            return code
+    return None
+
+
+def inject_country_filter_if_needed(user_query: str, json_spec: dict) -> dict:
+    """
+    When the user asks for sales/revenue by a specific country (e.g. Korean customers, revenue from India),
+    add a filter LAND1 = '<ISO code>'. Uses KNA1.LAND1 or VBRK.LAND1 depending on tables in spec.
+    """
+    if not user_query or not json_spec:
+        return json_spec
+    iso = _extract_country_iso_from_query(user_query)
+    if not iso:
+        return json_spec
+    tables = set()
+    for c in json_spec.get("columns", []):
+        if c.get("table"):
+            tables.add(str(c.get("table")).upper())
+    for j in json_spec.get("joins", []):
+        for side in ("left", "right"):
+            t = j.get(side)
+            if t:
+                tables.add(str(t).upper())
+    for t in json_spec.get("tables", []):
+        if isinstance(t, dict) and t.get("name"):
+            tables.add(str(t.get("name")).upper())
+    # Prefer VBRK.LAND1 (billing country) if VBRK present; else KNA1.LAND1 (customer country)
+    land1_lhs = None
+    if "VBRK" in tables:
+        land1_lhs = "VBRK.LAND1"
+    elif "KNA1" in tables:
+        land1_lhs = "KNA1.LAND1"
+    if not land1_lhs:
+        return json_spec
+    filters = json_spec.get("filters", [])
+    for f in filters:
+        lhs = (f.get("lhs") or "").upper()
+        if "LAND1" in lhs:
+            return json_spec  # already has country filter
+    json_spec.setdefault("filters", [])
+    json_spec["filters"].append({"lhs": land1_lhs, "operator": "=", "rhs": f"'{iso}'"})
+    return json_spec
+
+
 def inject_makt_single_language_if_needed(json_spec: dict, language: str = "E") -> dict:
     """Add MAKT.SPRAS = language when MAKT is in spec and no SPRAS filter exists."""
     if not json_spec:
