@@ -73,9 +73,11 @@ def _get_schema_config() -> Dict[str, Any]:
 # --- SQL Catalog: pre-built queries for common patterns ---
 
 _SQL_CATALOG: Optional[List[Dict[str, Any]]] = None
+_SQL_CATALOG_MTIME: float = 0.0  # last-modified time of the file when last loaded
+
 
 def _load_sql_catalog() -> List[Dict[str, Any]]:
-    """Load sql_catalog.json once at startup. Returns [] on failure."""
+    """Load sql_catalog.json. Returns [] on failure."""
     try:
         root = Path(__file__).resolve().parent.parent
         path = root / "sql_catalog.json"
@@ -89,11 +91,65 @@ def _load_sql_catalog() -> List[Dict[str, Any]]:
         logger.warning("Could not load sql_catalog.json: %s", e)
     return []
 
+
 def _get_sql_catalog() -> List[Dict[str, Any]]:
-    global _SQL_CATALOG
-    if _SQL_CATALOG is None:
-        _SQL_CATALOG = _load_sql_catalog()
-    return _SQL_CATALOG
+    """Return catalog, auto-reloading if sql_catalog.json has been modified on disk."""
+    global _SQL_CATALOG, _SQL_CATALOG_MTIME
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "sql_catalog.json"
+        current_mtime = path.stat().st_mtime if path.exists() else 0.0
+        if _SQL_CATALOG is None or current_mtime != _SQL_CATALOG_MTIME:
+            _SQL_CATALOG = _load_sql_catalog()
+            _SQL_CATALOG_MTIME = current_mtime
+            logger.info("sql_catalog: (re)loaded %d entries from disk", len(_SQL_CATALOG))
+    except Exception as e:
+        logger.warning("sql_catalog: mtime check failed (%s), using cached version", e)
+        if _SQL_CATALOG is None:
+            _SQL_CATALOG = _load_sql_catalog()
+    return _SQL_CATALOG or []
+
+
+def _get_actual_table_names_from_mapping() -> set:
+    """Return set of actual table names from db_table_mapping.json (used to quote catalog SQL)."""
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "db_table_mapping.json"
+        if path.exists():
+            import json as _json2
+            with path.open("r", encoding="utf-8") as f:
+                raw = _json2.load(f)
+            if isinstance(raw, dict):
+                return set(raw.keys())
+    except Exception:
+        pass
+    return set()
+
+
+def _quote_catalog_sql_tables(sql: str) -> str:
+    """
+    Fix catalog SQL for PostgreSQL by quoting table names that are stored uppercase.
+    Catalog SQL uses bare names like 'FROM VBRK vk' but PostgreSQL requires 'FROM "VBRK" vk'
+    for tables created with quoted uppercase identifiers.
+
+    This replaces unquoted uppercase table names with double-quoted versions throughout the SQL.
+    """
+    actual_tables = _get_actual_table_names_from_mapping()
+    if not actual_tables:
+        return sql
+
+    # Only quote tables that are uppercase (lowercase tables like 'vbrp' don't need quotes)
+    uppercase_tables = {t for t in actual_tables if t == t.upper() and not t.isdigit()}
+
+    for tbl in sorted(uppercase_tables, key=len, reverse=True):  # longest first to avoid partial matches
+        # Match the table name as a standalone word that is NOT already quoted
+        # Handles: FROM VBRK, JOIN VBRK, after comma, etc.
+        # Does NOT match if already quoted ("VBRK")
+        pattern = r'(?<!")\b' + re.escape(tbl) + r'\b(?!")'
+        replacement = f'"{tbl}"'
+        sql = re.sub(pattern, replacement, sql)
+
+    return sql
 
 
 def _lookup_sql_catalog(question: str) -> Optional[str]:
@@ -135,6 +191,37 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
         return None
     # SAP compound codes like DE01, US10, AT03, CC01 → specific entity → LLM
     if re.search(r"\b[A-Z]{1,3}\d{2,4}\b", question):
+        return None
+    # Country/region-specific filter words (nationality adjectives, "only" with geo noun) → LLM
+    # e.g. "Sales by Korean customers only", "revenue from German clients", "US invoices"
+    _nationality_adjectives = {
+        "korean", "german", "french", "american", "japanese", "chinese", "british",
+        "australian", "canadian", "italian", "spanish", "dutch", "swiss", "swedish",
+        "norwegian", "danish", "finnish", "polish", "czech", "hungarian", "romanian",
+        "portuguese", "greek", "turkish", "indian", "mexican", "brazilian", "russian",
+        "thai", "indonesian", "malaysian", "singaporean", "philippine", "vietnamese",
+        "south african", "egyptian", "nigerian", "saudi", "emirati", "israeli",
+        "austrian", "belgian", "irish",
+    }
+    for adj in _nationality_adjectives:
+        if re.search(r"\b" + re.escape(adj) + r"\b", q_lower):
+            return None
+    # 2-letter ISO country codes used as filters: "KR", "DE", "US", "GB", etc.
+    # Only bypass if they appear as standalone words (not part of another word) and are uppercase
+    if re.search(r"\b[A-Z]{2}\b", question):
+        # Exclude known SAP/business abbreviations that should NOT trigger bypass
+        _ok_codes = {"PO", "GL", "AR", "AP", "GR", "IR", "YY", "AM", "PM", "OK", "ID", "NO"}
+        iso_matches = re.findall(r"\b[A-Z]{2}\b", question)
+        if any(m not in _ok_codes for m in iso_matches):
+            return None
+    # "only" as a specificity filter word (e.g. "Korean customers only", "from Germany only")
+    # → bypass if "only" appears AND the question has a geographic/specific-entity word
+    if "only" in q_words and any(
+        kw in q_lower for kw in [
+            "country", "region", "city", "customer", "vendor", "product", "material",
+            "industry", "sector", "plant", "company", "currency",
+        ]
+    ):
         return None
     # If question specifies a concrete year (2000-2030) → might need date filter
     # BUT: "by year" or "per year" or "trend by year" is generic — allow it
@@ -780,8 +867,15 @@ def _get_table_descriptions(db: Session) -> Dict[str, str]:
         if desc:
             out[actual_name] = desc
             continue
-        # 3) Hardcoded fallback
-        desc = SAP_TABLE_DESCRIPTIONS.get(actual_name) or SAP_TABLE_DESCRIPTIONS.get(actual_name.upper())
+        # 3) Invoice-bot full descriptions (sap_table_descriptions.json) then hardcoded SAP_TABLE_DESCRIPTIONS
+        try:
+            from .invoice_bot_helpers import get_table_descriptions
+            ib = get_table_descriptions()
+            desc = ib.get(actual_name) or ib.get(actual_name.upper())
+        except Exception:
+            desc = None
+        if not desc:
+            desc = SAP_TABLE_DESCRIPTIONS.get(actual_name) or SAP_TABLE_DESCRIPTIONS.get(actual_name.upper())
         if desc:
             out[actual_name] = desc
             continue
@@ -970,10 +1064,18 @@ Available tables (use EXACT names):
    - RBKP.rmwwr = invoice amount (gross), RBKP.lifnr = vendor number (join LFA1.lifnr)
    - GROUP BY LFA1.name1, SUM(RBKP.rmwwr) ORDER BY total_spend DESC
 
-5. When the user explicitly names specific tables in the question (e.g. "using KONV",
+5. INVOICE LISTING rule (show/list individual invoice rows with names):
+   - "Show invoices with payer/customer names" → VBRK + KNA1
+   - "Show invoices with payer/customer names by industry" → VBRK + KNA1 + T016T
+   - "Show billing documents with customer details" → VBRK + KNA1
+   - "List all invoices with [customer/payer/billing] info" → VBRK + KNA1
+   - These are ROW-LEVEL queries (individual invoice rows), NOT aggregated.
+   - Do NOT include VBRP for these (VBRK has the header; VBRP adds complexity).
+
+6. When the user explicitly names specific tables in the question (e.g. "using KONV",
    "from FAGLFLEXA", "using EKPO"), ALWAYS use exactly those tables — do not substitute.
 
-6. Choose the MINIMUM set of tables. Do not include tables unrelated to the question.
+7. Choose the MINIMUM set of tables. Do not include tables unrelated to the question.
 
 Return STRICT JSON only — no explanation:
 {{
@@ -1030,6 +1132,268 @@ Return STRICT JSON only — no explanation:
 
     logger.info("sap_sql_agent: final selected tables: %s", tables)
     return tables
+
+
+# --- Adaptive (invoice-bot-style) path: richer prompts for table selection and SQL spec ---
+
+def _safe_json_extract_adaptive(text: str) -> Dict[str, Any]:
+    """Parse JSON from LLM response; tolerate wrapped text."""
+    if not text or not text.strip():
+        return {}
+    s = text.strip()
+    for attempt in range(2):
+        if attempt == 1:
+            m = re.search(r"\{[\s\S]*\}", s)
+            if m:
+                s = m.group(0)
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+def _pick_tables_adaptive(
+    question: str,
+    client: OpenAI,
+    db: Session,
+    knowledge_context: Optional[str] = None,
+) -> List[str]:
+    """
+    Invoice-bot-style table selection: same rules (product-only, revenue, delivery,
+    credit, costing, process flow) so each query gets the right tables.
+    Returns list of table names.
+    """
+    table_descriptions = _get_table_descriptions(db)
+    if not table_descriptions:
+        table_descriptions = SAP_TABLE_DESCRIPTIONS
+
+    prompt = f"""
+User query: "{question}"
+
+Available tables:
+{json.dumps(table_descriptions, indent=2)}
+
+Task:
+- Identify tables relevant to answer the query.
+- If the query involves customer number or customer name, always include KNA1 (customer number = KUNNR, customer name = NAME1).
+- For value determination, revenue, or "best products by value": prefer VBRK (header) and VBRP (item: NETWR, MATNR); join on VBELN. Revenue is shown only for billing category types A, B, C, D, E, I, L, W (VBRK.FKTYP).
+- For "best products" or "products by value and industry": use VBRK and VBRP for value; add KNA1 for industry (BRSCH); add MAKT and join MAKT.MATNR = VBRP.MATNR so results show material names (MAKTX).
+- **Product/master data only (no revenue, no logistics):** When the user asks to show/list/filter **products by name only** (e.g. "show Harley products") and does NOT ask for revenue, sales value, invoices: use ONLY **master data tables** — MARA, MAKT, MEAN, MARM, MVKE. Do NOT use VBRK, VBRP, VBAK, VBAP, BSAD, BSID or LIKP, LIPS, VBFA, VTTK.
+- **Revenue / sales value (when explicitly asked):** When the user asks for revenue, sales value, net value, invoices: use VBRK, VBRP, VBAK, VBAP, BSAD, BSID.
+- **Delivery / logistics (when explicitly asked):** LIKP, LIPS, VBFA, VTTK only when the user explicitly asks for delivery, shipments, logistics.
+- For product attributes, material master: include MARA and MAKT; join MARA.MATNR and MAKT.MATNR to VBRP.MATNR when combining with sales data.
+- For industry trends: use VBRK, VBRP, KNA1 (BRSCH), MAKT (MAKT.MATNR = VBRP.MATNR).
+- Sales order data: use VBAK (header) and VBAP (item). For billing documents: include VBRK, VBRP, join to VBAK (VBRP.AUBEL = VBAK.VBELN).
+- Delivery-specific: when the user asks about delivery or process flow: include LIKP, LIPS, VBFA.
+- For product costing, cost of goods, standard price: use MBEW (STPRS, VERPR, VPRSV, PEINH), KEKO, KEPH, MARA, MAKT.
+- For purchase orders: use EKKO, EKPO, LFA1 (vendor), MARA, MAKT.
+- Only return JSON in this format:
+
+{{
+  "query": "...",
+  "selected_tables": [
+    {{ "name": "TABLE_NAME", "description": "..." }}
+  ]
+}}
+"""
+    if knowledge_context:
+        prompt += f"\nUser context / preferences: {knowledge_context}\n"
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        out = _safe_json_extract_adaptive(content)
+        if not out or "selected_tables" not in out:
+            return []
+        names = [t.get("name") for t in out["selected_tables"] if t.get("name")]
+        # Ensure we only return tables that exist in table_descriptions (or known SAP tables)
+        return [n for n in names if n]
+    except Exception as e:
+        logger.warning("_pick_tables_adaptive failed: %s", e)
+        return []
+
+
+def _generate_sql_json_adaptive(
+    question: str,
+    selected_tables: List[str],
+    column_mappings: Dict[str, Dict[str, str]],
+    client: OpenAI,
+    time_scope: str = "current",
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
+    table_descriptions: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """
+    Invoice-bot-style SQL JSON spec generation: same rules for customer, revenue,
+    process flow, filters, order_by, so each query gets the right columns and joins.
+    """
+    tbl_desc = table_descriptions or {}
+    if not tbl_desc and selected_tables:
+        tbl_desc = {t: SAP_TABLE_DESCRIPTIONS.get(t, f"Table {t}") for t in selected_tables}
+
+    date_instruction = ""
+    if time_scope == "historical":
+        date_instruction = "MUST add date filters for 1994-01-01 to 2010-12-31."
+    elif time_scope == "current":
+        date_instruction = "Include recent data; add date filter only if user specifies a period."
+    else:
+        date_instruction = "Include ALL periods for comparison."
+
+    few_shot_block = ""
+    if few_shot_examples:
+        cleaned = [
+            {"user_query": str(e.get("user_query") or "")[:400], "sql_query": str(e.get("sql_query") or "")[:800]}
+            for e in few_shot_examples[:4] if e.get("user_query") and e.get("sql_query")
+        ]
+        if cleaned:
+            few_shot_block = "\nRecent question→SQL examples (use as patterns):\n" + json.dumps(cleaned, indent=2)
+
+    tables_block = {t: tbl_desc.get(t, f"Table {t}") for t in selected_tables}
+
+    prompt = f"""
+User query: "{question}"
+
+Tables available:
+{json.dumps(tables_block, indent=2)}
+
+Column mappings (table -> column -> description):
+{json.dumps(column_mappings, indent=2)}
+
+**Time scope:** {date_instruction}
+{few_shot_block}
+
+**Customer:** Use KNA1.KUNNR (customer number) and KNA1.NAME1 (customer name). Join VBRK.KUNAG = KNA1.KUNNR.
+**Revenue:** Use VBRK, VBRP; join VBRK.VBELN = VBRP.VBELN. VBRP has NETWR, MATNR. Revenue only for billing types A,B,C,D,E,I,L,W (FKTYP).
+**Best products by value and industry:** Use VBRK, VBRP, KNA1 (BRSCH), MAKT (MAKT.MATNR = VBRP.MATNR). Select MATNR, MAKTX, BRSCH, NETWR. Order by NETWR DESC.
+**Highest sales by customer:** Use only VBRK, VBRP, KNA1; select KUNNR, NAME1, NETWR; do NOT add VBAK, VBFA, LIKP, LIPS. Order by NETWR DESC.
+**Process flow (billing, order, delivery):** Include billing doc (VBRK.VBELN), sales order (VBRP.AUBEL or VBAK.VBELN), delivery (LIKP.VBELN via VBFA), purchase order (VBAK.BSTNK). Join VBRP.AUBEL = VBAK.VBELN; VBRP to VBFA to LIKP.
+**Product by name filter:** When user asks for products matching a name (e.g. "Harley"): add filter MAKT.MAKTX with operator "=" and rhs the product name; use MAKT.SPRAS = 'E' for one language.
+**Cost of a product:** Use MBEW, KEKO, KEPH, MARA, MAKT. Select STPRS, VERPR, PEINH, VPRSV, MAKTX. Filter by MAKT.MAKTX for product name.
+**All columns and filters must use only column names from the mappings above.**
+
+Return JSON only:
+{{
+  "tables": [{{ "name": "...", "description": "..." }}],
+  "columns": [{{ "table": "...", "name": "...", "description": "...", "agg": null or "SUM"/"AVG"/"COUNT"/"MIN"/"MAX" }}],
+  "joins": [{{ "left": "...", "right": "...", "on": "...", "type": "inner" or "left" }}],
+  "filters": [{{ "lhs": "...", "operator": "...", "rhs": "..." }}],
+  "order_by": [{{ "table": "...", "column": "...", "direction": "DESC" or "ASC" }}],
+  "group_by": [{{ "table": "...", "column": "..." }}],
+  "limit": 100
+}}
+"""
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            spec = _safe_json_extract_adaptive(content)
+            if spec and (spec.get("columns") or spec.get("tables")):
+                return spec
+        except Exception as e:
+            logger.warning("_generate_sql_json_adaptive attempt %d failed: %s", attempt + 1, e)
+    return {}
+
+
+def run_adaptive_sap_sql_agent(
+    question: str,
+    db: Session,
+    knowledge_context: Optional[str] = None,
+    time_scope: str = "current",
+    few_shot_examples: Optional[List[Dict[str, str]]] = None,
+) -> Optional[SqlAgentResult]:
+    """
+    Run the invoice-bot-style adaptive SQL path: richer table selection and SQL spec
+    generation so each query gets question-specific SQL. Uses Postgres execution.
+    Returns SqlAgentResult on success, None on failure (caller should fall back to run_sap_sql_agent).
+    """
+    client = _get_openai_client()
+    if not client:
+        return None
+
+    try:
+        selected_tables = _pick_tables_adaptive(question, client, db, knowledge_context)
+        if not selected_tables:
+            logger.info("run_adaptive_sap_sql_agent: no tables selected, falling back to standard path")
+            return None
+
+        logger.info("run_adaptive_sap_sql_agent: question=%r | selected_tables=%s", question[:80], selected_tables)
+
+        column_mappings = _introspect_columns(db, selected_tables)
+        if not column_mappings:
+            logger.warning("run_adaptive_sap_sql_agent: no column mappings for %s", selected_tables)
+            return None
+
+        table_descriptions = _get_table_descriptions(db)
+        spec = _generate_sql_json_adaptive(
+            question,
+            selected_tables,
+            column_mappings,
+            client,
+            time_scope=time_scope,
+            few_shot_examples=few_shot_examples,
+            table_descriptions=table_descriptions,
+        )
+        if not spec:
+            return None
+
+        # Invoice-bot spec post-processing: date filters, product name, material number, MAKT language, delivery chain
+        try:
+            from .invoice_bot_helpers import (
+                fix_date_filters,
+                inject_product_name_filter_if_needed,
+                inject_material_number_filter_if_needed,
+                inject_makt_single_language_if_needed,
+                ensure_delivery_chain_in_spec,
+            )
+            fix_date_filters(spec)
+            inject_product_name_filter_if_needed(question, spec)
+            inject_material_number_filter_if_needed(question, spec)
+            inject_makt_single_language_if_needed(spec)
+            ensure_delivery_chain_in_spec(spec)
+        except Exception as e:
+            logger.warning("invoice_bot_helpers spec post-processing failed: %s", e)
+
+        _ensure_having_for_aggregates(spec, question)
+        _auto_enrich_spec(spec, question)
+
+        is_valid, validation_errors = validate_sql_spec(spec)
+        if not is_valid and validation_errors:
+            spec = refine_query_on_error(client, question, "; ".join(validation_errors), spec)
+            is_valid, _ = validate_sql_spec(spec)
+        if not is_valid:
+            return None
+
+        sql = _json_to_sql_postgres(spec, column_mappings)
+        logger.info("run_adaptive_sap_sql_agent: generated SQL (first 400 chars): %s", (sql or "")[:400])
+        rows = _run_sql(db, sql)
+
+        if rows:
+            logger.info("run_adaptive_sap_sql_agent: success, %d rows", len(rows))
+            return SqlAgentResult(sql=sql, rows=rows)
+
+        # One retry with refinement when 0 rows
+        spec = refine_query_on_error(
+            client,
+            question,
+            "Query returned no rows. Simplify joins or remove strict filters; use all periods if needed.",
+            spec,
+        )
+        if spec:
+            sql = _json_to_sql_postgres(spec, column_mappings)
+            rows = _run_sql(db, sql)
+            if rows:
+                return SqlAgentResult(sql=sql, rows=rows)
+    except Exception as e:
+        logger.warning("run_adaptive_sap_sql_agent failed for %r: %s", question[:80], e)
+    return None
 
 
 def _generate_sql_json(
@@ -1264,6 +1628,21 @@ Rules:
   * {{"table": "VBRK", "name": "FKDAT", "description": "earliest_billing_date", "agg": "MIN"}}
   * {{"table": "VBRK", "name": "FKDAT", "description": "latest_billing_date", "agg": "MAX"}}
   Only add raw date to group_by for detail (non-aggregated) row-level queries.
+
+- **CRITICAL – INDIVIDUAL INVOICE ROWS (DO NOT AGGREGATE)**: When the user asks to
+  "show invoices", "list invoices", "display invoices with [customer/payer/industry]",
+  or "show billing documents with [names/details]" — return INDIVIDUAL ROWS, NOT aggregated totals.
+  * Do NOT use GROUP BY, SUM, or COUNT for invoice listing queries.
+  * Select: VBRK.VBELN (invoice_number), VBRK.FKDAT (billing_date), VBRK.KUNAG (customer_number),
+    KNA1.NAME1 (payer_name/customer_name), VBRK.NETWR (invoice_amount), VBRK.WAERK (currency)
+  * If user asks "by industry": also join T016T and select COALESCE(T016T.brtxt, KNA1.brsch) as industry
+  * Join: VBRK.KUNAG = KNA1.KUNNR (LEFT JOIN), KNA1.brsch = T016T.brsch (LEFT JOIN)
+  * DO NOT add group_by, DO NOT add agg on netwr — just individual rows.
+  * Limit: 200 rows. Order by billing_date DESC (or by industry ASC, billing_date DESC if asked by industry).
+  * Example correct output for "show invoices with payer names by industry":
+    tables: [VBRK, KNA1, T016T], no group_by, no agg,
+    columns: VBRK.VBELN, VBRK.FKDAT, VBRK.KUNAG, KNA1.NAME1, T016T.brtxt, VBRK.NETWR, VBRK.WAERK
+    order: industry ASC, billing_date DESC, limit: 200
 """
     messages: List[Dict[str, str]] = [{"role": "user", "content": prompt}]
     spec: Dict[str, Any] = {}
@@ -2091,13 +2470,17 @@ def run_sap_sql_agent(
     try:
         catalog_sql = _lookup_sql_catalog(question)
         if catalog_sql:
-            catalog_rows = _run_sql(db, catalog_sql)
+            # Fix table name quoting for PostgreSQL (catalog uses bare names like VBRK;
+            # PostgreSQL requires "VBRK" for uppercase-quoted tables)
+            catalog_sql_pg = _quote_catalog_sql_tables(catalog_sql)
+            logger.debug("sql_catalog: executing SQL (after quoting):\n%s", catalog_sql_pg[:500])
+            catalog_rows = _run_sql(db, catalog_sql_pg)
             if catalog_rows:
                 logger.info(
                     "sql_catalog: FAST-PATH hit — %d rows returned for: %r",
                     len(catalog_rows), question[:80],
                 )
-                return SqlAgentResult(sql=catalog_sql, rows=catalog_rows)
+                return SqlAgentResult(sql=catalog_sql_pg, rows=catalog_rows)
             else:
                 logger.info(
                     "sql_catalog: matched but returned 0 rows — falling through to LLM path for: %r",
