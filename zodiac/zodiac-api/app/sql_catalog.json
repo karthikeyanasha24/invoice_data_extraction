@@ -323,7 +323,12 @@
       "top",
       "highest",
       "brsch",
-      "industries"
+      "industries",
+      "invoices by industry",
+      "invoice industry",
+      "billing by industry",
+      "industry revenue",
+      "industry sales"
     ],
     "neg_keywords": [],
     "tables": [
@@ -2802,5 +2807,186 @@
     ],
     "sql": "SELECT bs.saknr AS gl_account,\n       bs.hkont AS hk_account,\n       SUM(bs.dmbtr) AS total_local_amount,\n       SUM(bs.wrbtr) AS total_transaction_amount,\n       bs.waers AS currency,\n       COUNT(*) AS line_count\nFROM BSEG bs\nWHERE bs.dmbtr IS NOT NULL AND bs.saknr IS NOT NULL\nGROUP BY bs.saknr, bs.hkont, bs.waers\nORDER BY ABS(SUM(bs.dmbtr)) DESC\nLIMIT 20",
     "priority": 0
+  },
+  {
+    "id": "invoices_with_customer_list",
+    "description": "List invoices with customer/payer name and country (VBRK + KNA1)",
+    "question_patterns": [
+      "show invoices with customer names",
+      "list invoices with payer names",
+      "show all invoices with customer details",
+      "invoices with payer details",
+      "show billing documents with customer names"
+    ],
+    "keywords": [
+      "invoices",
+      "invoice",
+      "payer",
+      "payers",
+      "customer name",
+      "billing document",
+      "show invoices",
+      "list invoices",
+      "invoice list",
+      "billing list",
+      "with customer",
+      "with payer",
+      "customer details"
+    ],
+    "neg_keywords": [
+      "by industry",
+      "by country",
+      "total",
+      "sum",
+      "aggregate",
+      "top",
+      "highest"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "priority": 3,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "invoices_by_industry_list",
+    "description": "List invoices with payer name and industry (VBRK + KNA1 + T016T)",
+    "question_patterns": [
+      "show invoices with payers names by industry",
+      "please show invoices with payers names by industry",
+      "list invoices by industry with customer names",
+      "invoices grouped by industry with payer",
+      "show billing documents by industry",
+      "invoices with industry information"
+    ],
+    "keywords": [
+      "invoices",
+      "invoice",
+      "payer",
+      "payers",
+      "industry",
+      "payer name",
+      "billing",
+      "customer name",
+      "sector",
+      "brsch",
+      "industry key",
+      "show invoices",
+      "list invoices",
+      "invoices with"
+    ],
+    "neg_keywords": [
+      "total sales by industry",
+      "revenue by industry"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1",
+      "T016T"
+    ],
+    "priority": 5,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       k.name1 AS payer_name,\n       COALESCE(t.brtxt, k.brsch) AS industry,\n       k.land1 AS country,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN T016T t ON k.brsch = t.brsch\nWHERE vk.fkdat IS NOT NULL\nORDER BY industry ASC, vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "invoices_with_material_list",
+    "description": "List invoice line items with product/material names (vbrp + VBRK + MAKT)",
+    "question_patterns": [
+      "show invoices with product names",
+      "list invoices with material details",
+      "invoice items with product descriptions",
+      "billing line items with material names"
+    ],
+    "keywords": [
+      "invoices",
+      "invoice",
+      "product",
+      "material",
+      "item",
+      "line item",
+      "billing item",
+      "with product",
+      "with material",
+      "item list"
+    ],
+    "neg_keywords": [
+      "by customer",
+      "by industry",
+      "total",
+      "top"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "MAKT"
+    ],
+    "priority": 3,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       v.posnr AS item_number,\n       COALESCE(m.maktx, v.matnr) AS product_name,\n       CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC) AS quantity,\n       v.vrkme AS unit,\n       CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) AS line_amount,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON v.vbeln = vk.vbeln\nLEFT JOIN MAKT m ON v.matnr = m.matnr AND m.spras = 'E'\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "invoice_full_detail",
+    "description": "Full invoice detail with customer name and products (vbrp + VBRK + KNA1 + MAKT)",
+    "question_patterns": [
+      "show full invoice details",
+      "detailed invoice listing with customer and product",
+      "invoice details with all information",
+      "complete invoice data"
+    ],
+    "keywords": [
+      "invoice detail",
+      "full invoice",
+      "invoice details",
+      "complete invoice",
+      "invoice data",
+      "billing detail",
+      "all invoice"
+    ],
+    "neg_keywords": [
+      "total",
+      "top",
+      "highest",
+      "aggregate"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "KNA1",
+      "MAKT"
+    ],
+    "priority": 3,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       k.name1 AS customer_name,\n       vk.kunag AS customer_number,\n       k.land1 AS country,\n       v.posnr AS item_number,\n       COALESCE(m.maktx, v.matnr) AS product_name,\n       CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC) AS quantity,\n       CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) AS line_amount,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON v.vbeln = vk.vbeln\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN MAKT m ON v.matnr = m.matnr AND m.spras = 'E'\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "recent_invoices_list",
+    "description": "List of recent invoices (billing documents) from VBRK",
+    "question_patterns": [
+      "show recent invoices",
+      "list all invoices",
+      "show all billing documents",
+      "recent billing documents",
+      "latest invoices"
+    ],
+    "keywords": [
+      "recent invoices",
+      "all invoices",
+      "latest invoices",
+      "billing documents",
+      "list invoices",
+      "show invoices",
+      "invoice list",
+      "invoices"
+    ],
+    "neg_keywords": [
+      "customer name",
+      "product",
+      "material",
+      "industry",
+      "payer"
+    ],
+    "tables": [
+      "VBRK"
+    ],
+    "priority": 2,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency,\n       vk.vkorg AS sales_org,\n       vk.fkart AS invoice_type\nFROM VBRK vk\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
   }
 ]
