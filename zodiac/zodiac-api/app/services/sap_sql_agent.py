@@ -1372,7 +1372,9 @@ def _is_cost_by_profit_center_query(question: str) -> bool:
     return any(
         x in q for x in (
             "cost by profit center", "total cost by profit center", "cost by profit centre",
-            "total cost by profit centre", "cost by profit center", "balance by profit center"
+            "total cost by profit centre", "balance by profit center",
+            "compare cost", "costs between", "two profit center", "monthly cost trend",
+            "cost trend", "profit center and gl account", "cost by profit center and gl"
         )
     ) or ("cost" in q and "profit center" in q) or ("total cost" in q and "profit center" in q)
 
@@ -1458,6 +1460,80 @@ def _build_minimal_last_sales_spec(
         "limit": 100,
     }
     return spec
+
+
+def _resolve_faglflexa_table_and_mappings(db: Session) -> Tuple[Optional[str], Dict[str, Dict[str, str]]]:
+    """
+    Resolve FAGLFLEXA table name and column mappings. Tries introspection with 'FAGLFLEXA',
+    then case-insensitive lookup in get_table_names(), then db_table_mapping.json.
+    Returns (actual_table_name, column_mappings). Either can be empty if not found.
+    """
+    column_mappings = _introspect_columns(db, ["FAGLFLEXA"])
+    if column_mappings and any(t.upper() == "FAGLFLEXA" for t in column_mappings.keys()):
+        return next((t for t in column_mappings.keys() if t.upper() == "FAGLFLEXA"), None), column_mappings
+    insp = inspect(db.bind)
+    all_tables = insp.get_table_names()
+    actual_name = next((t for t in all_tables if t.lower() == "faglflexa"), None)
+    if actual_name:
+        column_mappings = _introspect_columns(db, [actual_name])
+        if column_mappings:
+            return actual_name, column_mappings
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "db_table_mapping.json"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            entry = raw.get("FAGLFLEXA") or raw.get("faglflexa")
+            if isinstance(entry, dict) and isinstance(entry.get("columns"), dict):
+                cols = {k: str(v) for k, v in entry["columns"].items()}
+                if cols:
+                    table_name = actual_name or "FAGLFLEXA"
+                    return table_name, {table_name: cols}
+    except Exception as e:
+        logger.warning("_resolve_faglflexa_table_and_mappings: could not load mapping file: %s", e)
+    return actual_name or None, column_mappings or {}
+
+
+def _run_faglflexa_cost_by_profit_center_sql(db: Session, table_name: str, last_24_months: bool = False) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
+    """
+    Run a minimal 'cost by profit center' (and optionally GL account / last 24 months) query.
+    Returns (sql, rows) or None on failure. Tries table_name then lowercase (PostgreSQL often has lowercase tables).
+    """
+    def _build_and_run(tname: str) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
+        try:
+            if last_24_months:
+                sql = (
+                    f'SELECT "{tname}"."prctr" AS profit_center, "{tname}"."racct" AS gl_account, '
+                    f'"{tname}"."ryear" AS fiscal_year, "{tname}"."poper" AS posting_period, '
+                    f'SUM("{tname}"."hsl") AS total_cost, "{tname}"."rtcur" AS currency '
+                    f'FROM "{tname}" WHERE "{tname}"."prctr" IS NOT NULL '
+                    f'AND "{tname}"."ryear" IN (EXTRACT(YEAR FROM CURRENT_DATE)::text, (EXTRACT(YEAR FROM CURRENT_DATE) - 1)::text) '
+                    f'GROUP BY "{tname}"."prctr", "{tname}"."racct", "{tname}"."ryear", "{tname}"."poper", "{tname}"."rtcur" '
+                    f'ORDER BY total_cost DESC NULLS LAST LIMIT 200'
+                )
+            else:
+                sql = (
+                    f'SELECT "{tname}"."prctr" AS profit_center, "{tname}"."racct" AS gl_account, '
+                    f'SUM("{tname}"."hsl") AS total_cost, "{tname}"."ryear" AS fiscal_year, "{tname}"."rtcur" AS currency '
+                    f'FROM "{tname}" WHERE "{tname}"."prctr" IS NOT NULL '
+                    f'GROUP BY "{tname}"."prctr", "{tname}"."racct", "{tname}"."ryear", "{tname}"."rtcur" '
+                    f'ORDER BY total_cost DESC NULLS LAST LIMIT 200'
+                )
+            rows = _run_sql(db, sql)
+            return (sql, rows) if rows is not None else None
+        except Exception as e:
+            logger.debug("_run_faglflexa_cost_by_profit_center_sql with %r: %s", tname, e)
+            return None
+
+    result = _build_and_run(table_name)
+    if result:
+        return result
+    if table_name != table_name.lower():
+        result = _build_and_run(table_name.lower())
+        if result:
+            return result
+    return None
 
 
 def _build_minimal_faglflexa_spec(
@@ -1549,9 +1625,14 @@ def run_adaptive_sap_sql_agent(
             selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
             logger.info("run_adaptive_sap_sql_agent: using direct FAGLFLEXA-link path, tables=%s", selected_tables)
             column_mappings = _introspect_columns(db, selected_tables)
-            if not column_mappings:
-                selected_tables = ["FAGLFLEXA"]
-                column_mappings = _introspect_columns(db, selected_tables)
+            if not column_mappings or not any(t.upper() == "FAGLFLEXA" for t in column_mappings.keys()):
+                fagl_table, fagl_mappings = _resolve_faglflexa_table_and_mappings(db)
+                if fagl_table and fagl_mappings:
+                    selected_tables = list(fagl_mappings.keys())
+                    column_mappings = fagl_mappings
+                elif not column_mappings:
+                    selected_tables = ["FAGLFLEXA"]
+                    column_mappings = _introspect_columns(db, selected_tables)
             if column_mappings and (any(t.upper() == "FAGLFLEXA" for t in column_mappings.keys())):
                 table_descriptions = _get_table_descriptions(db)
                 spec = _generate_sql_json_adaptive(
@@ -1595,14 +1676,24 @@ def run_adaptive_sap_sql_agent(
                                 return SqlAgentResult(sql=sql, rows=rows)
                     else:
                         logger.warning("run_adaptive_sap_sql_agent: direct FAGLFLEXA-link spec validation failed: %s", validation_errors)
+            # Raw SQL fallback: return cost by profit center when link spec fails
+            link_table_name, _ = _resolve_faglflexa_table_and_mappings(db)
+            if link_table_name:
+                result = _run_faglflexa_cost_by_profit_center_sql(db, link_table_name, last_24_months=False)
+                if result:
+                    sql, rows = result
+                    logger.info("run_adaptive_sap_sql_agent: FAGLFLEXA-link raw SQL fallback returned %d rows", len(rows or []))
+                    return SqlAgentResult(sql=sql, rows=rows or [])
             # Fall through to normal path if direct path didn't return
-        # Direct path for "Total cost by profit center" / "cost by profit center" — FAGLFLEXA only, minimal spec
+        # Direct path for "Total cost by profit center" / "cost by profit center" — FAGLFLEXA only
         elif _is_cost_by_profit_center_query(question):
-            selected_tables = ["FAGLFLEXA"]
-            logger.info("run_adaptive_sap_sql_agent: using direct cost-by-profit-center path, tables=%s", selected_tables)
-            column_mappings = _introspect_columns(db, selected_tables)
-            if column_mappings and any(t.upper() == "FAGLFLEXA" for t in column_mappings.keys()):
-                spec = _build_minimal_faglflexa_spec(question, list(column_mappings.keys()), column_mappings)
+            q_lower = (question or "").lower()
+            last_24 = "last 24" in q_lower or "24 months" in q_lower
+            logger.info("run_adaptive_sap_sql_agent: using direct cost-by-profit-center path (last_24=%s)", last_24)
+            table_name, column_mappings = _resolve_faglflexa_table_and_mappings(db)
+            if table_name and column_mappings:
+                selected_tables = list(column_mappings.keys())
+                spec = _build_minimal_faglflexa_spec(question, selected_tables, column_mappings)
                 if spec:
                     try:
                         from .invoice_bot_helpers import (
@@ -1633,7 +1724,14 @@ def run_adaptive_sap_sql_agent(
                                 return SqlAgentResult(sql=sql, rows=rows)
                     else:
                         logger.warning("run_adaptive_sap_sql_agent: direct cost-by-profit-center spec validation failed: %s", validation_errors)
-            # Fall through to normal path if FAGLFLEXA not in DB or minimal spec failed
+            # Raw SQL fallback when spec path fails or we have table from mapping file
+            if table_name:
+                result = _run_faglflexa_cost_by_profit_center_sql(db, table_name, last_24_months=last_24)
+                if result:
+                    sql, rows = result
+                    logger.info("run_adaptive_sap_sql_agent: FAGLFLEXA raw SQL fallback returned %d rows", len(rows or []))
+                    return SqlAgentResult(sql=sql, rows=rows or [])
+            # Fall through to normal path if FAGLFLEXA not in DB or all attempts failed
         # Direct path for "last/best/recent sales" — skip LLM, use fixed tables + minimal spec so these always work
         elif _is_last_best_sales_query(question):
             selected_tables = ["VBRK", "VBRP", "KNA1"]
