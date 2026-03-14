@@ -38,6 +38,9 @@ class OrchestratorResult:
     # Invoice-bot: insights (best + alternatives) and analysis plan (calculations, visualizations, data_notes)
     insights: Optional[Dict[str, Any]] = None  # { "best_provider", "best_text", "alternatives": [(name, text), ...] }
     analysis_plan: Optional[Dict[str, Any]] = None  # { "calculations", "visualizations", "data_notes" }
+    # Analytics layer: KPIs and executive insights (after SQL execution)
+    metrics: Optional[Dict[str, Any]] = None  # { column: { total, avg, max, min, kpi_type } }
+    analytics_insights: Optional[Dict[str, Any]] = None  # { executive_summary, key_metrics[], insights[], recommendations[] }
 
 
 def _get_client(api_key: str) -> OpenAI:
@@ -904,6 +907,18 @@ If result is empty, say so and suggest a refined question.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
     preview = _rows_preview(result.rows, limit=20)
 
+    # Analytics layer: KPIs + executive insights (lightweight, after SQL execution)
+    metrics_out = None
+    analytics_insights_out = None
+    try:
+        from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
+        metrics_out = compute_metrics(result.rows)
+        analytics_insights_out = generate_analytics_insights(
+            user_query, result.rows, metrics=metrics_out, sql=result.sql
+        )
+    except Exception as analytics_err:
+        logger.debug("Analytics layer skipped: %s", analytics_err)
+
     # Extra safety: if the user asks about a very specific term (like "Harley leather jacket"
     # or "cost of the jacket") and that term never appears in any row (material/product/description),
     # we should clearly say that the precise item-level answer is not available instead of
@@ -1022,6 +1037,16 @@ Write a clear MARKDOWN answer:
     timings["summarization_ms"] = int((time.time() - summary_start) * 1000)
     timings["insights_model"] = insights_model
 
+    # Prepend analytics layer: executive summary + key metrics (if available)
+    if analytics_insights_out and reply:
+        summary = (analytics_insights_out.get("executive_summary") or "").strip()
+        key_metrics = analytics_insights_out.get("key_metrics") or []
+        if summary:
+            reply = f"**Executive Summary**\n{summary}\n\n{reply}"
+        if key_metrics:
+            kpi_block = "**Key Metrics**\n" + "\n".join(f"- {m}" for m in key_metrics[:8])
+            reply = f"{kpi_block}\n\n{reply}"
+
     # Generate charts for visualization
     charts_data = None
     try:
@@ -1044,6 +1069,16 @@ Write a clear MARKDOWN answer:
                     logger.info(f"   Sample data keys: {list(sample_data[0].keys()) if sample_data else 'none'}")
         else:
             logger.info("⚠️ No charts generated - analyze_visualization_needs returned empty list")
+        # Analytics layer fallback: one auto bar chart if no chart specs
+        if (not charts_data or len(charts_data) == 0):
+            try:
+                from ..analytics import generate_chart_from_rows
+                auto_chart = generate_chart_from_rows(result.rows, title="Result", return_base64=True)
+                if auto_chart:
+                    charts_data = [auto_chart]
+                    logger.info("Analytics layer: added auto bar chart")
+            except Exception as ac_err:
+                logger.debug("Auto chart fallback skipped: %s", ac_err)
     except Exception as chart_err:
         logger.error(f"❌ Chart generation failed: {chart_err}", exc_info=True)
         timings["chart_generation_ms"] = 0
@@ -1092,6 +1127,15 @@ Write a clear MARKDOWN answer:
             reply_extra.append("\n\n### Cost for product number\n" + "\n".join(lines))
     except Exception as inv_err:
         logger.warning("Invoice-bot analysis/insights/COGS failed: %s", inv_err)
+
+    # Analytics layer: recommendations and insights bullets
+    if analytics_insights_out:
+        recs = analytics_insights_out.get("recommendations") or []
+        insights_bullets = analytics_insights_out.get("insights") or []
+        if recs:
+            reply_extra.append("\n\n### Recommendations\n" + "\n".join(f"- {r}" for r in recs[:5]))
+        if insights_bullets and not any("Insights" in x for x in reply_extra):
+            reply_extra.append("\n\n### Insights\n" + "\n".join(f"- {i}" for i in insights_bullets[:5]))
 
     if reply_extra:
         reply = (reply or "") + "".join(reply_extra)
@@ -1158,6 +1202,8 @@ Write a clear MARKDOWN answer:
         period_info=period_info,
         insights=insights_out,
         analysis_plan=analysis_plan_out,
+        metrics=metrics_out,
+        analytics_insights=analytics_insights_out,
     )
 
 
