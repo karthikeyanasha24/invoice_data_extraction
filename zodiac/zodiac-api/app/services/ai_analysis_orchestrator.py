@@ -630,15 +630,18 @@ If result is empty, say so and suggest a refined question.
     knowledge = mem.knowledge()
     knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
 
-    # For reliability, avoid few-shot SQL examples here – they tended to bias the
-    # agent toward generic vendor/revenue patterns instead of respecting the exact
-    # question (e.g. explicit FAGLFLEXA/KONV usage or product text like "Harley leather jacket").
+    # Re-enabled few-shot examples: they help the LLM pick correct join patterns for
+    # invoice/industry/customer queries. The SQL catalog fast-path handles generic
+    # aggregation queries before LLM is called, so examples now only guide complex joins.
+    _few_shot = get_sql_examples_for_question(
+        user_query, additional_examples=get_few_shot_examples(db, 2)
+    )
     result = run_sap_sql_agent(
         user_query,
         sql_db,
         knowledge_context=knowledge_context,
         time_scope=time_scope,
-        few_shot_examples=None,
+        few_shot_examples=_few_shot,
     )
     timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
     
@@ -1026,5 +1029,4 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
     if payload.get("performance"):
         logger.debug(f"Performance data: {payload['performance']}")
     return payload
-
 
