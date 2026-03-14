@@ -1311,6 +1311,22 @@ Return JSON only:
     return {}
 
 
+def _is_last_best_sales_query(question: str) -> bool:
+    """True if the question is asking for last/best/recent sales (we handle these with a direct minimal spec)."""
+    if not (question or "").strip():
+        return False
+    q = (question or "").lower()
+    if "sales" not in q:
+        return False
+    return (
+        any(x in q for x in (
+            "last sales", "best sales", "recent sales", "latest sales", "show me sales",
+            "show sales", "last best sales", "top sales", "recent sales"
+        ))
+        or (("last" in q or "best" in q or "recent" in q or "latest" in q) and "sales" in q)
+    )
+
+
 def _build_minimal_last_sales_spec(
     question: str,
     selected_tables: List[str],
@@ -1411,6 +1427,48 @@ def run_adaptive_sap_sql_agent(
         return None
 
     try:
+        # Direct path for "last/best/recent sales" — skip LLM, use fixed tables + minimal spec so these always work
+        if _is_last_best_sales_query(question):
+            selected_tables = ["VBRK", "VBRP", "KNA1"]
+            logger.info("run_adaptive_sap_sql_agent: using direct last-sales path, tables=%s", selected_tables)
+            column_mappings = _introspect_columns(db, selected_tables)
+            if not column_mappings:
+                logger.warning("run_adaptive_sap_sql_agent: no column mappings for direct last-sales path")
+            else:
+                spec = _build_minimal_last_sales_spec(question, selected_tables, column_mappings)
+                if spec:
+                    # Run the same post-process, validate, build SQL, execute as below
+                    try:
+                        from .invoice_bot_helpers import (
+                            fix_date_filters,
+                            inject_product_name_filter_if_needed,
+                            inject_material_number_filter_if_needed,
+                            inject_makt_single_language_if_needed,
+                            ensure_delivery_chain_in_spec,
+                            inject_country_filter_if_needed,
+                        )
+                        fix_date_filters(spec)
+                        inject_product_name_filter_if_needed(question, spec)
+                        inject_material_number_filter_if_needed(question, spec)
+                        inject_makt_single_language_if_needed(spec)
+                        ensure_delivery_chain_in_spec(spec)
+                        inject_country_filter_if_needed(question, spec)
+                    except Exception as e:
+                        logger.warning("invoice_bot_helpers spec post-processing failed: %s", e)
+                    _ensure_having_for_aggregates(spec, question)
+                    _auto_enrich_spec(spec, question)
+                    is_valid, validation_errors = validate_sql_spec(spec)
+                    if is_valid:
+                        sql = _json_to_sql_postgres(spec, column_mappings)
+                        if sql:
+                            logger.info("run_adaptive_sap_sql_agent: direct last-sales SQL (first 300 chars): %s", (sql or "")[:300])
+                            rows = _run_sql(db, sql)
+                            if rows:
+                                return SqlAgentResult(sql=sql, rows=rows)
+                    else:
+                        logger.warning("run_adaptive_sap_sql_agent: direct last-sales spec validation failed: %s", validation_errors)
+            # If direct path didn't return, fall through to LLM path
+
         selected_tables = _pick_tables_adaptive(question, client, db, knowledge_context)
         # Fallback when LLM returns no tables: infer from common patterns so short queries still work
         if not selected_tables:
