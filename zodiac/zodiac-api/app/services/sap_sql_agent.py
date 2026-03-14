@@ -40,12 +40,20 @@ logger = logging.getLogger("zodiac-api.sap_sql_agent")
 # Schema-driven agent (no keyword rules): schema → LLM table selection → LLM SQL
 try:
     from .schema_loader import get_schema_dict, get_schema_text, schema_to_text
+    from .semantic_sql_resolver import resolve_to_sql as semantic_resolve_to_sql
+    from .semantic_sql_resolver import resolve_count_by_dimension as semantic_resolve_count_by
     from .table_selector_llm import select_tables as schema_select_tables
     from .sql_generator_llm import generate_sql as schema_generate_sql
     from .sql_validator import validate_sql as schema_validate_sql
+    try:
+        from .query_resolver import try_resolve_and_build_sql, get_semantic_context_for_prompt
+    except ImportError:
+        try_resolve_and_build_sql = None
+        get_semantic_context_for_prompt = lambda: ""
     _SCHEMA_DRIVEN_AVAILABLE = True
 except ImportError:
     _SCHEMA_DRIVEN_AVAILABLE = False
+    try_resolve_and_build_sql = None
 
 try:
     from openai import OpenAI
@@ -78,6 +86,15 @@ def _get_schema_config() -> Dict[str, Any]:
     if not _SCHEMA_CONFIG:
         _SCHEMA_CONFIG = _load_schema_config()
     return _SCHEMA_CONFIG
+
+
+def _get_semantic_prompt_block() -> str:
+    """Return semantic dictionary context for SQL generator prompts. Empty if unavailable."""
+    try:
+        block = get_semantic_context_for_prompt()
+        return f"\n{block}\n\n" if block else ""
+    except Exception:
+        return ""
 
 
 # --- SQL Catalog: pre-built queries for common patterns ---
@@ -1385,11 +1402,11 @@ def _generate_sql_json_adaptive(
             few_shot_block = "\nRecent question→SQL examples (use as patterns):\n" + json.dumps(cleaned, indent=2)
 
     tables_block = {t: tbl_desc.get(t, f"Table {t}") for t in selected_tables}
+    semantic_block = _get_semantic_prompt_block()
 
     prompt = f"""
 Interpret the user's intent flexibly: revenue/sales/billing/invoices mean the same; cost/spend/amount/expense mean the same; infer the correct columns and joins from context even if the user used informal or partial wording. Always return a valid spec when the tables can answer the question.
-
-User query: "{question}"
+{semantic_block}User query: "{question}"
 
 Tables available:
 {json.dumps(tables_block, indent=2)}
@@ -1533,6 +1550,18 @@ def _is_cost_by_profit_center_query(question: str) -> bool:
             )
         )
     )
+
+
+def _is_internal_order_question(question: str) -> bool:
+    """True if the question is about internal orders (AUFK)."""
+    if not (question or "").strip():
+        return False
+    q = (question or "").lower()
+    return any(x in q for x in (
+        "internal order", "internal orders", "aufk", "order master",
+        "orders by profit center", "orders by cost center", "orders by company code",
+        "project order", "maintenance order", "cost by internal order",
+    ))
 
 
 def _is_purchase_order_question(question: str) -> bool:
@@ -2427,15 +2456,16 @@ def _generate_sql_json(
         join_rules_block = "\nConfigured join rules (schema_ai_config.json – use these when joining):\n" + "\n".join(
             f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:30]  # increased: was 20
         ) + "\n"
-    
+
+    semantic_block = _get_semantic_prompt_block()
+
     prompt = f"""
 User question: "{question}"
 
 {date_filter_instruction}
 
 {few_shot_block}
-
-Tables selected as primary (with full column details below):
+{semantic_block}Tables selected as primary (with full column details below):
 {json.dumps(tables_block, indent=2)}
 {all_tables_catalogue}
 Column mappings (table -> column -> short description):
@@ -3455,15 +3485,41 @@ def run_schema_driven_sql_agent(
         if not schema:
             logger.warning("schema_driven_agent: no schema loaded")
             return None
-        schema_text = schema_to_text(schema)
         available_tables = list(schema.keys())
+        schema_table_case = {t.upper(): t for t in available_tables}
+
+        # Semantic dictionary fast path: resolve metric+dimension and build template SQL
+        template_sql = None
+        if try_resolve_and_build_sql:
+            template_sql = try_resolve_and_build_sql(
+                question,
+                available_tables=available_tables,
+                schema_table_case=schema_table_case,
+            )
+        if template_sql:
+            is_valid, err = schema_validate_sql(template_sql, schema)
+            if is_valid:
+                rows = _run_sql(db, template_sql)
+                return SqlAgentResult(sql=template_sql, rows=rows)
+            logger.debug("schema_driven_agent: template SQL invalid (%s), falling back to LLM", err)
+
+        # Use get_schema_text so table selector sees semantic map (vendor→LFA1, delivery→LIKP/LIPS, etc.)
+        schema_text = get_schema_text(db, include_semantic_map=True)
         tables = schema_select_tables(question, schema_text, client, available_tables)
-        # Purchase-order intent fallback: if LLM returned no tables but question is about purchase orders, force EKPO + MAKT
-        if not tables and _is_purchase_order_question(question):
+        # Intent-based table fallback when LLM returns no tables
+        if not tables:
             available_upper = {t.upper(): t for t in available_tables}
-            tables = [available_upper[t] for t in ("EKPO", "MAKT") if t in available_upper]
-            if tables:
-                logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
+            if _is_purchase_order_question(question):
+                tables = [available_upper[t] for t in ("EKPO", "MAKT") if t in available_upper]
+                if tables:
+                    logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
+            elif _is_internal_order_question(question):
+                # AUFK for order list; COEP for cost by order (join on objnr)
+                tables = [available_upper[t] for t in ("AUFK", "COEP") if t in available_upper]
+                if not tables:
+                    tables = [available_upper["AUFK"]] if "AUFK" in available_upper else []
+                if tables:
+                    logger.info("schema_driven_agent: internal-order intent fallback tables: %s", tables)
         if not tables:
             logger.warning("schema_driven_agent: no tables selected for question: %s", (question or "")[:80])
             return None
@@ -3544,6 +3600,33 @@ def run_sap_sql_agent(
         except Exception:
             pass
     # ── END CATALOG FAST-PATH ────────────────────────────────────────────────
+
+    # ── SEMANTIC DICTIONARY FAST-PATH ────────────────────────────────────────
+    # Use entities + metrics + join graph to resolve question → SQL without LLM.
+    if _SCHEMA_DRIVEN_AVAILABLE:
+        try:
+            schema = get_schema_dict(db)
+            if schema:
+                available = list(schema.keys())
+                sem_sql = semantic_resolve_to_sql(question, available_tables=available)
+                if not sem_sql:
+                    sem_sql = semantic_resolve_count_by(question, available_tables=available)
+                if sem_sql:
+                    sem_sql_pg = _quote_catalog_sql_tables(sem_sql)
+                    sem_rows = _run_sql(db, sem_sql_pg)
+                    if sem_rows:
+                        logger.info(
+                            "semantic_sql_resolver: FAST-PATH hit — %d rows for: %r",
+                            len(sem_rows), question[:80],
+                        )
+                        return SqlAgentResult(sql=sem_sql_pg, rows=sem_rows)
+        except Exception as _sem_err:
+            logger.debug("semantic_sql_resolver: %s — falling through to LLM path", _sem_err)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    # ── END SEMANTIC DICTIONARY FAST-PATH ────────────────────────────────────
 
     attempt = 0
     last_error = None
@@ -3690,3 +3773,4 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
+    
