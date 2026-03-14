@@ -49,7 +49,8 @@ Rules:
 - Prefer fewer tables when possible (e.g. for "cost by profit center" use FAGLFLEXA only; for "sales by product" use VBRK, VBRP, MAKT).
 - For profit center / cost / GL: use FAGLFLEXA (has prctr, hsl, racct).
 - For sales / revenue / billing: use VBRK, VBRP; add KNA1 for customer, MAKT for material name.
-- For purchases / orders: use EKKO, EKPO; add MAKT for material name, LFA1 for vendor.
+- For PURCHASING: use EKPO (purchase order items: matnr, menge, netpr), add MAKT for material name. Use EKKO only if question asks for order header. Keywords: "purchase order", "order totals", "PO totals", "vendor spend", "purchased", "procurement", "buy", "purchase".
+- For "purchase order totals by material" or "PO totals by material": you MUST return EKPO, MAKT.
 - For material description or product name filter: include MAKT (maktx = description).
 
 Return ONLY a comma-separated list of table names, e.g.:
@@ -98,3 +99,4 @@ def _parse_table_list(text: str, available_tables: List[str]) -> List[str]:
                 seen.add(part)
                 result.append(available_upper[part])
     return result
+
