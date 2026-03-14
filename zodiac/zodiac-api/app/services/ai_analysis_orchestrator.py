@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
-from .sap_sql_agent import run_sap_sql_agent, run_adaptive_sap_sql_agent, run_schema_driven_sql_agent, _serialize_value  # type: ignore
+from .sap_sql_agent import run_sap_sql_agent, run_adaptive_sap_sql_agent, run_schema_driven_sql_agent, run_purchase_order_fallback, _serialize_value  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
 from .training_data_collector import log_query_execution, get_few_shot_examples
 from .sql_example_library import get_sql_examples_for_question
@@ -691,6 +691,15 @@ If result is empty, say so and suggest a refined question.
             time_scope=time_scope,
             few_shot_examples=_few_shot,
         )
+    # Purchase-order direct fallback: when all agents fail and question is about purchase orders, run EKPO aggregate
+    if result is None or not getattr(result, "rows", None):
+        try:
+            po_result = run_purchase_order_fallback(sql_db, user_query)
+            if po_result and getattr(po_result, "rows", None):
+                result = po_result
+                logger.info("Purchase order fallback returned %d rows", len(po_result.rows))
+        except Exception as po_err:
+            logger.debug("Purchase order fallback failed: %s", po_err)
     timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
     
     # Product-performance fallback: when both adaptive and standard return 0 rows, try known-good VBRK/VBRP/MAKT SQL
