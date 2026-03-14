@@ -25,11 +25,17 @@ from pathlib import Path
 # (SAP exports billing / sales tables as VARCHAR; must cast to NUMERIC for SUM)
 TRIM_TABLES = {"VBRP", "vbrp", "VBRK", "VBAP", "VBAK", "LIKP", "LIPS"}
 
-def tc(table: str, col: str) -> str:
-    """Safe numeric cast: CAST(NULLIF(TRIM(t.col),'') AS NUMERIC) for VARCHAR tables."""
+def tc(table: str, col: str, alias: str = None) -> str:
+    """Safe numeric cast: CAST(NULLIF(TRIM(ref.col),'') AS NUMERIC) for VARCHAR tables.
+
+    IMPORTANT: If the SQL uses a table alias (e.g. FROM VBRK vk), pass the alias as
+    the third argument:  tc('VBRK', 'netwr', 'vk')  → CAST(NULLIF(TRIM(vk.netwr),'') AS NUMERIC)
+    Without the alias, PostgreSQL will raise 'missing FROM-clause entry' errors.
+    """
+    ref = alias if alias else table
     if table.upper() in {t.upper() for t in TRIM_TABLES}:
-        return f"CAST(NULLIF(TRIM({table}.{col}), '') AS NUMERIC)"
-    return f"{table}.{col}"
+        return f"CAST(NULLIF(TRIM({ref}.{col}), '') AS NUMERIC)"
+    return f"{ref}.{col}"
 
 
 # ─── Catalog container ────────────────────────────────────────────────────────
@@ -2186,7 +2192,43 @@ LIMIT 20
 # Write the catalog
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _fix_alias_mismatches(catalog: list) -> int:
+    """Post-process: fix any remaining tablename.col refs where the table has an alias.
+    PostgreSQL requires alias.col, not tablename.col, once an alias is defined."""
+    import re
+    SQL_KEYWORDS = {
+        'ON','WHERE','SET','INNER','LEFT','RIGHT','CROSS','FULL','OUTER','JOIN',
+        'GROUP','ORDER','HAVING','LIMIT','UNION','EXCEPT','INTERSECT','AS','BY',
+        'SELECT','FROM','AND','OR','NOT','IS','IN','BETWEEN','LIKE','NULL',
+    }
+    fixed = 0
+    for entry in catalog:
+        sql = entry["sql"]
+        alias_map = {}
+        for m in re.finditer(r'\b(FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)', sql, re.IGNORECASE):
+            tbl, alias = m.group(2), m.group(3)
+            if alias.upper() not in SQL_KEYWORDS:
+                alias_map[tbl.lower()] = alias
+                alias_map[tbl.upper()] = alias
+        if not alias_map:
+            continue
+        def replace_ref(match):
+            tbl = match.group(1); col = match.group(2)
+            a = alias_map.get(tbl) or alias_map.get(tbl.lower()) or alias_map.get(tbl.upper())
+            return f"{a}.{col}" if a else match.group(0)
+        new_sql = re.sub(r'\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]\w*)\b', replace_ref, sql)
+        if new_sql != sql:
+            entry["sql"] = new_sql
+            fixed += 1
+    return fixed
+
+
 if __name__ == "__main__":
+    # Auto-fix any alias mismatches before writing
+    n_fixed = _fix_alias_mismatches(entries)
+    if n_fixed:
+        print(f"⚠️  Auto-fixed alias mismatches in {n_fixed} entries")
+
     out = Path(__file__).parent / "app" / "sql_catalog.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
