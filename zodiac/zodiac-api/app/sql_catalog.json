@@ -6,7 +6,9 @@
       "what is the total sales",
       "total revenue overall",
       "overall billing amount",
-      "grand total sales"
+      "grand total sales",
+      "what is the total revenue",
+      "overall sales total"
     ],
     "keywords": [
       "total",
@@ -14,7 +16,11 @@
       "revenue",
       "overall",
       "billing",
-      "grand"
+      "grand",
+      "total revenue",
+      "what is the total",
+      "overall revenue",
+      "overall sales"
     ],
     "neg_keywords": [
       "by year",
@@ -28,7 +34,7 @@
       "VBRK",
       "vbrp"
     ],
-    "sql": "SELECT SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC) IS NOT NULL\nGROUP BY vk.waerk\nORDER BY total_sales DESC",
+    "sql": "SELECT SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL\nGROUP BY vk.waerk\nORDER BY total_sales DESC",
     "priority": 1
   },
   {
@@ -50,7 +56,10 @@
       "yearly",
       "revenue",
       "trend",
-      "billing"
+      "billing",
+      "by year",
+      "per year",
+      "each year"
     ],
     "neg_keywords": [
       "month",
@@ -62,7 +71,7 @@
       "VBRK",
       "vbrp"
     ],
-    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, vk.waerk\nORDER BY year ASC",
+    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, vk.waerk\nORDER BY year ASC",
     "priority": 2
   },
   {
@@ -88,7 +97,7 @@
       "VBRK",
       "vbrp"
     ],
-    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUBSTRING(vk.fkdat, 5, 2) AS month,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, month, vk.waerk\nORDER BY year ASC, month ASC",
+    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUBSTRING(vk.fkdat, 5, 2) AS month,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, month, vk.waerk\nORDER BY year ASC, month ASC",
     "priority": 3
   },
   {
@@ -116,7 +125,7 @@
     "tables": [
       "VBRK"
     ],
-    "sql": "SELECT vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nWHERE vk.land1 IS NOT NULL AND vk.land1 != ''\nGROUP BY vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nWHERE vk.land1 IS NOT NULL AND vk.land1 != ''\nGROUP BY vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 4
   },
   {
@@ -140,7 +149,7 @@
     "tables": [
       "VBRK"
     ],
-    "sql": "SELECT vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nWHERE vk.land1 IS NOT NULL AND vk.land1 != ''\nGROUP BY vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
+    "sql": "SELECT vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nWHERE vk.land1 IS NOT NULL AND vk.land1 != ''\nGROUP BY vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -172,7 +181,7 @@
       "VBRK",
       "KNA1"
     ],
-    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, k.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, k.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 5
   },
   {
@@ -198,7 +207,7 @@
       "VBRK",
       "KNA1"
     ],
-    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, k.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, k.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -233,7 +242,7 @@
       "VBRK",
       "MAKT"
     ],
-    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       SUM(CAST(NULLIF(TRIM(vbrp.fkimg), '') AS NUMERIC)) AS total_quantity,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS total_quantity,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 5
   },
   {
@@ -261,7 +270,7 @@
       "VBRK",
       "MAKT"
     ],
-    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       SUM(CAST(NULLIF(TRIM(vbrp.fkimg), '') AS NUMERIC)) AS total_quantity,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
+    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS total_quantity,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -293,7 +302,7 @@
       "vbrp",
       "MAKT"
     ],
-    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(vbrp.fkimg), '') AS NUMERIC)) AS total_quantity,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales\nFROM vbrp v\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx\nHAVING SUM(CAST(NULLIF(TRIM(vbrp.fkimg), '') AS NUMERIC)) > 0\nORDER BY total_quantity DESC\nLIMIT 20",
+    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS total_quantity,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales\nFROM vbrp v\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx\nHAVING SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) > 0\nORDER BY total_quantity DESC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -322,7 +331,7 @@
       "KNA1",
       "T016T"
     ],
-    "sql": "SELECT t.brtxt AS industry_name,\n       k.brsch AS industry_code,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.kunag) AS customer_count\nFROM VBRK vk\nJOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN T016T t ON k.brsch = t.brsch\nWHERE k.brsch IS NOT NULL AND k.brsch != ''\nGROUP BY k.brsch, t.brtxt, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT t.brtxt AS industry_name,\n       k.brsch AS industry_code,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.kunag) AS customer_count\nFROM VBRK vk\nJOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN T016T t ON k.brsch = t.brsch\nWHERE k.brsch IS NOT NULL AND k.brsch != ''\nGROUP BY k.brsch, t.brtxt, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 5
   },
   {
@@ -347,7 +356,7 @@
       "VBRK",
       "KNA1"
     ],
-    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -375,7 +384,7 @@
       "KNA1",
       "MAKT"
     ],
-    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       m.maktx AS material_name,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nGROUP BY vk.kunag, k.name1, m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       m.maktx AS material_name,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nGROUP BY vk.kunag, k.name1, m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -398,7 +407,7 @@
     "tables": [
       "VBRK"
     ],
-    "sql": "SELECT vk.vkorg AS sales_org,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nGROUP BY vk.vkorg, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
+    "sql": "SELECT vk.vkorg AS sales_org,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nGROUP BY vk.vkorg, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
     "priority": 0
   },
   {
@@ -421,7 +430,7 @@
     "tables": [
       "VBRK"
     ],
-    "sql": "SELECT vk.vtweg AS distribution_channel,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nGROUP BY vk.vtweg, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
+    "sql": "SELECT vk.vtweg AS distribution_channel,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nGROUP BY vk.vtweg, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
     "priority": 0
   },
   {
@@ -447,7 +456,7 @@
       "VBRK",
       "KNA1"
     ],
-    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.waerk\nORDER BY invoice_count DESC\nLIMIT 20",
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.waerk\nORDER BY invoice_count DESC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -473,7 +482,7 @@
       "VBRK",
       "KNA1"
     ],
-    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       AVG(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS avg_invoice_value,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY avg_invoice_value DESC\nLIMIT 20",
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       AVG(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS avg_invoice_value,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY avg_invoice_value DESC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -497,7 +506,7 @@
     "tables": [
       "VBRK"
     ],
-    "sql": "SELECT vk.spart AS division,\n       SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nWHERE vk.spart IS NOT NULL AND vk.spart != ''\nGROUP BY vk.spart, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(VBRK.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
+    "sql": "SELECT vk.spart AS division,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nWHERE vk.spart IS NOT NULL AND vk.spart != ''\nGROUP BY vk.spart, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
     "priority": 0
   },
   {
@@ -518,14 +527,20 @@
       "yoy",
       "growth",
       "change",
-      "revenue"
+      "revenue",
+      "year over year",
+      "yoy comparison",
+      "year comparison"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "total sales by year",
+      "by year only"
+    ],
     "tables": [
       "VBRK",
       "vbrp"
     ],
-    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       COUNT(DISTINCT vk.kunag) AS customer_count,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, vk.waerk\nORDER BY year ASC",
+    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       COUNT(DISTINCT vk.kunag) AS customer_count,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, vk.waerk\nORDER BY year ASC",
     "priority": 3
   },
   {
@@ -653,7 +668,10 @@
       "procurement",
       "purchasing",
       "overall",
-      "spend"
+      "spend",
+      "total purchase",
+      "purchase total",
+      "total procurement"
     ],
     "neg_keywords": [
       "by vendor",
@@ -914,7 +932,10 @@
       "accounts",
       "payable",
       "ap",
-      "overall"
+      "overall",
+      "total vendor invoice",
+      "total accounts payable",
+      "total invoice amount"
     ],
     "neg_keywords": [
       "by vendor",
@@ -1733,7 +1754,7 @@
   },
   {
     "id": "material_docs_by_year",
-    "description": "Material document count by year (MKPF — header only, no material detail)",
+    "description": "Material document count by year (MKPF \u2014 header only, no material detail)",
     "question_patterns": [
       "material documents by year",
       "goods movements by year",
@@ -1851,7 +1872,7 @@
       "EKPO",
       "EKKO"
     ],
-    "sql": "SELECT 'Sales Revenue' AS category,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_amount\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nUNION ALL\nSELECT 'Purchase Cost',\n       SUM(ep.netwr)\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ep.netwr IS NOT NULL",
+    "sql": "SELECT 'Sales Revenue' AS category,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_amount\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nUNION ALL\nSELECT 'Purchase Cost',\n       SUM(ep.netwr)\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ep.netwr IS NOT NULL",
     "priority": 0
   },
   {
@@ -1882,7 +1903,7 @@
       "EKPO",
       "MAKT"
     ],
-    "sql": "SELECT m.maktx AS material_name,\n       s.matnr AS material_number,\n       s.total_sales,\n       p.total_purchase_cost\nFROM (\n  SELECT TRIM(v.matnr) AS matnr, SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales\n  FROM vbrp v\n  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\n  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\n  GROUP BY TRIM(v.matnr)\n) s\nJOIN (\n  SELECT ep.matnr, SUM(ep.netwr) AS total_purchase_cost\n  FROM EKPO ep\n  WHERE ep.matnr IS NOT NULL AND ep.netwr IS NOT NULL\n  GROUP BY ep.matnr\n) p ON s.matnr = p.matnr\nLEFT JOIN MAKT m ON s.matnr = m.matnr AND m.spras = 'E'\nORDER BY s.total_sales DESC\nLIMIT 20",
+    "sql": "SELECT m.maktx AS material_name,\n       s.matnr AS material_number,\n       s.total_sales,\n       p.total_purchase_cost\nFROM (\n  SELECT TRIM(v.matnr) AS matnr, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales\n  FROM vbrp v\n  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\n  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\n  GROUP BY TRIM(v.matnr)\n) s\nJOIN (\n  SELECT ep.matnr, SUM(ep.netwr) AS total_purchase_cost\n  FROM EKPO ep\n  WHERE ep.matnr IS NOT NULL AND ep.netwr IS NOT NULL\n  GROUP BY ep.matnr\n) p ON s.matnr = p.matnr\nLEFT JOIN MAKT m ON s.matnr = m.matnr AND m.spras = 'E'\nORDER BY s.total_sales DESC\nLIMIT 20",
     "priority": 0
   },
   {
@@ -2499,7 +2520,7 @@
       "vbrp",
       "VBRK"
     ],
-    "sql": "SELECT v.prctr AS profit_center,\n       SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE v.prctr IS NOT NULL AND v.prctr != ''\nGROUP BY v.prctr, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vbrp.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "sql": "SELECT v.prctr AS profit_center,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE v.prctr IS NOT NULL AND v.prctr != ''\nGROUP BY v.prctr, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
     "priority": 0
   },
   {
