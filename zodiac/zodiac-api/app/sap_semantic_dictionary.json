@@ -1,0 +1,265 @@
+{
+  "_comment": "Universal SAP semantic dictionary: entities, joins, metrics, templates. Used for intent→table→column→SQL resolution.",
+  "entities": {
+    "vendor": {
+      "tables": ["LFA1", "LFB1", "LFM1"],
+      "primary_table": "LFA1",
+      "primary_key": "lifnr",
+      "name_column": "name1",
+      "country_column": "land1",
+      "dimension_columns": ["lifnr", "land1", "brsch", "bukrs", "ekorg", "ekgrp", "zterm"]
+    },
+    "customer": {
+      "tables": ["KNA1", "KNVV", "KNVP"],
+      "primary_table": "KNA1",
+      "primary_key": "kunnr",
+      "name_column": "name1",
+      "country_column": "land1",
+      "dimension_columns": ["kunnr", "land1", "brsch", "vkorg", "vtweg", "spart", "vkbur", "vkgrp"]
+    },
+    "material": {
+      "tables": ["MARA", "MARC", "MAKT", "MARM"],
+      "primary_table": "MARA",
+      "primary_key": "matnr",
+      "description": "maktx",
+      "description_table": "MAKT",
+      "dimension_columns": ["matnr", "werks", "mtart", "matkl", "lgort", "dispo"]
+    },
+    "delivery": {
+      "tables": ["LIKP", "LIPS"],
+      "primary_table": "LIPS",
+      "primary_key": "vbeln",
+      "item_key": "posnr",
+      "date": "lfdat",
+      "date_table": "LIKP",
+      "value": "netwr",
+      "quantity": "lfimg",
+      "dimension_columns": ["vbeln", "matnr", "werks", "kunnr", "route", "prctr"]
+    },
+    "warehouse": {
+      "tables": ["LSEG"],
+      "primary_table": "LSEG",
+      "material": "matnr",
+      "quantity": "menge",
+      "location": "lgort",
+      "plant": "werks",
+      "dimension_columns": ["matnr", "lgort", "werks", "lgnum", "lbeln"]
+    },
+    "finance": {
+      "tables": ["FAGLFLEXA"],
+      "primary_table": "FAGLFLEXA",
+      "value": "hsl",
+      "account": "racct",
+      "profit_center": "prctr",
+      "cost_center": "rcntr",
+      "company": "rbukrs",
+      "period": "poper",
+      "dimension_columns": ["racct", "prctr", "rcntr", "rbukrs", "segment", "poper", "gjahr"]
+    },
+    "purchasing": {
+      "tables": ["EKKO", "EKPO"],
+      "primary_table": "EKPO",
+      "header_table": "EKKO",
+      "primary_key": "ebeln",
+      "item_key": "ebelp",
+      "value": "netwr",
+      "quantity": "menge",
+      "vendor_key": "lifnr",
+      "dimension_columns": ["ebeln", "matnr", "werks", "lifnr", "bukrs"]
+    },
+    "sales": {
+      "tables": ["VBAK", "VBAP", "VBEP", "VBFA", "VBRK", "VBRP"],
+      "primary_table": "VBRP",
+      "header_table": "VBRK",
+      "primary_key": "vbeln",
+      "item_key": "posnr",
+      "value": "netwr",
+      "quantity": "fkimg",
+      "customer_key": "kunag",
+      "customer_key_table": "VBRK",
+      "dimension_columns": ["vbeln", "matnr", "werks", "prctr", "vkorg", "vtweg", "spart"]
+    },
+    "sales_order": {
+      "tables": ["VBAK", "VBAP", "VBEP"],
+      "primary_table": "VBAP",
+      "header_table": "VBAK",
+      "primary_key": "vbeln",
+      "item_key": "posnr",
+      "value": "netwr",
+      "quantity": "kwmeng",
+      "customer_key": "kunnr",
+      "dimension_columns": ["vbeln", "matnr", "werks", "prctr", "vkorg", "vtweg", "spart"]
+    },
+    "controlling": {
+      "tables": ["COEP", "COSP", "CSKS", "AUFK", "CEPC"],
+      "primary_table": "COEP",
+      "value": "wkgbtr",
+      "dimension_columns": ["objnr", "kstar", "bukrs", "werks", "gjahr", "perio"]
+    }
+  },
+  "joins": [
+    { "left_table": "LFA1", "right_table": "LFB1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "LFA1", "right_table": "LFM1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "LIKP", "right_table": "LIPS", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "LIPS", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "LIPS", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARC", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARC", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "MARM", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "KNA1", "right_table": "KNVV", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "KNA1", "right_table": "KNVP", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "EKKO", "right_table": "EKPO", "left_key": "ebeln", "right_key": "ebeln" },
+    { "left_table": "EKPO", "right_table": "LFA1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "EKPO", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBAK", "right_table": "VBAP", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBAP", "right_table": "VBEP", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBAP", "right_table": "VBEP", "left_key": "posnr", "right_key": "posnr" },
+    { "left_table": "VBAP", "right_table": "VBFA", "left_key": "vbeln", "right_key": "vbelv" },
+    { "left_table": "VBFA", "right_table": "VBRK", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBRK", "right_table": "VBRP", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBAP", "right_table": "VBRP", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRK", "right_table": "KNA1", "left_key": "kunag", "right_key": "kunnr" },
+    { "left_table": "VBAP", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "FAGLFLEXA", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "LIKP", "right_table": "KNA1", "left_key": "kunnr", "right_key": "kunnr" }
+  ],
+  "metrics": {
+    "delivery_quantity": {
+      "table": "LIPS",
+      "column": "lfimg",
+      "aggregation": "SUM",
+      "aliases": ["delivered quantity", "delivery quantity", "quantity delivered", "delivered qty"]
+    },
+    "delivery_value": {
+      "table": "LIPS",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["delivery value", "delivery amount", "delivered value", "total delivery value"]
+    },
+    "warehouse_stock": {
+      "table": "LSEG",
+      "column": "menge",
+      "aggregation": "SUM",
+      "aliases": ["warehouse quantity", "warehouse stock", "stock quantity", "inventory quantity"]
+    },
+    "purchase_value": {
+      "table": "EKPO",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["purchase value", "purchase amount", "PO value", "purchase order value", "procurement value"]
+    },
+    "purchase_quantity": {
+      "table": "EKPO",
+      "column": "menge",
+      "aggregation": "SUM",
+      "aliases": ["purchase quantity", "ordered quantity", "PO quantity"]
+    },
+    "sales_value": {
+      "table": "VBRP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["sales value", "revenue", "billing value", "invoice value", "sales amount", "revenue by material", "revenue by plant", "revenue by profit center", "invoice value by material", "invoice value by customer"]
+    },
+    "invoice_value": {
+      "table": "VBRP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["invoice value", "invoice amount", "billing value", "revenue", "invoice value by customer"]
+    },
+    "billing_quantity": {
+      "table": "VBRP",
+      "column": "fkimg",
+      "aggregation": "SUM",
+      "aliases": ["billed quantity", "invoiced quantity", "invoice quantity"]
+    },
+    "invoice_quantity": {
+      "table": "VBRP",
+      "column": "fkimg",
+      "aggregation": "SUM",
+      "aliases": ["invoice quantity", "invoiced quantity", "billed quantity"]
+    },
+    "order_value": {
+      "table": "VBAP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["order value", "sales order value", "order amount", "order total", "orders by customer", "order value by material", "order value by plant"]
+    },
+    "order_quantity": {
+      "table": "VBAP",
+      "column": "kwmeng",
+      "aggregation": "SUM",
+      "aliases": ["order quantity", "ordered quantity", "sales order quantity", "order quantity by plant", "order quantity by material"]
+    },
+    "schedule_quantity": {
+      "table": "VBEP",
+      "column": "wmeng",
+      "aggregation": "SUM",
+      "aliases": ["schedule quantity", "delivery schedule quantity", "delivery schedule by date", "delivery schedule"]
+    },
+    "gl_amount": {
+      "table": "FAGLFLEXA",
+      "column": "hsl",
+      "aggregation": "SUM",
+      "aliases": ["GL amount", "GL balance", "ledger amount", "posting amount", "revenue", "expense"]
+    },
+    "cost_by_profit_center": {
+      "table": "FAGLFLEXA",
+      "column": "hsl",
+      "aggregation": "SUM",
+      "aliases": ["cost by profit center", "postings by profit center", "total cost by profit center", "expense by profit center"]
+    },
+    "purchase_order_total": {
+      "table": "EKPO",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["purchase order totals", "PO totals", "PO value", "vendor spend by material"]
+    },
+    "actual_cost": {
+      "table": "COEP",
+      "column": "wkgbtr",
+      "aggregation": "SUM",
+      "aliases": ["actual cost", "cost posting", "controlling cost"]
+    },
+    "cost_estimate_value": {
+      "table": "CKIS",
+      "column": "wertn",
+      "aggregation": "SUM",
+      "aliases": ["cost estimate", "product cost", "cost component"]
+    }
+  },
+  "dimensions": {
+    "vendor": { "entity": "vendor", "table": "LFA1", "column": "lifnr", "name_column": "name1" },
+    "customer": { "entity": "customer", "table": "KNA1", "column": "kunnr", "name_column": "name1" },
+    "material": { "entity": "material", "table": "LIPS", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "material_warehouse": { "entity": "warehouse", "table": "LSEG", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "material_billing": { "entity": "sales", "table": "VBRP", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "material_order": { "entity": "sales_order", "table": "VBAP", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "plant_order": { "entity": "sales_order", "table": "VBAP", "column": "werks" },
+    "plant_billing": { "entity": "sales", "table": "VBRP", "column": "werks" },
+    "profit_center_billing": { "entity": "sales", "table": "VBRP", "column": "prctr", "name_table": "CEPC", "name_column": "name1" },
+    "customer_billing": { "entity": "customer", "table": "VBRK", "column": "kunag", "name_table": "KNA1", "name_column": "name1", "name_join_key": "kunnr", "metric_join_key": "vbeln" },
+    "country": { "entity": "vendor", "table": "LFA1", "column": "land1" },
+    "customer_country": { "entity": "customer", "table": "KNA1", "column": "land1" },
+    "plant": { "entity": "material", "table": "LIPS", "column": "werks" },
+    "storage_location": { "entity": "warehouse", "table": "LSEG", "column": "lgort" },
+    "profit_center": { "entity": "finance", "table": "FAGLFLEXA", "column": "prctr", "name_table": "CEPC", "name_column": "name1" },
+    "cost_center": { "entity": "finance", "table": "FAGLFLEXA", "column": "rcntr" },
+    "gl_account": { "entity": "finance", "table": "FAGLFLEXA", "column": "racct" },
+    "company_code": { "entity": "finance", "table": "FAGLFLEXA", "column": "rbukrs" }
+  },
+  "templates": {
+    "count_by_dimension": "SELECT {dimension}, COUNT(*) AS cnt FROM {table} GROUP BY {dimension} ORDER BY cnt DESC LIMIT 100",
+    "sum_by_dimension": "SELECT {dimension}, SUM({metric}) AS total FROM {table} GROUP BY {dimension} ORDER BY total DESC LIMIT 100",
+    "sum_by_dimension_with_name": "SELECT a.{dimension}, b.{name_column} AS name, SUM(a.{metric}) AS total FROM {table} a LEFT JOIN {name_table} b ON a.{join_key} = b.{join_key} GROUP BY a.{dimension}, b.{name_column} ORDER BY total DESC LIMIT 100",
+    "total_metric": "SELECT SUM({metric}) AS total FROM {table} LIMIT 1",
+    "list_entities": "SELECT {key}, {name_column} FROM {table} ORDER BY {name_column} LIMIT 100"
+  },
+  "fallback_rules": {
+    "if_metric_unknown": "use COUNT(*) AS cnt",
+    "if_aggregation_missing": "SUM numeric columns from primary table",
+    "if_table_unknown": "search entities by keywords then use primary_table",
+    "default_limit": 100
+  }
+}
