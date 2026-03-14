@@ -39,7 +39,7 @@ logger = logging.getLogger("zodiac-api.sap_sql_agent")
 
 # Schema-driven agent (no keyword rules): schema → LLM table selection → LLM SQL
 try:
-    from .schema_loader import get_schema_dict, get_schema_text, schema_to_text, load_schema
+    from .schema_loader import get_schema_dict, get_schema_text, schema_to_text
     from .table_selector_llm import select_tables as schema_select_tables
     from .sql_generator_llm import generate_sql as schema_generate_sql
     from .sql_validator import validate_sql as schema_validate_sql
