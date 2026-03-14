@@ -1188,6 +1188,9 @@ Task:
 - Delivery-specific: when the user asks about delivery or process flow: include LIKP, LIPS, VBFA.
 - For product costing, cost of goods, standard price: use MBEW (STPRS, VERPR, VPRSV, PEINH), KEKO, KEPH, MARA, MAKT.
 - For purchase orders: use EKKO, EKPO, LFA1 (vendor), MARA, MAKT.
+- **Sales/revenue by country or "X customers only"** (e.g. "Sales by Korean customers only", "revenue from India", "German customers"): use VBRK, VBRP, and KNA1 (customer country = KNA1.LAND1; or use VBRK.LAND1). Always include these tables so the query can filter by country code (e.g. KR, IN, DE).
+- **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). Group by year from VBRK.FKDAT. Do not require a specific table name in the question.
+- **Cost by profit center, cost by GL account, cost by profit center and GL account, cost by profit center and GL account for last N months**: use FAGLFLEXA only (columns: prctr=profit center, racct or cost_elem=GL account, hsl=amount in local currency, ryear, poper, budat for date). Do NOT use EKPO, RBKP, RSEG, or KEKO for profit center or GL account breakdowns.
 - Only return JSON in this format:
 
 {{
@@ -1268,8 +1271,12 @@ Column mappings (table -> column -> description):
 
 **Customer:** Use KNA1.KUNNR (customer number) and KNA1.NAME1 (customer name). Join VBRK.KUNAG = KNA1.KUNNR.
 **Revenue:** Use VBRK, VBRP; join VBRK.VBELN = VBRP.VBELN. VBRP has NETWR, MATNR. Revenue only for billing types A,B,C,D,E,I,L,W (FKTYP).
+**Country filter (Korean/Indian/German customers, revenue from India, etc.):** Add filter LAND1 = '<ISO code>': Korean→KR, Indian/India→IN, German/Germany→DE, US→US, UK→GB. Use KNA1.LAND1 when KNA1 is in the query (customer country), or VBRK.LAND1 when only VBRK is used. The system will inject this from the question if you omit it.
+**Sales by year / revenue by year:** Use VBRK.GJAHR (fiscal year) as the year dimension. Add column VBRK.GJAHR with description "year"; add group_by VBRK.GJAHR; select SUM(VBRP.NETWR) as total_sales. If GJAHR is not in the mappings, use SUBSTRING(VBRK.FKDAT::text, 1, 4) as year and group by it.
+**Cost by profit center and GL account (or "cost by profit center", "cost by GL account"):** Use table FAGLFLEXA only. Select prctr (profit center), racct or cost_elem (GL account), SUM(hsl) as total_cost or total_amount. Add group_by prctr and racct (or cost_elem). For "last 24 months" filter on ryear and poper (or budat) to restrict to recent periods; use current year and prior year with poper 01-12.
 **Best products by value and industry:** Use VBRK, VBRP, KNA1 (BRSCH), MAKT (MAKT.MATNR = VBRP.MATNR). Select MATNR, MAKTX, BRSCH, NETWR. Order by NETWR DESC.
 **Highest sales by customer:** Use only VBRK, VBRP, KNA1; select KUNNR, NAME1, NETWR; do NOT add VBAK, VBFA, LIKP, LIPS. Order by NETWR DESC.
+**Sales by currency (e.g. total sales by WAERS/WAERK):** Use VBRK (WAERK) and VBRP (NETWR). Group by VBRK.WAERK; select WAERK, SUM(NETWR) as total_sales.
 **Process flow (billing, order, delivery):** Include billing doc (VBRK.VBELN), sales order (VBRP.AUBEL or VBAK.VBELN), delivery (LIKP.VBELN via VBFA), purchase order (VBAK.BSTNK). Join VBRP.AUBEL = VBAK.VBELN; VBRP to VBFA to LIKP.
 **Product by name filter:** When user asks for products matching a name (e.g. "Harley"): add filter MAKT.MAKTX with operator "=" and rhs the product name; use MAKT.SPRAS = 'E' for one language.
 **Cost of a product:** Use MBEW, KEKO, KEPH, MARA, MAKT. Select STPRS, VERPR, PEINH, VPRSV, MAKTX. Filter by MAKT.MAKTX for product name.
@@ -1320,6 +1327,27 @@ def run_adaptive_sap_sql_agent(
 
     try:
         selected_tables = _pick_tables_adaptive(question, client, db, knowledge_context)
+        # Fallback when LLM returns no tables: infer from common patterns so short queries still work
+        if not selected_tables:
+            q_lower = (question or "").lower()
+            if any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl")):
+                selected_tables = ["FAGLFLEXA"]
+            elif any(x in q_lower for x in ("by year", "per year", "sales by year", "revenue by year")):
+                selected_tables = ["VBRK", "VBRP"]
+            elif any(x in q_lower for x in ("by currency", "sales by currency", "waerk", "waers")):
+                selected_tables = ["VBRK", "VBRP"]
+            else:
+                # Country/customer sales: Korean, Indian, German customers, revenue from X
+                try:
+                    from .invoice_bot_helpers import _extract_country_iso_from_query
+                    if _extract_country_iso_from_query(question):
+                        selected_tables = ["VBRK", "VBRP", "KNA1"]
+                    elif any(x in q_lower for x in ("sales", "revenue", "customer")) and not selected_tables:
+                        selected_tables = ["VBRK", "VBRP", "KNA1"]
+                except Exception:
+                    pass
+            if selected_tables:
+                logger.info("run_adaptive_sap_sql_agent: using fallback tables for short query: %s", selected_tables)
         if not selected_tables:
             logger.info("run_adaptive_sap_sql_agent: no tables selected, falling back to standard path")
             return None
@@ -1344,7 +1372,7 @@ def run_adaptive_sap_sql_agent(
         if not spec:
             return None
 
-        # Invoice-bot spec post-processing: date filters, product name, material number, MAKT language, delivery chain
+        # Invoice-bot spec post-processing: date filters, product name, material number, MAKT language, delivery chain, country
         try:
             from .invoice_bot_helpers import (
                 fix_date_filters,
@@ -1352,12 +1380,14 @@ def run_adaptive_sap_sql_agent(
                 inject_material_number_filter_if_needed,
                 inject_makt_single_language_if_needed,
                 ensure_delivery_chain_in_spec,
+                inject_country_filter_if_needed,
             )
             fix_date_filters(spec)
             inject_product_name_filter_if_needed(question, spec)
             inject_material_number_filter_if_needed(question, spec)
             inject_makt_single_language_if_needed(spec)
             ensure_delivery_chain_in_spec(spec)
+            inject_country_filter_if_needed(question, spec)
         except Exception as e:
             logger.warning("invoice_bot_helpers spec post-processing failed: %s", e)
 
