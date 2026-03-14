@@ -323,6 +323,67 @@ ORDER BY total_quantity DESC
 LIMIT 100
 '''.strip(),
     },
+    # ── Invoice + payer name + industry (the classic invoice-bot pattern) ──
+    {
+        "user_query": "Show invoices with payer names by industry",
+        "sql_query": '''
+SELECT
+    v."vbeln" AS invoice_number,
+    v."fkdat" AS billing_date,
+    v."kunag" AS customer_number,
+    k."name1" AS payer_name,
+    COALESCE(t."brtxt", k."brsch") AS industry,
+    k."land1" AS country,
+    NULLIF(TRIM(v."netwr"::text), '')::numeric AS invoice_amount,
+    v."waerk" AS currency
+FROM "VBRK" AS v
+LEFT JOIN "KNA1" AS k ON v."kunag" = k."kunnr"
+LEFT JOIN "T016T" AS t ON k."brsch" = t."brsch"
+WHERE v."fkdat" IS NOT NULL
+ORDER BY industry ASC, v."fkdat" DESC
+LIMIT 200
+'''.strip(),
+    },
+    # ── Invoice list with customer names ──────────────────────────────────
+    {
+        "user_query": "List all invoices with customer names",
+        "sql_query": '''
+SELECT
+    v."vbeln" AS invoice_number,
+    v."fkdat" AS billing_date,
+    v."kunag" AS customer_number,
+    k."name1" AS customer_name,
+    k."land1" AS country,
+    NULLIF(TRIM(v."netwr"::text), '')::numeric AS invoice_amount,
+    v."waerk" AS currency
+FROM "VBRK" AS v
+LEFT JOIN "KNA1" AS k ON v."kunag" = k."kunnr"
+WHERE v."fkdat" IS NOT NULL
+ORDER BY v."fkdat" DESC
+LIMIT 200
+'''.strip(),
+    },
+    # ── Sales (billing line items) with product names ─────────────────────
+    {
+        "user_query": "Show billing line items with product names and amounts",
+        "sql_query": '''
+SELECT
+    vk."vbeln" AS invoice_number,
+    vk."fkdat" AS billing_date,
+    v."posnr" AS item_number,
+    COALESCE(m."maktx", v."matnr") AS product_name,
+    NULLIF(TRIM(v."fkimg"::text), '')::numeric AS quantity,
+    v."vrkme" AS unit,
+    NULLIF(TRIM(v."netwr"::text), '')::numeric AS line_amount,
+    vk."waerk" AS currency
+FROM "vbrp" AS v
+JOIN "VBRK" AS vk ON v."vbeln" = vk."vbeln"
+LEFT JOIN "MAKT" AS m ON v."matnr" = m."matnr" AND m."spras" = \'E\'
+WHERE vk."fkdat" IS NOT NULL
+ORDER BY vk."fkdat" DESC
+LIMIT 200
+'''.strip(),
+    },
 ]
 
 
@@ -368,6 +429,12 @@ def get_sql_examples_for_question(
         (["customer payments", "bsad", "cleared items"], 16),
         (["sales orders", "vbak", "order date", "status"], 17),
         (["outbound delivery quantities", "lips", "product"], 18),
+        # Invoice + payer name + industry (the core invoice-bot pattern)
+        (["invoices", "payer", "industry", "payers", "billing documents"], 19),
+        # Invoice list with customer names
+        (["invoices", "customer name", "list invoices", "show invoices", "billing"], 20),
+        # Billing line items with product names
+        (["billing", "line items", "product names", "billing items", "vbrp", "line amount"], 21),
     ]
 
     for kw, idx in keywords_map:
