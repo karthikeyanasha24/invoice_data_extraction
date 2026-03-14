@@ -1192,6 +1192,19 @@ Task:
 - **Sales/revenue by country or "X customers only"** (e.g. "Sales by Korean customers only", "revenue from India", "German customers"): use VBRK, VBRP, and KNA1 (customer country = KNA1.LAND1; or use VBRK.LAND1). Always include these tables so the query can filter by country code (e.g. KR, IN, DE).
 - **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). Group by year from VBRK.FKDAT or VBRK.GJAHR. Do not require a specific table name in the question.
 - **Cost by profit center, cost by GL account, cost by profit center and GL account, cost by profit center and GL account for last N months**: use FAGLFLEXA only (columns: prctr=profit center, racct or cost_elem=GL account, hsl=amount in local currency, ryear, poper, budat for date). Do NOT use EKPO, RBKP, RSEG, or KEKO for profit center or GL account breakdowns.
+- **Link FAGLFLEXA profit center costs back to customers/products / profit center and customer / cost by profit center and customer**: use FAGLFLEXA with VBRK, VBRP, KNA1, MAKT when the question asks to link or attribute costs to customers or products. Select FAGLFLEXA (prctr, hsl, racct, ryear, poper), VBRK/VBRP (revenue/customer), KNA1 (customer name), MAKT (material name). Join where document or segment allows; if no direct join in schema, still return FAGLFLEXA by profit center and optionally by cost element so the user gets cost breakdown.
+- **Purchasing (EKPO, quantity, cost, material, plant, vendor)**: use EKKO, EKPO; add MAKT (MATNR description), MARA, LFA1 (vendor) when question asks for material name, vendor, or plant. For "jacket" or product name filter use MAKT and filter MAKT.MAKTX.
+- **Stock movements, reservations (MKPF, RESB, MSEG)**: use MKPF (header), MSEG or RESB as needed; join to MARA/MAKT for material names.
+- **Plant/master (MARC, on-hand, MRP, slow-moving)**: use MARC, MARA, MAKT when question asks plant-level data, on-hand, MRP parameters, or slow-moving materials.
+- **Costing (KEKO, CKMLCR, CKIS, standard cost, BOM)**: use KEKO, KEPH, CKIS for cost breakdown; CKMLCR for period totals/stock value; STKO, STPO, MAST for BOM/component questions.
+- **Pricing/conditions (KONV)**: use KONV with VBRK (KNUMV), VBRP, MAKT when question asks for prices, discounts, conditions, PR00, or list price.
+- **Revenue by industry (T016T)**: use KNA1 (BRSCH) and T016T (join KNA1.brsch = T016T.brsch) for industry description; use with VBRK, VBRP.
+- **Customer group / sales area (KNVV)**: use KNVV with KNA1, VBRK, VBRP when question asks customer group (kdgrp), sales org, or distribution channel.
+- **AR, receivables (BSAD, BSEG)**: use BSAD, BSEG, BKPF with KNA1 when question asks open AR, aging, credit, write-offs, or payment terms.
+- **Vendors, AP (LFA1, RBKP, RSEG)**: use LFA1 (vendor master), EKKO, EKPO for PO spend; RBKP, RSEG for invoice amounts; LFB1 for payment terms.
+- **Margin / profitability (revenue minus cost)**: use VBRK, VBRP (revenue) with EKPO or RSEG (cost) and MAKT; join on material where possible.
+- **Deliveries (LIKP, LIPS)**: use LIKP, LIPS, VBFA with VBRK, VBRP when question asks delivered quantity, on-time delivery, or delivery performance.
+- **Controlling (AUFK, COEP, COSP, CSKS, CEPC)**: use AUFK (internal orders), COEP/COSP (actual/planned cost), CSKS (cost center), CEPC (profit center master) when question asks cost by order, cost center, or profit center master.
 - Only return JSON in this format:
 
 {{
@@ -1282,6 +1295,16 @@ Column mappings (table -> column -> description):
 **Process flow (billing, order, delivery):** Include billing doc (VBRK.VBELN), sales order (VBRP.AUBEL or VBAK.VBELN), delivery (LIKP.VBELN via VBFA), purchase order (VBAK.BSTNK). Join VBRP.AUBEL = VBAK.VBELN; VBRP to VBFA to LIKP.
 **Product by name filter:** When user asks for products matching a name (e.g. "Harley"): add filter MAKT.MAKTX with operator "=" and rhs the product name; use MAKT.SPRAS = 'E' for one language.
 **Cost of a product:** Use MBEW, KEKO, KEPH, MARA, MAKT. Select STPRS, VERPR, PEINH, VPRSV, MAKTX. Filter by MAKT.MAKTX for product name.
+**Link FAGLFLEXA to customers/products:** Return FAGLFLEXA columns (prctr, racct or cost_elem, hsl, ryear, poper). If VBRK/VBRP/KNA1/MAKT are in tables, add them: join FAGLFLEXA to billing/customer where schema allows (e.g. document or segment); select prctr, SUM(hsl) as total_cost, and customer/material name when available. If no join exists, return FAGLFLEXA grouped by prctr (and racct) with SUM(hsl). Never return empty columns.
+**Purchasing (EKPO):** Use EKKO, EKPO; join EKPO.EBELN = EKKO.EBELN. Select MATNR, WERKS (plant), NETPR, MENGE, and SUM for totals; add MAKT (MAKT.MATNR = EKPO.MATNR, SPRAS='E') for material name. Filter MAKT.MAKTX ILIKE '%jacket%' when user asks jacket products. Group by material/plant/vendor as needed.
+**Stock movements (MKPF, MSEG, RESB):** Use MKPF (BLDAT, BUDAT), MSEG (MATNR, MENGE, BWKEY) join on MBLNR/MJAHR; or RESB for reservations. Join MARA/MAKT for material name. Group by material; SUM(quantity) for totals.
+**Revenue by industry:** Join KNA1.BRSCH = T016T.BRSCH; select T016T text (brtxt) as industry, SUM(VBRP.NETWR). Use VBRK, VBRP, KNA1, T016T.
+**Pricing (KONV):** Join KONV to VBRK on KNUMV; use KSCHL (condition type), KWERT or KBETR, KWAER. Add VBRP, MAKT for material-level conditions. Filter MAKT.MAKTX for product name when asked.
+**AR / receivables (BSAD, BSEG):** Use BSAD (cleared), BSEG (line items); join to BKPF on BELNR/BUKRS/GJAHR; join KNA1 on KUNNR. Select customer, amount, clearing date; group by customer for totals.
+**Vendors (LFA1, RBKP, RSEG):** Use LFA1 (LIFNR, NAME1), EKPO/EKKO for PO spend; RBKP (invoice header), RSEG (invoice item) for invoice amounts. Join on LIFNR, document keys. Sum by vendor, material, or year.
+**Margin:** Select VBRP.NETWR (revenue), EKPO.NETWR or RSEG amount (cost); join VBRP.MATNR = EKPO.MATNR where possible. Compute margin = revenue - cost; group by material or customer.
+**Deliveries (LIKP, LIPS):** Join LIKP to LIPS on VBELN; join to VBRP/VBFA for value. Select delivery doc, customer, material, quantity, value. Order by quantity or value DESC.
+**Controlling (AUFK, COEP, COSP, CSKS):** Use COEP for actual cost by cost object; COSP for planned; join AUFK for order description; CSKS for cost center. Select OBJNR or order, cost element, SUM(amount).
 **All columns and filters must use only column names from the mappings above.**
 
 Return JSON only:
@@ -1410,6 +1433,77 @@ def _build_minimal_last_sales_spec(
     return spec
 
 
+def _build_minimal_faglflexa_spec(
+    question: str,
+    selected_tables: List[str],
+    column_mappings: Dict[str, Dict[str, str]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a minimal valid spec for FAGLFLEXA profit center cost questions when the LLM returns empty.
+    Returns FAGLFLEXA by profit center (and GL account if requested). If VBRK/VBRP/KNA1/MAKT are
+    in selected_tables, include them so the SQL can link costs to customers/products where the schema allows.
+    """
+    mapping_lower = {k.lower(): k for k in column_mappings.keys()}
+    tables_in_mapping = []
+    for t in selected_tables:
+        actual = mapping_lower.get((t or "").lower())
+        if actual:
+            tables_in_mapping.append(actual)
+
+    fagl = next((t for t in tables_in_mapping if t.upper() == "FAGLFLEXA"), None)
+    if not fagl:
+        return None
+
+    def has_col(tbl: str, col: str) -> bool:
+        cols = column_mappings.get(tbl, {})
+        return col.lower() in {c.lower() for c in cols.keys()}
+
+    def col_name(tbl: str, col: str) -> str:
+        cols = column_mappings.get(tbl, {})
+        for k in cols.keys():
+            if k.lower() == col.lower():
+                return k
+        return col
+
+    columns: List[Dict[str, Any]] = []
+    if has_col(fagl, "prctr"):
+        columns.append({"table": fagl, "name": col_name(fagl, "prctr"), "description": "profit_center", "agg": None})
+    if has_col(fagl, "racct"):
+        columns.append({"table": fagl, "name": col_name(fagl, "racct"), "description": "gl_account", "agg": None})
+    elif has_col(fagl, "cost_elem"):
+        columns.append({"table": fagl, "name": col_name(fagl, "cost_elem"), "description": "cost_element", "agg": None})
+    if has_col(fagl, "hsl"):
+        columns.append({"table": fagl, "name": col_name(fagl, "hsl"), "description": "total_cost", "agg": "SUM"})
+    if has_col(fagl, "ryear"):
+        columns.append({"table": fagl, "name": col_name(fagl, "ryear"), "description": "fiscal_year", "agg": None})
+    if has_col(fagl, "poper"):
+        columns.append({"table": fagl, "name": col_name(fagl, "poper"), "description": "posting_period", "agg": None})
+    if has_col(fagl, "rtcur"):
+        columns.append({"table": fagl, "name": col_name(fagl, "rtcur"), "description": "currency", "agg": None})
+
+    if not columns:
+        return None
+
+    joins: List[Dict[str, Any]] = []
+    # Minimal spec: FAGLFLEXA only (profit center + GL + cost). Link to customers/products
+    # requires document-level keys that vary by schema; LLM can add VBRK/VBRP/KNA1/MAKT when it generates spec.
+    # No order_by: with GROUP BY, we need ORDER BY alias (total_cost); builder expects description match.
+    spec: Dict[str, Any] = {
+        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "columns": columns,
+        "joins": joins,
+        "filters": [],
+        "order_by": [{"table": fagl, "column": "total_cost", "direction": "DESC"}] if has_col(fagl, "hsl") else [],
+        "group_by": [{"table": fagl, "column": col_name(fagl, "prctr")}] if has_col(fagl, "prctr") else [],
+        "limit": 100,
+    }
+    if has_col(fagl, "racct"):
+        spec["group_by"].append({"table": fagl, "column": col_name(fagl, "racct")})
+    elif has_col(fagl, "cost_elem"):
+        spec["group_by"].append({"table": fagl, "column": col_name(fagl, "cost_elem")})
+    return spec
+
+
 def run_adaptive_sap_sql_agent(
     question: str,
     db: Session,
@@ -1473,8 +1567,26 @@ def run_adaptive_sap_sql_agent(
         # Fallback when LLM returns no tables: infer from common patterns so short queries still work
         if not selected_tables:
             q_lower = (question or "").lower()
-            if any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl")):
+            if any(x in q_lower for x in ("link faglflexa", "faglflexa profit center", "profit center costs back to", "profit center and customer")) or (
+                "faglflexa" in q_lower and ("customer" in q_lower or "product" in q_lower or "link" in q_lower)
+            ):
+                selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
+            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl")):
                 selected_tables = ["FAGLFLEXA"]
+            elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend")):
+                selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
+            elif any(x in q_lower for x in ("mkpf", "resb", "stock movement", "reservation", "issued from inventory")):
+                selected_tables = ["MKPF", "MSEG", "MARA", "MAKT"]
+            elif any(x in q_lower for x in ("konv", "condition", "price condition", "discount", "pr00")):
+                selected_tables = ["KONV", "VBRK", "VBRP", "MAKT"]
+            elif any(x in q_lower for x in ("bsad", "bseg", "ar ", "receivable", "aging", "write-off")):
+                selected_tables = ["BSAD", "BSEG", "KNA1"]
+            elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor")):
+                selected_tables = ["LFA1", "EKKO", "EKPO", "RBKP", "RSEG"]
+            elif any(x in q_lower for x in ("margin", "profitability", "revenue minus cost")):
+                selected_tables = ["VBRK", "VBRP", "EKPO", "MAKT"]
+            elif any(x in q_lower for x in ("deliver", "likp", "lips", "delivered quantity")):
+                selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
             elif any(x in q_lower for x in ("by year", "per year", "sales by year", "revenue by year")):
                 selected_tables = ["VBRK", "VBRP"]
             elif any(x in q_lower for x in ("by currency", "sales by currency", "waerk", "waers")):
@@ -1518,7 +1630,7 @@ def run_adaptive_sap_sql_agent(
             table_descriptions=table_descriptions,
         )
         if not spec:
-            # When LLM returns empty, use minimal spec for "last/best/recent sales" so we still answer
+            # When LLM returns empty, use minimal spec for known question types so we still answer
             q_lower = (question or "").lower()
             if any(x in q_lower for x in ("last sales", "best sales", "recent sales", "show me sales", "top sales")) or (
                 ("last" in q_lower or "best" in q_lower or "recent" in q_lower) and "sales" in q_lower
@@ -1526,6 +1638,12 @@ def run_adaptive_sap_sql_agent(
                 spec = _build_minimal_last_sales_spec(question, selected_tables, column_mappings)
                 if spec:
                     logger.info("run_adaptive_sap_sql_agent: using minimal last-sales spec after LLM returned empty")
+            if not spec and "FAGLFLEXA" in (t.upper() for t in selected_tables) and any(
+                x in q_lower for x in ("profit center", "faglflexa", "link", "cost by profit", "gl account")
+            ):
+                spec = _build_minimal_faglflexa_spec(question, selected_tables, column_mappings)
+                if spec:
+                    logger.info("run_adaptive_sap_sql_agent: using minimal FAGLFLEXA spec after LLM returned empty")
             if not spec:
                 return None
 
