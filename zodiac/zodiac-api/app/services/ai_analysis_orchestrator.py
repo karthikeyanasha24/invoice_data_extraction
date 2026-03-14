@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
-from .sap_sql_agent import run_sap_sql_agent, run_adaptive_sap_sql_agent, _serialize_value  # type: ignore
+from .sap_sql_agent import run_sap_sql_agent, run_adaptive_sap_sql_agent, run_schema_driven_sql_agent, _serialize_value  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
 from .training_data_collector import log_query_execution, get_few_shot_examples
 from .sql_example_library import get_sql_examples_for_question
@@ -663,15 +663,22 @@ If result is empty, say so and suggest a refined question.
         logger.warning("Procurement-from-list check failed: %s", proc_err)
 
     if result is None:
-        # Try invoice-bot-style adaptive SQL first (question-specific tables and SQL per query).
-        # If it fails or returns no rows, fall back to current run_sap_sql_agent (catalog + standard prompts).
-        result = run_adaptive_sap_sql_agent(
-            user_query,
-            sql_db,
-            knowledge_context=knowledge_context,
-            time_scope=time_scope,
-            few_shot_examples=_few_shot,
-        )
+        # 1) Schema-driven agent first: LLM reads schema → selects tables → generates SQL (no keyword rules).
+        try:
+            result = run_schema_driven_sql_agent(user_query, sql_db, few_shot_examples=_few_shot)
+            if result and getattr(result, "rows", None):
+                logger.info("Schema-driven SQL agent returned %d rows", len(result.rows))
+        except Exception as schema_err:
+            logger.debug("Schema-driven agent failed: %s", schema_err)
+        # 2) Fall back to adaptive (keyword/heuristic) then standard sap_sql_agent.
+        if result is None or not getattr(result, "rows", None):
+            result = run_adaptive_sap_sql_agent(
+                user_query,
+                sql_db,
+                knowledge_context=knowledge_context,
+                time_scope=time_scope,
+                few_shot_examples=_few_shot,
+            )
     if result is None or not (getattr(result, "rows", None)):
         logger.info("Adaptive SQL path returned no result; falling back to standard sap_sql_agent")
         result = run_sap_sql_agent(
@@ -1163,5 +1170,4 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
     if payload.get("performance"):
         logger.debug(f"Performance data: {payload['performance']}")
     return payload
-
 
