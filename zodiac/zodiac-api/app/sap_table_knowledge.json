@@ -1,0 +1,84 @@
+{
+  "AUFK": {
+    "description": "Internal order master data (SAP CO). Tracks costs, revenues, or activities for projects, maintenance orders, marketing campaigns. Primary key: aufnr.",
+    "primary_key": "aufnr",
+    "important_columns": ["aufnr", "ktext", "ltext", "bukrs", "werks", "gsber", "kokrs", "kostl", "prctr", "erdat", "ernam", "objnr", "auart", "autyp", "waers"],
+    "amount_columns": [],
+    "date_columns": ["erdat", "aedat", "stdat"],
+    "joins": {
+      "COEP": "objnr",
+      "COSP": "objnr",
+      "CSKS": "kostl",
+      "CEPC": "prctr"
+    },
+    "business_meaning": "Internal orders for project cost tracking, maintenance, marketing, internal cost collection. objnr links to COEP/COSP for actual/planned costs.",
+    "example_questions": [
+      "List all internal orders",
+      "Show internal orders by profit center",
+      "Internal orders by cost center",
+      "Internal orders by company code",
+      "Orders created this year",
+      "Top internal orders by cost",
+      "Which profit center has the most orders?"
+    ],
+    "sql_hints": "AUFK: use aufnr (order number), ktext (description), prctr (profit center), kostl (cost center), objnr to join COEP/COSP for costs. Group by prctr, kostl, bukrs, or EXTRACT(YEAR FROM erdat) for time analysis."
+  },
+  "BSAD": {
+    "description": "Customer cleared items (Accounts Receivable). Paid/cleared customer invoice line items. BSAD = historical cleared receivables (invoice was paid).",
+    "primary_key": ["bukrs", "belnr", "gjahr", "buzei"],
+    "important_columns": ["bukrs", "kunnr", "belnr", "gjahr", "buzei", "budat", "bldat", "augdt", "augbl", "waers", "dmbtr", "wrbtr", "saknr", "hkont", "zfbdt", "zterm", "sknto", "sgtxt", "prctr", "kostl", "aufnr"],
+    "amount_columns": ["dmbtr", "wrbtr", "sknto"],
+    "date_columns": ["budat", "bldat", "augdt", "zfbdt"],
+    "customer_column": "kunnr",
+    "joins": {
+      "KNA1": "kunnr",
+      "BSEG": "belnr+gjahr",
+      "AUFK": "aufnr",
+      "CSKS": "kostl"
+    },
+    "business_meaning": "Cleared (paid) customer invoices. Use for: total payments by customer, revenue collected, payment timing, cash discounts. Join KNA1 on kunnr for customer name.",
+    "example_questions": [
+      "Total cleared receivables",
+      "Top customers by payment",
+      "Revenue collected per month",
+      "Which customers pay fastest?",
+      "Cash discount totals by customer",
+      "Payments by profit center",
+      "Payments by cost center",
+      "Invoices cleared this year"
+    ],
+    "sql_hints": "BSAD: dmbtr/wrbtr = amount; augdt = clearing date; kunnr = customer. SUM(dmbtr) GROUP BY kunnr for revenue by customer; GROUP BY prctr, kostl, bukrs; EXTRACT(YEAR FROM augdt) for time. Join KNA1 on kunnr for name1."
+  },
+  "BSEG": {
+    "description": "Accounting document segment (FI line items). Every financial transaction creates entries. Customer (koart D), vendor (K), GL (S), material (M), asset (A).",
+    "primary_key": ["bukrs", "belnr", "gjahr", "buzei"],
+    "important_columns": ["bukrs", "belnr", "gjahr", "buzei", "bschl", "koart", "dmbtr", "wrbtr", "saknr", "hkont", "kunnr", "lifnr", "kostl", "prctr", "aufnr", "matnr", "werks", "menge", "vbeln"],
+    "amount_columns": ["dmbtr", "wrbtr"],
+    "date_columns": ["budat", "bldat"],
+    "account_type_column": "koart",
+    "customer_column": "kunnr",
+    "vendor_column": "lifnr",
+    "joins": {
+      "BKPF": "belnr+gjahr+bukrs",
+      "KNA1": "kunnr",
+      "LFA1": "lifnr",
+      "AUFK": "aufnr",
+      "CSKS": "kostl",
+      "CEPC": "prctr",
+      "MARA": "matnr"
+    },
+    "business_meaning": "All accounting line items. koart: D=customer, K=vendor, S=GL, M=material, A=asset. Use for GL analysis, vendor spend (WHERE koart='K'), customer revenue (WHERE koart='D'), cost by cost center/profit center.",
+    "example_questions": [
+      "Total accounting postings",
+      "Top GL accounts by value",
+      "Vendor spend",
+      "Customer revenue",
+      "Cost by cost center",
+      "Cost by profit center",
+      "Transactions by material",
+      "Revenue by sales document",
+      "Internal order costs"
+    ],
+    "sql_hints": "BSEG: dmbtr/wrbtr = amount. Filter koart = 'K' for vendor, 'D' for customer. SUM(dmbtr) GROUP BY hkont (GL), kunnr, lifnr, kostl, prctr, aufnr, matnr, vbeln. Join KNA1 on kunnr, LFA1 on lifnr for names."
+  }
+}
