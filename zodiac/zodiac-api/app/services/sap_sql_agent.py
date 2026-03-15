@@ -251,11 +251,22 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
     if re.search(r"['\"]", question):
         return None
     # "containing X", "with description X", "named X" etc. → text-search / specific filter → LLM
-    if re.search(
-        r"\b(containing|with word|with description|named|called|that include|that has"
-        r"|for customer|for vendor|for material|for product)\b",
-        q_lower,
-    ):
+    # BUT: do NOT bypass when question is clearly analytical (total/sum/by material/list/show)
+    _parametric_phrases = (
+        r"\b(containing|with word|with description|named|called|that include|that has)\b"
+    )
+    _entity_filter_phrases = (
+        r"\b(for customer|for vendor)\b"
+    )
+    # "for material" / "for product" only bypass when NOT an aggregation (avoid blocking "total for each material")
+    _for_material_product = re.search(r"\b(for material|for product)\b", q_lower)
+    if _for_material_product:
+        _agg_signals = ("total", "sum", "each", "by material", "by product", "average", "list", "show")
+        if not any(s in q_lower for s in _agg_signals):
+            return None  # specific entity lookup
+    if re.search(_parametric_phrases, q_lower):
+        return None
+    if re.search(_entity_filter_phrases, q_lower):
         return None
     # SAP compound codes like DE01, US10, AT03, CC01 → specific entity → LLM
     if re.search(r"\b[A-Z]{1,3}\d{2,4}\b", question):
@@ -292,9 +303,9 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
     ):
         return None
     # If question specifies a concrete year (2000-2030) → might need date filter
-    # BUT: "by year" or "per year" or "trend by year" is generic — allow it
+    # BUT: "by year", "per year", "trend", "last 24 months", "24 months" are generic — allow it
     year_match = re.findall(r"\b(19\d{2}|20[0-2]\d)\b", question)
-    if year_match and not any(p in q_lower for p in ("by year", "per year", "each year", "trend")):
+    if year_match and not any(p in q_lower for p in ("by year", "per year", "each year", "trend", "last 24", "24 months")):
         return None
     # If question contains a specific numeric ID / cost center code (standalone 3–6 digit number)
     if re.search(r"\b\d{3,6}\b", question):
@@ -379,15 +390,15 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
             best_score = score
             best_entry = entry
 
-    if best_score >= 5 and best_entry:
+    if best_score >= 4 and best_entry:
         logger.info(
             "sql_catalog: matched [%s] (score=%.1f) for question: %r",
             best_entry["id"], best_score, question[:80],
         )
         return best_entry.get("sql") or None
 
-    logger.debug(
-        "sql_catalog: no confident match (best=%.1f, entry=%s) for: %r",
+    logger.info(
+        "sql_catalog: no confident match (best=%.1f, threshold=4, entry=%s) for: %r",
         best_score,
         best_entry["id"] if best_entry else "none",
         question[:80],
@@ -1264,6 +1275,12 @@ def _enrich_tables_by_intent(question: str, selected_tables: List[str]) -> List[
     # Revenue/sales/customer -> ensure VBRK, VBRP, KNA1 when relevant
     if ("revenue" in intents or "sales" in intents) and "customer" in intents and "VBRK" not in tables_upper:
         tables.extend(["VBRK", "VBRP", "KNA1"])
+    # Profit margin by product: need CKIS for cost (not EKPO)
+    if ("margin" in intents or "profit" in intents) and ("product" in intents or "material" in intents) and "CKIS" not in tables_upper:
+        tables.append("CKIS")
+    # Costs of manufacturing: CKIS + MAKT only
+    if "manufacturing" in intents and "CKIS" not in tables_upper:
+        tables.extend(["CKIS", "MAKT"])
     return tables
 
 
@@ -1286,6 +1303,7 @@ def _get_query_intent_tokens(question: str) -> set:
         ("cost center", "cost centre", "csks", "costcenter"),
         ("delivery", "deliveries", "delivered", "ship", "shipped", "shipment"),
         ("margin", "margins", "profit", "profitability", "gross margin"),
+        ("manufacturing", "manufacturings", "production cost"),
         ("industry", "industries", "sector", "brsch"),
         ("material", "materials", "product", "products", "item", "items", "sku"),
         ("quantity", "quantities", "qty", "volume"),
@@ -1360,6 +1378,8 @@ Task:
 - **Stock movements, reservations (MKPF, RESB, MSEG)**: use MKPF (header), MSEG or RESB as needed; join to MARA/MAKT for material names.
 - **Plant/master (MARC, on-hand, MRP, slow-moving)**: use MARC, MARA, MAKT when question asks plant-level data, on-hand, MRP parameters, or slow-moving materials.
 - **Costing (KEKO, CKMLCR, CKIS, standard cost, BOM)**: use KEKO, KEPH, CKIS for cost breakdown; CKMLCR for period totals/stock value; STKO, STPO, MAST for BOM/component questions.
+- **Costs of manufacturing / cost of manufacturing / manufacturing cost**: use CKIS and MAKT only. This is cost data by material (SUM(wertn)), NOT a product name search. Do NOT use EKPO, RBKP, RSEG for this intent.
+- **Profit margin / margin by product / profit margin on certain products**: use VBRP, VBRK, MAKT, CKIS. Revenue from VBRP.NETWR; cost from CKIS (subquery SUM(wertn) by matnr); margin = revenue - cost; margin_pct = 100*margin/revenue. Group by matnr. Always include these four tables.
 - **Pricing/conditions (KONV)**: use KONV with VBRK (KNUMV), VBRP, MAKT when question asks for prices, discounts, conditions, PR00, or list price.
 - **Revenue by industry (T016T)**: use KNA1 (BRSCH) and T016T (join KNA1.brsch = T016T.brsch) for industry description; use with VBRK, VBRP.
 - **Customer group / sales area (KNVV)**: use KNVV with KNA1, VBRK, VBRP when question asks customer group (kdgrp), sales org, or distribution channel.
@@ -1510,6 +1530,8 @@ Column mappings (table -> column -> description):
 **AR / open balance / aging:** BSAD or BSEG with KNA1; group by customer; SUM(DMBTR or amount). For aging use clearing date (AUGDT) buckets.
 **Vendor spend / invoice totals:** RBKP, RSEG or EKPO, EKKO; join LFA1 on LIFNR; group by vendor (LIFNR or name); SUM(amount). For "by vendor and year" add EKKO.BEDAT or RBKP year.
 **Standard cost (KEKO, CKMLCR):** KEKO/KEPH/CKIS for cost breakdown; CKMLCR for stprs, salk3 by material. Join MARA, MAKT for material name.
+**Costs of manufacturing / cost of manufacturing / manufacturing cost:** Use CKIS and MAKT only. Select matnr, MAKTX, SUM(wertn) as total_cost_value, hwaer; GROUP BY matnr, maktx, hwaer; ORDER BY total_cost_value DESC; LIMIT 20. This is cost data by material — do NOT filter by product name.
+**Profit margin by product / profit margin on certain products:** Use VBRP, VBRK, MAKT, CKIS. Revenue = SUM(VBRP.NETWR); cost = subquery from CKIS SUM(wertn) by matnr; margin = revenue - cost; margin_pct = 100*margin/revenue when revenue>0. Group by matnr, maktx; ORDER BY margin DESC; LIMIT 100. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS subquery on MATNR.
 **BOM (STKO, STPO, MAST):** MAST links material to BOM (STLNR); STKO header, STPO has IDNRK (component), MENGE; join STPO.IDNRK to MARA/MAKT for component name.
 **FAGLFLEXA segment / rcntr / rfarea / pprctr:** Use FAGLFLEXA columns segment, rcntr (cost center), rfarea (functional area), pprctr (partner profit center) when question asks for these dimensions; group by prctr and the requested dimension.
 **CKMLPP (variances):** Join CKMLPP to CKMLCR/MARA/MAKT; select material, variance fields (planned vs actual); group by material when question asks materials with large variances.
@@ -2380,8 +2402,12 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["BSAD", "BSEG", "KNA1"]
             elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor", "vendor balance", "lfb1", "invoice amount", "ap aging", "payables", "rmwwr", "matkl", "pareto", "80%", "lead time", "ekorg")):
                 selected_tables = ["LFA1", "EKKO", "EKPO", "RBKP", "RSEG"]
+            elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain", "margin analysis", "profit margin on certain products")):
+                selected_tables = ["VBRP", "VBRK", "MAKT", "CKIS"]
+            elif any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs", "cost of manufacturings")):
+                selected_tables = ["CKIS", "MAKT"]
             elif any(x in q_lower for x in ("margin", "profitability", "revenue minus cost", "improving margin", "margin year over year", "margin trend", "products with improving")):
-                selected_tables = ["VBRK", "VBRP", "EKPO", "MAKT"]
+                selected_tables = ["VBRK", "VBRP", "CKIS", "MAKT"]
             elif any(x in q_lower for x in ("deliver", "likp", "lips", "delivered quantity", "delivery document", "vstel", "vbep")):
                 selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
             elif any(x in q_lower for x in ("aufk", "coep", "cosp", "csks", "cepc", "internal order", "cost center", "cost by order")):
@@ -2446,8 +2472,12 @@ def run_adaptive_sap_sql_agent(
                     selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
                 elif "delivery" in intents:
                     selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
+                elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain", "margin analysis")):
+                    selected_tables = ["VBRP", "VBRK", "MAKT", "CKIS"]
+                elif any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs")):
+                    selected_tables = ["CKIS", "MAKT"]
                 elif "margin" in intents or "profit" in intents:
-                    selected_tables = ["VBRK", "VBRP", "EKPO", "MAKT"]
+                    selected_tables = ["VBRK", "VBRP", "CKIS", "MAKT"]
                 elif "cost" in intents and ("material" in intents or "product" in intents):
                     selected_tables = ["EKPO", "EKKO", "MAKT", "MARA"]
                 elif "ask_value" in intents and not selected_tables:
@@ -2576,7 +2606,6 @@ def run_adaptive_sap_sql_agent(
     except Exception as e:
         logger.warning("run_adaptive_sap_sql_agent failed for %r: %s", question[:80], e)
     return None
-
 
 
 def _generate_sql_json(
@@ -2712,6 +2741,8 @@ Task:
   * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
+- **Profit margin by product / profit margin on certain products**: Use VBRP, VBRK, MAKT, CKIS. Revenue = SUM(VBRP.NETWR); cost = subquery from CKIS SUM(wertn) by matnr; margin = revenue - cost; margin_pct = 100*margin/revenue when revenue>0. Group by matnr, maktx; ORDER BY margin DESC; LIMIT 100. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS subquery on MATNR.
+- **Costs of manufacturing / cost of manufacturing / manufacturing cost**: Use CKIS and MAKT only. Select matnr, MAKTX, SUM(wertn) as total_cost_value, hwaer; GROUP BY matnr, maktx, hwaer; ORDER BY total_cost_value DESC; LIMIT 20. This is cost data by material — do NOT filter by product name (manufacturing is the concept, not a product).
 - **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X":
   * PREFERRED: use KEKO + CKIS + MAKT for the STANDARD COST.
     - Filter: MAKT.MAKTX ILIKE '%jacket%'  (or whatever product)
@@ -3741,7 +3772,16 @@ def run_schema_driven_sql_agent(
         # Intent-based table fallback when LLM returns no tables
         if not tables:
             available_upper = {t.upper(): t for t in available_tables}
-            if _is_purchase_order_question(question):
+            q_lower = (question or "").lower()
+            if any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs")):
+                tables = [available_upper[t] for t in ("CKIS", "MAKT") if t in available_upper]
+                if tables:
+                    logger.info("schema_driven_agent: manufacturing-cost intent fallback tables: %s", tables)
+            elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain products")):
+                tables = [available_upper[t] for t in ("VBRP", "VBRK", "MAKT", "CKIS") if t in available_upper]
+                if tables:
+                    logger.info("schema_driven_agent: profit-margin intent fallback tables: %s", tables)
+            elif _is_purchase_order_question(question):
                 tables = [available_upper[t] for t in ("EKPO", "MAKT") if t in available_upper]
                 if tables:
                     logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
