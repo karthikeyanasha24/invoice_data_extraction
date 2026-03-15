@@ -7,7 +7,7 @@ import {
   GitBranch, RefreshCw, Mic, MicOff,
   Activity, BarChart3, Clock, Zap, AlertTriangle, CheckCircle2,
   ArrowUpRight, ArrowDownRight, Minus, CalendarRange, Eye,
-  FlaskConical, TrendingDown,
+  FlaskConical, TrendingDown, DollarSign,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
 import MultiModelComparison from './ai/MultiModelComparison';
@@ -32,6 +32,7 @@ const REALTIME_PROMPTS = [
 ];
 
 const HISTORICAL_PROMPTS = [
+  { label: 'Profit margin', query: 'Show profit margin by product for all products in the database' },
   { label: 'Revenue trend', query: 'Summarize revenue by customer and by country with trend analysis' },
   { label: 'Flow deviation', query: 'How does my current document flow deviate from the standard process?' },
   { label: 'Period forecast', query: 'Based on historical patterns, forecast next period revenue and invoice volume' },
@@ -1049,8 +1050,9 @@ export default function DashboardAIAnalysis() {
                 </div>
 
                 {/* Quick action tiles */}
-                <div className="px-3 pt-2.5 pb-0 grid grid-cols-2 md:grid-cols-4 gap-2 flex-shrink-0">
+                <div className="px-3 pt-2.5 pb-0 grid grid-cols-2 md:grid-cols-5 gap-2 flex-shrink-0">
                   {[
+                    { label: 'Profit margin', query: 'Show profit margin by product for all products in the database', icon: DollarSign },
                     { label: 'Forecast', query: 'Based on historical patterns, forecast next period revenue and invoice volume', icon: TrendingUp },
                     { label: 'Compare periods', query: 'Compare current period performance to the previous period with key insights', icon: BarChart3 },
                     { label: 'Anomalies', query: 'Identify any anomalies or unusual patterns in the historical data', icon: AlertTriangle },
