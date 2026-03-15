@@ -114,6 +114,7 @@
     "KAPPL": "Condition application in KONV: V=sales pricing, M=purchasing",
     "KDATU": "Condition validity date in KONV (YYYYMMDD) \u2013 use for active condition filters",
     "KAWRT": "Condition base value in KONV \u2013 the base amount the condition applies to",
+    "COMPREAS": "Complaint reason code in VBRP \u2013 abbreviation for complaints reason. Filter WHERE TRIM(compreas) != '' for complaint/claim items. Use for: complaints by customer, complaint count.",
     "AUGDT": "Clearing date in BSAD (AR cleared items) \u2013 when the invoice was cleared/paid",
     "SHKZG": "Debit/credit indicator: S=debit (charge), H=credit (payment/refund)",
     "DMBTR": "Amount in local currency (BSAD, BSEG) \u2013 use for AR analysis",
@@ -123,7 +124,7 @@
     "PVPRS": "Moving average price in CKMLCR \u2013 actual periodic price"
   },
   "table_semantic_hints": {
-    "VBRP": "Billing document item \u2013 sales by product, amounts, quantities. Join VBRK for header, KNA1 for customer.",
+    "VBRP": "Billing document item \u2013 sales by product, amounts, quantities, compreas (complaint reason). Join VBRK for header, KNA1 for customer. Use compreas for complaint/claim analysis.",
     "vbrp": "Same as VBRP \u2013 billing item for sales analysis.",
     "VBRK": "Billing document header \u2013 invoice dates, customer (KUNAG=sold-to), currency (WAERK), country (LAND1 – use this directly for country grouping), kdgrp (customer group), vkorg (sales org), vtweg (distribution channel). PREFERRED for 'by country' queries: use VBRK.LAND1 directly. PREFERRED for 'by customer' queries: group by VBRK.KUNAG.",
     "KNA1": "Customer master \u2013 names, country (LAND1), industry (brsch). Use T016T for industry text.",
