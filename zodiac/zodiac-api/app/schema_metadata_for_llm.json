@@ -1,67 +1,5 @@
 {
-  "_comment": "Schema metadata for LLM adaptiveness. Use for domain classification, table selection, and SQL generation. Each table has: description (what kind of table), business_category (for pruning), important_columns, joins, sql_hints. _join_graph defines canonical join paths for profit margin and multi-table analysis.",
-  "_join_graph": [
-    "VBRP.vbeln → VBRK.vbeln",
-    "VBRP.matnr → MARA.matnr",
-    "VBRP.matnr → MAKT.matnr",
-    "VBRP.kunnr → KNA1.kunnr",
-    "VBRK.kunag → KNA1.kunnr",
-    "VBRK.knumv → KONV.knumv",
-    "VBRP.matnr → MBEW.matnr",
-    "VBRP.werks → MBEW.bwkey",
-    "MARA.matnr → KEKO.matnr",
-    "KEKO.kalnr → CKIS.kalnr",
-    "KEKO.kalnr → KEPH.kalnr",
-    "VBRP.matnr → VBAP.matnr",
-    "VBAP.vbeln → VBAK.vbeln",
-    "VBAK.kunnr → KNA1.kunnr",
-    "VBAP.vbeln → VBEP.vbeln",
-    "VBAP.vbeln → VBFA.vbelv",
-    "VBFA.vbeln → VBRK.vbeln",
-    "VBFA.vbeln → LIKP.vbeln",
-    "VBRP.vbeln → VBRK.vbeln",
-    "EKPO.ebeln → EKKO.ebeln",
-    "EKPO.matnr → MARA.matnr",
-    "EKPO.matnr → MAKT.matnr",
-    "EKPO.lifnr → LFA1.lifnr",
-    "EKKO.lifnr → LFA1.lifnr",
-    "RBKP.lifnr → LFA1.lifnr",
-    "RSEG.belnr → RBKP.belnr",
-    "RSEG.ebeln → EKPO.ebeln",
-    "BSEG.kunnr → KNA1.kunnr",
-    "BSEG.lifnr → LFA1.lifnr",
-    "BSEG.kostl → CSKS.kostl",
-    "BSEG.prctr → CEPC.prctr",
-    "AUFK.objnr → COEP.objnr",
-    "AUFK.kostl → CSKS.kostl",
-    "COEP.objnr → AUFK.objnr",
-    "COEP.matnr → MARA.matnr",
-    "CSKS.objnr → COEP.objnr",
-    "FAGLFLEXA.prctr → CEPC.prctr",
-    "FAGLFLEXA.rcntr → CSKS.kostl",
-    "LIPS.vbeln → LIKP.vbeln",
-    "LIPS.matnr → MARA.matnr",
-    "LIKP.kunnr → KNA1.kunnr",
-    "MARA.matnr → MARC.matnr",
-    "MARA.matnr → MARM.matnr",
-    "MARA.matnr → MVKE.matnr",
-    "VBRP.matnr → MVKE.matnr",
-    "VBRP.matnr → MEAN.matnr",
-    "VBRP.prctr → CEPC.prctr",
-    "CKIS.matnr → MARA.matnr",
-    "CKIS.matnr → MAKT.matnr",
-    "CKMLHD.matnr → MARA.matnr",
-    "CKMLHD.kalnr → CKMLCR.kalnr",
-    "KEKO.matnr → MARA.matnr",
-    "KNA1.brsch → T016T.brsch",
-    "MAST.matnr → MARA.matnr",
-    "MAST.stlnr → STKO.stlnr",
-    "STPO.stlnr → STKO.stlnr",
-    "STPO.idnrk → MARA.matnr",
-    "MSEG.matnr → MARA.matnr",
-    "MKPF.mblnr → MSEG.mblnr",
-    "MKPF.mjahr → MSEG.mjahr"
-  ],
+  "_comment": "Schema metadata for LLM adaptiveness. Use for domain classification, table selection, and SQL generation. Each table has: description (what kind of table), business_category (for pruning), important_columns, joins, sql_hints.",
   "_business_categories": ["sales", "billing", "procurement", "finance", "cost", "delivery", "inventory", "material", "customer", "vendor", "production", "manufacturing"],
   "_category_keywords": {
     "sales": ["sales", "order", "revenue", "sold", "billed", "top products", "best products"],
@@ -79,7 +17,7 @@
   },
   "_diagnostic_queries": {
     "highest_revenue_products": ["VBRP", "MARA", "MAKT"],
-    "profit_margin_by_product": ["VBRP", "MARA", "KEKO", "CKIS"],
+    "profit_margin_by_product": ["VBRP", "MARA", "MAKT", "MBEW", "KEKO", "CKIS"],
     "top_customers_by_sales": ["VBRP", "VBRK", "KNA1"],
     "procurement_spend_by_vendor": ["EKPO", "EKKO", "LFA1"],
     "sales_trend_by_year": ["VBRP", "VBRK"],
@@ -103,8 +41,8 @@
     "BSEG": {
       "description": "Accounting document segment (FI line items). Every financial transaction: customer (D), vendor (K), GL (S), material (M).",
       "business_category": "finance",
-      "important_columns": ["dmbtr", "wrbtr", "koart", "kunnr", "lifnr", "kostl", "prctr", "matnr", "vbeln"],
-      "joins": ["KNA1.kunnr", "LFA1.lifnr", "AUFK.aufnr", "CSKS.kostl", "CEPC.prctr", "MARA.matnr"],
+      "important_columns": ["dmbtr", "wrbtr", "koart", "kunnr", "lifnr", "kostl", "prctr", "matnr", "vbeln", "belnr", "bukrs", "gjahr"],
+      "joins": ["BKPF.belnr+bukrs+gjahr", "KNA1.kunnr", "LFA1.lifnr", "AUFK.aufnr", "CSKS.kostl", "CEPC.prctr", "MARA.matnr"],
       "sql_hints": "Filter koart='K' for vendor, 'D' for customer. SUM(dmbtr) GROUP BY hkont, kunnr, lifnr, kostl, prctr."
     },
     "CEPC": {
@@ -391,92 +329,113 @@
       "description": "Billing document items. Product-level invoice: matnr, fkimg (quantity), netwr (revenue).",
       "business_category": "billing",
       "important_columns": ["vbeln", "posnr", "matnr", "fkimg", "netwr", "werks", "prctr"],
-      "joins": ["VBRK.vbeln", "MAKT.matnr", "MARA.matnr", "CEPC.prctr", "KEKO.matnr", "CKIS.matnr", "MBEW.matnr"],
-      "sql_hints": "SUM(netwr) for revenue. GROUP BY matnr, werks, prctr. For profit margin: netwr (revenue) + MBEW.stprs*FKIMG or CKIS.wertn (cost) via MARA→KEKO→CKIS or VBRP→MBEW."
+      "joins": ["VBRK.vbeln", "MAKT.matnr", "MARA.matnr", "MBEW.matnr", "CEPC.prctr", "KEKO.matnr", "CKIS.matnr"],
+      "sql_hints": "SUM(netwr) for revenue. GROUP BY matnr, werks, prctr. For profit margin: netwr (revenue) minus cost. Cost from MBEW: STPRS*FKIMG (standard price) OR from CKIS.wertn via MARA→KEKO→CKIS. Prefer MBEW when available (simpler)."
     },
     "MBEW": {
-      "description": "Material valuation (MM). Standard price (STPRS), moving average (VERPR) per material/plant/valuation type. Critical for profit margin.",
+      "description": "Material valuation (standard price, moving average). STPRS=standard price, VERPR=moving avg price, PEINH=price unit, SALK3=stock value.",
       "business_category": "cost",
-      "important_columns": ["matnr", "bwkey", "bwtar", "stprs", "verpr", "peinh", "vprsv"],
-      "joins": ["MARA.matnr", "MARC.matnr+werks", "VBRP.matnr"], 
-      "sql_hints": "stprs=standard price, verpr=moving average. For profit margin: cost = MBEW.stprs * VBRP.fkimg when VPRSV=S. Join VBRP.matnr=MBEW.matnr, VBRP.werks=MBEW.bwkey."
-    },
-    "MKPF": {
-      "description": "Material document header. Goods movement header: mblnr, mjahr, budat, bldat posting date.",
-      "business_category": "inventory",
-      "important_columns": ["mblnr", "mjahr", "budat", "bldat", "vgart", "usnam"],
-      "joins": ["MSEG.mblnr", "MSEG.mjahr"],
-      "sql_hints": "Join MSEG on mblnr+mjahr for line items. SUM(menge) for stock movements by material."
-    },
-    "MVKE": {
-      "description": "Sales data for material. Sales org, distribution channel, product hierarchy (PRODH), pricing group.",
-      "business_category": "sales",
-      "important_columns": ["matnr", "vkorg", "vtweg", "prodh", "vrkme", "mvgr1"],
-      "joins": ["MARA.matnr", "VBRP.matnr"],
-      "sql_hints": "Join VBRP.MATNR=MVKE.MATNR for sales org hierarchy. Group by PRODH for product hierarchy analysis."
-    },
-    "MEAN": {
-      "description": "International Article Numbers (EAN/UPC). Alternative material identifiers for barcode lookup.",
-      "business_category": "material",
-      "important_columns": ["matnr", "ean11", "meinh", "eantp"],
-      "joins": ["MARA.matnr"],
-      "sql_hints": "Join MARA on matnr. Filter ean11 for barcode lookup."
-    },
-    "STKO": {
-      "description": "BOM header (bill of materials). Links material to BOM structure; stlnr, stlty, bmeng.",
-      "business_category": "cost",
-      "important_columns": ["stlty", "stlnr", "stlal", "bmeng", "bmein"],
-      "joins": ["STPO.stlnr", "MAST.stlnr"],
-      "sql_hints": "Join MAST for material→BOM; STPO for components (idnrk, menge)."
-    },
-    "STPO": {
-      "description": "BOM item (component). Component material (idnrk), quantity (menge), position.",
-      "business_category": "cost",
-      "important_columns": ["stlty", "stlnr", "stlkn", "idnrk", "menge", "posnr"],
-      "joins": ["STKO.stlnr", "MARA.matnr via idnrk"],
-      "sql_hints": "idnrk=component material. Join MARA/MAKT on idnrk for component names. SUM(menge) for BOM explosion."
-    },
-    "MSEG": {
-      "description": "Material document segment. Goods movement line items: matnr, menge, bwkey, werks.",
-      "business_category": "inventory",
-      "important_columns": ["mblnr", "mjahr", "zeile", "matnr", "menge", "bwkey", "werks", "bwart"],
-      "joins": ["MKPF.mblnr", "MKPF.mjahr", "MARA.matnr"],
-      "sql_hints": "Join MKPF on mblnr+mjahr. SUM(menge) for stock movements by material, plant."
-    },
-    "MAST": {
-      "description": "Material to BOM link. Links material (matnr) to BOM (stlnr, stlty).",
-      "business_category": "cost",
-      "important_columns": ["matnr", "stlnr", "stlal", "stlty", "werks"],
-      "joins": ["MARA.matnr", "STKO.stlnr", "STPO.stlnr"],
-      "sql_hints": "Join MARA on matnr; STKO/STPO on stlnr for BOM structure."
+      "important_columns": ["matnr", "bwkey", "stprs", "verpr", "peinh", "vprsv", "salk3", "lbkum", "waers"],
+      "joins": ["MARA.matnr", "VBRP.matnr", "MAKT.matnr"],
+      "sql_hints": "For profit margin: revenue=VBRP.netwr, cost=MBEW.stprs*VBRP.fkimg (or VERPR if vprsv='V'). Join VBRP.matnr=MBEW.matnr. Optionally VBRP.werks=MBEW.bwkey when bwkey=plant. PEINH=price unit (e.g. 1000 means price per 1000 units)."
     },
     "BKPF": {
-      "description": "Accounting document header. Company code, fiscal year, document date, posting date.",
+      "description": "Accounting document header (FI). BELNR, BUKRS, GJAHR, BLDAT, BUDAT, WAERS. Links to BSEG for line items.",
       "business_category": "finance",
-      "important_columns": ["bukrs", "belnr", "gjahr", "budat", "bldat", "waers"],
-      "joins": ["BSEG.bukrs", "BSEG.belnr", "BSEG.gjahr"],
-      "sql_hints": "Join BSEG on bukrs+belnr+gjahr for line items. Filter by budat for date range."
-    },
-    "BSID": {
-      "description": "Customer open items (AR). Unpaid customer invoice line items; open receivables.",
-      "business_category": "finance",
-      "important_columns": ["kunnr", "bukrs", "belnr", "gjahr", "dmbtr", "wrbtr", "augdt"],
-      "joins": ["KNA1.kunnr", "BKPF.bukrs"],
-      "sql_hints": "SUM(dmbtr) for open AR by customer. Join KNA1 for name1."
-    },
-    "BSIS": {
-      "description": "Vendor open items (AP). Unpaid vendor invoice line items; open payables.",
-      "business_category": "finance",
-      "important_columns": ["lifnr", "bukrs", "belnr", "gjahr", "dmbtr", "wrbtr"],
-      "joins": ["LFA1.lifnr", "BKPF.bukrs"],
-      "sql_hints": "SUM(dmbtr) for open AP by vendor. Join LFA1 for name1."
+      "important_columns": ["belnr", "bukrs", "gjahr", "bldat", "budat", "waers", "blart"],
+      "joins": ["BSEG.belnr+bukrs+gjahr", "KNA1.kunnr via BSEG", "LFA1.lifnr via BSEG"],
+      "sql_hints": "Join BSEG on belnr, bukrs, gjahr. Use for posted COGS, AR, AP. BLDAT=document date, BUDAT=posting date."
     },
     "ACDOCA": {
-      "description": "Universal journal (S/4). Line items with segment, profit center, cost center, GL account.",
+      "description": "Universal Journal line items (S/4 HANA). RACCT, RBUKRS, RYEAR/GJAHR, BELNR, DOCLN, WTGBTR. Profitability, COGS, FI/CO.",
       "business_category": "finance",
-      "important_columns": ["rbukrs", "racct", "prctr", "rcntr", "hsl", "budat", "poper", "gjahr"],
-      "joins": ["CEPC.prctr", "CSKS.kostl"],
-      "sql_hints": "hsl=amount. SUM(hsl) GROUP BY racct, prctr, rcntr. Alternative to FAGLFLEXA in S/4."
+      "important_columns": ["racct", "rbukrs", "ryear", "gjahr", "belnr", "docln", "wtgbtr", "prctr", "rcntr"],
+      "joins": ["CEPC.prctr", "CSKS.rcntr"],
+      "sql_hints": "Filter by RACCT for COGS accounts. SUM(WTGBTR) GROUP BY racct, prctr, rcntr. Alternative to FAGLFLEXA in S/4."
+    },
+    "MEAN": {
+      "description": "International article numbers (EAN/UPC). MATNR, MEANM (EAN), MEINS (UoM). Link to MARA for product lookup by barcode.",
+      "business_category": "material",
+      "important_columns": ["matnr", "meinh", "meanm", "ean11"],
+      "joins": ["MARA.matnr"],
+      "sql_hints": "Join MARA on matnr. Use MEANM for EAN lookup when user asks by barcode/EAN."
+    },
+    "MVKE": {
+      "description": "Material sales data by sales org. MATNR, VKORG, VTWEG, sales attributes.",
+      "business_category": "material",
+      "important_columns": ["matnr", "vkorg", "vtweg", "pmatn", "mvgr1"],
+      "joins": ["MARA.matnr", "VBRK.vkorg+vtweg"],
+      "sql_hints": "Join MARA on matnr. Use for product attributes by sales org/distribution channel."
+    },
+    "MKPF": {
+      "description": "Material document header. MBLNR, MJAHR, BLDAT, BUDAT. Stock movements, goods receipt, transfer.",
+      "business_category": "inventory",
+      "important_columns": ["mblnr", "mjahr", "bldat", "budat", "bwart"],
+      "joins": ["MSEG.mblnr+mjahr"],
+      "sql_hints": "Join MSEG on mblnr, mjahr. BLDAT=document date. SUM quantities from MSEG."
+    },
+    "MSEG": {
+      "description": "Material document line items. MATNR, MENGE, BWKEY. Stock movements per material.",
+      "business_category": "inventory",
+      "important_columns": ["mblnr", "mjahr", "zeile", "matnr", "menge", "bwkey", "werks", "lgort"],
+      "joins": ["MKPF.mblnr+mjahr", "MARA.matnr", "MAKT.matnr"],
+      "sql_hints": "Join MKPF on mblnr, mjahr. SUM(menge) GROUP BY matnr, werks, bwart for stock movements."
+    },
+    "STKO": {
+      "description": "BOM header. STLNR, STLAL, STLST. Links to STPO for components.",
+      "business_category": "material",
+      "important_columns": ["stlnr", "stlal", "stlst", "stlty"],
+      "joins": ["STPO.stlnr", "MAST.stlnr"],
+      "sql_hints": "Join STPO on stlnr for component list. MAST links material to BOM."
+    },
+    "STPO": {
+      "description": "BOM item. STLNR, POSNR, IDNRK (component material), MENGE. Component quantities.",
+      "business_category": "material",
+      "important_columns": ["stlnr", "posnr", "idnrk", "menge", "meins"],
+      "joins": ["STKO.stlnr", "MARA.matnr via idnrk", "MAKT.matnr via idnrk", "MAST.stlnr"],
+      "sql_hints": "IDNRK=component material. Join MARA/MAKT on IDNRK for component name. MENGE=quantity per assembly."
+    },
+    "MAST": {
+      "description": "Material to BOM link. MATNR (main material), WERKS, STLNR (BOM number).",
+      "business_category": "material",
+      "important_columns": ["matnr", "werks", "stlnr", "stlal"],
+      "joins": ["MARA.matnr", "STKO.stlnr", "STPO.stlnr"],
+      "sql_hints": "MAST.STLNR=STKO.STLNR=STPO.STLNR. Use for BOM explosion, components of a product."
+    },
+    "EKBE": {
+      "description": "PO history (goods receipt/invoice). EBELN, EBELP, DMBTR. Actual cost per PO item.",
+      "business_category": "procurement",
+      "important_columns": ["ebeln", "ebelp", "bwart", "dmbtr", "menge", "bldat"],
+      "joins": ["EKKO.ebeln", "EKPO.ebeln+ebelp", "MARA.matnr via EKPO"],
+      "sql_hints": "Join EKPO on ebeln, ebelp. DMBTR=amount. Use for actual purchase cost vs order value."
+    },
+    "EKKN": {
+      "description": "PO account assignment. EBELN, EBELP, KOSTL, SAKTO. Cost center/GL per PO item.",
+      "business_category": "procurement",
+      "important_columns": ["ebeln", "ebelp", "kostl", "sakto", "prctr"],
+      "joins": ["EKPO.ebeln+ebelp", "CSKS.kostl", "CEPC.prctr"],
+      "sql_hints": "Join EKPO on ebeln, ebelp. Use for purchase cost by cost center or profit center."
+    },
+    "SKA1": {
+      "description": "G/L account master (chart of accounts). KTOPL, SAKNR, TXT50. Account descriptions.",
+      "business_category": "finance",
+      "important_columns": ["ktopl", "saknr", "txt50", "mcod1"],
+      "joins": ["SKB1.saknr", "BSEG.hkont via saknr"],
+      "sql_hints": "Join SKB1 on saknr. Use TXT50 for account name in GL reports."
+    },
+    "SKB1": {
+      "description": "G/L account master (company code). BUKRS, SAKNR, WAERS. Account by company.",
+      "business_category": "finance",
+      "important_columns": ["bukrs", "saknr", "waers"],
+      "joins": ["SKA1.saknr", "BSEG.bukrs+hkont", "BKPF.bukrs"],
+      "sql_hints": "Join BSEG on bukrs and hkont/saknr. Use for COGS account determination."
+    },
+    "EKET": {
+      "description": "PO delivery schedule. EBELN, EBELP, EINDT, MENGE. Planned delivery dates.",
+      "business_category": "procurement",
+      "important_columns": ["ebeln", "ebelp", "etenr", "eindt", "menge"],
+      "joins": ["EKPO.ebeln+ebelp", "EKKO.ebeln"],
+      "sql_hints": "Join EKPO on ebeln, ebelp. EINDT=delivery date. SUM(menge) for schedule quantities."
     }
   }
 }
