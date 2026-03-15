@@ -3280,5 +3280,34 @@
     ],
     "priority": 2,
     "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency,\n       vk.vkorg AS sales_org,\n       vk.fkart AS invoice_type\nFROM VBRK vk\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "complaints_by_customer",
+    "description": "Complaints/claims count by customer (client) from billing items with complaint reason",
+    "question_patterns": [
+      "how much complaints are from the client",
+      "how many complaints from clients",
+      "complaints by customer",
+      "complaints by client",
+      "show complaints from clients",
+      "list complaints by customer",
+      "complaint count by customer",
+      "which customers have the most complaints",
+      "top customers by complaints",
+      "complaint reasons by customer"
+    ],
+    "keywords": [
+      "complaint",
+      "complaints",
+      "client",
+      "customer",
+      "claim",
+      "compreas",
+      "reason"
+    ],
+    "neg_keywords": [],
+    "tables": ["VBRK", "vbrp", "KNA1"],
+    "priority": 2,
+    "sql": "SELECT vk.kunag AS customer_number, COALESCE(k.name1, '') AS customer_name, COUNT(*) AS complaint_count, STRING_AGG(DISTINCT TRIM(v.compreas), ', ') AS complaint_reasons FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN kna1 k ON TRIM(vk.kunag) = TRIM(k.kunnr) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY vk.kunag, k.name1 ORDER BY complaint_count DESC LIMIT 100"
   }
 ]
