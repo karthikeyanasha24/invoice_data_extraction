@@ -676,8 +676,10 @@ If result is empty, say so and suggest a refined question.
                 if catalog_rows:
                     result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
                     logger.info("SQL catalog fast-path returned %d rows for: %r", len(catalog_rows), user_query[:60])
+                else:
+                    logger.info("SQL catalog matched but returned 0 rows; trying LLM path for: %r", user_query[:60])
         except Exception as catalog_err:
-            logger.debug("SQL catalog fast-path failed: %s", catalog_err)
+            logger.warning("SQL catalog fast-path failed (will try LLM): %s", catalog_err)
 
     if result is None:
         # 1) Schema-driven agent: LLM reads schema → selects tables → generates SQL (no keyword rules).
@@ -821,6 +823,15 @@ If result is empty, say so and suggest a refined question.
         is_product_specific = bool(_product_keywords) and not _named_table
         # Do NOT treat "profit center" / "cost by profit center" as a product name — it's an accounting dimension
         if "profit center" in q_lower or "profit centre" in q_lower or "cost by profit" in q_lower:
+            is_product_specific = False
+        # Do NOT treat "cost of manufacturing" / "costs of manufacturing" as product search — it's CKIS/KEKO cost data
+        if any(phrase in q_lower for phrase in (
+            "cost of manufacturing", "costs of manufacturing", "manufacturing cost",
+            "cost of manufacturings", "manufacturing costs", "production cost"
+        )):
+            is_product_specific = False
+        # Do NOT treat "profit margin" as product search — it's margin analysis (VBRP+CKIS)
+        if "profit margin" in q_lower or "margin by product" in q_lower or "margin analysis" in q_lower:
             is_product_specific = False
 
         if cost_related and is_product_specific:
