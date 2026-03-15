@@ -1818,10 +1818,13 @@ def _build_minimal_last_sales_spec(
 ) -> Optional[Dict[str, Any]]:
     """
     Build a minimal valid spec for "last/best/recent sales" when the LLM returns empty.
-    Uses VBRK, VBRP, KNA1 with standard columns so a query can be generated.
+    Uses VBRK, VBRP, MAKT (and KNA1 if customer). For "best/top sales" includes product dimension.
+    When "including year" is requested, adds year dimension.
     """
     q_lower = (question or "").lower()
-    include_year = "year" in q_lower or "including year" in q_lower
+    year_phrases = ("year", "including year", "per year", "by year", "yearly", "trend")
+    include_year = any(yp in q_lower for yp in year_phrases)
+    by_product = any(x in q_lower for x in ("best", "top", "highest", "last best"))
     # Resolve selected_tables to actual keys in column_mappings (case-insensitive)
     mapping_lower = {k.lower(): k for k in column_mappings.keys()}
     tables_in_mapping = []
@@ -1833,9 +1836,9 @@ def _build_minimal_last_sales_spec(
     if not tables_in_mapping:
         return None
 
-    # Prefer VBRP, VBRK, KNA1 order for building joins/columns
     vbrp = next((t for t in tables_in_mapping if t.upper() == "VBRP"), None)
     vbrk = next((t for t in tables_in_mapping if t.upper() == "VBRK"), None)
+    makt = next((t for t in tables_in_mapping if t.upper() == "MAKT"), None)
     kna1 = next((t for t in tables_in_mapping if t.upper() == "KNA1"), None)
     if not vbrp or not vbrk:
         return None
@@ -1852,29 +1855,46 @@ def _build_minimal_last_sales_spec(
         return col
 
     columns: List[Dict[str, Any]] = []
-    if vbrp and has_col(vbrp, "netwr"):
-        columns.append({"table": vbrp, "name": col_name(vbrp, "netwr"), "description": "amount", "agg": None})
-    if vbrk and has_col(vbrk, "vbeln"):
-        columns.append({"table": vbrk, "name": col_name(vbrk, "vbeln"), "description": "billing_doc", "agg": None})
-    if vbrk and has_col(vbrk, "fkdat"):
-        columns.append({"table": vbrk, "name": col_name(vbrk, "fkdat"), "description": "billing_date", "agg": None})
-    if include_year and vbrk and has_col(vbrk, "gjahr"):
-        columns.append({"table": vbrk, "name": col_name(vbrk, "gjahr"), "description": "year", "agg": None})
-    if vbrk and has_col(vbrk, "waerk"):
-        columns.append({"table": vbrk, "name": col_name(vbrk, "waerk"), "description": "currency", "agg": None})
-    if kna1 and has_col(kna1, "name1"):
-        columns.append({"table": kna1, "name": col_name(kna1, "name1"), "description": "customer_name", "agg": None})
-    if kna1 and has_col(kna1, "kunnr"):
-        columns.append({"table": kna1, "name": col_name(kna1, "kunnr"), "description": "customer_number", "agg": None})
+    group_by: List[Dict[str, str]] = []
+    joins: List[Dict[str, Any]] = []
+
+    if vbrp and vbrk and has_col(vbrp, "vbeln") and has_col(vbrk, "vbeln"):
+        joins.append({"left": vbrp, "right": vbrk, "on": f"{vbrp}.vbeln = {vbrk}.vbeln", "type": "left"})
+
+    filters: List[Dict[str, Any]] = []
+    if by_product and makt and has_col(vbrp, "matnr") and has_col(makt, "maktx"):
+        # Best sales by product: include product name and SUM
+        joins.append({"left": vbrp, "right": makt, "on": f"{vbrp}.matnr = {makt}.matnr", "type": "left"})
+        columns.append({"table": makt, "name": col_name(makt, "maktx"), "description": "product", "agg": None})
+        columns.append({"table": vbrp, "name": col_name(vbrp, "netwr"), "description": "amount", "agg": "SUM"})
+        group_by.append({"table": makt, "column": col_name(makt, "maktx")})
+        if include_year and vbrk and has_col(vbrk, "gjahr"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "gjahr"), "description": "year", "agg": None})
+            group_by.append({"table": vbrk, "column": col_name(vbrk, "gjahr")})
+        # "last" = best sales in latest year: filter to recent years
+        if "last" in q_lower and vbrk and has_col(vbrk, "gjahr"):
+            from datetime import datetime
+            current_year = datetime.now().year
+            latest_year = str(current_year - 1)  # last year + current
+            filters.append({"lhs": f"{vbrk}.gjahr", "operator": ">=", "rhs": f"'{latest_year}'"})
+    else:
+        # Row-level: billing doc, date, amount
+        if vbrp and has_col(vbrp, "netwr"):
+            columns.append({"table": vbrp, "name": col_name(vbrp, "netwr"), "description": "amount", "agg": None})
+        if vbrk and has_col(vbrk, "vbeln"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "vbeln"), "description": "billing_doc", "agg": None})
+        if vbrk and has_col(vbrk, "fkdat"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "fkdat"), "description": "billing_date", "agg": None})
+        if include_year and vbrk and has_col(vbrk, "gjahr"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "gjahr"), "description": "year", "agg": None})
+        if vbrk and has_col(vbrk, "waerk"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "waerk"), "description": "currency", "agg": None})
+        if kna1 and has_col(kna1, "name1"):
+            joins.append({"left": vbrk, "right": kna1, "on": f"{vbrk}.kunag = {kna1}.kunnr", "type": "left"})
+            columns.append({"table": kna1, "name": col_name(kna1, "name1"), "description": "customer_name", "agg": None})
 
     if not columns:
         return None
-
-    joins: List[Dict[str, Any]] = []
-    if vbrp and vbrk and has_col(vbrp, "vbeln") and has_col(vbrk, "vbeln"):
-        joins.append({"left": vbrp, "right": vbrk, "on": f"{vbrp}.vbeln = {vbrk}.vbeln", "type": "left"})
-    if vbrk and kna1 and has_col(vbrk, "kunag") and has_col(kna1, "kunnr"):
-        joins.append({"left": vbrk, "right": kna1, "on": f"{vbrk}.kunag = {kna1}.kunnr", "type": "left"})
 
     order_col = "netwr" if has_col(vbrp, "netwr") else "fkdat" if vbrk and has_col(vbrk, "fkdat") else None
     order_table = vbrp if (order_col == "netwr") else vbrk
@@ -1886,9 +1906,9 @@ def _build_minimal_last_sales_spec(
         "tables": [{"name": t, "description": t} for t in tables_in_mapping],
         "columns": columns,
         "joins": joins,
-        "filters": [],
+        "filters": filters if by_product else [],
         "order_by": order_by,
-        "group_by": [],
+        "group_by": group_by,
         "limit": 100,
     }
     return spec
@@ -2108,7 +2128,6 @@ def _build_minimal_marc_spec(
     }
     return spec
 
-    
 
 def _resolve_faglflexa_table_and_mappings(db: Session) -> Tuple[Optional[str], Dict[str, Dict[str, str]]]:
     """
@@ -2593,7 +2612,9 @@ def run_adaptive_sap_sql_agent(
                 "last sales", "best sales", "recent sales", "latest sales", "show me sales",
                 "show sales", "last best sales", "top sales", "recent sales"
             )) or (("last" in q_lower or "best" in q_lower or "recent" in q_lower or "latest" in q_lower) and "sales" in q_lower):
-                selected_tables = ["VBRK", "VBRP", "KNA1"]
+                selected_tables = ["VBRK", "VBRP", "MAKT"]
+                if "customer" in q_lower or "by customer" in q_lower:
+                    selected_tables.append("KNA1")
             elif any(x in q_lower for x in ("jacket", "harley")) and any(x in q_lower for x in ("revenue", "sales", "customer", "cost", "margin", "invoice")):
                 selected_tables = ["VBRK", "VBRP", "KNA1", "MAKT"]
             else:
@@ -3723,8 +3744,10 @@ Task:
 - **Always state the currency** of any monetary amounts (e.g. "USD", "EUR"). If a "currency",
   "WAERS", or "WAERK" column is present in the data, use it. If not, note the currency is unknown.
 - **Always state the time period** the data covers. If "billing_date", "FKDAT", "posting_date",
-  "BUDAT", "period", "POPER", "fiscal_year", or "RYEAR" columns are present, mention the date range
-  or period. If no date column is present, note the time scope (e.g. "all available periods").
+  "BUDAT", "period", "POPER", "fiscal_year", "year", or "RYEAR" columns are present, mention the date range
+  or period. If no date column is present, say "all available periods" or "full dataset" — do NOT say
+  "date not available" or "no date" because SAP sales tables (VBRK) have FKDAT and GJAHR; the query
+  may have omitted them.
 - For material numbers (MATNR), always use the material name (MAKTX) instead of the raw code
   if a "material_name" or "MAKTX" column is present in the data.
 - Be concise (3–8 sentences).
