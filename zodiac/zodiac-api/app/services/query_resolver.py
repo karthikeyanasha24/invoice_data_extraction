@@ -342,3 +342,4 @@ def get_semantic_context_for_prompt() -> str:
         lines.append("Templates: " + ", ".join(tmpl_names) + " — use for 'X by dimension' (sum_by_dimension) or 'total X' (total_metric).")
 
     return "\n".join(lines)
+
