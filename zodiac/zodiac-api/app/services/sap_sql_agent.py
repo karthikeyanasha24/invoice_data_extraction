@@ -2521,7 +2521,8 @@ def run_adaptive_sap_sql_agent(
                 "faglflexa" in q_lower and ("customer" in q_lower or "product" in q_lower or "link" in q_lower)
             ):
                 selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
-            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center", "top 20 profit centers", "top 10 profit centers", "list top", "profit centers by cost")):
+            
+            elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center", "top 20 profit centers", "top 10 profit centers", "list top", "profit centers by cost", "highest total cost", "total cost by profit center", "which profit centers", "current fiscal year")):
                 selected_tables = ["FAGLFLEXA"]
             elif any(x in q_lower for x in ("jacket", "harley")) and any(x in q_lower for x in ("profit center", "profit centre")) and any(x in q_lower for x in ("cost", "postings")):
                 selected_tables = ["FAGLFLEXA", "MAKT", "VBRP"]
