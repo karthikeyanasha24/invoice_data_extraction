@@ -1376,7 +1376,7 @@ def _get_query_intent_tokens(question: str) -> set:
     synonyms = [
         ("revenue", "sales", "billing", "invoices", "sold", "sell", "sale", "billed", "invoice", "revenues"),
         ("cost", "costs", "spend", "spending", "expense", "expenses", "amount", "amounts", "price", "prices", "posting", "postings"),
-        ("purchase", "purchased", "buy", "bought", "procure", "procurement", "po ", "pos "),
+        ("purchase", "purchased", "buy", "bought", "procure", "procurement", "procurement spend", "po ", "pos "),
         ("customer", "customers", "client", "clients", "buyer", "buyers"),
         ("vendor", "vendors", "supplier", "suppliers"),
         ("profit center", "profit centre", "profitcenter", "prctr"),
@@ -2602,7 +2602,7 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["CEPC", "FAGLFLEXA"]
             elif any(x in q_lower for x in ("lfb1", "payment terms")) and "vendor" in q_lower:
                 selected_tables = ["LFA1", "LFB1", "RBKP", "RSEG"]
-            elif any(x in q_lower for x in ("total cost by vendor", "highest spend by vendor", "spend by vendor", "cost by vendor")):
+            elif any(x in q_lower for x in ("total cost by vendor", "highest spend by vendor", "spend by vendor", "cost by vendor", "procurement spend", "procurement spend by vendor")):
                 selected_tables = ["LFA1", "EKKO", "EKPO", "MAKT"]
             elif any(x in q_lower for x in ("invoice amounts by customer", "invoice value by customer", "top vendors by invoice")):
                 selected_tables = ["VBRK", "VBRP", "KNA1"] if "customer" in q_lower else ["LFA1", "RBKP", "RSEG"]
@@ -2628,8 +2628,8 @@ def run_adaptive_sap_sql_agent(
                         selected_tables = ["VBRK", "VBRP", "KNA1", "MAKT"]
                     if "industry" in intents:
                         selected_tables = ["VBRK", "VBRP", "KNA1", "T016T"]
-                elif "purchase" in intents or "vendor" in intents:
-                    selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
+                elif "purchase" in intents or "vendor" in intents or "procurement" in q_lower:
+                    selected_tables = ["EKKO", "EKPO", "LFA1", "MAKT", "MARA"]
                 elif "delivery" in intents:
                     selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
                 elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain", "margin analysis")):
@@ -2768,6 +2768,7 @@ def run_adaptive_sap_sql_agent(
     except Exception as e:
         logger.warning("run_adaptive_sap_sql_agent failed for %r: %s", question[:80], e)
     return None
+
 
 
 def _generate_sql_json(
