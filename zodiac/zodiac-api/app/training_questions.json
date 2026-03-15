@@ -235,6 +235,13 @@
     "10_costing_bom": {
       "description": "Costing, BOM, standard cost (KEKO, CKIS, CKMLCR, STKO, STPO)",
       "questions": [
+        "What was the profit margin on certain products?",
+        "What is the profit margin on products?",
+        "Profit margin by product",
+        "Costs of manufacturing",
+        "Manufacturing cost by material",
+        "Cost of manufacturing",
+        "What are the costs of manufacturing?",
         "What are the standard costs for finished goods materials in KEKO and CKMLCR?",
         "List all costed materials in CKMLCR with their standard price (stprs) and stock value (salk3)",
         "Show materials with large variances between planned and actual costs in CKMLPP",
