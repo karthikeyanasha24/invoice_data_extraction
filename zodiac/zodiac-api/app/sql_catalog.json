@@ -3104,7 +3104,8 @@
       "profitability analysis",
       "revenue vs cost",
       "gross margin by product",
-      "how are profit margins calculated"
+      "how are profit margins calculated",
+      "profit_margin_by_product"
     ],
     "keywords": [
       "profit margin",
@@ -3154,6 +3155,98 @@
     "tables": ["FAGLFLEXA", "VBRK", "vbrp", "KNA1", "MAKT"],
     "priority": 1,
     "sql": "SELECT v.prctr AS profit_center, COALESCE(epc.name1, v.prctr) AS profit_center_name, c.name1 AS customer_name, vk.kunag AS customer_number, COALESCE(m.maktx, v.matnr) AS product_name, v.matnr AS material_number, f.total_cost AS profit_center_total_cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN KNA1 c ON vk.kunag = c.kunnr LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN CEPC epc ON v.prctr = epc.prctr LEFT JOIN (SELECT prctr, SUM(hsl) AS total_cost FROM FAGLFLEXA WHERE prctr IS NOT NULL AND TRIM(prctr) != '' GROUP BY prctr) f ON v.prctr = f.prctr WHERE v.prctr IS NOT NULL AND TRIM(v.prctr) != '' AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.prctr, epc.name1, vk.kunag, c.name1, v.matnr, m.maktx, f.total_cost ORDER BY revenue DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "resb_materials_highest_reserved_quantity",
+    "description": "Materials with highest total quantity reserved in RESB",
+    "question_patterns": [
+      "materials with highest total quantity reserved in RESB",
+      "list materials with highest total quantity reserved in RESB",
+      "highest reserved quantity by material",
+      "total quantity reserved by material",
+      "reserved quantity by material",
+      "materials with highest reserved quantity"
+    ],
+    "keywords": ["resb", "reserved", "quantity", "materials", "highest", "total", "bdmng"],
+    "neg_keywords": [],
+    "tables": ["RESB", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT r.matnr, COALESCE(m.maktx, r.matnr) AS material_name, r.werks AS plant, SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) AS total_reserved_qty, r.meins AS unit FROM RESB r LEFT JOIN MAKT m ON TRIM(r.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE r.matnr IS NOT NULL AND TRIM(r.matnr) != '' GROUP BY r.matnr, m.maktx, r.werks, r.meins HAVING SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) > 0 ORDER BY total_reserved_qty DESC LIMIT 100"
+  },
+  {
+    "id": "faglflexa_cost_by_profit_center_gl_last_24_months",
+    "description": "Cost by profit center and GL account for last 24 months from FAGLFLEXA",
+    "question_patterns": [
+      "cost by profit center and GL account for the last 24 months",
+      "show cost by profit center and GL account for the last 24 months",
+      "cost by profit center and gl account last 24 months",
+      "profit center and GL account cost last 24 months"
+    ],
+    "keywords": ["faglflexa", "profit center", "gl account", "cost", "last 24", "24 months", "racct"],
+    "neg_keywords": [],
+    "tables": ["FAGLFLEXA"],
+    "priority": 2,
+    "sql": "SELECT f.prctr AS profit_center, f.racct AS gl_account, f.ryear AS fiscal_year, f.poper AS posting_period, SUM(f.hsl) AS total_cost, f.rtcur AS currency FROM FAGLFLEXA f WHERE f.prctr IS NOT NULL AND TRIM(f.prctr) != '' AND f.ryear IN (EXTRACT(YEAR FROM CURRENT_DATE)::text, (EXTRACT(YEAR FROM CURRENT_DATE) - 1)::text) GROUP BY f.prctr, f.racct, f.ryear, f.poper, f.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 200"
+  },
+  {
+    "id": "faglflexa_cost_by_profit_center_gl",
+    "description": "Cost by profit center and GL account from FAGLFLEXA (all periods)",
+    "question_patterns": [
+      "cost by profit center and GL account",
+      "show cost by profit center and gl account",
+      "total cost by profit center and gl account",
+      "break down GL balances by profit center and GL account"
+    ],
+    "keywords": ["faglflexa", "profit center", "gl account", "cost", "racct", "hsl"],
+    "neg_keywords": ["last 24", "24 months"],
+    "tables": ["FAGLFLEXA"],
+    "priority": 2,
+    "sql": "SELECT f.prctr AS profit_center, f.racct AS gl_account, f.ryear AS fiscal_year, SUM(f.hsl) AS total_cost, f.rtcur AS currency FROM FAGLFLEXA f WHERE f.prctr IS NOT NULL AND TRIM(f.prctr) != '' GROUP BY f.prctr, f.racct, f.ryear, f.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 200"
+  },
+  {
+    "id": "ekpo_total_purchased_quantity_cost_by_material",
+    "description": "Total purchased quantity and cost by material from EKPO",
+    "question_patterns": [
+      "total purchased quantity and cost for each material using EKPO",
+      "what is the total purchased quantity and cost for each material using EKPO",
+      "purchased quantity and cost by material",
+      "total purchase cost and quantity by material"
+    ],
+    "keywords": ["ekpo", "purchased", "quantity", "cost", "material", "total", "menge", "netwr"],
+    "neg_keywords": [],
+    "tables": ["EKPO", "EKKO", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT e.matnr, COALESCE(m.maktx, e.matnr) AS material_name, SUM(CAST(COALESCE(e.menge, 0) AS NUMERIC)) AS total_quantity, SUM(CAST(COALESCE(e.netwr, 0) AS NUMERIC)) AS total_cost, ek.waers AS currency FROM EKPO e LEFT JOIN EKKO ek ON e.ebeln = ek.ebeln LEFT JOIN MAKT m ON TRIM(e.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE e.matnr IS NOT NULL AND TRIM(e.matnr) != '' GROUP BY e.matnr, m.maktx, ek.waers ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "ekpo_total_by_material_plant",
+    "description": "Total purchase cost and quantity by material and plant from EKPO",
+    "question_patterns": [
+      "show total purchase cost and quantity by material and plant from EKPO",
+      "total purchase cost and quantity by material and plant",
+      "purchase by matnr werks"
+    ],
+    "keywords": ["ekpo", "purchase", "cost", "quantity", "material", "plant", "werks", "matnr"],
+    "neg_keywords": [],
+    "tables": ["EKPO", "EKKO", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT e.matnr, e.werks AS plant, COALESCE(m.maktx, e.matnr) AS material_name, SUM(CAST(COALESCE(e.menge, 0) AS NUMERIC)) AS total_quantity, SUM(CAST(COALESCE(e.netwr, 0) AS NUMERIC)) AS total_cost, ek.waers AS currency FROM EKPO e LEFT JOIN EKKO ek ON e.ebeln = ek.ebeln LEFT JOIN MAKT m ON TRIM(e.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE e.matnr IS NOT NULL AND TRIM(e.matnr) != '' GROUP BY e.matnr, e.werks, m.maktx, ek.waers ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "marc_materials_plant_master",
+    "description": "Materials with plant-level data from MARC (plant master)",
+    "question_patterns": [
+      "materials with highest on-hand quantities in plant master MARC",
+      "show materials with highest on-hand quantities in plant master MARC",
+      "materials in plant master MARC",
+      "on-hand quantities in MARC",
+      "plant master MARC materials"
+    ],
+    "keywords": ["marc", "plant master", "materials", "on-hand", "plant", "werks", "matnr"],
+    "neg_keywords": [],
+    "tables": ["MARC", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT m.matnr, m.werks AS plant, COALESCE(mk.maktx, m.matnr) AS material_name, COALESCE(CAST(NULLIF(TRIM(m.minbe), '') AS NUMERIC), 0) + COALESCE(CAST(NULLIF(TRIM(m.eisbe), '') AS NUMERIC), 0) AS planning_qty FROM MARC m LEFT JOIN MAKT mk ON TRIM(m.matnr) = TRIM(mk.matnr) AND (mk.spras = 'E' OR mk.spras IS NULL) WHERE m.matnr IS NOT NULL AND TRIM(m.matnr) != '' GROUP BY m.matnr, m.werks, m.minbe, m.eisbe, mk.maktx ORDER BY planning_qty DESC NULLS LAST LIMIT 100"
   },
   {
     "id": "recent_invoices_list",
