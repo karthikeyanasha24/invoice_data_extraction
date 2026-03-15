@@ -13,10 +13,9 @@ logger = logging.getLogger("zodiac-api.config")
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GEMINI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-# Multi-modal comparison: when true, insights call ChatGPT + Gemini + Claude in parallel and return best analysis
 ENABLE_MULTI_MODEL = os.getenv("ENABLE_MULTI_MODEL", "false").lower() == "true"
 
 # AI Analysis Model Configuration
@@ -39,7 +38,7 @@ except ImportError:
     logger.warning("⚠️ Vercel Blob not available - will use local storage only")
 
 # Determine if we MUST use blob storage (PROD + token provided)
-MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None
+MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and bool(BLOB_READ_WRITE_TOKEN)
 USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
 
 # Local storage directories
