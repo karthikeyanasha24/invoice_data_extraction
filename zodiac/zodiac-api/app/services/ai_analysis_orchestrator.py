@@ -702,6 +702,42 @@ If result is empty, say so and suggest a refined question.
             logger.debug("Purchase order fallback failed: %s", po_err)
     timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
     
+    # FAGLFLEXA link fallback: when user asks to link profit center costs to customers/products
+    # and the main query fails or returns 0 rows, return profit center costs only with a note
+    if (result is None or not getattr(result, "rows", None)) or (result and not result.rows):
+        _q = (user_query or "").lower()
+        _is_fagl_link = (
+            ("faglflexa" in _q or ("profit center" in _q and "cost" in _q))
+            and any(x in _q for x in ("link", "back to", "attribute", "customers", "products", "major"))
+        )
+        if _is_fagl_link:
+            try:
+                from .sap_sql_agent import (
+                    _resolve_faglflexa_table_and_mappings,
+                    _run_faglflexa_cost_by_profit_center_sql,
+                    _run_sql,
+                    SqlAgentResult,
+                )
+                fagl_table, fagl_mappings = _resolve_faglflexa_table_and_mappings(sql_db)
+                if fagl_table and fagl_mappings:
+                    pc_result = _run_faglflexa_cost_by_profit_center_sql(
+                        sql_db, fagl_table, last_24_months=False, column_mappings=fagl_mappings
+                    )
+                    if pc_result:
+                        _sql, _rows = pc_result
+                        if _rows:
+                            _note = (
+                                "The database has no direct link between FAGLFLEXA (GL costs) and billing/customer data "
+                                "for the requested period, or the link query returned no rows. "
+                                "Below is the **cost by profit center** from FAGLFLEXA. "
+                                "To see customers and products, use sales tables (VBRK, VBRP) separately."
+                            )
+                            result = SqlAgentResult(sql=_sql, rows=_rows)
+                            user_query = f"{user_query}\n\n[Note to AI: {_note}]"
+                            logger.info("FAGLFLEXA link fallback: returned profit center costs only (%d rows)", len(_rows))
+            except Exception as fagl_err:
+                logger.debug("FAGLFLEXA link fallback failed: %s", fagl_err)
+
     # Product-performance fallback: when both adaptive and standard return 0 rows, try known-good VBRK/VBRP/MAKT SQL
     if result and not result.rows:
         try:
@@ -1225,5 +1261,4 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
     if payload.get("performance"):
         logger.debug(f"Performance data: {payload['performance']}")
     return payload
-
 
