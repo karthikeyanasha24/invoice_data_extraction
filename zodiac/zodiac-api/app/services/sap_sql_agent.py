@@ -204,27 +204,6 @@ def _get_enriched_table_context(tables: List[str]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _get_join_graph_for_tables(tables: List[str]) -> str:
-    """Return join graph lines relevant to the selected tables for profit margin and multi-table SQL."""
-    meta = _load_schema_metadata_for_llm()
-    graph = meta.get("_join_graph") or []
-    if not graph:
-        return ""
-    tbl_set = {t.upper() for t in tables}
-    relevant = []
-    for line in graph:
-        # line format: "VBRP.vbeln → VBRK.vbeln" or "TABLE.col → OTHER.col"
-        parts = line.split("→")
-        if len(parts) == 2:
-            left = parts[0].strip().split(".")[0].upper()
-            right = parts[1].strip().split(".")[0].upper()
-            if left in tbl_set or right in tbl_set:
-                relevant.append(line)
-    if not relevant:
-        return ""
-    return "\n**Join graph (use for multi-table joins, e.g. profit margin):**\n" + "\n".join(relevant[:40]) + "\n\n"
-
-
 def _get_semantic_prompt_block(question: Optional[str] = None) -> str:
     """Return semantic dictionary context for SQL generator prompts. Empty if unavailable.
     When question is margin/profitability-related, appends margin semantic context for deeper analysis."""
@@ -1620,9 +1599,6 @@ def _generate_sql_json_adaptive(
                     join_lines.append(" | ".join(parts))
         if join_lines:
             joins_block = "\n**Schema metadata (joins, key columns):**\n" + "\n".join(join_lines) + "\n\n"
-    join_graph_block = _get_join_graph_for_tables(selected_tables)
-    if join_graph_block:
-        joins_block = joins_block + join_graph_block
 
     date_instruction = ""
     if time_scope == "historical":
@@ -2064,6 +2040,7 @@ def _build_minimal_resb_spec(
         "limit": 100,
     }
     return spec
+
 
 
 def _build_minimal_marc_spec(
