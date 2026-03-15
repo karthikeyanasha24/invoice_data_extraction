@@ -1328,6 +1328,29 @@
     "priority": 0
   },
   {
+    "id": "cost_by_profit_center_faglflexa",
+    "description": "Total cost by profit center from FAGLFLEXA",
+    "question_patterns": [
+      "total cost by profit center",
+      "cost by profit center",
+      "FAGLFLEXA cost by profit center",
+      "top profit centers by cost",
+      "which profit centers have highest cost"
+    ],
+    "keywords": [
+      "cost",
+      "profit center",
+      "faglflexa",
+      "total cost",
+      "postings",
+      "balance"
+    ],
+    "neg_keywords": ["customer", "product", "link", "material"],
+    "tables": ["FAGLFLEXA", "CEPC"],
+    "priority": 2,
+    "sql": "SELECT fg.prctr AS profit_center, COALESCE(c.name1, fg.prctr) AS profit_center_name, SUM(fg.hsl) AS total_cost, fg.rtcur AS currency FROM FAGLFLEXA fg LEFT JOIN CEPC c ON fg.prctr = c.prctr WHERE fg.prctr IS NOT NULL AND TRIM(fg.prctr) != '' GROUP BY fg.prctr, c.name1, fg.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+  },
+  {
     "id": "standard_cost_by_material",
     "description": "Standard cost/price by material (top 20 highest)",
     "question_patterns": [
@@ -3046,6 +3069,40 @@
     "tables": ["vbrp", "VBRK", "MAKT", "CKIS"],
     "priority": 1,
     "sql": "SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, COALESCE(c.total_cost, 0) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0) AS margin, CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN ROUND(100.0 * (SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0)) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2) ELSE NULL END AS margin_pct FROM vbrp v LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) AS total_cost FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.matnr, m.maktx, c.total_cost ORDER BY margin DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "faglflexa_profit_center_costs_linked_to_customers_products",
+    "description": "Link FAGLFLEXA profit center costs to major customers and products (via VBRP.prctr)",
+    "question_patterns": [
+      "link FAGLFLEXA profit center costs back to major customers and products",
+      "link profit center costs to customers and products",
+      "profit center costs back to customers",
+      "FAGLFLEXA costs by customer and product",
+      "attribute profit center costs to customers and products",
+      "link FAGLFLEXA profit center costs back to major customers and products where possible",
+      "link profit center costs to customers and products where possible",
+      "profit center and customer",
+      "cost by profit center and customer",
+      "costs by customer and product",
+      "profit center costs to customers"
+    ],
+    "keywords": [
+      "link",
+      "FAGLFLEXA",
+      "profit center",
+      "costs",
+      "customers",
+      "products",
+      "back to",
+      "where possible",
+      "major",
+      "attribute",
+      "connect"
+    ],
+    "neg_keywords": [],
+    "tables": ["FAGLFLEXA", "VBRK", "vbrp", "KNA1", "MAKT"],
+    "priority": 1,
+    "sql": "SELECT v.prctr AS profit_center, COALESCE(epc.name1, v.prctr) AS profit_center_name, c.name1 AS customer_name, vk.kunag AS customer_number, COALESCE(m.maktx, v.matnr) AS product_name, v.matnr AS material_number, f.total_cost AS profit_center_total_cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN KNA1 c ON vk.kunag = c.kunnr LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN CEPC epc ON v.prctr = epc.prctr LEFT JOIN (SELECT prctr, SUM(hsl) AS total_cost FROM FAGLFLEXA WHERE prctr IS NOT NULL AND TRIM(prctr) != '' GROUP BY prctr) f ON v.prctr = f.prctr WHERE v.prctr IS NOT NULL AND TRIM(v.prctr) != '' AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.prctr, epc.name1, vk.kunag, c.name1, v.matnr, m.maktx, f.total_cost ORDER BY revenue DESC NULLS LAST LIMIT 100"
   },
   {
     "id": "recent_invoices_list",
