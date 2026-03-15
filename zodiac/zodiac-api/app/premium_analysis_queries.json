@@ -25,3 +25,4 @@
   ],
   "margin_semantic_context": "Revenue: VBRP.NETWR (billing item net value). Cost: CKIS.WERTN (cost estimate) or MBEW.STPRS*VBRP.FKIMG. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS/KEKO on MATNR. Margin = Revenue - COGS. Margin % = (Revenue - COGS)/Revenue*100."
 }
+
