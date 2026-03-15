@@ -358,6 +358,18 @@
       "right": "MAKT",
       "on": "EBAN.MATNR = MAKT.MATNR",
       "note": "Purchase requisition to material description"
+    },
+    {
+      "left": "FAGLFLEXA",
+      "right": "VBRP",
+      "on": "FAGLFLEXA.PRCTR = VBRP.PRCTR",
+      "note": "Link profit center costs to billing items by profit center (VBRP has prctr)"
+    },
+    {
+      "left": "FAGLFLEXA",
+      "right": "BSEG",
+      "on": "FAGLFLEXA.RBUKRS = BSEG.BUKRS AND FAGLFLEXA.BELNR = BSEG.BELNR AND FAGLFLEXA.GJAHR = BSEG.GJAHR",
+      "note": "Link GL line items to FI line items for customer (BSEG.KUNNR), material (BSEG.MATNR), vendor (BSEG.LIFNR)"
     }
   ]
 }
