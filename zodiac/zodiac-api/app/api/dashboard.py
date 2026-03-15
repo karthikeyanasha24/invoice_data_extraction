@@ -29,7 +29,10 @@ from ..database import get_sap_session
 from ..services.database import extract_supplier_info_from_string
 from ..services.file_service import read_file_from_storage
 from ..services.invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
-from ..services.sap_sql_agent import answer_with_sap_sql_agent
+try:
+    from ..services.sap_sql_agent import answer_with_sap_sql_agent
+except Exception as _sap_import_err:
+    answer_with_sap_sql_agent = None  # type: ignore
 from collections import defaultdict
 from decimal import Decimal
 
