@@ -204,7 +204,57 @@ def resolve_deterministic_sql(
         )
         return sql
 
-    # 0c) Procurement spend by vendor
+    # 0c) Purchase order totals by material (quantity + cost from EKPO)
+    if (any(p in q for p in ("purchase", "purchased", "po ", "ekpo", "purchase order totals")) and
+            "material" in q and ok("EKPO") and ok("MAKT")):
+        if ok("MARA"):
+            sql = (
+                f"SELECT COALESCE(m.{_quote('maktx')}, e.{_quote('matnr')}) AS product, "
+                f"SUM(e.{_quote('menge')}) AS total_quantity, "
+                f"SUM(e.{_quote('netwr')}) AS total_cost "
+                f"FROM {tbl('EKPO')} e "
+                f"LEFT JOIN {tbl('MAKT')} m ON e.{_quote('matnr')} = m.{_quote('matnr')} AND (m.spras = 'E' OR m.spras IS NULL) "
+                f"GROUP BY e.{_quote('matnr')}, m.{_quote('maktx')} "
+                f"ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+            )
+            return sql
+
+    # 0d) Vendor invoice totals by vendor (RBKP + LFA1)
+    if ("vendor invoice" in q or "invoice value" in q and "vendor" in q or "top vendors by invoice" in q) and ok("RBKP") and ok("LFA1"):
+        sql = (
+            f"SELECT l.{_quote('name1')} AS vendor, "
+            f"SUM(r.{_quote('rmwwr')}) AS value "
+            f"FROM {tbl('RBKP')} r "
+            f"LEFT JOIN {tbl('LFA1')} l ON r.{_quote('lifnr')} = l.{_quote('lifnr')} "
+            f"GROUP BY r.{_quote('lifnr')}, l.{_quote('name1')} "
+            f"ORDER BY value DESC NULLS LAST LIMIT 100"
+        )
+        return sql
+
+    # 0e) Vendor invoice totals by currency
+    if "vendor invoice" in q and "currency" in q and ok("RBKP"):
+        sql = (
+            f"SELECT r.{_quote('waers')} AS currency, "
+            f"SUM(r.{_quote('rmwwr')}) AS value "
+            f"FROM {tbl('RBKP')} r "
+            f"GROUP BY r.{_quote('waers')} "
+            f"ORDER BY value DESC NULLS LAST LIMIT 100"
+        )
+        return sql
+
+    # 0f) Outbound delivery quantities by product (LIPS)
+    if ("delivery" in q or "delivered" in q) and ("quantity" in q or "quantities" in q) and "product" in q and ok("LIPS") and ok("MAKT"):
+        sql = (
+            f"SELECT COALESCE(m.{_quote('maktx')}, l.{_quote('matnr')}) AS product, "
+            f"SUM(l.{_quote('lfimg')}) AS total_quantity "
+            f"FROM {tbl('LIPS')} l "
+            f"LEFT JOIN {tbl('MAKT')} m ON l.{_quote('matnr')} = m.{_quote('matnr')} AND (m.spras = 'E' OR m.spras IS NULL) "
+            f"GROUP BY l.{_quote('matnr')}, m.{_quote('maktx')} "
+            f"ORDER BY total_quantity DESC NULLS LAST LIMIT 100"
+        )
+        return sql
+
+    # 0g) Procurement spend by vendor (EKPO path)
     if (("procurement" in q and "vendor" in q) or "vendor spend" in q or "spend by vendor" in q or
         ("purchase" in q and "vendor" in q) or "procurement spend" in q) and ok("EKPO") and ok("EKKO") and ok("LFA1"):
         sql = (
