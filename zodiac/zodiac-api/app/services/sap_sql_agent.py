@@ -103,6 +103,27 @@ def _get_schema_config() -> Dict[str, Any]:
     return _SCHEMA_CONFIG
 
 
+_SAP_TABLE_METADATA: Dict[str, Any] = {}
+_SAP_TABLE_METADATA_LOADED = False
+def _load_sap_table_metadata() -> Dict[str, Any]:
+    """Load sap_table_metadata.json for rich per-table descriptions, sql_hints, joins. Returns {} on failure."""
+    global _SAP_TABLE_METADATA, _SAP_TABLE_METADATA_LOADED
+    if _SAP_TABLE_METADATA_LOADED:
+        return _SAP_TABLE_METADATA
+    _SAP_TABLE_METADATA_LOADED = True
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "sap_table_metadata.json"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _SAP_TABLE_METADATA.update({k: v for k, v in data.items() if not k.startswith("_") and isinstance(v, dict)})
+    except Exception as e:
+        logger.warning("Could not load sap_table_metadata.json: %s", e)
+    return _SAP_TABLE_METADATA
+
+
 def _get_semantic_prompt_block(question: Optional[str] = None) -> str:
     """Return semantic dictionary context for SQL generator prompts. Empty if unavailable.
     When question is margin/profitability-related, appends margin semantic context for deeper analysis."""
@@ -874,9 +895,10 @@ def _get_table_descriptions(db: Session) -> Dict[str, str]:
     """
     Build table descriptions. Priority (mapping-first, adaptive for new tables):
     1) db_table_mapping.json meta.description
-    2) schema_ai_config.json table_semantic_hints
-    3) SAP_TABLE_DESCRIPTIONS (fallback)
-    4) Generic fallback
+    2) sap_table_metadata.json business_meaning or description
+    3) schema_ai_config.json table_semantic_hints
+    4) SAP_TABLE_DESCRIPTIONS (fallback)
+    5) Generic fallback
 
     Skip tables from schema_ai_config skip_tables.
     """
@@ -900,6 +922,7 @@ def _get_table_descriptions(db: Session) -> Dict[str, str]:
         pass
 
     table_hints = (cfg.get("table_semantic_hints") or {})
+    sap_meta = _load_sap_table_metadata()
     out: Dict[str, str] = {}
     for actual_name in db_table_names:
         # 1) Mapping meta (from db_table_mapping.json - updated by refresh_schema_for_ai.py)
@@ -909,12 +932,19 @@ def _get_table_descriptions(db: Session) -> Dict[str, str]:
             if desc and desc != f"{actual_name} table":
                 out[actual_name] = desc
                 continue
-        # 2) Config table_semantic_hints (extensible - add new tables here)
+        # 2) sap_table_metadata.json (rich business_meaning or description)
+        meta_entry = sap_meta.get(actual_name) or sap_meta.get(actual_name.upper())
+        if isinstance(meta_entry, dict):
+            desc = meta_entry.get("business_meaning") or meta_entry.get("description")
+            if desc:
+                out[actual_name] = str(desc)
+                continue
+        # 3) Config table_semantic_hints (extensible - add new tables here)
         desc = table_hints.get(actual_name) or table_hints.get(actual_name.upper())
         if desc:
             out[actual_name] = desc
             continue
-        # 3) Invoice-bot full descriptions (sap_table_descriptions.json) then hardcoded SAP_TABLE_DESCRIPTIONS
+        # 4) Invoice-bot full descriptions (sap_table_descriptions.json) then hardcoded SAP_TABLE_DESCRIPTIONS
         try:
             from .invoice_bot_helpers import get_table_descriptions
             ib = get_table_descriptions()
@@ -926,7 +956,7 @@ def _get_table_descriptions(db: Session) -> Dict[str, str]:
         if desc:
             out[actual_name] = desc
             continue
-        # 4) Generic
+        # 5) Generic
         out[actual_name] = f"{actual_name} table – check columns for available fields."
     return out
 
@@ -2192,13 +2222,18 @@ def run_adaptive_sap_sql_agent(
             elif any(x in q_lower for x in ("resb", "reserved")) and ("quantity" in q_lower or "highest" in q_lower or "total quantity" in q_lower):
                 selected_tables = ["RESB", "MARA", "MAKT"]
             elif any(x in q_lower for x in ("mkpf", "stock movement", "reservation", "issued from inventory", "mseg", "slow-moving", "reserved quantity", "no movements", "posting dates")):
-                selected_tables = ["MKPF", "MSEG", "MARA", "MAKT"]
+                # MSEG (material doc items) not in schema; use RESB for quantity-by-material, MKPF for doc counts/dates
+                if "quantity" in q_lower or "issued" in q_lower or ("movement" in q_lower and "material" in q_lower):
+                    selected_tables = ["RESB", "MAKT", "MARA"]
+                else:
+                    selected_tables = ["MKPF", "RESB", "MAKT"]
             elif any(x in q_lower for x in ("marc", "plant master", "mrp", "configurable", "batch-managed", "marm", "on-hand", "valuation", "planning")):
                 selected_tables = ["MARC", "MARA", "MAKT"]
             elif any(x in q_lower for x in ("keko", "ckmlcr", "ckis", "standard cost", "stprs", "salk3", "bom", "stko", "stpo", "mast", "component", "ckmlpp", "variance", "planned vs actual")):
                 selected_tables = ["KEKO", "KEPH", "CKIS", "MARA", "MAKT"] if "ckmlpp" not in q_lower else ["CKMLCR", "CKMLPP", "MARA", "MAKT"]
             elif any(x in q_lower for x in ("ckmlcr", "costed materials", "stock value", "finished goods")):
-                selected_tables = ["CKMLCR", "MARA", "MAKT"]
+                # CKMLCR has no matnr; join via CKMLHD
+                selected_tables = ["CKMLCR", "CKMLHD", "MAKT"]
             elif any(x in q_lower for x in ("konv", "condition", "price condition", "discount", "pr00", "base price", "kschl", "knumv", "rebate", "ra01", "k007", "kappl", "cash discount", "list price", "net price")):
                 selected_tables = ["KONV", "VBRK", "VBRP", "MAKT", "KNA1"]
             elif any(x in q_lower for x in ("bsad", "bseg", "ar ", "receivable", "aging", "write-off", "open ar", "payment terms", "zterm", "overdue", "bkpf", "write off", "credit note")):
@@ -2477,6 +2512,17 @@ def _generate_sql_json(
             f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:30]  # increased: was 20
         ) + "\n"
 
+    # Per-table SQL hints from sap_table_metadata.json (when available for selected tables)
+    sap_meta = _load_sap_table_metadata()
+    sql_hints_lines = []
+    for tbl in selected_tables:
+        meta = sap_meta.get(tbl) or sap_meta.get(tbl.upper())
+        if isinstance(meta, dict) and meta.get("sql_hints"):
+            sql_hints_lines.append(f"- {tbl}: {meta['sql_hints']}")
+    sql_hints_block = ""
+    if sql_hints_lines:
+        sql_hints_block = "\nPer-table SQL hints (sap_table_metadata.json – follow these when using these tables):\n" + "\n".join(sql_hints_lines) + "\n"
+
     semantic_block = _get_semantic_prompt_block(question)
 
     prompt = f"""
@@ -2491,6 +2537,7 @@ User question: "{question}"
 Column mappings (table -> column -> short description):
 {json.dumps(column_mappings, indent=2)}
 {col_hints_block}
+{sql_hints_block}
 Known join patterns between these tables:
 {SAP_JOIN_HINTS}
 {join_rules_block}
@@ -3815,4 +3862,3 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-
