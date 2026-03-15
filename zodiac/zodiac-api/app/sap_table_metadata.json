@@ -272,5 +272,27 @@
       "How many complaints from clients"
     ],
     "sql_hints": "VBRP: SUM(netwr) for revenue, SUM(fkimg) for billed quantity. GROUP BY matnr, werks, prctr. Join VBRK on vbeln for kunag; MAKT on matnr for maktx. VBRP has prctr for profit center; use VBRK.KUNAG for customer. For complaints: filter WHERE TRIM(COALESCE(compreas,'')) != '' and GROUP BY kunag."
+  },
+  "RESB": {
+    "description": "Reservation/dependent requirements. Material reservations by plant, order, and storage location. bdmng = reserved quantity, enmng = issued quantity.",
+    "primary_key": ["rsnum", "rspos"],
+    "important_columns": ["matnr", "werks", "lgort", "bdmng", "enmng", "meins", "aufnr", "ebeln", "ebelp"],
+    "amount_columns": ["bdmng", "enmng"],
+    "date_columns": ["bdter"],
+    "joins": {
+      "MAKT": "matnr",
+      "AUFK": "aufnr",
+      "EKKO": "ebeln"
+    },
+    "business_meaning": "Material reservations. Use for: total reserved quantity by material (SUM(bdmng)), top materials by reserved qty, open reservation qty (bdmng - enmng).",
+    "example_questions": [
+      "Materials with highest total quantity reserved in RESB",
+      "List materials with highest total quantity reserved in RESB",
+      "Reserved quantity by material",
+      "Top reserved materials",
+      "What materials are reserved",
+      "Reservation list by material"
+    ],
+    "sql_hints": "RESB: bdmng = reserved qty, enmng = issued qty. SUM(bdmng) GROUP BY matnr for total reserved by material. Join MAKT on matnr for maktx. HAVING SUM(bdmng) > 0 ORDER BY reserved DESC LIMIT 20."
   }
 }
