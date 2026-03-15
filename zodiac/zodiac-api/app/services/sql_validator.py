@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def validate_sql(
     sql: str,
     schema: Dict[str, List[str]],
-) -> tuple[bool, Optional[str]]:
+) -> Tuple[bool, Optional[str]]:
     """
     Check that all tables (and optionally columns) referenced in SQL exist in schema.
     Returns (is_valid, error_message).
