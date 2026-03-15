@@ -456,6 +456,29 @@
     "priority": 0
   },
   {
+    "id": "revenue_by_sales_org_and_distribution_channel",
+    "description": "Revenue by sales organization and distribution channel (VBRK.vkorg, VBRK.vtweg)",
+    "question_patterns": [
+      "revenue by sales organization and distribution channel",
+      "sales by vkorg and vtweg",
+      "revenue by vkorg vtweg",
+      "sales org and distribution channel"
+    ],
+    "keywords": [
+      "revenue",
+      "sales",
+      "organization",
+      "distribution",
+      "channel",
+      "vkorg",
+      "vtweg"
+    ],
+    "neg_keywords": [],
+    "tables": ["VBRK", "vbrp"],
+    "sql": "SELECT vk.vkorg AS sales_org, vk.vtweg AS distribution_channel, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_revenue, vk.waerk AS currency FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) WHERE vk.vkorg IS NOT NULL AND vk.vtweg IS NOT NULL GROUP BY vk.vkorg, vk.vtweg, vk.waerk HAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 ORDER BY total_revenue DESC LIMIT 100",
+    "priority": 3
+  },
+  {
     "id": "sales_by_sales_org",
     "description": "Sales by sales organization",
     "question_patterns": [
@@ -1335,7 +1358,10 @@
       "cost by profit center",
       "FAGLFLEXA cost by profit center",
       "top profit centers by cost",
-      "which profit centers have highest cost"
+      "which profit centers have highest cost",
+      "which profit centers have the highest total cost",
+      "profit centers with highest total cost",
+      "highest total cost by profit center"
     ],
     "keywords": [
       "cost",
@@ -1793,6 +1819,21 @@
     "priority": 0
   },
   {
+    "id": "marc_material_planning_params",
+    "description": "Materials with highest reorder point/safety stock from MARC (MARC has no on-hand; this is the closest stock-related data)",
+    "question_patterns": [
+      "materials with highest on-hand quantities in plant master MARC",
+      "highest on-hand in MARC",
+      "on-hand quantities in MARC",
+      "materials with highest stock in MARC"
+    ],
+    "keywords": ["marc", "on-hand", "plant", "material", "master", "quantity", "stock"],
+    "neg_keywords": [],
+    "tables": ["MARC", "MAKT"],
+    "sql": "SELECT m.maktx AS material_name, mc.matnr AS material_number, mc.werks AS plant, mc.minbe AS reorder_point, mc.eisbe AS safety_stock FROM MARC mc LEFT JOIN MAKT m ON mc.matnr = m.matnr AND m.spras = 'E' WHERE mc.minbe IS NOT NULL AND mc.minbe != 0 ORDER BY mc.minbe DESC NULLS LAST LIMIT 50",
+    "priority": 0
+  },
+  {
     "id": "reservations_by_material",
     "description": "Top 20 materials by reserved quantity (RESB)",
     "question_patterns": [
@@ -1800,7 +1841,10 @@
       "reserved quantity by material",
       "top reserved materials",
       "what materials are reserved",
-      "reservation list by material"
+      "reservation list by material",
+      "materials with highest total quantity reserved in RESB",
+      "list materials with highest total quantity reserved in RESB",
+      "highest quantity reserved by material"
     ],
     "keywords": [
       "reservation",
@@ -2004,7 +2048,10 @@
       "total purchased quantity and cost by material using EKPO",
       "EKPO quantity and cost",
       "what is total purchase quantity and cost for each material",
-      "purchase quantity and cost per material EKPO"
+      "purchase quantity and cost per material EKPO",
+      "purchase order totals by material",
+      "PO totals by material",
+      "total purchase order value by material"
     ],
     "keywords": [
       "purchase",
@@ -2013,7 +2060,10 @@
       "material",
       "ekpo",
       "total",
-      "each"
+      "totals",
+      "each",
+      "order",
+      "po"
     ],
     "neg_keywords": [],
     "tables": [
@@ -2021,7 +2071,7 @@
       "EKKO",
       "MAKT"
     ],
-    "sql": "SELECT m.maktx AS material_name,\n       ep.matnr AS material_number,\n       SUM(ep.menge) AS total_quantity,\n       SUM(ep.netwr) AS total_purchase_cost,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nWHERE ep.matnr IS NOT NULL AND ep.matnr != ''\nGROUP BY ep.matnr, m.maktx, ek.waers\nHAVING SUM(ep.menge) > 0 OR SUM(ep.netwr) > 0\nORDER BY total_purchase_cost DESC NULLS LAST\nLIMIT 50",
+    "sql": "SELECT m.maktx AS material_name,\n       ep.matnr AS material_number,\n       SUM(CAST(NULLIF(TRIM(ep.menge::text), '') AS NUMERIC)) AS total_quantity,\n       SUM(CAST(NULLIF(TRIM(ep.netwr::text), '') AS NUMERIC)) AS total_purchase_cost,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nWHERE ep.matnr IS NOT NULL AND TRIM(ep.matnr) != ''\nGROUP BY ep.matnr, m.maktx, ek.waers\nHAVING SUM(CAST(NULLIF(TRIM(ep.menge::text), '') AS NUMERIC)) > 0 OR SUM(CAST(NULLIF(TRIM(ep.netwr::text), '') AS NUMERIC)) > 0\nORDER BY total_purchase_cost DESC NULLS LAST\nLIMIT 50",
     "priority": 8
   },
   {
@@ -3048,6 +3098,7 @@
     "question_patterns": [
       "profit margin",
       "margin analysis",
+      "profit margin analysis",
       "margin by product",
       "product margin",
       "profitability analysis",
