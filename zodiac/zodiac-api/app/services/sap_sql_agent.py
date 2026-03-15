@@ -50,10 +50,25 @@ try:
     except ImportError:
         try_resolve_and_build_sql = None
         get_semantic_context_for_prompt = lambda: ""
+    try:
+        from .deterministic_sql_resolver import resolve_deterministic_sql
+    except ImportError:
+        resolve_deterministic_sql = None
+    try:
+        from .premium_analysis_service import (
+            is_margin_or_profitability_question,
+            get_margin_semantic_context,
+            get_base_sql_for_premium,
+        )
+    except ImportError:
+        is_margin_or_profitability_question = lambda _: False
+        get_margin_semantic_context = lambda: ""
+        get_base_sql_for_premium = lambda *_: None
     _SCHEMA_DRIVEN_AVAILABLE = True
 except ImportError:
     _SCHEMA_DRIVEN_AVAILABLE = False
     try_resolve_and_build_sql = None
+    resolve_deterministic_sql = None
 
 try:
     from openai import OpenAI
@@ -88,10 +103,15 @@ def _get_schema_config() -> Dict[str, Any]:
     return _SCHEMA_CONFIG
 
 
-def _get_semantic_prompt_block() -> str:
-    """Return semantic dictionary context for SQL generator prompts. Empty if unavailable."""
+def _get_semantic_prompt_block(question: Optional[str] = None) -> str:
+    """Return semantic dictionary context for SQL generator prompts. Empty if unavailable.
+    When question is margin/profitability-related, appends margin semantic context for deeper analysis."""
     try:
         block = get_semantic_context_for_prompt()
+        if question and is_margin_or_profitability_question(question):
+            margin_ctx = get_margin_semantic_context()
+            if margin_ctx:
+                block = (block or "") + "\n\n" + margin_ctx
         return f"\n{block}\n\n" if block else ""
     except Exception:
         return ""
@@ -1402,7 +1422,7 @@ def _generate_sql_json_adaptive(
             few_shot_block = "\nRecent question→SQL examples (use as patterns):\n" + json.dumps(cleaned, indent=2)
 
     tables_block = {t: tbl_desc.get(t, f"Table {t}") for t in selected_tables}
-    semantic_block = _get_semantic_prompt_block()
+    semantic_block = _get_semantic_prompt_block(question)
 
     prompt = f"""
 Interpret the user's intent flexibly: revenue/sales/billing/invoices mean the same; cost/spend/amount/expense mean the same; infer the correct columns and joins from context even if the user used informal or partial wording. Always return a valid spec when the tables can answer the question.
@@ -2457,7 +2477,7 @@ def _generate_sql_json(
             f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:30]  # increased: was 20
         ) + "\n"
 
-    semantic_block = _get_semantic_prompt_block()
+    semantic_block = _get_semantic_prompt_block(question)
 
     prompt = f"""
 User question: "{question}"
@@ -3488,9 +3508,21 @@ def run_schema_driven_sql_agent(
         available_tables = list(schema.keys())
         schema_table_case = {t.upper(): t for t in available_tables}
 
-        # Semantic dictionary fast path: resolve metric+dimension and build template SQL
+        # Layer 1: Deterministic resolver (intent + semantic mapping + templates)
         template_sql = None
-        if try_resolve_and_build_sql:
+        if resolve_deterministic_sql:
+            try:
+                template_sql = resolve_deterministic_sql(
+                    question,
+                    available_tables=available_tables,
+                    schema_table_case=schema_table_case,
+                )
+                if template_sql:
+                    logger.info("schema_driven_agent: deterministic resolver produced SQL")
+            except Exception as det_err:
+                logger.debug("deterministic_sql_resolver: %s", det_err)
+        # Layer 2: Query resolver (metric+dimension from dictionary)
+        if not template_sql and try_resolve_and_build_sql:
             template_sql = try_resolve_and_build_sql(
                 question,
                 available_tables=available_tables,
@@ -3602,13 +3634,23 @@ def run_sap_sql_agent(
     # ── END CATALOG FAST-PATH ────────────────────────────────────────────────
 
     # ── SEMANTIC DICTIONARY FAST-PATH ────────────────────────────────────────
-    # Use entities + metrics + join graph to resolve question → SQL without LLM.
+    # Layer 1: Deterministic (intent + semantic + templates), Layer 2: semantic_sql_resolver
     if _SCHEMA_DRIVEN_AVAILABLE:
         try:
             schema = get_schema_dict(db)
             if schema:
                 available = list(schema.keys())
-                sem_sql = semantic_resolve_to_sql(question, available_tables=available)
+                schema_case = {t.upper(): t for t in available}
+                sem_sql = None
+                if resolve_deterministic_sql:
+                    try:
+                        sem_sql = resolve_deterministic_sql(
+                            question, available_tables=available, schema_table_case=schema_case
+                        )
+                    except Exception:
+                        pass
+                if not sem_sql:
+                    sem_sql = semantic_resolve_to_sql(question, available_tables=available)
                 if not sem_sql:
                     sem_sql = semantic_resolve_count_by(question, available_tables=available)
                 if sem_sql:
@@ -3773,4 +3815,4 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-    
+
