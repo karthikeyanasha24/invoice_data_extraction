@@ -16,6 +16,7 @@ OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+# Multi-modal comparison: when true, insights call ChatGPT + Gemini + Claude in parallel and return best analysis
 ENABLE_MULTI_MODEL = os.getenv("ENABLE_MULTI_MODEL", "false").lower() == "true"
 
 # AI Analysis Model Configuration
