@@ -666,7 +666,21 @@ If result is empty, say so and suggest a refined question.
         logger.warning("Procurement-from-list check failed: %s", proc_err)
 
     if result is None:
-        # 1) Schema-driven agent first: LLM reads schema → selects tables → generates SQL (no keyword rules).
+        # 0) Fast path: try sql_catalog first for common table-specific and analytical queries
+        try:
+            from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+            catalog_sql = _lookup_sql_catalog(user_query)
+            if catalog_sql:
+                quoted_sql = _quote_catalog_sql_tables(catalog_sql)
+                catalog_rows = _run_sql(sql_db, quoted_sql)
+                if catalog_rows:
+                    result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
+                    logger.info("SQL catalog fast-path returned %d rows for: %r", len(catalog_rows), user_query[:60])
+        except Exception as catalog_err:
+            logger.debug("SQL catalog fast-path failed: %s", catalog_err)
+
+    if result is None:
+        # 1) Schema-driven agent: LLM reads schema → selects tables → generates SQL (no keyword rules).
         try:
             result = run_schema_driven_sql_agent(user_query, sql_db, few_shot_examples=_few_shot)
             if result and getattr(result, "rows", None):
@@ -720,8 +734,9 @@ If result is empty, say so and suggest a refined question.
                 )
                 fagl_table, fagl_mappings = _resolve_faglflexa_table_and_mappings(sql_db)
                 if fagl_table and fagl_mappings:
+                    _last_24 = "last 24" in _q or "24 months" in _q
                     pc_result = _run_faglflexa_cost_by_profit_center_sql(
-                        sql_db, fagl_table, last_24_months=False, column_mappings=fagl_mappings
+                        sql_db, fagl_table, last_24_months=_last_24, column_mappings=fagl_mappings
                     )
                     if pc_result:
                         _sql, _rows = pc_result
