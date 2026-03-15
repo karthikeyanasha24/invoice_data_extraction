@@ -1406,13 +1406,19 @@
   },
   {
     "id": "cost_details_by_material",
-    "description": "Top 20 materials by total itemized cost value (CKIS)",
+    "description": "Top 20 materials by total itemized cost value (CKIS) - includes manufacturing/production costs",
     "question_patterns": [
       "costing by material",
       "cost elements by material",
       "production cost by material",
       "itemized cost by material",
-      "CKIS cost by material"
+      "CKIS cost by material",
+      "costs of manufacturing",
+      "manufacturing cost",
+      "cost of manufacturing",
+      "manufacturing costs",
+      "production costs",
+      "costs and similar queries"
     ],
     "keywords": [
       "cost",
@@ -1422,7 +1428,8 @@
       "element",
       "production",
       "itemized",
-      "wertn"
+      "wertn",
+      "manufacturing"
     ],
     "neg_keywords": [],
     "tables": [
@@ -3105,7 +3112,11 @@
       "revenue vs cost",
       "gross margin by product",
       "how are profit margins calculated",
-      "profit_margin_by_product"
+      "profit_margin_by_product",
+      "profit margin on certain products",
+      "what was the profit margin on certain products",
+      "profit margin on products",
+      "profit margins by product"
     ],
     "keywords": [
       "profit margin",
