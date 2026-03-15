@@ -114,6 +114,28 @@ def resolve_deterministic_sql(
             return _quote(schema_table_case[t.upper()])
         return _quote(t)
 
+    # 0a) Total cost by profit center (FAGLFLEXA) - highest cost, current fiscal year
+    pc_cost_phrases = (
+        "profit center", "profit centres", "cost by profit center", "total cost by profit center",
+        "highest total cost", "which profit centers", "profit centers by cost",
+    )
+    if any(p in q for p in pc_cost_phrases) and ("cost" in q or "total" in q) and ok("FAGLFLEXA"):
+        current_year_only = "current fiscal year" in q or "current year" in q or "fiscal year only" in q
+        where_parts = [f"f.{_quote('prctr')} IS NOT NULL"]
+        if current_year_only:
+            # FAGLFLEXA: ryear (New GL) or gjahr - prefer ryear
+            where_parts.append(f"f.{_quote('ryear')}::text = EXTRACT(YEAR FROM CURRENT_DATE)::text")
+        where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
+        sql = (
+            f"SELECT f.{_quote('prctr')} AS profit_center, "
+            f"SUM(f.{_quote('hsl')}) AS total_cost "
+            f"FROM {tbl('FAGLFLEXA')} f "
+            f"{where_clause} "
+            f"GROUP BY f.{_quote('prctr')} "
+            f"ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+        )
+        return sql.strip()
+
     # 0) Profit margin by product/customer/country (REQUIRED - runs before other patterns)
     margin_phrases = ("profit margin", "margin by product", "product profitability", "margin by customer",
                       "contribution margin", "gross margin", "customer profitability", "top profitable",
