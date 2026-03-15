@@ -1,0 +1,274 @@
+{
+  "_comment": "Rich per-table metadata for SAP SQL agent. Used for enhanced descriptions, sql_hints, and join context.",
+  "AUFK": {
+    "description": "Internal order master data (SAP CO). Tracks costs, revenues, or activities for projects, maintenance orders, marketing campaigns. Primary key: aufnr.",
+    "primary_key": "aufnr",
+    "important_columns": ["aufnr", "ktext", "ltext", "bukrs", "werks", "gsber", "kokrs", "kostl", "prctr", "erdat", "ernam", "objnr", "auart", "autyp", "waers"],
+    "amount_columns": [],
+    "date_columns": ["erdat", "aedat", "stdat"],
+    "joins": {
+      "COEP": "objnr",
+      "COSP": "objnr",
+      "CSKS": "kostl",
+      "CEPC": "prctr"
+    },
+    "business_meaning": "Internal orders for project cost tracking, maintenance, marketing, internal cost collection. objnr links to COEP/COSP for actual/planned costs.",
+    "example_questions": [
+      "List all internal orders",
+      "Show internal orders by profit center",
+      "Internal orders by cost center",
+      "Internal orders by company code",
+      "Orders created this year",
+      "Top internal orders by cost",
+      "Which profit center has the most orders?"
+    ],
+    "sql_hints": "AUFK: use aufnr (order number), ktext (description), prctr (profit center), kostl (cost center), objnr to join COEP/COSP for costs. Group by prctr, kostl, bukrs, or EXTRACT(YEAR FROM erdat) for time analysis."
+  },
+  "BSAD": {
+    "description": "Customer cleared items (Accounts Receivable). Paid/cleared customer invoice line items. BSAD = historical cleared receivables (invoice was paid).",
+    "primary_key": ["bukrs", "belnr", "gjahr", "buzei"],
+    "important_columns": ["bukrs", "kunnr", "belnr", "gjahr", "buzei", "budat", "bldat", "augdt", "augbl", "waers", "dmbtr", "wrbtr", "saknr", "hkont", "zfbdt", "zterm", "sknto", "sgtxt", "prctr", "kostl", "aufnr"],
+    "amount_columns": ["dmbtr", "wrbtr", "sknto"],
+    "date_columns": ["budat", "bldat", "augdt", "zfbdt"],
+    "customer_column": "kunnr",
+    "joins": {
+      "KNA1": "kunnr",
+      "BSEG": "belnr+gjahr",
+      "AUFK": "aufnr",
+      "CSKS": "kostl"
+    },
+    "business_meaning": "Cleared (paid) customer invoices. Use for: total payments by customer, revenue collected, payment timing, cash discounts. Join KNA1 on kunnr for customer name.",
+    "example_questions": [
+      "Total cleared receivables",
+      "Top customers by payment",
+      "Revenue collected per month",
+      "Which customers pay fastest?",
+      "Cash discount totals by customer",
+      "Payments by profit center",
+      "Payments by cost center",
+      "Invoices cleared this year"
+    ],
+    "sql_hints": "BSAD: dmbtr/wrbtr = amount; augdt = clearing date; kunnr = customer. SUM(dmbtr) GROUP BY kunnr for revenue by customer; GROUP BY prctr, kostl, bukrs; EXTRACT(YEAR FROM augdt) for time. Join KNA1 on kunnr for name1."
+  },
+  "BSEG": {
+    "description": "Accounting document segment (FI line items). Every financial transaction creates entries. Customer (koart D), vendor (K), GL (S), material (M), asset (A).",
+    "primary_key": ["bukrs", "belnr", "gjahr", "buzei"],
+    "important_columns": ["bukrs", "belnr", "gjahr", "buzei", "bschl", "koart", "dmbtr", "wrbtr", "saknr", "hkont", "kunnr", "lifnr", "kostl", "prctr", "aufnr", "matnr", "werks", "menge", "vbeln"],
+    "amount_columns": ["dmbtr", "wrbtr"],
+    "date_columns": ["budat", "bldat"],
+    "account_type_column": "koart",
+    "customer_column": "kunnr",
+    "vendor_column": "lifnr",
+    "joins": {
+      "BKPF": "belnr+gjahr+bukrs",
+      "KNA1": "kunnr",
+      "LFA1": "lifnr",
+      "AUFK": "aufnr",
+      "CSKS": "kostl",
+      "CEPC": "prctr",
+      "MARA": "matnr"
+    },
+    "business_meaning": "All accounting line items. koart: D=customer, K=vendor, S=GL, M=material, A=asset. Use for GL analysis, vendor spend (WHERE koart='K'), customer revenue (WHERE koart='D'), cost by cost center/profit center.",
+    "example_questions": [
+      "Total accounting postings",
+      "Top GL accounts by value",
+      "Vendor spend",
+      "Customer revenue",
+      "Cost by cost center",
+      "Cost by profit center",
+      "Transactions by material",
+      "Revenue by sales document",
+      "Internal order costs"
+    ],
+    "sql_hints": "BSEG: dmbtr/wrbtr = amount. Filter koart = 'K' for vendor, 'D' for customer. SUM(dmbtr) GROUP BY hkont (GL), kunnr, lifnr, kostl, prctr, aufnr, matnr, vbeln. Join KNA1 on kunnr, LFA1 on lifnr for names."
+  },
+  "CEPC": {
+    "description": "Profit center master data (SAP PCA). A profit center is a business unit, product line, or region whose profit and cost are tracked separately.",
+    "primary_key": "prctr",
+    "important_columns": ["prctr", "kokrs", "bukrs", "segment", "name1", "abtei", "verak", "land1", "ort01", "waers", "datab", "datbi"],
+    "amount_columns": [],
+    "date_columns": ["datab", "datbi"],
+    "joins": {
+      "BSEG": "prctr",
+      "FAGLFLEXA": "prctr",
+      "CKIS": "prctr",
+      "AUFK": "prctr"
+    },
+    "business_meaning": "Profit center master. Use for revenue/cost by business unit, organizational structure, reporting by segment/region/company code.",
+    "example_questions": [
+      "List profit centers",
+      "Profit centers by company",
+      "Profit centers by segment",
+      "Profit centers by country",
+      "Profit centers by manager",
+      "Which profit centers generate most cost?",
+      "Revenue by profit center",
+      "Profit centers per controlling area"
+    ],
+    "sql_hints": "CEPC: prctr = profit center ID, name1 = profit center name, segment = reporting segment, verak = responsible. GROUP BY bukrs, segment, land1, verak for reporting. Profit center costs: BSEG c JOIN CEPC p ON c.prctr = p.prctr, SUM(c.dmbtr) AS total_cost GROUP BY c.prctr, p.name1 ORDER BY total_cost DESC."
+  },
+  "CKMLCR": {
+    "description": "Material ledger cost records (CO-PC). Material ledger values and cost differences per period; actual costing data for materials.",
+    "primary_key": ["kalnr", "bdatj", "poper"],
+    "important_columns": ["kalnr", "bdatj", "poper", "stprs", "pvprs", "salk3", "waers"],
+    "amount_columns": ["stprs", "pvprs", "salk3"],
+    "date_columns": [],
+    "joins": {
+      "CKMLHD": "kalnr",
+      "CKMLPP": "kalnr"
+    },
+    "business_meaning": "Material valuation, price differences, inventory cost adjustments. Join CKMLHD on kalnr for matnr, plant, vendor.",
+    "example_questions": [
+      "Inventory value by material",
+      "Standard price vs periodic price",
+      "Material valuation by year",
+      "Inventory value by period",
+      "Total material ledger value",
+      "Material prices"
+    ],
+    "sql_hints": "CKMLCR: salk3 = inventory value, stprs = standard price, pvprs = periodic unit price. SUM(salk3) for totals. CRITICAL: no matnr column – must join CKMLHD on kalnr to get matnr. Inventory value by material: CKMLCR c JOIN CKMLHD h ON c.kalnr = h.kalnr, SUM(c.salk3) AS inventory_value GROUP BY h.matnr."
+  },
+  "CKMLHD": {
+    "description": "Material ledger header (CO-PC). Master information linking material ledger records to materials, plants, and vendors. Primary key: kalnr.",
+    "primary_key": "kalnr",
+    "important_columns": ["kalnr", "matnr", "bwkey", "lifnr", "vbeln", "posnr", "pspnr"],
+    "amount_columns": [],
+    "date_columns": [],
+    "joins": {
+      "CKMLCR": "kalnr",
+      "CKMLPP": "kalnr",
+      "MARA": "matnr",
+      "LFA1": "lifnr"
+    },
+    "business_meaning": "Material ledger master. Join CKMLCR for values (salk3), CKMLPP for quantities. Use to get inventory value or stock by material (matnr), plant (bwkey), vendor (lifnr).",
+    "example_questions": [
+      "Inventory value by material",
+      "Material ledger materials",
+      "Materials by plant",
+      "Materials supplied by vendor"
+    ],
+    "sql_hints": "CKMLHD: kalnr links to CKMLCR (values: salk3, stprs) and CKMLPP (quantities). Join chain: CKMLHD → CKMLCR or CKMLPP on kalnr. Essential bridge to get matnr from CKMLCR."
+  },
+  "EKPO": {
+    "description": "Purchase order items. Line items of purchase orders (material, quantity, unit price, total value, plant, storage location).",
+    "primary_key": ["ebeln", "ebelp"],
+    "important_columns": ["ebeln", "ebelp", "matnr", "menge", "netpr", "netwr", "werks", "lgort"],
+    "amount_columns": ["netpr", "netwr"],
+    "date_columns": [],
+    "joins": {
+      "EKKO": "ebeln",
+      "MARA": "matnr",
+      "LFA1": "lifnr"
+    },
+    "business_meaning": "PO line items. netwr = total value. Join EKKO on ebeln for vendor, company. Use for purchase totals, by material, by plant, top vendors by value.",
+    "example_questions": [
+      "Purchase totals",
+      "Purchases by material",
+      "Purchases by plant",
+      "Top vendors by purchase value",
+      "Purchase order totals"
+    ],
+    "sql_hints": "EKPO: netwr = line value, netpr = unit price. SUM(netwr) for total purchases. GROUP BY matnr, werks. Join EKKO on ebeln for lifnr, then SUM(p.netwr) GROUP BY e.lifnr for purchase by vendor."
+  },
+  "FAGLFLEXA": {
+    "description": "General ledger line items (SAP New GL). Actual financial postings at line-item level for GL reporting, profit center, cost center, and segment analysis.",
+    "primary_key": ["belnr", "buzei", "gjahr"],
+    "important_columns": ["rbukrs", "racct", "prctr", "rcntr", "segment", "budat", "poper", "hsl", "wsl", "drcrk", "belnr", "docln", "gjahr"],
+    "amount_columns": ["hsl", "wsl", "tsl", "ksl"],
+    "date_columns": ["budat"],
+    "joins": {
+      "SKA1": "racct",
+      "CEPC": "prctr",
+      "CSKS": "rcntr"
+    },
+    "business_meaning": "New GL actual postings. hsl = amount in local currency (primary for aggregation). drcrk: S=debit, H=credit. Use for GL balance by account (racct), profit center P&L (prctr), cost center expenses (rcntr).",
+    "example_questions": [
+      "GL balance by account",
+      "Profit center P&L",
+      "Expenses by cost center",
+      "Revenue by company code",
+      "GL postings by period"
+    ],
+    "sql_hints": "FAGLFLEXA: SUM(hsl) for totals; consider drcrk (S=debit, H=credit) for signed balance. GROUP BY racct, prctr, rcntr, rbukrs, poper, gjahr. Join CEPC on prctr for profit center name. To link costs to customers/products: (1) Join VBRP on prctr (VBRP has prctr, matnr; VBRK has kunag) — aggregate FAGLFLEXA by prctr, join to VBRP/VBRK/KNA1/MAKT for customer and product; (2) Or join BSEG on rbukrs=bukrs, belnr, gjahr when BSEG has kunnr/matnr on same document."
+  },
+  "KNA1": {
+    "description": "Customer master (general data). Name, country, address, industry, language.",
+    "primary_key": "kunnr",
+    "important_columns": ["kunnr", "name1", "name2", "name3", "name4", "land1", "ort01", "pstlz", "regio", "stras", "brsch", "spras", "erdat", "ernam"],
+    "amount_columns": [],
+    "date_columns": ["erdat"],
+    "joins": {
+      "KNVV": "kunnr",
+      "KNVP": "kunnr",
+      "BSAD": "kunnr",
+      "VBAK": "kunnr",
+      "VBRK": "kunnr"
+    },
+    "business_meaning": "Customer master. Join KNVV for sales area data; KNVP for partner functions (sold-to, bill-to, ship-to, payer). Use for customer list, by country, by industry.",
+    "example_questions": [
+      "Customers by country",
+      "Customers by industry",
+      "Customer master list"
+    ],
+    "sql_hints": "KNA1: kunnr = customer. GROUP BY land1, brsch for country/industry. Join KNVV on kunnr for vkorg, vtweg, spart; KNVP for parvw (AG/RE/WE/RG). Use T016T on brsch for industry text (brtxt)."
+  },
+  "KONV": {
+    "description": "Pricing conditions. Condition records used in sales pricing (base price, discounts, tax). Linked via knumv to billing (VBRK) or sales order (VBAK).",
+    "primary_key": ["knumv", "kposn", "stunr", "zaehk"],
+    "important_columns": ["knumv", "kposn", "kschl", "kbetr", "kwert", "waers", "kawrt", "kappl", "kdatu", "krech"],
+    "amount_columns": ["kbetr", "kwert", "kawrt"],
+    "date_columns": ["kdatu"],
+    "joins": {
+      "VBRK": "knumv",
+      "VBAK": "knumv"
+    },
+    "business_meaning": "Pricing condition lines. kschl: PR00=base price, K007=discount, MWST=tax. kwert = condition value. Join VBRK or VBAK on knumv for document header.",
+    "example_questions": [
+      "Discount totals",
+      "Pricing by condition type",
+      "Tax by sales document",
+      "Price conditions for orders"
+    ],
+    "sql_hints": "KONV: Filter kschl = 'K007' for discounts; SUM(kwert) for condition value. GROUP BY kschl for pricing by type. Join VBRK on knumv for billing doc, VBAK for order doc."
+  },
+  "VBRK": {
+    "description": "Billing document header. Invoice header: invoice number, date, sold-to customer, total value.",
+    "primary_key": "vbeln",
+    "important_columns": ["vbeln", "fkdat", "kunag", "netwr", "waerk", "vkorg", "vtweg", "spart", "knumv"],
+    "amount_columns": ["netwr"],
+    "date_columns": ["fkdat"],
+    "joins": {
+      "VBRP": "vbeln",
+      "KNA1": "kunag",
+      "KONV": "knumv"
+    },
+    "customer_column": "kunag",
+    "business_meaning": "Billing header. kunag=sold-to customer, fkdat=invoice date, netwr=invoice value. Use for invoice value by customer.",
+    "example_questions": [
+      "Invoice value by customer",
+      "Invoices by date",
+      "Revenue by customer"
+    ],
+    "sql_hints": "VBRK: SUM(netwr) for invoice value. GROUP BY kunag for customer. PREFERRED for 'by customer' queries: use VBRK.KUNAG directly. Join VBRP on vbeln for item-level matnr, netwr; KNA1 on kunag for name1."
+  },
+  "VBRP": {
+    "description": "Billing document items. Product-level invoice data: material, billed quantity, value, plant.",
+    "primary_key": ["vbeln", "posnr"],
+    "important_columns": ["vbeln", "posnr", "matnr", "fkimg", "netwr", "werks", "prctr", "arktx", "kunnr"],
+    "amount_columns": ["netwr", "netpr"],
+    "date_columns": [],
+    "joins": {
+      "VBRK": "vbeln",
+      "KNA1": "kunnr",
+      "MAKT": "matnr"
+    },
+    "business_meaning": "Billing items. fkimg=billed quantity, netwr=item value. Use for revenue by material, revenue by plant, revenue by profit center.",
+    "example_questions": [
+      "Revenue by material",
+      "Revenue by plant",
+      "Revenue by profit center",
+      "Invoice value by material"
+    ],
+    "sql_hints": "VBRP: SUM(netwr) for revenue, SUM(fkimg) for billed quantity. GROUP BY matnr, werks, prctr. Join VBRK on vbeln for kunag; MAKT on matnr for maktx. VBRP has prctr for profit center; use VBRK.KUNAG for customer."
+  }
+}
