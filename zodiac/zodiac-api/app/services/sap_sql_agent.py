@@ -1494,7 +1494,7 @@ Task:
 - **Plant/master (MARC, on-hand, MRP, slow-moving)**: use MARC, MARA, MAKT when question asks plant-level data, on-hand, MRP parameters, or slow-moving materials.
 - **Costing (KEKO, CKMLCR, CKIS, standard cost, BOM)**: use KEKO, KEPH, CKIS for cost breakdown; CKMLCR for period totals/stock value; STKO, STPO, MAST for BOM/component questions.
 - **Costs of manufacturing / cost by manufacturing / manufacturing cost / manufacturing costs**: use AUFK (internal orders), COEP (actual costs wkgbtr), CSKS (cost center), CRHD (work center), KEKO, CKIS (product cost), MAKT. Join COEP.objnr = AUFK.objnr; AUFK.kostl = CSKS.kostl. SUM(COEP.wkgbtr) for order costs, or SUM(CKIS.wertn) for product cost. Include MAKT for material names.
-- **Profit margin / margin by product / profit margin on certain products**: use VBRP, VBRK, MAKT, CKIS. Revenue from VBRP.NETWR; cost from CKIS (subquery SUM(wertn) by matnr); margin = revenue - cost; margin_pct = 100*margin/revenue. Group by matnr. Always include these four tables.
+- **Profit margin / margin by product / profit margin on certain products**: use VBRP, VBRK, MAKT, and cost from MBEW (STPRS*FKIMG) or CKIS (SUM(wertn) by matnr via MARA→KEKO→CKIS). Revenue from VBRP.NETWR; cost = MBEW.STPRS*VBRP.FKIMG when MBEW available, else CKIS subquery; margin = revenue - cost; margin_pct = 100*margin/revenue. Prefer MBEW when simpler. Group by matnr.
 - **Pricing/conditions (KONV)**: use KONV with VBRK (KNUMV), VBRP, MAKT when question asks for prices, discounts, conditions, PR00, or list price.
 - **Revenue by industry (T016T)**: use KNA1 (BRSCH) and T016T (join KNA1.brsch = T016T.brsch) for industry description; use with VBRK, VBRP.
 - **Customer group / sales area (KNVV)**: use KNVV with KNA1, VBRK, VBRP when question asks customer group (kdgrp), sales org, or distribution channel.
@@ -1669,7 +1669,7 @@ Column mappings (table -> column -> description):
 **Vendor spend / invoice totals:** RBKP, RSEG or EKPO, EKKO; join LFA1 on LIFNR; group by vendor (LIFNR or name); SUM(amount). For "by vendor and year" add EKKO.BEDAT or RBKP year.
 **Standard cost (KEKO, CKMLCR):** KEKO/KEPH/CKIS for cost breakdown; CKMLCR for stprs, salk3 by material. Join MARA, MAKT for material name.
 **Costs of manufacturing / cost by manufacturing / manufacturing cost:** Use AUFK (internal orders), COEP (actual costs wkgbtr), CSKS (cost center), CRHD (work center), KEKO, CKIS (product cost), MAKT. Join COEP.objnr = AUFK.objnr; AUFK.kostl = CSKS.kostl. SUM(COEP.wkgbtr) for costs by order/cost center; or SUM(CKIS.wertn) for product cost. Add MAKT for material names (MAKT.MATNR = CKIS.MATNR or COEP.MATNR).
-**Profit margin by product / profit margin on certain products:** Use VBRP, VBRK, MAKT, CKIS. Revenue = SUM(VBRP.NETWR); cost = subquery from CKIS SUM(wertn) by matnr; margin = revenue - cost; margin_pct = 100*margin/revenue when revenue>0. Group by matnr, maktx; ORDER BY margin DESC; LIMIT 100. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS subquery on MATNR.
+**Profit margin by product / profit margin on certain products:** Use VBRP, VBRK, MAKT. Revenue = SUM(VBRP.NETWR). Cost: prefer MBEW (MBEW.STPRS*VBRP.FKIMG, join VBRP.matnr=MBEW.matnr) when available; else CKIS subquery SUM(wertn) by matnr via MARA→KEKO→CKIS. margin = revenue - cost; margin_pct = 100*margin/revenue when revenue>0. Group by matnr, maktx; ORDER BY margin DESC; LIMIT 100. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR.
 **BOM (STKO, STPO, MAST):** MAST links material to BOM (STLNR); STKO header, STPO has IDNRK (component), MENGE; join STPO.IDNRK to MARA/MAKT for component name.
 **FAGLFLEXA segment / rcntr / rfarea / pprctr:** Use FAGLFLEXA columns segment, rcntr (cost center), rfarea (functional area), pprctr (partner profit center) when question asks for these dimensions; group by prctr and the requested dimension.
 **CKMLPP (variances):** Join CKMLPP to CKMLCR/MARA/MAKT; select material, variance fields (planned vs actual); group by material when question asks materials with large variances.
@@ -2042,7 +2042,6 @@ def _build_minimal_resb_spec(
     return spec
 
 
-
 def _build_minimal_marc_spec(
     question: str,
     selected_tables: List[str],
@@ -2109,6 +2108,7 @@ def _build_minimal_marc_spec(
     }
     return spec
 
+    
 
 def _resolve_faglflexa_table_and_mappings(db: Session) -> Tuple[Optional[str], Dict[str, Dict[str, str]]]:
     """
@@ -2542,7 +2542,7 @@ def run_adaptive_sap_sql_agent(
             elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor", "vendor balance", "lfb1", "invoice amount", "ap aging", "payables", "rmwwr", "matkl", "pareto", "80%", "lead time", "ekorg")):
                 selected_tables = ["LFA1", "EKKO", "EKPO", "RBKP", "RSEG"]
             elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain", "margin analysis", "profit margin on certain products")):
-                selected_tables = ["VBRP", "VBRK", "MAKT", "CKIS"]
+                selected_tables = ["VBRP", "VBRK", "MAKT", "MBEW", "CKIS"]
             elif any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs", "cost by manufacturing", "cost of manufacturings")):
                 selected_tables = ["AUFK", "COEP", "CSKS", "CRHD", "KEKO", "CKIS", "MAKT"]
             elif any(x in q_lower for x in ("margin", "profitability", "revenue minus cost", "improving margin", "margin year over year", "margin trend", "products with improving")):
@@ -2612,7 +2612,7 @@ def run_adaptive_sap_sql_agent(
                 elif "delivery" in intents:
                     selected_tables = ["LIKP", "LIPS", "VBRP", "KNA1"]
                 elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain", "margin analysis")):
-                    selected_tables = ["VBRP", "VBRK", "MAKT", "CKIS"]
+                    selected_tables = ["VBRP", "VBRK", "MAKT", "MBEW", "CKIS"]
                 elif any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs", "cost by manufacturing")):
                     selected_tables = ["AUFK", "COEP", "CSKS", "CRHD", "KEKO", "CKIS", "MAKT"]
                 elif "margin" in intents or "profit" in intents:
@@ -2881,7 +2881,7 @@ Task:
   * SELECT T016T.brtxt for industry name (not KNA1.brsch which is just a code).
   * Do NOT add T016T for questions about products, customers, or sales alone.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
-- **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from EKPO.NETWR or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
+- **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from MBEW.STPRS*VBRP.FKIMG (prefer), or EKPO.NETWR, or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If MBEW/EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
 - **Profit margin by product / profit margin on certain products**: Use VBRP, VBRK, MAKT, CKIS. Revenue = SUM(VBRP.NETWR); cost = subquery from CKIS SUM(wertn) by matnr; margin = revenue - cost; margin_pct = 100*margin/revenue when revenue>0. Group by matnr, maktx; ORDER BY margin DESC; LIMIT 100. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS subquery on MATNR.
 - **Costs of manufacturing / cost of manufacturing / manufacturing cost**: Use CKIS and MAKT only. Select matnr, MAKTX, SUM(wertn) as total_cost_value, hwaer; GROUP BY matnr, maktx, hwaer; ORDER BY total_cost_value DESC; LIMIT 20. This is cost data by material — do NOT filter by product name (manufacturing is the concept, not a product).
 - **Cost of a specific product (e.g. a jacket)**: when the question is "cost of X" or "price of X":
@@ -3919,7 +3919,7 @@ def run_schema_driven_sql_agent(
                 if tables:
                     logger.info("schema_driven_agent: manufacturing-cost intent fallback tables: %s", tables)
             elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain products")):
-                tables = [available_upper[t] for t in ("VBRP", "VBRK", "MAKT", "CKIS") if t in available_upper]
+                tables = [available_upper[t] for t in ("VBRP", "VBRK", "MAKT", "MBEW", "CKIS") if t in available_upper]
                 if tables:
                     logger.info("schema_driven_agent: profit-margin intent fallback tables: %s", tables)
             elif _is_purchase_order_question(question):
