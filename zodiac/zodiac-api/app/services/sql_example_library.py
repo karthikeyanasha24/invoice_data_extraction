@@ -467,6 +467,20 @@ SELECT m.maktx AS material_name, rs.matnr AS material_number, SUM(rs.bdmng) AS r
 SELECT vk.vbeln AS invoice_number, vk.fkdat AS billing_date, vk.kunag AS customer_number, CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount, vk.waerk AS currency, vk.vkorg AS sales_org, vk.fkart AS invoice_type FROM VBRK vk WHERE vk.fkdat IS NOT NULL ORDER BY vk.fkdat DESC LIMIT 200
 '''.strip(),
     },
+    # ── Profit margin by product (VBRP + CKIS) ──────────────────────────────
+    {
+        "user_query": "What was the profit margin on certain products?",
+        "sql_query": '''
+SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, COALESCE(c.total_cost, 0) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0) AS margin, CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN ROUND(100.0 * (SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0)) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2) ELSE NULL END AS margin_pct FROM vbrp v LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) AS total_cost FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.matnr, m.maktx, c.total_cost ORDER BY margin DESC NULLS LAST LIMIT 100
+'''.strip(),
+    },
+    # ── Costs of manufacturing (CKIS) ───────────────────────────────────────
+    {
+        "user_query": "Costs of manufacturing",
+        "sql_query": '''
+SELECT m.maktx AS material_name, ci.matnr AS material_number, SUM(ci.wertn) AS total_cost_value, ci.hwaer AS currency FROM CKIS ci LEFT JOIN MAKT m ON ci.matnr = m.matnr AND m.spras = 'E' WHERE ci.matnr IS NOT NULL AND ci.wertn IS NOT NULL GROUP BY ci.matnr, m.maktx, ci.hwaer HAVING SUM(ci.wertn) > 0 ORDER BY total_cost_value DESC LIMIT 20
+'''.strip(),
+    },
 ]
 
 
@@ -532,6 +546,10 @@ def get_sql_examples_for_question(
         (["reservation", "reserved", "material", "quantity", "resb", "bdmng", "highest reserved"], 27),
         # Recent invoices list
         (["recent invoices", "list invoices", "all invoices", "billing documents", "latest invoices"], 28),
+        # Profit margin by product
+        (["profit margin", "margin", "profitability", "revenue vs cost", "certain products", "margin by product"], 29),
+        # Costs of manufacturing
+        (["costs of manufacturing", "manufacturing cost", "cost of manufacturing", "ckis", "production cost"], 30),
     ]
 
     for kw, idx in keywords_map:
