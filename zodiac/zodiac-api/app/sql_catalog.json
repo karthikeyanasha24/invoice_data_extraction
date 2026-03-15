@@ -3309,5 +3309,37 @@
     "tables": ["VBRK", "vbrp", "KNA1"],
     "priority": 2,
     "sql": "SELECT vk.kunag AS customer_number, COALESCE(k.name1, '') AS customer_name, COUNT(*) AS complaint_count, STRING_AGG(DISTINCT TRIM(v.compreas), ', ') AS complaint_reasons FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN kna1 k ON TRIM(vk.kunag) = TRIM(k.kunnr) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY vk.kunag, k.name1 ORDER BY complaint_count DESC LIMIT 100"
+  },
+  {
+    "id": "complaints_by_reason",
+    "description": "Complaint count by complaint reason (compreas)",
+    "question_patterns": [
+      "complaints by reason",
+      "complaint reasons breakdown",
+      "what are the complaint reasons",
+      "breakdown by complaint reason",
+      "complaint count by reason",
+      "which complaint reasons are most common"
+    ],
+    "keywords": ["complaint", "reason", "compreas", "breakdown", "by reason"],
+    "neg_keywords": ["customer", "client"],
+    "tables": ["vbrp", "VBRK"],
+    "priority": 2,
+    "sql": "SELECT TRIM(v.compreas) AS complaint_reason, COUNT(*) AS complaint_count, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_value FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY TRIM(v.compreas) ORDER BY complaint_count DESC LIMIT 50"
+  },
+  {
+    "id": "open_reservations_by_material",
+    "description": "Open (unfulfilled) reservation quantity by material (bdmng - enmng)",
+    "question_patterns": [
+      "open reservations by material",
+      "unfulfilled reservations by material",
+      "pending reservations by material",
+      "reserved but not issued by material"
+    ],
+    "keywords": ["open", "reservation", "unfulfilled", "pending", "resb", "bdmng", "enmng"],
+    "neg_keywords": [],
+    "tables": ["RESB", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT r.matnr, COALESCE(m.maktx, r.matnr) AS material_name, r.werks AS plant, SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) - SUM(CAST(COALESCE(r.enmng, 0) AS NUMERIC)) AS open_reserved_qty, r.meins AS unit FROM RESB r LEFT JOIN MAKT m ON TRIM(r.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE r.matnr IS NOT NULL AND TRIM(r.matnr) != '' GROUP BY r.matnr, m.maktx, r.werks, r.meins HAVING SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) - SUM(CAST(COALESCE(r.enmng, 0) AS NUMERIC)) > 0 ORDER BY open_reserved_qty DESC LIMIT 50"
   }
 ]
