@@ -53,7 +53,15 @@
         "Show revenue split by Incoterms (VBRK.inco1, inco2)",
         "What is the total sales?",
         "Sales by year",
-        "Revenue by country"
+        "Revenue by country",
+        "How much complaints are from the client",
+        "Complaints by customer",
+        "Show complaints from clients",
+        "Which customers have the most complaints",
+        "List complaints by customer",
+        "Complaints by reason",
+        "What are the complaint reasons",
+        "Breakdown by complaint reason"
       ]
     },
     "3_pricing_conditions_konv": {
@@ -207,12 +215,21 @@
       "questions": [
         "Show total stock movements by material from MKPF and RESB",
         "List materials with the highest total quantity reserved in RESB",
+        "Materials with highest total quantity reserved in RESB",
+        "List materials with highest total quantity reserved in RESB",
+        "Highest quantity reserved by material",
         "Show total quantity issued from inventory by material based on MKPF movements",
         "Which materials have the largest discrepancy between reserved quantity in RESB and delivered quantity in LIPS?",
         "List materials with no movements in the last 12 months using MKPF posting dates",
         "Show materials with the highest on-hand quantities in plant master MARC",
         "List slow-moving materials based on low movement quantities in MKPF over the last three years",
-        "Show total stock value by material and plant using MARC and valuation fields"
+        "Show total stock value by material and plant using MARC and valuation fields",
+        "What materials are reserved",
+        "Reserved quantity by material",
+        "Top reserved materials",
+        "Open reservations by material",
+        "Unfulfilled reservations by material",
+        "Pending reservations by material"
       ]
     },
     "10_costing_bom": {
@@ -270,6 +287,23 @@
         "Show key KPIs: total revenue, total cost, margin, and top 10 customers for the current year",
         "List any materials that appear in sales (VBRP) but not in purchasing (EKPO)",
         "List any materials that appear in purchasing but have never been sold"
+      ]
+    },
+    "14_invoice_listing": {
+      "description": "Invoice lists, billing documents (VBRK, VBRP, KNA1, MAKT)",
+      "questions": [
+        "Show recent invoices",
+        "List all invoices",
+        "Show all billing documents",
+        "Recent billing documents",
+        "Latest invoices",
+        "Show invoices with customer names",
+        "List invoices with payer names",
+        "Show invoices with product names",
+        "Invoices with payer names by industry",
+        "List invoices by industry with customer names",
+        "Show full invoice details",
+        "Invoice details with customer and product"
       ]
     },
     "13_casual_user_phrasing": {
