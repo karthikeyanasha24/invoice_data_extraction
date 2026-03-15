@@ -13,6 +13,7 @@
   "metric_phrases": {
     "sales value": "sales_value",
     "sales": "sales_value",
+    "sales trend": "sales_value",
     "revenue": "sales_value",
     "highest sales": "sales_value",
     "invoice value": "invoice_value",
@@ -29,8 +30,19 @@
     "purchase value": "purchase_value",
     "purchase cost": "purchase_value",
     "purchase amount": "purchase_value",
+    "purchased quantity": "purchase_quantity",
+    "purchase quantity": "purchase_quantity",
+    "purchase order total": "purchase_value",
+    "purchase order totals": "purchase_value",
+    "po total": "purchase_value",
+    "po totals": "purchase_value",
     "vendor spend": "purchase_value",
+    "procurement spend": "purchase_value",
     "vendor invoice": "vendor_invoice",
+    "vendor invoice total": "vendor_invoice",
+    "vendor invoice totals": "vendor_invoice",
+    "top vendors by invoice": "vendor_invoice",
+    "invoice value by vendor": "vendor_invoice",
     "gl amount": "gl_amount",
     "cost by profit center": "cost_by_profit_center",
     "cost": "gl_amount",
@@ -58,6 +70,7 @@
     "products": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
     "material": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
     "materials": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "material_ekpo": { "table": "EKPO", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
     "customer": { "table": "VBRK", "column": "kunag", "dimension_column": "kunag", "name_table": "KNA1", "name_column": "name1", "entity": "customer", "name_join_key": "kunnr" },
     "customers": { "table": "VBRK", "column": "kunag", "dimension_column": "kunag", "name_table": "KNA1", "name_column": "name1", "entity": "customer", "name_join_key": "kunnr" },
     "vendor": { "table": "LFA1", "column": "lifnr", "dimension_column": "lifnr", "name_column": "name1", "entity": "vendor" },
@@ -72,7 +85,9 @@
     "customer group": { "table": "KNVV", "column": "kdgrp", "dimension_column": "kdgrp", "entity": "customer" },
     "sales org": { "table": "VBRK", "column": "vkorg", "dimension_column": "vkorg", "entity": "sales" },
     "distribution channel": { "table": "VBRK", "column": "vtweg", "dimension_column": "vtweg", "entity": "sales" },
-    "material group": { "table": "MARA", "column": "matkl", "dimension_column": "matkl", "entity": "material" }
+    "material group": { "table": "MARA", "column": "matkl", "dimension_column": "matkl", "entity": "material" },
+    "year": { "table": "VBRK", "column": "gjahr", "dimension_column": "gjahr", "entity": "sales" },
+    "years": { "table": "VBRK", "column": "gjahr", "dimension_column": "gjahr", "entity": "sales" }
   },
   "entities": {
     "vendor": {
@@ -208,7 +223,9 @@
     { "left_table": "RESB", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
     { "left_table": "CKMLCR", "right_table": "CKMLHD", "left_key": "kalnr", "right_key": "kalnr" },
     { "left_table": "CKMLHD", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
-    { "left_table": "VBRK", "right_table": "KNVV", "left_key": "kunag", "right_key": "kunnr" }
+    { "left_table": "VBRK", "right_table": "KNVV", "left_key": "kunag", "right_key": "kunnr" },
+    { "left_table": "MARA", "right_table": "MBEW", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "MBEW", "left_key": "matnr", "right_key": "matnr" }
   ],
   "metrics": {
     "delivery_quantity": {
