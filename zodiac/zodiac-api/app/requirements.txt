@@ -1,13 +1,44 @@
+# Core FastAPI
 fastapi==0.118.3
 uvicorn==0.37.0
+
+# Database
 sqlalchemy==2.0.44
-python-dotenv==1.1.1
-openai==2.6.1
+asyncpg==0.29.0
 psycopg2-binary==2.9.11
+
+# Authentication & Security
 passlib[bcrypt]==1.7.4
 python-jose==3.5.0
-requests==2.32.3
+
+# HTTP Clients
+requests>=2.32.5
+httpx==0.27.0
+
+# File Processing
 python-multipart
 vercel-blob
 lxml
 reportlab==4.0.9
+
+# Data Processing (for Excel upload)
+# Using openpyxl directly (lighter than pandas, works on Vercel)
+openpyxl>=3.1.0
+
+# SFTP for customer file delivery
+paramiko>=3.4.0
+cryptography>=42.0.0
+
+# AI Models
+python-dotenv==1.1.1
+openai>=1.12.0
+google-generativeai>=0.8.0
+anthropic>=0.18.0
+
+# Optional: Langchain (if needed)
+# Uncomment if you're using langchain features
+# langchain-core==0.3.72
+# langchain==0.3.27
+# langchain-community==0.3.29
+# langchain-experimental==0.3.4
+
