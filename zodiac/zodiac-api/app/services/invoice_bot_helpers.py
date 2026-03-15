@@ -42,6 +42,8 @@ TABLE_DESCRIPTIONS = get_table_descriptions
 # Constants (invoice-bot config parity)
 REVENUE_BILLING_CATEGORIES = ("A", "B", "C", "D", "E", "I", "L", "W")
 DATE_COLUMNS = {"FKDAT", "BUDAT", "BLDAT", "ZBDAT", "GSTRP"}
+# Year/period columns: store 4-digit year (GJAHR, RYEAR) or period 01-12 (POPER). Do NOT convert to date range.
+YEAR_PERIOD_COLUMNS = {"GJAHR", "RYEAR", "BDATJ", "POPER"}
 INDUSTRY_SECTOR_LABELS = {
     "1": "Sector 1",
     "A": "Plant engineering and construction",
@@ -147,7 +149,8 @@ def convert_date_to_yyyymmdd(date_str: str) -> str:
 
 
 def fix_date_filters(json_spec: dict) -> dict:
-    """Normalize date filters: single year -> >= YYYY0101 and <= YYYY1231; year range -> full dates."""
+    """Normalize date filters: single year -> >= YYYY0101 and <= YYYY1231 for date columns;
+    for GJAHR/RYEAR/BDATJ keep as = 'YYYY'; for POPER keep as = 'MM'. Year range -> full dates."""
     if not json_spec or "filters" not in json_spec:
         return json_spec
     new_filters = []
@@ -156,7 +159,25 @@ def fix_date_filters(json_spec: dict) -> dict:
         op = (filt.get("operator") or "=").strip()
         rhs_raw = (str(filt.get("rhs") or "").strip()).strip("'\"")
         col = lhs.split(".")[-1].strip() if "." in lhs else lhs
-        if col.upper() in DATE_COLUMNS:
+        col_upper = col.upper()
+        # Year columns (GJAHR, RYEAR, BDATJ): store 4-digit year, use = 'YYYY' not date range
+        if col_upper in {"GJAHR", "RYEAR", "BDATJ"}:
+            if not rhs_raw or rhs_raw.upper() in ("NULL", "NONE", "''"):
+                continue
+            if re.match(r"^\d{4}$", rhs_raw):
+                new_filters.append({"lhs": lhs, "operator": "=", "rhs": f"'{rhs_raw}'"})
+                continue
+        # Period column (POPER): 01-12, normalize single digit (5 -> 05)
+        if col_upper == "POPER":
+            if rhs_raw:
+                m = re.match(r"^(\d{1,2})$", rhs_raw)
+                if m:
+                    p_val = int(m.group(1))
+                    if 1 <= p_val <= 12:
+                        new_filters.append({"lhs": lhs, "operator": "=", "rhs": f"'{p_val:02d}'"})
+                        continue
+        # Date columns: convert 4-digit year to date range
+        if col_upper in DATE_COLUMNS:
             if not rhs_raw or rhs_raw.upper() in ("NULL", "NONE", "''"):
                 continue
             if re.match(r"^\d{4}$", rhs_raw):
