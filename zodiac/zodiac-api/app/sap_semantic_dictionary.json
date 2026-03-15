@@ -55,6 +55,8 @@
     "profit margin": "profit_margin",
     "margin analysis": "profit_margin",
     "profitability": "profit_margin",
+    "profit margin for all products": "profit_margin",
+    "margin for all products": "profit_margin",
     "reserved quantity": "reserved_quantity",
     "reservation": "reserved_quantity",
     "stock value": "stock_value",
