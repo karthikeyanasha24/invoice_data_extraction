@@ -121,7 +121,9 @@
     "WRBTR": "Amount in transaction currency (BSAD, BSEG) \u2013entials",
     "RMWWR": "Gross invoice amount in RBKP (vendor invoice header) \u2013 total invoice value",
     "SALK3": "Stock value in CKMLCR \u2013 total inventory value for the period",
-    "PVPRS": "Moving average price in CKMLCR \u2013 actual periodic price"
+    "PVPRS": "Moving average price in CKMLCR \u2013 actual periodic price",
+    "BDMNG": "Reserved quantity in RESB \u2013 use SUM(bdmng) for total reserved quantity by material. Join RESB to MAKT on matnr for material names.",
+    "ENMNG": "Issued/withdrawn quantity in RESB \u2013 quantity already withdrawn from reservation. Open qty = bdmng - enmng."
   },
   "table_semantic_hints": {
     "VBRP": "Billing document item \u2013 sales by product, amounts, quantities, compreas (complaint reason). Join VBRK for header, KNA1 for customer. Use compreas for complaint/claim analysis.",
@@ -165,7 +167,7 @@
     "MARM": "Material units of measure \u2013 conversion factors and GTINs.",
     "MEAN": "Material EAN/UPC codes \u2013 barcode mapping for materials.",
     "MKPF": "Material document header \u2013 goods movement header (posting date).",
-    "RESB": "Reservations \u2013 reserved quantities by material, plant, and order.",
+    "RESB": "Reservations \u2013 reserved quantities by material, plant, and order. Key columns: bdmng (reserved qty), enmng (issued qty), matnr, werks. Use SUM(bdmng) for total reserved; join MAKT on matnr for material names. For 'highest reserved by material': GROUP BY matnr, HAVING SUM(bdmng) > 0 ORDER BY reserved DESC.",
     "LSEG": "Warehouse document segment \u2013 WM quantities and locations.",
     "CKMLCR": "Material ledger cumulative values \u2013 periodic actual costs. Key columns: kalnr (join to CKMLHD for matnr), stprs (standard/periodic price), salk3 (stock value), waers, poper (period), bdatj (year). CRITICAL: no matnr column \u2013 must join CKMLHD on kalnr to get matnr.",
     "CKMLHD": "Material ledger header \u2013 bridge table linking kalnr (costing number) to matnr (material) and bwkey (plant). Essential for joining CKMLCR to material descriptions.",
@@ -359,6 +361,12 @@
       "right": "MAKT",
       "on": "EBAN.MATNR = MAKT.MATNR",
       "note": "Purchase requisition to material description"
+    },
+    {
+      "left": "RESB",
+      "right": "MAKT",
+      "on": "RESB.MATNR = MAKT.MATNR",
+      "note": "Reservation to material description"
     },
     {
       "left": "FAGLFLEXA",
