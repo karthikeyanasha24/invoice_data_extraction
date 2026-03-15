@@ -666,22 +666,6 @@ If result is empty, say so and suggest a refined question.
         logger.warning("Procurement-from-list check failed: %s", proc_err)
 
     if result is None:
-        # 0) Fast path: try sql_catalog first for common table-specific and analytical queries
-        try:
-            from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
-            catalog_sql = _lookup_sql_catalog(user_query)
-            if catalog_sql:
-                quoted_sql = _quote_catalog_sql_tables(catalog_sql)
-                catalog_rows = _run_sql(sql_db, quoted_sql)
-                if catalog_rows:
-                    result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
-                    logger.info("SQL catalog fast-path returned %d rows for: %r", len(catalog_rows), user_query[:60])
-                else:
-                    logger.info("SQL catalog matched but returned 0 rows; trying LLM path for: %r", user_query[:60])
-        except Exception as catalog_err:
-            logger.warning("SQL catalog fast-path failed (will try LLM): %s", catalog_err)
-
-    if result is None:
         # 1) Schema-driven agent: LLM reads schema → selects tables → generates SQL (no keyword rules).
         try:
             result = run_schema_driven_sql_agent(user_query, sql_db, few_shot_examples=_few_shot)
@@ -774,6 +758,20 @@ If result is empty, say so and suggest a refined question.
                             result = type(result)(sql=fallback_sql_all, rows=fallback_rows)
         except Exception as fallback_err:
             logger.warning("Product performance fallback failed: %s", fallback_err)
+
+    if not result or not result.rows:
+        # Catalog fallback: when all LLM paths and other fallbacks failed, try pre-built sql_catalog.
+        try:
+            from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+            catalog_sql = _lookup_sql_catalog(user_query)
+            if catalog_sql:
+                quoted_sql = _quote_catalog_sql_tables(catalog_sql)
+                catalog_rows = _run_sql(sql_db, quoted_sql)
+                if catalog_rows:
+                    result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
+                    logger.info("SQL catalog fallback returned %d rows for: %r", len(catalog_rows), user_query[:60])
+        except Exception as catalog_err:
+            logger.debug("SQL catalog fallback failed: %s", catalog_err)
 
     if not result or not result.rows:
         q_lower = (user_query or "").lower()
