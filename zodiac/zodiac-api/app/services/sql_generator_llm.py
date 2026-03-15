@@ -13,11 +13,25 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 
-def _get_semantic_context() -> str:
-    """Semantic dictionary context for the LLM (entities, metrics, joins, templates)."""
+def _get_semantic_context(question: Optional[str] = None) -> str:
+    """Semantic dictionary context for the LLM (entities, metrics, joins, templates).
+    When question is margin/profitability-related, appends margin semantic context."""
     try:
         from .query_resolver import get_semantic_context_for_prompt
-        return get_semantic_context_for_prompt()
+        block = get_semantic_context_for_prompt()
+        if question:
+            try:
+                from .premium_analysis_service import (
+                    is_margin_or_profitability_question,
+                    get_margin_semantic_context,
+                )
+                if is_margin_or_profitability_question(question):
+                    margin_ctx = get_margin_semantic_context()
+                    if margin_ctx:
+                        block = (block or "") + "\n\n" + margin_ctx
+            except Exception:
+                pass
+        return block or ""
     except Exception:
         return ""
 
@@ -43,7 +57,7 @@ def generate_sql(
         for q, sql in similar_examples[:3]:
             examples_block += f"\nQuestion: {q}\nSQL:\n{sql}\n"
 
-    semantic_block = _get_semantic_context()
+    semantic_block = _get_semantic_context(question)
     if semantic_block:
         semantic_block = semantic_block + "\n\n"
 
