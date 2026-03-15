@@ -1,5 +1,79 @@
 {
   "_comment": "Universal SAP semantic dictionary: entities, joins, metrics, templates. Used for intent→table→column→SQL resolution.",
+  "intent_keywords": {
+    "sales": ["sales", "revenue", "product", "customer", "highest sales", "top products", "top customers"],
+    "billing": ["invoice", "invoices", "billing", "invoice value", "invoice by customer"],
+    "purchasing": ["vendor", "supplier", "purchase", "PO", "vendor spend", "vendor invoice"],
+    "logistics": ["delivery", "deliveries", "delivered", "route", "stock movement"],
+    "finance": ["cost", "profit center", "cost center", "GL", "posting", "expense"],
+    "pricing": ["discount", "price", "condition", "margin"],
+    "inventory": ["stock", "inventory", "warehouse", "reservation"],
+    "margin": ["margin", "revenue vs cost", "compare sales vs", "compare revenue"]
+  },
+  "metric_phrases": {
+    "sales value": "sales_value",
+    "sales": "sales_value",
+    "revenue": "sales_value",
+    "highest sales": "sales_value",
+    "invoice value": "invoice_value",
+    "invoice amount": "invoice_value",
+    "billing value": "invoice_value",
+    "order value": "order_value",
+    "order amount": "order_value",
+    "delivery value": "delivery_value",
+    "delivery quantity": "delivery_quantity",
+    "delivered quantity": "delivery_quantity",
+    "invoice quantity": "invoice_quantity",
+    "billed quantity": "billing_quantity",
+    "order quantity": "order_quantity",
+    "purchase value": "purchase_value",
+    "purchase cost": "purchase_value",
+    "purchase amount": "purchase_value",
+    "vendor spend": "purchase_value",
+    "vendor invoice": "vendor_invoice",
+    "gl amount": "gl_amount",
+    "cost by profit center": "cost_by_profit_center",
+    "cost": "gl_amount",
+    "stock": "warehouse_stock",
+    "inventory": "warehouse_stock",
+    "profit margin": "profit_margin",
+    "margin analysis": "profit_margin",
+    "profitability": "profit_margin",
+    "reserved quantity": "reserved_quantity",
+    "reservation": "reserved_quantity",
+    "stock value": "stock_value",
+    "inventory value": "stock_value",
+    "standard cost": "cost_estimate_value",
+    "AR balance": "ar_balance",
+    "open AR": "ar_balance",
+    "receivables": "ar_balance",
+    "pricing condition": "pricing_condition",
+    "base price": "pricing_condition",
+    "discount": "pricing_condition",
+    "average unit price": "average_unit_price",
+    "netpr": "average_unit_price"
+  },
+  "dimension_aliases": {
+    "product": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "products": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "material": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "materials": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "customer": { "table": "VBRK", "column": "kunag", "dimension_column": "kunag", "name_table": "KNA1", "name_column": "name1", "entity": "customer", "name_join_key": "kunnr" },
+    "customers": { "table": "VBRK", "column": "kunag", "dimension_column": "kunag", "name_table": "KNA1", "name_column": "name1", "entity": "customer", "name_join_key": "kunnr" },
+    "vendor": { "table": "LFA1", "column": "lifnr", "dimension_column": "lifnr", "name_column": "name1", "entity": "vendor" },
+    "vendors": { "table": "LFA1", "column": "lifnr", "dimension_column": "lifnr", "name_column": "name1", "entity": "vendor" },
+    "country": { "table": "KNA1", "column": "land1", "dimension_column": "land1", "entity": "customer" },
+    "countries": { "table": "KNA1", "column": "land1", "dimension_column": "land1", "entity": "customer" },
+    "industry": { "table": "KNA1", "column": "brsch", "dimension_column": "brsch", "name_table": "T016T", "name_column": "brtxt", "entity": "customer", "name_join_key": "brsch" },
+    "profit center": { "table": "FAGLFLEXA", "column": "prctr", "dimension_column": "prctr", "name_table": "CEPC", "name_column": "name1", "entity": "finance" },
+    "profit_center": { "table": "FAGLFLEXA", "column": "prctr", "dimension_column": "prctr", "name_table": "CEPC", "name_column": "name1", "entity": "finance" },
+    "plant": { "table": "VBRP", "column": "werks", "dimension_column": "werks", "entity": "sales" },
+    "plants": { "table": "VBRP", "column": "werks", "dimension_column": "werks", "entity": "sales" },
+    "customer group": { "table": "KNVV", "column": "kdgrp", "dimension_column": "kdgrp", "entity": "customer" },
+    "sales org": { "table": "VBRK", "column": "vkorg", "dimension_column": "vkorg", "entity": "sales" },
+    "distribution channel": { "table": "VBRK", "column": "vtweg", "dimension_column": "vtweg", "entity": "sales" },
+    "material group": { "table": "MARA", "column": "matkl", "dimension_column": "matkl", "entity": "material" }
+  },
   "entities": {
     "vendor": {
       "tables": ["LFA1", "LFB1", "LFM1"],
@@ -122,8 +196,19 @@
     { "left_table": "VBAP", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
     { "left_table": "VBRP", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
     { "left_table": "VBRP", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "VBRP", "right_table": "FAGLFLEXA", "left_key": "prctr", "right_key": "prctr" },
     { "left_table": "FAGLFLEXA", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
-    { "left_table": "LIKP", "right_table": "KNA1", "left_key": "kunnr", "right_key": "kunnr" }
+    { "left_table": "KNA1", "right_table": "T016T", "left_key": "brsch", "right_key": "brsch" },
+    { "left_table": "RBKP", "right_table": "LFA1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "VBRP", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "KEKO", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "CKIS", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "KEKO", "right_table": "CKIS", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "LIKP", "right_table": "KNA1", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "RESB", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "CKMLCR", "right_table": "CKMLHD", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "CKMLHD", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRK", "right_table": "KNVV", "left_key": "kunag", "right_key": "kunnr" }
   ],
   "metrics": {
     "delivery_quantity": {
@@ -216,6 +301,18 @@
       "aggregation": "SUM",
       "aliases": ["purchase order totals", "PO totals", "PO value", "vendor spend by material"]
     },
+    "purchase_cost": {
+      "table": "EKPO",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["purchase cost", "PO cost", "procurement cost", "menge * netpr"]
+    },
+    "vendor_invoice": {
+      "table": "RBKP",
+      "column": "rmwwr",
+      "aggregation": "SUM",
+      "aliases": ["vendor invoice", "vendor invoice totals", "invoice value by vendor", "top vendors by invoice"]
+    },
     "actual_cost": {
       "table": "COEP",
       "column": "wkgbtr",
@@ -227,6 +324,45 @@
       "column": "wertn",
       "aggregation": "SUM",
       "aliases": ["cost estimate", "product cost", "cost component"]
+    },
+    "revenue": {
+      "table": "VBRP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["revenue", "sales revenue", "billing revenue", "sales value"]
+    },
+    "cost": {
+      "table": "CKIS",
+      "column": "wertn",
+      "aggregation": "SUM",
+      "join_path": ["VBRP.matnr", "MARA.matnr", "KEKO.matnr", "KEKO.kalnr", "CKIS.kalnr"],
+      "aliases": ["product cost", "cost of goods", "manufacturing cost", "standard cost"]
+    },
+    "profit_margin": {
+      "formula": "(revenue - cost) / revenue",
+      "components": {
+        "revenue": { "metric": "revenue", "table": "VBRP", "column": "netwr" },
+        "cost": { "metric": "cost", "table": "CKIS", "column": "wertn", "join_via": ["MARA", "KEKO"] }
+      },
+      "aliases": ["profit margin", "margin", "margin analysis", "profitability", "revenue minus cost", "gross margin"]
+    },
+    "reserved_quantity": {
+      "table": "RESB",
+      "column": "bdmng",
+      "aggregation": "SUM",
+      "aliases": ["reserved quantity", "reservation quantity", "total reserved", "reserved qty"]
+    },
+    "stock_value": {
+      "table": "CKMLCR",
+      "column": "salk3",
+      "aggregation": "SUM",
+      "aliases": ["stock value", "inventory value", "total stock value"]
+    },
+    "ar_balance": {
+      "table": "BSAD",
+      "column": "dmbtr",
+      "aggregation": "SUM",
+      "aliases": ["AR balance", "open AR", "receivables", "customer balance"]
     }
   },
   "dimensions": {
@@ -254,6 +390,8 @@
     "sum_by_dimension": "SELECT {dimension}, SUM({metric}) AS total FROM {table} GROUP BY {dimension} ORDER BY total DESC LIMIT 100",
     "sum_by_dimension_with_name": "SELECT a.{dimension}, b.{name_column} AS name, SUM(a.{metric}) AS total FROM {table} a LEFT JOIN {name_table} b ON a.{join_key} = b.{join_key} GROUP BY a.{dimension}, b.{name_column} ORDER BY total DESC LIMIT 100",
     "total_metric": "SELECT SUM({metric}) AS total FROM {table} LIMIT 1",
+    "top_n": "SELECT {dimension}, SUM({metric}) AS value FROM {table} GROUP BY {dimension} ORDER BY value DESC LIMIT {n}",
+    "comparison_two_metrics": "SELECT {dimension}, SUM({metric1}) AS {alias1}, SUM({metric2}) AS {alias2} FROM {table1} t1 JOIN {table2} t2 ON t1.{join_key} = t2.{join_key} GROUP BY {dimension} ORDER BY {alias1} DESC LIMIT 100",
     "list_entities": "SELECT {key}, {name_column} FROM {table} ORDER BY {name_column} LIMIT 100"
   },
   "fallback_rules": {
