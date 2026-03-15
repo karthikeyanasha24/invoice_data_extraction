@@ -114,6 +114,110 @@ def resolve_deterministic_sql(
             return _quote(schema_table_case[t.upper()])
         return _quote(t)
 
+    # 0) Profit margin by product/customer/country (REQUIRED - runs before other patterns)
+    margin_phrases = ("profit margin", "margin by product", "product profitability", "margin by customer",
+                      "contribution margin", "gross margin", "customer profitability", "top profitable",
+                      "profit by customer", "profit by country", "margin by country")
+    if any(m in q for m in margin_phrases):
+        if ok("VBRP") and ok("VBRK"):
+            # Dimension: product (default), customer, or country
+            by_customer = "customer" in q or "margin by customer" in q or "profit by customer" in q or "customer profitability" in q
+            by_country = "country" in q or "margin by country" in q or "profit by country" in q
+            # Prefer MBEW (standard price) when available; else CKIS (cost estimate)
+            if ok("MBEW"):
+                cost_expr = (
+                    f"(SELECT COALESCE(b2.{_quote('stprs')}, 0) FROM {tbl('MBEW')} b2 "
+                    f"WHERE b2.{_quote('matnr')} = v.{_quote('matnr')} LIMIT 1)"
+                )
+                if by_customer and ok("KNA1"):
+                    sql = (
+                        f"SELECT COALESCE(n.{_quote('name1')}, r.{_quote('kunag')}) AS customer, "
+                        f"SUM(v.{_quote('netwr')}) AS revenue, "
+                        f"SUM({cost_expr} * v.{_quote('fkimg')}) AS cost, "
+                        f"SUM(v.{_quote('netwr')}) - SUM({cost_expr} * v.{_quote('fkimg')}) AS profit, "
+                        f"CASE WHEN SUM(v.{_quote('netwr')}) <> 0 THEN "
+                        f"((SUM(v.{_quote('netwr')}) - SUM({cost_expr} * v.{_quote('fkimg')})) / SUM(v.{_quote('netwr')})) * 100 ELSE NULL END AS margin "
+                        f"FROM {tbl('VBRP')} v "
+                        f"JOIN {tbl('VBRK')} r ON v.{_quote('vbeln')} = r.{_quote('vbeln')} "
+                        f"LEFT JOIN {tbl('KNA1')} n ON r.{_quote('kunag')} = n.{_quote('kunnr')} "
+                        f"GROUP BY r.{_quote('kunag')}, n.{_quote('name1')} "
+                        f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                    )
+                    return sql
+                if by_country:
+                    sql = (
+                        f"SELECT r.{_quote('land1')} AS country, "
+                        f"SUM(v.{_quote('netwr')}) AS revenue, "
+                        f"SUM({cost_expr} * v.{_quote('fkimg')}) AS cost, "
+                        f"SUM(v.{_quote('netwr')}) - SUM({cost_expr} * v.{_quote('fkimg')}) AS profit, "
+                        f"CASE WHEN SUM(v.{_quote('netwr')}) <> 0 THEN "
+                        f"((SUM(v.{_quote('netwr')}) - SUM({cost_expr} * v.{_quote('fkimg')})) / SUM(v.{_quote('netwr')})) * 100 ELSE NULL END AS margin "
+                        f"FROM {tbl('VBRP')} v "
+                        f"JOIN {tbl('VBRK')} r ON v.{_quote('vbeln')} = r.{_quote('vbeln')} "
+                        f"GROUP BY r.{_quote('land1')} "
+                        f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                    )
+                    return sql
+                # Default: by product
+                if ok("MAKT"):
+                    sql = (
+                        f"SELECT COALESCE(MAX(m.{_quote('maktx')}), v.{_quote('matnr')}) AS product, "
+                        f"SUM(v.{_quote('netwr')}) AS revenue, "
+                        f"SUM({cost_expr} * v.{_quote('fkimg')}) AS cost, "
+                        f"SUM(v.{_quote('netwr')}) - SUM({cost_expr} * v.{_quote('fkimg')}) AS profit, "
+                        f"CASE WHEN SUM(v.{_quote('netwr')}) <> 0 THEN "
+                        f"((SUM(v.{_quote('netwr')}) - SUM({cost_expr} * v.{_quote('fkimg')})) / SUM(v.{_quote('netwr')})) * 100 ELSE NULL END AS margin "
+                        f"FROM {tbl('VBRP')} v "
+                        f"LEFT JOIN {tbl('MAKT')} m ON v.{_quote('matnr')} = m.{_quote('matnr')} AND (m.spras = 'E' OR m.spras IS NULL) "
+                        f"GROUP BY v.{_quote('matnr')} "
+                        f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                    )
+                    return sql
+            if ok("CKIS") and ok("KEKO") and ok("MAKT"):
+                ckis_cost = (
+                    f"(SELECT COALESCE(SUM(c.{_quote('wertn')}), 0) FROM {tbl('KEKO')} k2 "
+                    f"JOIN {tbl('CKIS')} c ON k2.{_quote('kalnr')} = c.{_quote('kalnr')} WHERE k2.{_quote('matnr')} = v.{_quote('matnr')})"
+                )
+                sql = (
+                    f"SELECT m.{_quote('maktx')} AS product, "
+                    f"SUM(v.{_quote('netwr')}) AS revenue, "
+                    f"{ckis_cost} AS cost, "
+                    f"SUM(v.{_quote('netwr')}) - {ckis_cost} AS profit, "
+                    f"CASE WHEN SUM(v.{_quote('netwr')}) <> 0 THEN "
+                    f"((SUM(v.{_quote('netwr')}) - {ckis_cost}) / SUM(v.{_quote('netwr')})) * 100 ELSE NULL END AS margin "
+                    f"FROM {tbl('VBRP')} v "
+                    f"LEFT JOIN {tbl('MAKT')} m ON v.{_quote('matnr')} = m.{_quote('matnr')} AND (m.spras = 'E' OR m.spras IS NULL) "
+                    f"GROUP BY v.{_quote('matnr')}, m.{_quote('maktx')} "
+                    f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                )
+                return sql
+
+    # 0b) Sales trend by year (dimension = year)
+    if ("sales" in q or "revenue" in q) and ("year" in q or "trend" in q) and ok("VBRP") and ok("VBRK"):
+        sql = (
+            f"SELECT r.{_quote('gjahr')} AS year, "
+            f"SUM(v.{_quote('netwr')}) AS sales "
+            f"FROM {tbl('VBRP')} v "
+            f"JOIN {tbl('VBRK')} r ON v.{_quote('vbeln')} = r.{_quote('vbeln')} "
+            f"GROUP BY r.{_quote('gjahr')} "
+            f"ORDER BY r.{_quote('gjahr')} ASC LIMIT 100"
+        )
+        return sql
+
+    # 0c) Procurement spend by vendor
+    if (("procurement" in q and "vendor" in q) or "vendor spend" in q or "spend by vendor" in q or
+        ("purchase" in q and "vendor" in q) or "procurement spend" in q) and ok("EKPO") and ok("EKKO") and ok("LFA1"):
+        sql = (
+            f"SELECT l.{_quote('name1')} AS vendor, "
+            f"SUM(e.{_quote('netwr')}) AS value "
+            f"FROM {tbl('EKPO')} e "
+            f"JOIN {tbl('EKKO')} k ON e.{_quote('ebeln')} = k.{_quote('ebeln')} "
+            f"LEFT JOIN {tbl('LFA1')} l ON k.{_quote('lifnr')} = l.{_quote('lifnr')} "
+            f"GROUP BY k.{_quote('lifnr')}, l.{_quote('name1')} "
+            f"ORDER BY value DESC LIMIT 100"
+        )
+        return sql
+
     # 1) Top N pattern: "top 10 customers by revenue"
     top_n = re.search(r"\btop\s+(\d+)\b", q) or re.search(r"\b(\d+)\s+top\b", q)
     if top_n:
