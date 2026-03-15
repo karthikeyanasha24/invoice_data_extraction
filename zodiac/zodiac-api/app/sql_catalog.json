@@ -121,7 +121,14 @@
       "land1",
       "countries"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
     "tables": [
       "VBRK"
     ],
@@ -135,7 +142,8 @@
       "lowest sales by country",
       "least sales by country",
       "countries with lowest revenue",
-      "bottom countries by sales"
+      "bottom countries by sales",
+      "bottom 20 countries by sales"
     ],
     "keywords": [
       "country",
@@ -145,7 +153,13 @@
       "least",
       "revenue"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "highest",
+      "max",
+      "best",
+      "top",
+      "maximum"
+    ],
     "tables": [
       "VBRK"
     ],
@@ -176,7 +190,14 @@
       "biggest",
       "customers"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
     "tables": [
       "VBRK",
       "KNA1"
@@ -191,7 +212,8 @@
       "lowest sales by customer",
       "customers with least revenue",
       "bottom customers by sales",
-      "customers with lowest purchases"
+      "customers with lowest purchases",
+      "bottom 20 customers by sales"
     ],
     "keywords": [
       "customer",
@@ -202,7 +224,13 @@
       "revenue",
       "customers"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "highest",
+      "max",
+      "best",
+      "top",
+      "maximum"
+    ],
     "tables": [
       "VBRK",
       "KNA1"
@@ -236,7 +264,14 @@
       "products",
       "materials"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
     "tables": [
       "vbrp",
       "VBRK",
@@ -252,7 +287,8 @@
       "lowest sales by product",
       "least sold products",
       "bottom products by sales",
-      "products with lowest revenue"
+      "products with lowest revenue",
+      "bottom 20 products by sales"
     ],
     "keywords": [
       "product",
@@ -264,7 +300,13 @@
       "revenue",
       "products"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "highest",
+      "max",
+      "best",
+      "top",
+      "maximum"
+    ],
     "tables": [
       "vbrp",
       "VBRK",
@@ -330,7 +372,14 @@
       "industry revenue",
       "industry sales"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
     "tables": [
       "VBRK",
       "KNA1",
@@ -356,7 +405,14 @@
       "highest",
       "revenue"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
     "tables": [
       "VBRK",
       "KNA1"
@@ -382,7 +438,14 @@
       "highest",
       "revenue"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
     "tables": [
       "vbrp",
       "VBRK",
@@ -2955,6 +3018,34 @@
     ],
     "priority": 3,
     "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       k.name1 AS customer_name,\n       vk.kunag AS customer_number,\n       k.land1 AS country,\n       v.posnr AS item_number,\n       COALESCE(m.maktx, v.matnr) AS product_name,\n       CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC) AS quantity,\n       CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) AS line_amount,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON v.vbeln = vk.vbeln\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN MAKT m ON v.matnr = m.matnr AND m.spras = 'E'\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "profit_margin_by_product",
+    "description": "Profit margin analysis: revenue vs cost by product (VBRP + VBRK + MAKT + CKIS)",
+    "question_patterns": [
+      "profit margin",
+      "margin analysis",
+      "margin by product",
+      "product margin",
+      "profitability analysis",
+      "revenue vs cost",
+      "gross margin by product",
+      "how are profit margins calculated"
+    ],
+    "keywords": [
+      "profit margin",
+      "margin",
+      "profitability",
+      "revenue vs cost",
+      "gross margin",
+      "contribution margin",
+      "cogs",
+      "cost of goods"
+    ],
+    "neg_keywords": [],
+    "tables": ["vbrp", "VBRK", "MAKT", "CKIS"],
+    "priority": 1,
+    "sql": "SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, COALESCE(c.total_cost, 0) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0) AS margin, CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN ROUND(100.0 * (SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0)) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2) ELSE NULL END AS margin_pct FROM vbrp v LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) AS total_cost FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.matnr, m.maktx, c.total_cost ORDER BY margin DESC NULLS LAST LIMIT 100"
   },
   {
     "id": "recent_invoices_list",
