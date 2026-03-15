@@ -139,7 +139,8 @@ def resolve_deterministic_sql(
     # 0) Profit margin by product/customer/country (REQUIRED - runs before other patterns)
     margin_phrases = ("profit margin", "margin by product", "product profitability", "margin by customer",
                       "contribution margin", "gross margin", "customer profitability", "top profitable",
-                      "profit by customer", "profit by country", "margin by country")
+                      "profit by customer", "profit by country", "margin by country",
+                      "profit margin for all products", "margin for all products")
     if any(m in q for m in margin_phrases):
         if ok("VBRP") and ok("VBRK"):
             # Dimension: product (default), customer, or country
@@ -163,7 +164,7 @@ def resolve_deterministic_sql(
                         f"JOIN {tbl('VBRK')} r ON v.{_quote('vbeln')} = r.{_quote('vbeln')} "
                         f"LEFT JOIN {tbl('KNA1')} n ON r.{_quote('kunag')} = n.{_quote('kunnr')} "
                         f"GROUP BY r.{_quote('kunag')}, n.{_quote('name1')} "
-                        f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                        f"ORDER BY margin DESC NULLS LAST LIMIT 500"
                     )
                     return sql
                 if by_country:
@@ -177,7 +178,7 @@ def resolve_deterministic_sql(
                         f"FROM {tbl('VBRP')} v "
                         f"JOIN {tbl('VBRK')} r ON v.{_quote('vbeln')} = r.{_quote('vbeln')} "
                         f"GROUP BY r.{_quote('land1')} "
-                        f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                        f"ORDER BY margin DESC NULLS LAST LIMIT 500"
                     )
                     return sql
                 # Default: by product
@@ -192,7 +193,7 @@ def resolve_deterministic_sql(
                         f"FROM {tbl('VBRP')} v "
                         f"LEFT JOIN {tbl('MAKT')} m ON v.{_quote('matnr')} = m.{_quote('matnr')} AND (m.spras = 'E' OR m.spras IS NULL) "
                         f"GROUP BY v.{_quote('matnr')} "
-                        f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                        f"ORDER BY margin DESC NULLS LAST LIMIT 500"
                     )
                     return sql
             if ok("CKIS") and ok("KEKO") and ok("MAKT"):
@@ -210,7 +211,7 @@ def resolve_deterministic_sql(
                     f"FROM {tbl('VBRP')} v "
                     f"LEFT JOIN {tbl('MAKT')} m ON v.{_quote('matnr')} = m.{_quote('matnr')} AND (m.spras = 'E' OR m.spras IS NULL) "
                     f"GROUP BY v.{_quote('matnr')}, m.{_quote('maktx')} "
-                    f"ORDER BY margin DESC NULLS LAST LIMIT 100"
+                    f"ORDER BY margin DESC NULLS LAST LIMIT 500"
                 )
                 return sql
 
