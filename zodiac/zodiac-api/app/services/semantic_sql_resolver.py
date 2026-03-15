@@ -147,6 +147,11 @@ def resolve_to_sql(
         name_column = dimension_info.get("name_column")
         dimension_key = dimension_info.get("column") or dim_column  # key for join
 
+        # Domain-aware: when metric table has the dimension column (e.g. EKPO.matnr for material),
+        # use metric table for dimension so purchasing queries work (purchase by material -> EKPO+MAKT)
+        if dim_column and table_available(table):
+            if table.upper() in ("EKPO", "LIPS", "VBRP", "RESB") and dim_column.lower() == "matnr":
+                dim_table = table
         if not table_available(dim_table):
             dim_table = table
         if dim_column and dim_table == table and table_available(table):
@@ -286,4 +291,3 @@ def get_metrics_text() -> str:
     for name, m in list(metrics.items())[:20]:
         lines.append(f"  {name}: {m.get('table')}.{m.get('column')} -> {m.get('aggregation', 'SUM')}")
     return "\n".join(lines)
-
