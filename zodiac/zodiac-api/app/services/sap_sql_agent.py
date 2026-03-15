@@ -2001,7 +2001,6 @@ def _build_minimal_ekpo_spec(
     return spec
 
 
-
 def _build_minimal_resb_spec(
     question: str,
     selected_tables: List[str],
