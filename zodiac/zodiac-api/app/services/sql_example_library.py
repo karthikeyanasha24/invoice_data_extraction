@@ -384,6 +384,54 @@ ORDER BY vk."fkdat" DESC
 LIMIT 200
 '''.strip(),
     },
+    # ── FAGLFLEXA: Total cost by profit center ────────────────────────────
+    {
+        "user_query": "Total cost by profit center from FAGLFLEXA",
+        "sql_query": '''
+SELECT
+    fg."prctr" AS profit_center,
+    COALESCE(c."name1", fg."prctr") AS profit_center_name,
+    SUM(fg."hsl") AS total_cost,
+    fg."rtcur" AS currency
+FROM "FAGLFLEXA" AS fg
+LEFT JOIN "CEPC" AS c ON fg."prctr" = c."prctr"
+WHERE fg."prctr" IS NOT NULL AND TRIM(fg."prctr") != ''
+GROUP BY fg."prctr", c."name1", fg."rtcur"
+ORDER BY total_cost DESC NULLS LAST
+LIMIT 100
+'''.strip(),
+    },
+    # ── FAGLFLEXA: Link profit center costs to customers and products ───────
+    {
+        "user_query": "Link FAGLFLEXA profit center costs back to major customers and products where possible",
+        "sql_query": '''
+SELECT
+    v."prctr" AS profit_center,
+    COALESCE(epc."name1", v."prctr") AS profit_center_name,
+    c."name1" AS customer_name,
+    vk."kunag" AS customer_number,
+    COALESCE(m."maktx", v."matnr") AS product_name,
+    v."matnr" AS material_number,
+    f.total_cost AS profit_center_total_cost,
+    SUM(CAST(NULLIF(TRIM(v."netwr"), '') AS NUMERIC)) AS revenue
+FROM "vbrp" AS v
+JOIN "VBRK" AS vk ON TRIM(v."vbeln") = TRIM(vk."vbeln")
+LEFT JOIN "KNA1" AS c ON vk."kunag" = c."kunnr"
+LEFT JOIN "MAKT" AS m ON v."matnr" = m."matnr" AND (m."spras" = 'E' OR m."spras" IS NULL)
+LEFT JOIN "CEPC" AS epc ON v."prctr" = epc."prctr"
+LEFT JOIN (
+    SELECT "prctr", SUM("hsl") AS total_cost
+    FROM "FAGLFLEXA"
+    WHERE "prctr" IS NOT NULL AND TRIM("prctr") != ''
+    GROUP BY "prctr"
+) f ON v."prctr" = f."prctr"
+WHERE v."prctr" IS NOT NULL AND TRIM(v."prctr") != ''
+  AND CAST(NULLIF(TRIM(v."netwr"), '') AS NUMERIC) IS NOT NULL
+GROUP BY v."prctr", epc."name1", vk."kunag", c."name1", v."matnr", m."maktx", f.total_cost
+ORDER BY revenue DESC NULLS LAST
+LIMIT 100
+'''.strip(),
+    },
 ]
 
 
@@ -435,6 +483,10 @@ def get_sql_examples_for_question(
         (["invoices", "customer name", "list invoices", "show invoices", "billing"], 20),
         # Billing line items with product names
         (["billing", "line items", "product names", "billing items", "vbrp", "line amount"], 21),
+        # FAGLFLEXA profit center costs
+        (["faglflexa", "profit center", "cost", "total cost by profit center"], 22),
+        # Link FAGLFLEXA to customers/products
+        (["link", "faglflexa", "profit center", "costs", "customers", "products", "back to", "major", "where possible"], 23),
     ]
 
     for kw, idx in keywords_map:
