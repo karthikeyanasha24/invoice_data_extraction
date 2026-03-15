@@ -432,6 +432,41 @@ ORDER BY revenue DESC NULLS LAST
 LIMIT 100
 '''.strip(),
     },
+    # ── Complaints by customer (VBRP.compreas) ─────────────────────────────
+    {
+        "user_query": "Complaints by customer",
+        "sql_query": '''
+SELECT vk.kunag AS customer_number, COALESCE(k.name1, '') AS customer_name, COUNT(*) AS complaint_count, STRING_AGG(DISTINCT TRIM(v.compreas), ', ') AS complaint_reasons FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN kna1 k ON TRIM(vk.kunag) = TRIM(k.kunnr) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY vk.kunag, k.name1 ORDER BY complaint_count DESC LIMIT 100
+'''.strip(),
+    },
+    # ── Complaints by reason (VBRP.compreas) ───────────────────────────────
+    {
+        "user_query": "Complaints by reason",
+        "sql_query": '''
+SELECT TRIM(v.compreas) AS complaint_reason, COUNT(*) AS complaint_count, COUNT(DISTINCT vk.kunag) AS customer_count FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY TRIM(v.compreas) ORDER BY complaint_count DESC LIMIT 100
+'''.strip(),
+    },
+    # ── Open/unfulfilled reservations by material (RESB bdmng - enmng) ────
+    {
+        "user_query": "Open reservations by material",
+        "sql_query": '''
+SELECT m.maktx AS material_name, rs.matnr AS material_number, rs.werks AS plant, SUM(CAST(COALESCE(rs.bdmng, 0) AS NUMERIC) - CAST(COALESCE(rs.enmng, 0) AS NUMERIC)) AS open_reserved_qty, rs.meins AS unit FROM RESB rs LEFT JOIN MAKT m ON TRIM(rs.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE rs.matnr IS NOT NULL AND TRIM(rs.matnr) != '' GROUP BY rs.matnr, m.maktx, rs.werks, rs.meins HAVING SUM(CAST(COALESCE(rs.bdmng, 0) AS NUMERIC) - CAST(COALESCE(rs.enmng, 0) AS NUMERIC)) > 0 ORDER BY open_reserved_qty DESC LIMIT 100
+'''.strip(),
+    },
+    # ── Reservations by material (RESB) ────────────────────────────────────
+    {
+        "user_query": "Materials with highest total quantity reserved in RESB",
+        "sql_query": '''
+SELECT m.maktx AS material_name, rs.matnr AS material_number, SUM(rs.bdmng) AS reserved_quantity, SUM(rs.enmng) AS issued_quantity FROM RESB rs LEFT JOIN MAKT m ON rs.matnr = m.matnr AND m.spras = 'E' WHERE rs.matnr IS NOT NULL AND rs.matnr != '' GROUP BY rs.matnr, m.maktx HAVING SUM(rs.bdmng) > 0 ORDER BY reserved_quantity DESC LIMIT 20
+'''.strip(),
+    },
+    # ── Recent invoices list ──────────────────────────────────────────────
+    {
+        "user_query": "Show recent invoices",
+        "sql_query": '''
+SELECT vk.vbeln AS invoice_number, vk.fkdat AS billing_date, vk.kunag AS customer_number, CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount, vk.waerk AS currency, vk.vkorg AS sales_org, vk.fkart AS invoice_type FROM VBRK vk WHERE vk.fkdat IS NOT NULL ORDER BY vk.fkdat DESC LIMIT 200
+'''.strip(),
+    },
 ]
 
 
@@ -487,6 +522,16 @@ def get_sql_examples_for_question(
         (["faglflexa", "profit center", "cost", "total cost by profit center"], 22),
         # Link FAGLFLEXA to customers/products
         (["link", "faglflexa", "profit center", "costs", "customers", "products", "back to", "major", "where possible"], 23),
+        # Complaints by customer
+        (["complaint", "complaints", "client", "customer", "compreas", "claim"], 24),
+        # Complaints by reason
+        (["complaint", "complaints", "reason", "reasons", "breakdown", "compreas"], 25),
+        # Open/unfulfilled reservations by material
+        (["open", "unfulfilled", "pending", "reservation", "reserved", "material", "resb", "bdmng", "enmng"], 26),
+        # Reservations by material (total reserved)
+        (["reservation", "reserved", "material", "quantity", "resb", "bdmng", "highest reserved"], 27),
+        # Recent invoices list
+        (["recent invoices", "list invoices", "all invoices", "billing documents", "latest invoices"], 28),
     ]
 
     for kw, idx in keywords_map:
