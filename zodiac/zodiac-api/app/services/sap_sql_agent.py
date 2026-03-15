@@ -364,6 +364,14 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
                 score += 4
                 break  # one pattern match is enough for the boost
 
+        # Table-name boost: when user explicitly names a table that's in this catalog entry,
+        # boost score so table-specific questions (e.g. "using RESB", "from MARC") match
+        entry_tables = {str(t).upper() for t in (entry.get("tables") or [])}
+        for tbl in entry_tables:
+            if tbl and len(tbl) >= 3 and tbl.lower() in q_lower:
+                score += 2
+                break
+
         # Priority tie-breaker
         score += (entry.get("priority") or 0) * 0.1
 
@@ -1809,6 +1817,138 @@ def _build_minimal_ekpo_spec(
     return spec
 
 
+def _build_minimal_resb_spec(
+    question: str,
+    selected_tables: List[str],
+    column_mappings: Dict[str, Dict[str, str]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a minimal valid spec for RESB (reservations) when the LLM returns empty.
+    Uses RESB with bdmng (reserved quantity), matnr, werks; join MAKT for material name.
+    """
+    mapping_lower = {k.lower(): k for k in column_mappings.keys()}
+    tables_in_mapping = []
+    for t in selected_tables:
+        actual = mapping_lower.get((t or "").lower())
+        if actual:
+            tables_in_mapping.append(actual)
+    resb = next((t for t in tables_in_mapping if t.upper() == "RESB"), None)
+    if not resb:
+        return None
+
+    def has_col(tbl: str, col: str) -> bool:
+        cols = column_mappings.get(tbl, {})
+        return col.lower() in {c.lower() for c in cols.keys()}
+
+    def col_name(tbl: str, col: str) -> str:
+        cols = column_mappings.get(tbl, {})
+        for k in cols.keys():
+            if k.lower() == col.lower():
+                return k
+        return col
+
+    makt = next((t for t in tables_in_mapping if t.upper() == "MAKT"), None)
+    columns: List[Dict[str, Any]] = []
+    group_by: List[Dict[str, str]] = []
+    if has_col(resb, "matnr"):
+        columns.append({"table": resb, "name": col_name(resb, "matnr"), "description": "material", "agg": None})
+        group_by.append({"table": resb, "column": col_name(resb, "matnr")})
+    if has_col(resb, "werks"):
+        columns.append({"table": resb, "name": col_name(resb, "werks"), "description": "plant", "agg": None})
+        group_by.append({"table": resb, "column": col_name(resb, "werks")})
+    if has_col(resb, "bdmng"):
+        columns.append({"table": resb, "name": col_name(resb, "bdmng"), "description": "total_reserved_qty", "agg": "SUM"})
+    if makt and has_col(makt, "maktx"):
+        columns.append({"table": makt, "name": col_name(makt, "maktx"), "description": "material_name", "agg": None})
+        if has_col(resb, "matnr") and has_col(makt, "matnr"):
+            group_by.append({"table": makt, "column": col_name(makt, "matnr")})
+
+    if not columns:
+        return None
+
+    joins: List[Dict[str, Any]] = []
+    if makt and has_col(resb, "matnr") and has_col(makt, "matnr"):
+        joins.append({"left": resb, "right": makt, "on": f"{resb}.matnr = {makt}.matnr", "type": "left"})
+
+    spec: Dict[str, Any] = {
+        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "columns": columns,
+        "joins": joins,
+        "filters": [],
+        "order_by": [{"table": resb, "column": "total_reserved_qty", "direction": "DESC"}] if has_col(resb, "bdmng") else [],
+        "group_by": group_by,
+        "limit": 100,
+    }
+    return spec
+
+
+def _build_minimal_marc_spec(
+    question: str,
+    selected_tables: List[str],
+    column_mappings: Dict[str, Dict[str, str]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a minimal valid spec for MARC (plant material master) when the LLM returns empty.
+    Uses MARC with matnr, werks; join MAKT for material name.
+    """
+    mapping_lower = {k.lower(): k for k in column_mappings.keys()}
+    tables_in_mapping = []
+    for t in selected_tables:
+        actual = mapping_lower.get((t or "").lower())
+        if actual:
+            tables_in_mapping.append(actual)
+    marc = next((t for t in tables_in_mapping if t.upper() == "MARC"), None)
+    if not marc:
+        return None
+
+    def has_col(tbl: str, col: str) -> bool:
+        cols = column_mappings.get(tbl, {})
+        return col.lower() in {c.lower() for c in cols.keys()}
+
+    def col_name(tbl: str, col: str) -> str:
+        cols = column_mappings.get(tbl, {})
+        for k in cols.keys():
+            if k.lower() == col.lower():
+                return k
+        return col
+
+    makt = next((t for t in tables_in_mapping if t.upper() == "MAKT"), None)
+    columns: List[Dict[str, Any]] = []
+    group_by: List[Dict[str, str]] = []
+    if has_col(marc, "matnr"):
+        columns.append({"table": marc, "name": col_name(marc, "matnr"), "description": "material", "agg": None})
+        group_by.append({"table": marc, "column": col_name(marc, "matnr")})
+    if has_col(marc, "werks"):
+        columns.append({"table": marc, "name": col_name(marc, "werks"), "description": "plant", "agg": None})
+        group_by.append({"table": marc, "column": col_name(marc, "werks")})
+    if has_col(marc, "minbe"):
+        columns.append({"table": marc, "name": col_name(marc, "minbe"), "description": "reorder_point", "agg": None})
+    if has_col(marc, "eisbe"):
+        columns.append({"table": marc, "name": col_name(marc, "eisbe"), "description": "safety_stock", "agg": None})
+    if makt and has_col(makt, "maktx"):
+        columns.append({"table": makt, "name": col_name(makt, "maktx"), "description": "material_name", "agg": None})
+        if has_col(marc, "matnr") and has_col(makt, "matnr"):
+            group_by.append({"table": makt, "column": col_name(makt, "matnr")})
+
+    if not columns:
+        return None
+
+    joins: List[Dict[str, Any]] = []
+    if makt and has_col(marc, "matnr") and has_col(makt, "matnr"):
+        joins.append({"left": marc, "right": makt, "on": f"{marc}.matnr = {makt}.matnr", "type": "left"})
+
+    spec: Dict[str, Any] = {
+        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "columns": columns,
+        "joins": joins,
+        "filters": [],
+        "order_by": [],
+        "group_by": group_by,
+        "limit": 100,
+    }
+    return spec
+
+
 def _resolve_faglflexa_table_and_mappings(db: Session) -> Tuple[Optional[str], Dict[str, Dict[str, str]]]:
     """
     Resolve FAGLFLEXA table name and column mappings. Tries introspection with 'FAGLFLEXA',
@@ -2369,6 +2509,18 @@ def run_adaptive_sap_sql_agent(
                 spec = _build_minimal_ekpo_spec(question, selected_tables, column_mappings)
                 if spec:
                     logger.info("run_adaptive_sap_sql_agent: using minimal EKPO spec after LLM returned empty")
+            if not spec and "RESB" in (t.upper() for t in selected_tables) and any(
+                x in q_lower for x in ("reserved", "reservation", "quantity", "bdmng", "materials", "highest", "total")
+            ):
+                spec = _build_minimal_resb_spec(question, selected_tables, column_mappings)
+                if spec:
+                    logger.info("run_adaptive_sap_sql_agent: using minimal RESB spec after LLM returned empty")
+            if not spec and "MARC" in (t.upper() for t in selected_tables) and any(
+                x in q_lower for x in ("plant", "marc", "on-hand", "planning", "mrp", "material", "plant master")
+            ):
+                spec = _build_minimal_marc_spec(question, selected_tables, column_mappings)
+                if spec:
+                    logger.info("run_adaptive_sap_sql_agent: using minimal MARC spec after LLM returned empty")
             if not spec:
                 return None
 
@@ -2424,6 +2576,7 @@ def run_adaptive_sap_sql_agent(
     except Exception as e:
         logger.warning("run_adaptive_sap_sql_agent failed for %r: %s", question[:80], e)
     return None
+
 
 
 def _generate_sql_json(
