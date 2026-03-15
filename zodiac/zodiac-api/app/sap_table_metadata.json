@@ -254,7 +254,7 @@
   "VBRP": {
     "description": "Billing document items. Product-level invoice data: material, billed quantity, value, plant.",
     "primary_key": ["vbeln", "posnr"],
-    "important_columns": ["vbeln", "posnr", "matnr", "fkimg", "netwr", "werks", "prctr", "arktx", "kunnr"],
+    "important_columns": ["vbeln", "posnr", "matnr", "fkimg", "netwr", "werks", "prctr", "arktx", "kunnr", "compreas"],
     "amount_columns": ["netwr", "netpr"],
     "date_columns": [],
     "joins": {
@@ -267,8 +267,10 @@
       "Revenue by material",
       "Revenue by plant",
       "Revenue by profit center",
-      "Invoice value by material"
+      "Invoice value by material",
+      "Complaints by customer",
+      "How many complaints from clients"
     ],
-    "sql_hints": "VBRP: SUM(netwr) for revenue, SUM(fkimg) for billed quantity. GROUP BY matnr, werks, prctr. Join VBRK on vbeln for kunag; MAKT on matnr for maktx. VBRP has prctr for profit center; use VBRK.KUNAG for customer."
+    "sql_hints": "VBRP: SUM(netwr) for revenue, SUM(fkimg) for billed quantity. GROUP BY matnr, werks, prctr. Join VBRK on vbeln for kunag; MAKT on matnr for maktx. VBRP has prctr for profit center; use VBRK.KUNAG for customer. For complaints: filter WHERE TRIM(COALESCE(compreas,'')) != '' and GROUP BY kunag."
   }
 }
