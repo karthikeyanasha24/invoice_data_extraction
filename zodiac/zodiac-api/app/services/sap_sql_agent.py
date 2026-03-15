@@ -2525,7 +2525,7 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["FAGLFLEXA"]
             elif any(x in q_lower for x in ("jacket", "harley")) and any(x in q_lower for x in ("profit center", "profit centre")) and any(x in q_lower for x in ("cost", "postings")):
                 selected_tables = ["FAGLFLEXA", "MAKT", "VBRP"]
-            elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend", "total purchased quantity", "netpr", "matnr werks", "purchase order totals", "po totals", "order totals by material")):
+            elif any(x in q_lower for x in ("ekpo", "purchase", "purchased quantity", "purchase cost", "vendor spend", "total purchased quantity", "netpr", "matnr werks", "purchase order totals", "po totals", "order totals by material", "purchase order totals by material", "purchased quantity and cost")):
                 selected_tables = ["EKKO", "EKPO", "MAKT", "MARA"]
             elif any(x in q_lower for x in ("compare sales", "sales data", "invoice data") and ("invoice" in q_lower or "compare" in q_lower)):
                 selected_tables = ["VBRK", "VBRP", "RBKP", "RSEG", "KNA1"]
@@ -2558,7 +2558,7 @@ def run_adaptive_sap_sql_agent(
                 selected_tables = ["KONV", "VBRK", "VBRP", "MAKT", "KNA1"]
             elif any(x in q_lower for x in ("bsad", "bseg", "ar ", "receivable", "aging", "write-off", "open ar", "payment terms", "zterm", "overdue", "bkpf", "write off", "credit note")):
                 selected_tables = ["BSAD", "BSEG", "KNA1"]
-            elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor", "vendor balance", "lfb1", "invoice amount", "ap aging", "payables", "rmwwr", "matkl", "pareto", "80%", "lead time", "ekorg")):
+            elif any(x in q_lower for x in ("rbkp", "rseg", "vendor invoice", "lfa1", " spend by vendor", "vendor balance", "lfb1", "invoice amount", "ap aging", "payables", "rmwwr", "matkl", "pareto", "80%", "lead time", "ekorg", "vendor invoice totals", "top vendors by invoice", "invoice value by vendor")):
                 selected_tables = ["LFA1", "EKKO", "EKPO", "RBKP", "RSEG"]
             elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain", "margin analysis", "profit margin on certain products")):
                 selected_tables = ["VBRP", "VBRK", "MAKT", "MBEW", "CKIS"]
@@ -2768,7 +2768,6 @@ def run_adaptive_sap_sql_agent(
     except Exception as e:
         logger.warning("run_adaptive_sap_sql_agent failed for %r: %s", question[:80], e)
     return None
-
 
 
 def _generate_sql_json(
@@ -3946,10 +3945,14 @@ def run_schema_driven_sql_agent(
                 tables = [available_upper[t] for t in ("VBRP", "VBRK", "MAKT", "MBEW", "CKIS") if t in available_upper]
                 if tables:
                     logger.info("schema_driven_agent: profit-margin intent fallback tables: %s", tables)
-            elif _is_purchase_order_question(question):
-                tables = [available_upper[t] for t in ("EKPO", "MAKT") if t in available_upper]
+            elif _is_purchase_order_question(question) or any(x in q_lower for x in ("purchase order totals", "purchased quantity and cost", "purchase cost by material", "ekpo")):
+                tables = [available_upper[t] for t in ("EKPO", "EKKO", "MAKT", "MARA") if t in available_upper]
                 if tables:
                     logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
+            elif any(x in q_lower for x in ("vendor invoice", "top vendors by invoice", "vendor invoice totals")):
+                tables = [available_upper[t] for t in ("RBKP", "LFA1", "RSEG") if t in available_upper]
+                if tables:
+                    logger.info("schema_driven_agent: vendor-invoice intent fallback tables: %s", tables)
             elif _is_internal_order_question(question):
                 # AUFK for order list; COEP for cost by order (join on objnr)
                 tables = [available_upper[t] for t in ("AUFK", "COEP") if t in available_upper]
