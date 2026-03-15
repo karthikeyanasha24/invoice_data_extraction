@@ -185,7 +185,7 @@
     "COEP": "CO actual line items \u2013 kostl (cost center), prctr (profit center), kstar (cost element), wkgbtr (actual amount in CO currency), wtgbtr (transaction currency), gjahr, poper. Use for: actual cost breakdown.",
     "COSP": "CO planned totals \u2013 kostl, kstar, gjahr, versn (version). Use for: budget vs actuals.",
     "KEKO": "Cost estimate header \u2013 matnr, werks, kalnr (join to CKIS), kalka (costing type), hwaer (currency \u2013 NOT waers). NOTE: KEKO has NO stprs column. Standard cost = SUM(CKIS.wertn). Use CKMLCR.stprs for periodic price.",
-    "CKIS": "Costing items \u2013 kalnr (join to KEKO), wertn (cost value \u2013 SUM for total cost), kstar (cost element), matnr. Use for: cost breakdown by component/element."
+    "CKIS": "Costing items \u2013 kalnr (join to KEKO), wertn (cost value \u2013 SUM for total cost), kstar (cost element), matnr. Use for: cost breakdown by component/element, costs of manufacturing, manufacturing cost, production cost."
   },
   "join_rules": [
     {
