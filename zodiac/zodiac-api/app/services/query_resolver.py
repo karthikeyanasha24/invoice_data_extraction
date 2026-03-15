@@ -172,6 +172,11 @@ def resolve_query(
     if not tables:
         return None
 
+    year_phrases = ("year", "including year", "per year", "by year", "yearly", "trend")
+    include_year = any(yp in q for yp in year_phrases)
+    if include_year and metric_tuple and metric_tuple[1].upper() == "VBRP" and "VBRK" not in [t.upper() for t in tables]:
+        tables.append("VBRK")
+
     result = {
         "tables": tables,
         "metric_table": metric_tuple[1] if metric_tuple else None,
@@ -183,6 +188,7 @@ def resolve_query(
         "dimension_name_table": dim_tuple[4] if dim_tuple and len(dim_tuple) > 4 else None,
         "dimension_metric_join_key": dim_tuple[5] if dim_tuple and len(dim_tuple) > 5 else None,
         "dimension_name_join_key": dim_tuple[6] if dim_tuple and len(dim_tuple) > 6 else None,
+        "include_year": include_year,
     }
     return result
 
@@ -238,6 +244,24 @@ def build_sql_from_resolution(
                 # Join for name (e.g. material + MAKT.maktx)
                 join_key = name_join_key or dim_column
                 name_table_key = name_join_key or dim_column
+                year_col = ""
+                year_group = ""
+                if resolution.get("include_year") and metric_table.upper() == "VBRP":
+                    tables_upper = [t.upper() for t in (resolution.get("tables") or [])]
+                    vbrk = "VBRK" if "VBRK" in tables_upper else None
+                    if vbrk:
+                        year_col = f", {_tbl(vbrk)}.GJAHR AS year "
+                        year_group = f", {_tbl(vbrk)}.GJAHR"
+                        sql = (
+                            f"SELECT a.{dim_column} AS dimension, b.{name_column} AS name{year_col}, "
+                            f"{aggregation}(a.{metric_column}) AS total "
+                            f"FROM {_tbl(metric_table)} a "
+                            f"LEFT JOIN {_tbl(name_table)} b ON a.{join_key} = b.{name_table_key} "
+                            f"LEFT JOIN {_tbl(vbrk)} h ON a.vbeln = h.vbeln "
+                            f"GROUP BY a.{dim_column}, b.{name_column}{year_group} "
+                            f"ORDER BY total DESC LIMIT 100"
+                        )
+                        return sql
                 sql = (
                     f"SELECT a.{dim_column} AS dimension, b.{name_column} AS name, "
                     f"{aggregation}(a.{metric_column}) AS total "
@@ -342,4 +366,3 @@ def get_semantic_context_for_prompt() -> str:
         lines.append("Templates: " + ", ".join(tmpl_names) + " — use for 'X by dimension' (sum_by_dimension) or 'total X' (total_metric).")
 
     return "\n".join(lines)
-
