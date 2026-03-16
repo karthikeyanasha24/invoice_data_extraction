@@ -48,6 +48,8 @@ type AiAnalysisMeta = {
   time_scope?: string;
   date_range?: { min_date: string; max_date: string };
   period_info?: string;
+  needs_approval?: boolean;
+  proposed_sql?: string;
   performance?: {
     action_decision_ms?: number;
     pattern_matching_ms?: number;
@@ -181,6 +183,7 @@ function ChatPanel({
   loading,
   prompts,
   onSend,
+  onApproveQuery,
   placeholder,
   useContext,
   setUseContext,
@@ -193,6 +196,7 @@ function ChatPanel({
   loading: boolean;
   prompts: { label: string; query: string }[];
   onSend: (text: string) => void;
+  onApproveQuery?: (question: string, proposedSql: string) => Promise<void>;
   placeholder: string;
   useContext: boolean;
   setUseContext: (v: boolean) => void;
@@ -299,6 +303,29 @@ function ChatPanel({
                       </div>
                     )}
                   </div>
+                  {/* Approve button when ChatGPT proposes SQL */}
+                  {m.role === 'assistant' && m.meta?.needs_approval && m.meta?.proposed_sql && onApproveQuery && (
+                    <div className="max-w-[92%] mt-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                          if (prevUser && m.meta?.proposed_sql) {
+                            try {
+                              await onApproveQuery(prevUser.content, m.meta.proposed_sql);
+                            } catch (err) {
+                              console.error('Approve failed:', err);
+                            }
+                          }
+                        }}
+                        disabled={loading}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Approve &amp; run query
+                      </button>
+                    </div>
+                  )}
                   {/* Show SQL and data info for assistant messages */}
                   {m.role === 'assistant' && m.meta && (
                     <div className="max-w-[92%] mt-1 text-[10px] font-mono text-slate-400 px-1 space-y-0.5">
@@ -563,13 +590,15 @@ export default function DashboardAIAnalysis() {
           time_scope: res?.time_scope,
           date_range: res?.date_range,
           period_info: res?.period_info,
+          needs_approval: res?.needs_approval,
+          proposed_sql: res?.proposed_sql,
         };
 
         console.log('📊 Period Info:', meta.period_info, meta.date_range);
         console.log('📊 Extracted Charts:', meta.charts);
         console.log('📊 Has Charts:', Boolean(meta.charts && meta.charts.length > 0));
 
-        const hasMeta = Boolean(meta.action || meta.sql || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info);
+        const hasMeta = Boolean(meta.action || meta.sql || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info || meta.needs_approval);
         setMsgs((prev) => [...prev, {
           role: 'assistant', content: reply,
           meta: hasMeta ? meta : undefined, section, ts: Date.now(),
@@ -577,6 +606,39 @@ export default function DashboardAIAnalysis() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to get AI response.';
+      setError(msg);
+      setMsgs((prev) => [...prev, { role: 'assistant', content: `Error: ${msg}`, section, ts: Date.now() }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApproveQuery = async (section: 'realtime' | 'historical', question: string, proposedSql: string) => {
+    const setMsgs = section === 'realtime' ? setRealtimeMessages : setHistoricalMessages;
+    const setLoading = section === 'realtime' ? setRealtimeLoading : setHistoricalLoading;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await dashboardApi.postAIAnalysisApproveQuery(question, proposedSql, timeScope);
+      const meta: AiAnalysisMeta = {
+        action: res?.action,
+        reason: res?.reason,
+        sql: res?.sql,
+        rows_preview: res?.rows_preview,
+        charts: res?.charts,
+        time_scope: res?.time_scope,
+        date_range: res?.date_range,
+        period_info: res?.period_info,
+      };
+      setMsgs((prev) => [...prev, {
+        role: 'assistant',
+        content: res?.reply ?? 'Query executed and stored for future use.',
+        meta: meta.sql || meta.rows_preview?.length ? meta : undefined,
+        section,
+        ts: Date.now(),
+      }]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to approve query.';
       setError(msg);
       setMsgs((prev) => [...prev, { role: 'assistant', content: `Error: ${msg}`, section, ts: Date.now() }]);
     } finally {
@@ -906,6 +968,7 @@ export default function DashboardAIAnalysis() {
                     setPendingQuery({ section: 'realtime', text: t });
                     setShowTimeScopeModal(true);
                   }}
+                  onApproveQuery={(q, s) => handleApproveQuery('realtime', q, s)}
                   placeholder="Ask about live invoices, SAT docs, failures…"
                   useContext={useContext}
                   setUseContext={setUseContext}
@@ -1081,6 +1144,7 @@ export default function DashboardAIAnalysis() {
                       setPendingQuery({ section: 'historical', text: t });
                       setShowTimeScopeModal(true);
                     }}
+                    onApproveQuery={(q, s) => handleApproveQuery('historical', q, s)}
                     placeholder="Ask about trends, forecasts, period comparisons…"
                     useContext={useContext}
                     setUseContext={setUseContext}
