@@ -2627,7 +2627,6 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
     return "\n".join(parts) if parts else ""
 
 
-
 @router.post("/ai-analysis/chat")
 async def post_ai_analysis_chat(
     message: str = Body(..., embed=True),
@@ -2751,7 +2750,7 @@ async def post_ai_analysis_suggest_sql(
         is_valid, err = validate_sql_for_safe_execution(quoted)
         if is_valid:
             return {"proposed_sql": quoted}
-            
+
     ai_openai_key = _get_ai_analysis_config()
     if not ai_openai_key or not openai_available:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI not available (set OPENAI_API_KEY)")
@@ -2809,8 +2808,22 @@ async def post_ai_analysis_approve_query(
     Andy's training loop: User approves ChatGPT-proposed SQL.
     Stores question→SQL in ai_query_memory, executes, and returns full result.
     """
+    try:
+        return _do_approve_query(question, proposed_sql, time_scope, current_user, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Approve failed: {str(e)}",
+        )
+
+
+
+
+def _do_approve_query(question: str, proposed_sql: str, time_scope: str, current_user, db):
     from ..services.ai_query_memory_service import store_approved_query, validate_sql_for_safe_execution
-    from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
+    from ..services.ai_analysis_orchestrator import orchestrator_payload
     from ..services.sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
     from ..config.config import USE_SAP_DB_FOR_AI
 
