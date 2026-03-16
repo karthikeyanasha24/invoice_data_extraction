@@ -41,6 +41,9 @@ class OrchestratorResult:
     # Analytics layer: KPIs and executive insights (after SQL execution)
     metrics: Optional[Dict[str, Any]] = None  # { column: { total, avg, max, min, kpi_type } }
     analytics_insights: Optional[Dict[str, Any]] = None  # { executive_summary, key_metrics[], insights[], recommendations[] }
+    # Andy's training loop: when LLM fails, ChatGPT proposes SQL → user approves → store
+    needs_approval: bool = False
+    proposed_sql: Optional[str] = None
 
 
 def _get_client(api_key: str) -> OpenAI:
@@ -632,6 +635,21 @@ If result is empty, say so and suggest a refined question.
     sql_db = sap_db or db
     sql_start = time.time()
 
+    result = None
+    # Andy's training loop: check ai_query_memory first for user-approved queries
+    try:
+        from .ai_query_memory_service import find_similar_stored_query
+        stored_sql = find_similar_stored_query(db, user_query, user_id)
+        if stored_sql:
+            from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+            quoted_sql = _quote_catalog_sql_tables(stored_sql)
+            stored_rows = _run_sql(sql_db, quoted_sql)
+            if stored_rows:
+                result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
+                logger.info("ai_query_memory: reused stored SQL for %r (%d rows)", user_query[:60], len(stored_rows))
+    except Exception as mem_err:
+        logger.debug("ai_query_memory lookup failed: %s", mem_err)
+
     # Always go through the SAP SQL agent using live schema instead of predefined patterns.
     knowledge = mem.knowledge()
     knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
@@ -644,7 +662,6 @@ If result is empty, say so and suggest a refined question.
     )
 
     # Procurement-from-list: "from the list below which are procured internally/externally" → use prior result materials
-    result = None
     try:
         from .invoice_bot_helpers import (
             is_from_list_below_procurement_query,
@@ -760,18 +777,36 @@ If result is empty, say so and suggest a refined question.
             logger.warning("Product performance fallback failed: %s", fallback_err)
 
     if not result or not result.rows:
-        # Catalog fallback: when all LLM paths and other fallbacks failed, try pre-built sql_catalog.
-        try:
-            from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
-            catalog_sql = _lookup_sql_catalog(user_query)
-            if catalog_sql:
-                quoted_sql = _quote_catalog_sql_tables(catalog_sql)
-                catalog_rows = _run_sql(sql_db, quoted_sql)
-                if catalog_rows:
-                    result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
-                    logger.info("SQL catalog fallback returned %d rows for: %r", len(catalog_rows), user_query[:60])
-        except Exception as catalog_err:
-            logger.debug("SQL catalog fallback failed: %s", catalog_err)
+        # Profit margin early fallback: when question clearly asks for profit margin, try catalog directly
+        q_lower = (user_query or "").lower()
+        margin_phrases = ("profit margin", "margin by product", "margin for all products", "product profitability")
+        if any(p in q_lower for p in margin_phrases):
+            try:
+                from .sap_sql_agent import _get_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+                catalog = _get_sql_catalog()
+                profit_entry = next((e for e in catalog if e.get("id") == "profit_margin_by_product"), None)
+                if profit_entry and profit_entry.get("sql"):
+                    quoted = _quote_catalog_sql_tables(profit_entry["sql"])
+                    margin_rows = _run_sql(sql_db, quoted)
+                    if margin_rows:
+                        result = SqlAgentResult(sql=quoted, rows=margin_rows)
+                        logger.info("Profit margin catalog fallback returned %d rows", len(margin_rows))
+            except Exception as pm_err:
+                logger.debug("Profit margin fallback failed: %s", pm_err)
+
+    # Catalog fallback: when all LLM paths and other fallbacks failed, try pre-built sql_catalog.
+        if not (result and result.rows):
+            try:
+                from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+                catalog_sql = _lookup_sql_catalog(user_query)
+                if catalog_sql:
+                    quoted_sql = _quote_catalog_sql_tables(catalog_sql)
+                    catalog_rows = _run_sql(sql_db, quoted_sql)
+                    if catalog_rows:
+                        result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
+                        logger.info("SQL catalog fallback returned %d rows for: %r", len(catalog_rows), user_query[:60])
+            except Exception as catalog_err:
+                logger.debug("SQL catalog fallback failed: %s", catalog_err)
 
     if not result or not result.rows:
         q_lower = (user_query or "").lower()
@@ -930,9 +965,64 @@ If result is empty, say so and suggest a refined question.
         # (e.g. a FAGLFLEXA query being answered with cached VBRK/sales data).
         # Each query must get its own fresh SQL result. If SQL returns 0 rows, tell the user clearly.
 
-        # If we have no SQL result, return a clear error.
+        # If we have no SQL result: Andy's training loop — try ChatGPT fallback, then ask user to approve
         if not (result and result.rows):
             sql_attempted = result.sql if result else ""
+            # ChatGPT fallback: when LLM fails, ask OpenAI to propose SQL for user approval
+            proposed_sql = None
+            try:
+                from .schema_loader import get_schema_text
+                from .ai_query_memory_service import validate_sql_for_safe_execution
+                schema_text = get_schema_text(sql_db, include_semantic_map=True)
+                prompt = f"""You are an SAP SQL expert. The user asked: "{user_query}"
+
+Database schema (PostgreSQL, table names may need double quotes for uppercase):
+{schema_text[:6000]}
+
+Generate a single PostgreSQL SELECT query to answer this. Rules:
+- Use only SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
+- No DELETE, UPDATE, DROP, INSERT
+- Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.
+- Return ONLY the SQL, no explanation. No markdown code blocks."""
+                resp = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=800,
+                )
+                raw = (resp.choices[0].message.content or "").strip()
+                # Extract SQL (remove markdown if present)
+                if "```" in raw:
+                    import re as _re
+                    m = _re.search(r"```(?:\w+)?\s*([\s\S]*?)```", raw)
+                    if m:
+                        raw = m.group(1).strip()
+                proposed_sql = raw if raw and "SELECT" in raw.upper() else None
+                if proposed_sql:
+                    is_valid, err = validate_sql_for_safe_execution(proposed_sql)
+                    if not is_valid:
+                        proposed_sql = None
+                        logger.warning("ChatGPT proposed invalid SQL: %s", err)
+            except Exception as chat_err:
+                logger.debug("ChatGPT fallback failed: %s", chat_err)
+
+            if proposed_sql:
+                return OrchestratorResult(
+                    reply=(
+                        "I couldn't generate a query automatically, but I have a suggested SQL from ChatGPT. "
+                        "**Review it below and click Approve** to run it and save it for future similar questions. "
+                        "Or try rephrasing your question."
+                    ),
+                    action="new",
+                    reason="chatgpt_fallback_needs_approval",
+                    sql=sql_attempted,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                    needs_approval=True,
+                    proposed_sql=proposed_sql,
+                )
+
             return OrchestratorResult(
                 reply=(
                     "No data was found for that query. "
