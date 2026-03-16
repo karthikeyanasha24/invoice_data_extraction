@@ -1,12 +1,13 @@
 """
 AI Query Memory Service - Find, store, and reuse user-approved question→SQL pairs.
+Approved SQL is shared across all users (global).
 
 Andy's training loop:
 1. User asks question
-2. Check ai_query_memory for similar question
+2. Check ai_query_memory for similar question (any user's approval)
 3. If match → use stored SQL
 4. If no match and LLM fails → ChatGPT proposes SQL
-5. User approves → store in ai_query_memory
+5. User approves → store in ai_query_memory (visible to all users)
 6. Execute and return
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ import re
 import logging
 from typing import List, Optional, Tuple
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -52,10 +54,12 @@ def _validate_sql_safe(sql: str) -> Tuple[bool, str]:
 def find_similar_stored_query(
     db: Session,
     question: str,
-    user_id: int,
+    user_id: Optional[int] = None,
+    mark_used: bool = True,
 ) -> Optional[str]:
     """
-    Find a stored SQL for a similar question. Uses simple similarity:
+    Find a stored SQL for a similar question. Shared across all users.
+    Uses simple similarity:
     - Exact match on normalized question
     - Substring match if question contains the stored pattern
     """
@@ -68,28 +72,35 @@ def find_similar_stored_query(
     if not q_norm:
         return None
 
-    # 1) Exact match
+    # 1) Exact match — shared globally; prefer user-approved SQL, then use_count, then most recent
     records = db.query(AiQueryMemory).filter(
-        AiQueryMemory.user_id == user_id,
         AiQueryMemory.question_pattern == q_norm,
-    ).order_by(AiQueryMemory.use_count.desc()).limit(1).all()
+    ).order_by(
+        case((AiQueryMemory.source == "user", 0), else_=1),
+        AiQueryMemory.use_count.desc(),
+        AiQueryMemory.created_at.desc(),
+    ).limit(1).all()
 
     if records:
         rec = records[0]
-        rec.mark_used()
-        db.commit()
+        if mark_used:
+            rec.mark_used()
+            db.commit()
         return rec.sql_query
 
-    # 2) Substring match: stored pattern is contained in question
-    all_records = db.query(AiQueryMemory).filter(
-        AiQueryMemory.user_id == user_id,
+    # 2) Substring match: stored pattern is contained in question (same preference order)
+    all_records = db.query(AiQueryMemory).order_by(
+        case((AiQueryMemory.source == "user", 0), else_=1),
+        AiQueryMemory.use_count.desc(),
+        AiQueryMemory.created_at.desc(),
     ).all()
 
     for rec in all_records:
         pattern_norm = _normalize_question(rec.question_pattern)
         if pattern_norm and pattern_norm in q_norm:
-            rec.mark_used()
-            db.commit()
+            if mark_used:
+                rec.mark_used()
+                db.commit()
             return rec.sql_query
 
     return None
@@ -120,19 +131,34 @@ def store_approved_query(
     if not q_norm:
         return False
 
-    rec = AiQueryMemory(
-        user_id=user_id,
-        question_pattern=q_norm[:500],
-        original_question=question[:2000] if question else None,
-        sql_query=sql_query,
-        tables_used=tables_used,
-        source=source,
-        model_used=model_used,
-        approved_by_user_id=user_id,
-    )
-    db.add(rec)
-    db.commit()
-    logger.info("Stored ai_query_memory: user=%s pattern=%r", user_id, q_norm[:80])
+    # Upsert: one record per question_pattern globally — update if exists, else insert
+    existing = db.query(AiQueryMemory).filter(
+        AiQueryMemory.question_pattern == q_norm[:500],
+    ).first()
+
+    if existing:
+        existing.sql_query = sql_query
+        existing.original_question = question[:2000] if question else None
+        existing.tables_used = tables_used
+        existing.source = source
+        existing.model_used = model_used
+        existing.approved_by_user_id = user_id
+        db.commit()
+        logger.info("Updated ai_query_memory: user=%s pattern=%r", user_id, q_norm[:80])
+    else:
+        rec = AiQueryMemory(
+            user_id=user_id,
+            question_pattern=q_norm[:500],
+            original_question=question[:2000] if question else None,
+            sql_query=sql_query,
+            tables_used=tables_used,
+            source=source,
+            model_used=model_used,
+            approved_by_user_id=user_id,
+        )
+        db.add(rec)
+        db.commit()
+        logger.info("Stored ai_query_memory: user=%s pattern=%r", user_id, q_norm[:80])
     return True
 
 
