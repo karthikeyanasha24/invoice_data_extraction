@@ -400,21 +400,22 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
     # If question contains a specific numeric ID / cost center code (standalone 3–6 digit number)
     if re.search(r"\b\d{3,6}\b", question):
         return None
-    # If question contains a title-case proper noun (word starting uppercase mid-sentence)
-    # e.g. "sales for customer Siemens" — "Siemens" is a specific name
-    # Heuristic: ignore words at the very start; flag if ANY word after position 0 starts uppercase
-    # and is NOT a known SAP keyword / acronym
-    words_in_question = question.split()
-    _known_uppercase = {"SAP","GL","PO","AP","AR","BOM","YoY","KPI","UOM","MRP","ABC","GR","IR",
-                        "MARA","MBEW","MARD","MSEG","SKA1","SKAT","MAST","EKBE","KNB1","TCURR",
-                        "T001W","T001","T016T","LFA1","LFB1","LFM1","KNA1","BSEG","FAGLFLEXA",
-                        "EKKO","EKPO","RBKP","RSEG","VBRK","MAKT","MARC","BSAD","COEP","CSKS",
-                        "CEPC","CKIS","KEKO","CKMLCR","KONV","LSEG","LIKP","LIPS","STKO","STPO",
-                        "MKPF","RESB","EBAN","AUFK","VBAK","VBAP","VBFA","VBEP","MVKE","KNVV"}
-    for w in words_in_question[1:]:  # skip first word (might be a normal capitalised start)
-        w_clean = re.sub(r"\W", "", w)
-        if (w_clean and w_clean[0].isupper() and not w_clean.isupper()
-                and w_clean not in _known_uppercase and len(w_clean) >= 3):
+    # Exception: "profit margin for X" / "margin for X" — use catalog (all-products SQL) and filter by product name in post-processing
+    if not re.search(r"\b(profit\s+margin\s+for|margin\s+for|profitability\s+for)\b", q_lower):
+        # If question contains a title-case proper noun (word starting uppercase mid-sentence)
+        # e.g. "sales for customer Siemens" — "Siemens" is a specific name
+        words_in_question = question.split()
+        _known_uppercase = {"SAP","GL","PO","AP","AR","BOM","YoY","KPI","UOM","MRP","ABC","GR","IR",
+                            "MARA","MBEW","MARD","MSEG","SKA1","SKAT","MAST","EKBE","KNB1","TCURR",
+                            "T001W","T001","T016T","LFA1","LFB1","LFM1","KNA1","BSEG","FAGLFLEXA",
+                            "EKKO","EKPO","RBKP","RSEG","VBRK","MAKT","MARC","BSAD","COEP","CSKS",
+                            "CEPC","CKIS","KEKO","CKMLCR","KONV","LSEG","LIKP","LIPS","STKO","STPO",
+                            "MKPF","RESB","EBAN","AUFK","VBAK","VBAP","VBFA","VBEP","MVKE","KNVV"}
+        for w in words_in_question[1:]:  # skip first word (might be a normal capitalised start)
+            w_clean = re.sub(r"\W", "", w)
+            if (w_clean and w_clean[0].isupper() and not w_clean.isupper()
+                    and w_clean not in _known_uppercase and len(w_clean) >= 3):
+                return None  # title-case proper noun → LLMlen(w_clean) >= 3):
             return None  # title-case proper noun → LLM
     # If question contains a specific material/vendor code pattern (≥6 uppercase chars)
     code_pattern = re.findall(r"\b[A-Z0-9_-]{6,}\b", question)
