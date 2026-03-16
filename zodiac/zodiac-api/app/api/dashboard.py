@@ -2273,6 +2273,7 @@ def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list
     return results
 
 
+
 def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db: Session, days: int = 30) -> str:
     """Build context string for AI analysis chat from requested context_keys.
     Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
@@ -2735,15 +2736,23 @@ async def post_ai_analysis_suggest_sql(
     db: Session = Depends(get_db),
 ):
     """
-    Suggest SQL for the question. Uses sql_catalog first (correct pre-built queries),
-    then falls back to ChatGPT. Returns proposed_sql only (no execution).
+    Suggest SQL for the question. Uses ai_query_memory first (user-approved), then
+    sql_catalog, then ChatGPT. Returns proposed_sql only (no execution).
     """
     from ..services.schema_loader import get_schema_text
-    from ..services.ai_query_memory_service import validate_sql_for_safe_execution
+    from ..services.ai_query_memory_service import find_similar_stored_query, validate_sql_for_safe_execution
     from ..services.sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
     from ..config.config import USE_SAP_DB_FOR_AI
 
-    # 1) Try catalog first — has correct SQL for "highest spend by vendor", etc.
+    # 1) Try ai_query_memory first — user-approved SQL for this question (don't mark_used when just suggesting)
+    stored_sql = find_similar_stored_query(db, question, current_user.id, mark_used=False)
+    if stored_sql:
+        quoted = _quote_catalog_sql_tables(stored_sql)
+        is_valid, err = validate_sql_for_safe_execution(quoted)
+        if is_valid:
+            return {"proposed_sql": quoted}
+
+    # 2) Try catalog — has correct SQL for "highest spend by vendor", etc.
     catalog_sql = _lookup_sql_catalog(question)
     if catalog_sql:
         quoted = _quote_catalog_sql_tables(catalog_sql)
@@ -2935,7 +2944,6 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
             sql_db.close()
-
 
 
 @router.post("/ai-analysis-multi-model")
