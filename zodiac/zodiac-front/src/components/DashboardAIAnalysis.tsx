@@ -417,7 +417,7 @@ function ChatPanel({
                                 value={manualSql}
                                 onChange={(e) => setManualSql(e.target.value)}
                                 placeholder="SELECT ... FROM ..."
-                                className="w-full text-[11px] font-mono bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
+                                className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
                                 rows={4}
                               />
                               {onApproveQuery && (
@@ -509,7 +509,7 @@ function ChatPanel({
                             value={manualSql}
                             onChange={(e) => setManualSql(e.target.value)}
                             placeholder="SELECT ... FROM ..."
-                            className="w-full text-[11px] font-mono bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
+                            className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
                             rows={4}
                           />
                           {onApproveQuery && (
@@ -604,7 +604,7 @@ function ChatPanel({
                               value={manualSql}
                               onChange={(e) => setManualSql(e.target.value)}
                               placeholder="SELECT ... FROM ..."
-                              className="w-full text-[11px] font-mono bg-white border border-amber-300 rounded p-2 min-h-[80px] resize-y"
+                              className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-amber-300 rounded p-2 min-h-[80px] resize-y"
                               rows={4}
                             />
                             <button
