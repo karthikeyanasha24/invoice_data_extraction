@@ -2736,12 +2736,22 @@ async def post_ai_analysis_suggest_sql(
     db: Session = Depends(get_db),
 ):
     """
-    Ask ChatGPT to suggest SQL for the question. Returns proposed_sql only (no execution).
+    Suggest SQL for the question. Uses sql_catalog first (correct pre-built queries),
+    then falls back to ChatGPT. Returns proposed_sql only (no execution).
     """
     from ..services.schema_loader import get_schema_text
     from ..services.ai_query_memory_service import validate_sql_for_safe_execution
+    from ..services.sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
     from ..config.config import USE_SAP_DB_FOR_AI
 
+    # 1) Try catalog first — has correct SQL for "highest spend by vendor", etc.
+    catalog_sql = _lookup_sql_catalog(question)
+    if catalog_sql:
+        quoted = _quote_catalog_sql_tables(catalog_sql)
+        is_valid, err = validate_sql_for_safe_execution(quoted)
+        if is_valid:
+            return {"proposed_sql": quoted}
+            
     ai_openai_key = _get_ai_analysis_config()
     if not ai_openai_key or not openai_available:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI not available (set OPENAI_API_KEY)")
