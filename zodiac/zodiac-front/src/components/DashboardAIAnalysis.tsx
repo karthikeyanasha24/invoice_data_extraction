@@ -350,7 +350,7 @@ function ChatPanel({
                             onClick={() => {
                               setRejectingIndex(rejectingIndex === i ? null : i);
                               setSuggestedSql(null);
-                              setManualSql('');
+                              // Keep manualSql - user may have typed their own SQL
                             }}
                             disabled={loading}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium disabled:opacity-50"
@@ -360,7 +360,9 @@ function ChatPanel({
                           </button>
                         </div>
                         <div className="pt-2 border-t border-slate-200 space-y-2">
-                          <p className="text-xs font-medium text-slate-700">Or get a new suggestion / enter SQL manually:</p>
+                          <p className="text-xs font-medium text-slate-700">
+                            {rejectingIndex === i ? 'Rejected — enter your own SQL or ask for a new suggestion:' : 'Or get a new suggestion / enter SQL manually:'}
+                          </p>
                             <div className="flex flex-wrap gap-2">
                               {onSuggestSql && (
                                 <button
