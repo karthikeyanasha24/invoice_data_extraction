@@ -1724,6 +1724,24 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to get multi-model AI response.');
         }
     },
+
+    postAIAnalysisApproveQuery: async (
+        question: string,
+        proposedSql: string,
+        timeScope: 'current' | 'historical' | 'both' = 'both'
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/approve-query', {
+                question,
+                proposed_sql: proposedSql,
+                time_scope: timeScope,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI approve query failed:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to approve and run query.');
+        }
+    },
 };
 
 // Admin API
@@ -2554,4 +2572,3 @@ export const convertedInvoicesApi = {
 };
 
 export default api;
-
