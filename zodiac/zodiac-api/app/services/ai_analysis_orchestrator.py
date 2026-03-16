@@ -965,16 +965,29 @@ If result is empty, say so and suggest a refined question.
         # (e.g. a FAGLFLEXA query being answered with cached VBRK/sales data).
         # Each query must get its own fresh SQL result. If SQL returns 0 rows, tell the user clearly.
 
-        # If we have no SQL result: Andy's training loop — try ChatGPT fallback, then ask user to approve
+        # If we have no SQL result: Andy's training loop — try catalog first, then ChatGPT fallback
         if not (result and result.rows):
             sql_attempted = result.sql if result else ""
-            # ChatGPT fallback: when LLM fails, ask OpenAI to propose SQL for user approval
             proposed_sql = None
+            # 1) Try sql_catalog first — has correct SQL for "highest spend by vendor", etc.
             try:
-                from .schema_loader import get_schema_text
+                from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
                 from .ai_query_memory_service import validate_sql_for_safe_execution
-                schema_text = get_schema_text(sql_db, include_semantic_map=True)
-                prompt = f"""You are an SAP SQL expert. The user asked: "{user_query}"
+                catalog_sql = _lookup_sql_catalog(user_query)
+                if catalog_sql:
+                    quoted = _quote_catalog_sql_tables(catalog_sql)
+                    is_valid, err = validate_sql_for_safe_execution(quoted)
+                    if is_valid:
+                        proposed_sql = quoted
+            except Exception:
+                pass
+            # 2) ChatGPT fallback: when catalog has no match, ask OpenAI to propose SQL
+            if not proposed_sql:
+                try:
+                    from .schema_loader import get_schema_text
+                    from .ai_query_memory_service import validate_sql_for_safe_execution
+                    schema_text = get_schema_text(sql_db, include_semantic_map=True)
+                    prompt = f"""You are an SAP SQL expert. The user asked: "{user_query}"
 
 Database schema (PostgreSQL, table names may need double quotes for uppercase):
 {schema_text[:6000]}
@@ -984,27 +997,27 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
 - No DELETE, UPDATE, DROP, INSERT
 - Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.
 - Return ONLY the SQL, no explanation. No markdown code blocks."""
-                resp = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2,
-                    max_tokens=800,
-                )
-                raw = (resp.choices[0].message.content or "").strip()
-                # Extract SQL (remove markdown if present)
-                if "```" in raw:
-                    import re as _re
-                    m = _re.search(r"```(?:\w+)?\s*([\s\S]*?)```", raw)
-                    if m:
-                        raw = m.group(1).strip()
-                proposed_sql = raw if raw and "SELECT" in raw.upper() else None
-                if proposed_sql:
-                    is_valid, err = validate_sql_for_safe_execution(proposed_sql)
-                    if not is_valid:
-                        proposed_sql = None
-                        logger.warning("ChatGPT proposed invalid SQL: %s", err)
-            except Exception as chat_err:
-                logger.debug("ChatGPT fallback failed: %s", chat_err)
+                    resp = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.2,
+                        max_tokens=800,
+                    )
+                    raw = (resp.choices[0].message.content or "").strip()
+                    # Extract SQL (remove markdown if present)
+                    if "```" in raw:
+                        import re as _re
+                        m = _re.search(r"```(?:\w+)?\s*([\s\S]*?)```", raw)
+                        if m:
+                            raw = m.group(1).strip()
+                    proposed_sql = raw if raw and "SELECT" in raw.upper() else None
+                    if proposed_sql:
+                        is_valid, err = validate_sql_for_safe_execution(proposed_sql)
+                        if not is_valid:
+                            proposed_sql = None
+                            logger.warning("ChatGPT proposed invalid SQL: %s", err)
+                except Exception as chat_err:
+                    logger.debug("ChatGPT fallback failed: %s", chat_err)
 
             if proposed_sql:
                 return OrchestratorResult(
