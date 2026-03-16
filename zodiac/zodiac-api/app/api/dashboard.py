@@ -2197,8 +2197,6 @@ def _get_sales_by_country_industry(db: Session, limit: int = 20) -> list[dict]:
     return results
 
 
-
-
 def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list[dict]:
     """
     Aggregate highest sales by customer, product, and country using vbrp + vbrk + kna1.
@@ -2703,6 +2701,90 @@ async def post_ai_analysis_chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
+
+
+
+@router.post("/ai-analysis/store-query")
+async def post_ai_analysis_store_query(
+    question: str = Body(..., embed=True),
+    sql_query: str = Body(..., embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Store user-confirmed SQL (Yes case). No execution - query was already run successfully.
+    """
+    from ..services.ai_query_memory_service import store_approved_query, validate_sql_for_safe_execution
+
+    is_valid, err = validate_sql_for_safe_execution(sql_query)
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid SQL: {err}")
+
+    stored = store_approved_query(
+        db, current_user.id, question, sql_query,
+        source="user", model_used=None,
+    )
+    if not stored:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store query")
+    return {"success": True, "message": "Query stored for future use."}
+
+
+@router.post("/ai-analysis/suggest-sql")
+async def post_ai_analysis_suggest_sql(
+    question: str = Body(..., embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Ask ChatGPT to suggest SQL for the question. Returns proposed_sql only (no execution).
+    """
+    from ..services.schema_loader import get_schema_text
+    from ..services.ai_query_memory_service import validate_sql_for_safe_execution
+    from ..config.config import USE_SAP_DB_FOR_AI
+
+    ai_openai_key = _get_ai_analysis_config()
+    if not ai_openai_key or not openai_available:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI not available (set OPENAI_API_KEY)")
+
+    sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+    try:
+        schema_text = get_schema_text(sql_db, include_semantic_map=True)
+        from openai import OpenAI
+        client = OpenAI(api_key=ai_openai_key)
+        prompt = f"""You are an SAP SQL expert. The user asked: "{question}"
+
+Database schema (PostgreSQL, table names may need double quotes for uppercase):
+{schema_text[:6000]}
+
+Generate a single PostgreSQL SELECT query. Rules:
+- Use only SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
+- No DELETE, UPDATE, DROP, INSERT
+- Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.
+- For quantities use numeric columns (e.g. FKIMG, MENGE), NOT currency columns
+- For values use NETWR, HSL, or similar amount columns
+- Return ONLY the SQL, no explanation. No markdown code blocks."""
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=800,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        import re
+        if "```" in raw:
+            m = re.search(r"```(?:\w+)?\s*([\s\S]*?)```", raw)
+            if m:
+                raw = m.group(1).strip()
+        proposed_sql = raw if raw and "SELECT" in raw.upper() else None
+        if not proposed_sql:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="ChatGPT could not generate valid SQL")
+        is_valid, err = validate_sql_for_safe_execution(proposed_sql)
+        if not is_valid:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"ChatGPT proposed invalid SQL: {err}")
+        return {"proposed_sql": proposed_sql}
+    finally:
+        if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
+            sql_db.close()
 
 
 @router.post("/ai-analysis/approve-query")
