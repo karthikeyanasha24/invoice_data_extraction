@@ -10,7 +10,6 @@ import logging
 import os
 import re
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -85,11 +84,19 @@ _TABLES_THAT_JOIN_TO_MAKT = (
 
 
 def _extract_product_name_from_query(user_query: str) -> str:
-    """Extract product name from query (e.g. 'show Harley products' -> 'Harley')."""
+    """Extract product name from query (e.g. 'show Harley products' -> 'Harley',
+    'profit margin for Fire fighting vehicle' -> 'Fire fighting vehicle')."""
     if not user_query or not isinstance(user_query, str):
         return ""
     s = (user_query or "").strip()
     s_lower = s.lower()
+    # "profit margin for X", "margin for X", "profitability for X" (adaptive to any product)
+    for prefix in ("profit margin for", "margin for", "profitability for", "profit margin for the"):
+        if prefix in s_lower:
+            idx = s_lower.index(prefix) + len(prefix)
+            name = s[idx:].strip().split(",")[0].split(".")[0].strip()
+            if name and len(name) <= 80 and name.lower() not in ("all", "the", "a", "an"):
+                return name
     # "show Harley products", "list Harley products"
     m = re.search(r"(?:show\s+me?\s+)?(.+?)\s+products\b", s_lower, re.IGNORECASE | re.DOTALL)
     if m:
@@ -465,7 +472,7 @@ def _get_product_display_column(cols: List[str]) -> str:
         if not c:
             continue
         cu = (c or "").upper().replace(" ", "_")
-        if cu == "MAKTX" or "MATERIAL_DESCRIPTION" in cu or (cu != "MATNR" and "DESCRIPTION" in cu and "MATERIAL" in cu):
+        if cu in ("MAKTX", "MATERIAL_NAME", "PRODUCT_NAME") or "MATERIAL_DESCRIPTION" in cu or (cu != "MATNR" and "DESCRIPTION" in cu and "MATERIAL" in cu):
             return c
     return ""
 
@@ -1031,46 +1038,10 @@ Data summary:
                 temperature=0.3,
             )
             return (r.choices[0].message.content or "").strip()
-        if provider == "claude":
-            from ..config.config import ANTHROPIC_API_KEY
-            if not ANTHROPIC_API_KEY:
-                return "Claude is not configured. Set ANTHROPIC_API_KEY."
-            import anthropic
-            c = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            msg = c.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=2048,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return (msg.content[0].text if msg.content else "").strip()
-        if provider == "gemini":
-            from ..config.config import GOOGLE_API_KEY
-            if not GOOGLE_API_KEY:
-                return "Gemini is not configured. Set GOOGLE_API_KEY."
-            import google.generativeai as genai
-            genai.configure(api_key=GOOGLE_API_KEY)
-            model = genai.GenerativeModel("gemini-1.5-pro")
-            resp = model.generate_content(prompt)
-            return (resp.text or "").strip()
+        # Optional: add claude, gemini, perplexity via env keys
         return "Provider not configured."
     except Exception as e:
         return f"Error from {provider}: {e}"
-
-
-def _configured_insight_providers() -> List[str]:
-    """Return list of provider keys that have API keys set (for multi-modal comparison)."""
-    providers: List[str] = []
-    try:
-        from ..config.config import OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
-        if OPENAI_API_KEY:
-            providers.append("chatgpt")
-        if ANTHROPIC_API_KEY:
-            providers.append("claude")
-        if GOOGLE_API_KEY:
-            providers.append("gemini")
-    except Exception:
-        pass
-    return providers
 
 
 def get_insights_from_all_providers(
@@ -1080,41 +1051,7 @@ def get_insights_from_all_providers(
     pdf_text: str = "",
     sql_query: str = "",
 ) -> List[Tuple[str, str]]:
-    """Run ChatGPT and optionally Claude, Gemini in parallel; return [(provider_display_name, text), ...].
-    When ENABLE_MULTI_MODEL=true, calls all configured providers in parallel and returns all valid responses.
-    Otherwise, only ChatGPT is called."""
-    provider_names = {"chatgpt": "ChatGPT (OpenAI)", "claude": "Claude (Anthropic)", "gemini": "Gemini (Google)"}
-    try:
-        from ..config.config import ENABLE_MULTI_MODEL
-    except Exception:
-        ENABLE_MULTI_MODEL = False
-
-    if ENABLE_MULTI_MODEL:
-        providers = _configured_insight_providers()
-        if not providers:
-            return [("No provider", "No API keys configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY.")]
-        results: List[Tuple[str, str]] = []
-        with ThreadPoolExecutor(max_workers=min(3, len(providers))) as ex:
-            futures = {
-                ex.submit(
-                    get_insights_from_provider,
-                    p, user_query, rows, openai_client,
-                    pdf_text=pdf_text, sql_query=sql_query,
-                ): p for p in providers
-            }
-            for future in as_completed(futures):
-                provider = futures[future]
-                try:
-                    text = future.result()
-                    if text and "not configured" not in text.lower() and not text.startswith("Error from"):
-                        results.append((provider_names.get(provider, provider), text))
-                except Exception as e:
-                    logger.warning("Insight provider %s failed: %s", provider, e)
-        if not results:
-            return [("No result", "No provider returned a valid analysis. Check API keys and try again.")]
-        return results
-
-    # Single-provider mode: ChatGPT only
+    """Run ChatGPT (and optionally others); return [(provider_display_name, text), ...]."""
     results = []
     text = get_insights_from_provider("chatgpt", user_query, rows, openai_client, pdf_text=pdf_text, sql_query=sql_query)
     if text and "not configured" not in text.lower():
