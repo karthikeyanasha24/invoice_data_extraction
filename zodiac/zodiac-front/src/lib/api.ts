@@ -1739,7 +1739,11 @@ export const dashboardApi = {
             return response.data;
         } catch (error: any) {
             console.error('AI approve query failed:', error);
-            throw new Error(error.response?.data?.detail || 'Failed to approve and run query.');
+            const detail = error.response?.data?.detail;
+            const msg = typeof detail === 'string' ? detail
+                : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? d).join('; ')
+                : 'Failed to approve and run query.';
+            throw new Error(msg);
         }
     },
 
