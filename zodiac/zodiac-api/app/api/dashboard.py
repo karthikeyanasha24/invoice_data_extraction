@@ -2627,6 +2627,7 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
     return "\n".join(parts) if parts else ""
 
 
+
 @router.post("/ai-analysis/chat")
 async def post_ai_analysis_chat(
     message: str = Body(..., embed=True),
@@ -2701,7 +2702,6 @@ async def post_ai_analysis_chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
-
 
 
 @router.post("/ai-analysis/store-query")
@@ -2818,7 +2818,16 @@ async def post_ai_analysis_approve_query(
     sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
     try:
         quoted_sql = _quote_catalog_sql_tables(proposed_sql)
-        rows = _run_sql(sql_db, quoted_sql)
+        try:
+            rows = _run_sql(sql_db, quoted_sql)
+        except Exception as e:
+            err_msg = str(e)
+            if hasattr(e, "orig") and e.orig:
+                err_msg = str(e.orig)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"SQL execution failed: {err_msg}",
+            )
         if not rows:
             return {
                 "reply": "The query ran successfully but returned no rows. The stored query will be reused for similar questions.",
