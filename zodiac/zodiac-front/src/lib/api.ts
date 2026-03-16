@@ -1742,6 +1742,31 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to approve and run query.');
         }
     },
+
+    postAIAnalysisStoreQuery: async (question: string, sqlQuery: string) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/store-query', {
+                question,
+                sql_query: sqlQuery,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI store query failed:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to store query.');
+        }
+    },
+
+    postAIAnalysisSuggestSql: async (question: string) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/suggest-sql', {
+                question,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI suggest SQL failed:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to get SQL suggestion.');
+        }
+    },
 };
 
 // Admin API
