@@ -167,6 +167,36 @@
     "priority": 0
   },
   {
+    "id": "sales_by_vendor_top50",
+    "description": "Top 50 vendors (sold-to customers) by total sales",
+    "question_patterns": [
+      "highest sell by vendor",
+      "highest sales by vendor",
+      "top vendors by sales",
+      "top vendors by revenue"
+    ],
+    "keywords": [
+      "vendor",
+      "sales",
+      "sell",
+      "revenue",
+      "top",
+      "highest"
+    ],
+    "neg_keywords": [
+      "spend",
+      "purchase",
+      "invoice",
+      "ap"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT v.\"kunag\" AS vendor_id,\n       MAX(COALESCE(TRIM(k.\"name1\"), v.\"kunag\"::text)) AS vendor_name,\n       v.\"waerk\" AS currency,\n       SUM(COALESCE(v.\"netwr\"::numeric, 0)) AS total_sales,\n       COUNT(DISTINCT v.\"vbeln\") AS invoice_count\nFROM \"VBRK\" v\nLEFT JOIN \"KNA1\" k ON k.\"mandt\" = v.\"mandt\" AND k.\"kunnr\" = v.\"kunag\"\nWHERE v.\"netwr\" IS NOT NULL\nGROUP BY v.\"kunag\", v.\"waerk\"\nHAVING SUM(COALESCE(v.\"netwr\"::numeric, 0)) > 0\nORDER BY total_sales DESC\nLIMIT 50",
+    "priority": 6
+  },
+  {
     "id": "sales_by_customer_top20",
     "description": "Top 20 customers by total sales",
     "question_patterns": [
@@ -242,6 +272,7 @@
     "id": "sales_by_product_top20",
     "description": "Top 20 products/materials by total sales",
     "question_patterns": [
+      "show me highest sales by product",
       "highest sales by product",
       "top products by sales",
       "top 20 products by revenue",
