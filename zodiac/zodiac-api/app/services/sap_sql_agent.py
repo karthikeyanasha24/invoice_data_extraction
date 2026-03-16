@@ -280,11 +280,21 @@ def _quote_catalog_sql_tables(sql: str) -> str:
     Catalog SQL uses bare names like 'FROM VBRK vk' but PostgreSQL requires 'FROM "VBRK" vk'
     for tables created with quoted uppercase identifiers.
 
-    This replaces unquoted uppercase table names with double-quoted versions throughout the SQL.
+    Tables that exist as lowercase in the DB (e.g. vbrp) must stay lowercase — replace
+    VBRP and "VBRP" with vbrp so the query works.
     """
     actual_tables = _get_actual_table_names_from_mapping()
     if not actual_tables:
         return sql
+
+    # Tables stored as lowercase in mapping — DB has them lowercase; use vbrp not "VBRP"
+    lowercase_tables = {t for t in actual_tables if t == t.lower() and not t.isdigit()}
+    for tbl in sorted(lowercase_tables, key=len, reverse=True):
+        upper = tbl.upper()
+        # Replace "VBRP" (quoted) and VBRP (unquoted) with vbrp
+        sql = re.sub(r'"' + re.escape(upper) + r'"', tbl, sql)
+        sql = re.sub(r'\b' + re.escape(upper) + r'\b', tbl, sql)
+        
 
     # Only quote tables that are uppercase (lowercase tables like 'vbrp' don't need quotes)
     uppercase_tables = {t for t in actual_tables if t == t.upper() and not t.isdigit()}
