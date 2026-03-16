@@ -29,10 +29,7 @@ from ..database import get_sap_session
 from ..services.database import extract_supplier_info_from_string
 from ..services.file_service import read_file_from_storage
 from ..services.invoice_v2_business_intelligence import InvoiceV2BusinessIntelligence
-try:
-    from ..services.sap_sql_agent import answer_with_sap_sql_agent
-except Exception as _sap_import_err:
-    answer_with_sap_sql_agent = None  # type: ignore
+from ..services.sap_sql_agent import answer_with_sap_sql_agent
 from collections import defaultdict
 from decimal import Decimal
 
@@ -2200,6 +2197,8 @@ def _get_sales_by_country_industry(db: Session, limit: int = 20) -> list[dict]:
     return results
 
 
+
+
 def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list[dict]:
     """
     Aggregate highest sales by customer, product, and country using vbrp + vbrk + kna1.
@@ -2704,6 +2703,121 @@ async def post_ai_analysis_chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
+
+
+@router.post("/ai-analysis/approve-query")
+async def post_ai_analysis_approve_query(
+    question: str = Body(..., embed=True),
+    proposed_sql: str = Body(..., embed=True),
+    time_scope: str = Body(default="both", embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Andy's training loop: User approves ChatGPT-proposed SQL.
+    Stores question→SQL in ai_query_memory, executes, and returns full result.
+    """
+    from ..services.ai_query_memory_service import store_approved_query, validate_sql_for_safe_execution
+    from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
+    from ..services.sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+    from ..config.config import USE_SAP_DB_FOR_AI
+
+    is_valid, err = validate_sql_for_safe_execution(proposed_sql)
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid SQL: {err}")
+
+    stored = store_approved_query(
+        db, current_user.id, question, proposed_sql,
+        source="chatgpt", model_used="gpt-4o",
+    )
+    if not stored:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store approved query")
+
+    sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+    try:
+        quoted_sql = _quote_catalog_sql_tables(proposed_sql)
+        rows = _run_sql(sql_db, quoted_sql)
+        if not rows:
+            return {
+                "reply": "The query ran successfully but returned no rows. The stored query will be reused for similar questions.",
+                "action": "new",
+                "reason": "approved_query_zero_rows",
+                "sql": quoted_sql,
+                "rows_preview": [],
+                "charts": None,
+                "needs_approval": False,
+                "period_info": "All Periods" if time_scope == "both" else time_scope,
+            }
+        # Run full orchestrator flow for summarization (reuse last SQL path)
+        ai_openai_key = _get_ai_analysis_config()
+        if ai_openai_key:
+            from ..services.ai_analysis_memory_store import load_memory, save_memory
+            from ..services.ai_analysis_orchestrator import OrchestratorResult
+            from ..services.ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
+            from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
+            mem = load_memory(db, current_user.id)
+            mem.last_sql = quoted_sql
+            mem.last_rows_json = json.dumps(rows[:80], default=str)
+            save_memory(db, mem)
+            result = SqlAgentResult(sql=quoted_sql, rows=rows)
+            preview = rows[:30]
+            metrics_out = None
+            analytics_insights_out = None
+            try:
+                metrics_out = compute_metrics(rows)
+                analytics_insights_out = generate_analytics_insights(question, rows, metrics=metrics_out, sql=quoted_sql)
+            except Exception:
+                pass
+            charts_data = None
+            try:
+                chart_specs = analyze_visualization_needs(rows, question, "new", quoted_sql)
+                if chart_specs:
+                    charts_data = chart_specs_to_json(chart_specs)
+            except Exception:
+                pass
+            from openai import OpenAI
+            client = OpenAI(api_key=ai_openai_key)
+            summarization_prompt = f"""You are a data analyst. The user asked: "{question}"
+
+SQL executed:
+{quoted_sql[:1500]}
+
+Result preview (first 20 rows):
+{json.dumps(preview[:20], default=str, indent=2)}
+
+Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbers. Use bullet points if listing items."""
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": summarization_prompt}],
+                temperature=0.4,
+                max_tokens=700,
+            )
+            reply = (resp.choices[0].message.content or "").strip()
+            period_info, date_range = ("All Periods (1994-2026)", {"min_date": "1994-01-01", "max_date": "2026-12-31"}) if time_scope == "both" else ("Last 30 days", {})
+            orch = OrchestratorResult(
+                reply=reply or "Query executed successfully.",
+                action="new",
+                reason="approved_and_stored",
+                sql=quoted_sql,
+                rows_preview=preview,
+                charts=charts_data,
+                metrics=metrics_out,
+                analytics_insights=analytics_insights_out,
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info,
+                needs_approval=False,
+            )
+            return orchestrator_payload(orch)
+        return {
+            "reply": "Query executed and stored for future use.",
+            "sql": quoted_sql,
+            "rows_preview": rows[:30],
+            "needs_approval": False,
+        }
+    finally:
+        if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
+            sql_db.close()
 
 
 @router.post("/ai-analysis-multi-model")
