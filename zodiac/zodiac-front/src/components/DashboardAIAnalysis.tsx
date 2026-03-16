@@ -335,6 +335,91 @@ function ChatPanel({
                       </button>
                     </div>
                   )}
+                  {/* When AI fails (no SQL executed): show Ask ChatGPT / Enter SQL directly */}
+                  {m.role === 'assistant' && !m.meta?.sql && !m.meta?.needs_approval && !m.meta?.proposed_sql && (onSuggestSql || onApproveQuery) && messages[i - 1]?.role === 'user' && (
+                    <div className="max-w-[92%] mt-2">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+                        <p className="text-xs font-medium text-slate-700">AI couldn&apos;t find data. Train it:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {onSuggestSql && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const prevUser = messages[i - 1];
+                                if (!prevUser?.content) return;
+                                setRejectingIndex(i);
+                                setSuggestLoading(true);
+                                try {
+                                  const sql = await onSuggestSql(prevUser.content);
+                                  setSuggestedSql(sql);
+                                } catch (err) {
+                                  console.error('Suggest failed:', err);
+                                } finally {
+                                  setSuggestLoading(false);
+                                }
+                              }}
+                              disabled={suggestLoading || loading}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
+                            >
+                              <Sparkles className="h-3 w-3" />
+                              {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
+                            </button>
+                          )}
+                        </div>
+                        {rejectingIndex === i && suggestedSql && (
+                          <div className="space-y-2 pt-2 border-t border-slate-200">
+                            <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql}</pre>
+                            {onApproveQuery && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const prevUser = messages[i - 1];
+                                  if (prevUser?.content) {
+                                    await onApproveQuery(prevUser.content, suggestedSql);
+                                    setSuggestedSql(null);
+                                    setRejectingIndex(null);
+                                  }
+                                }}
+                                disabled={loading}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
+                              >
+                                <CheckCircle2 className="h-3 w-3" />
+                                Use this SQL
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        <div className="pt-2 border-t border-slate-200">
+                          <label className="text-xs font-medium text-slate-700 block mb-1">Or enter SQL manually:</label>
+                          <textarea
+                            value={manualSql}
+                            onChange={(e) => setManualSql(e.target.value)}
+                            placeholder="SELECT ... FROM ..."
+                            className="w-full text-[11px] font-mono bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
+                            rows={4}
+                          />
+                          {onApproveQuery && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const prevUser = messages[i - 1];
+                                if (prevUser?.content && manualSql.trim()) {
+                                  await onApproveQuery(prevUser.content, manualSql.trim());
+                                  setManualSql('');
+                                  setRejectingIndex(null);
+                                }
+                              }}
+                              disabled={loading || !manualSql.trim()}
+                              className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium disabled:opacity-50"
+                            >
+                              <FileCode className="h-3 w-3" />
+                              Submit &amp; store
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {/* SQL confirmation for every successful query */}
                   {m.role === 'assistant' && m.meta?.sql && !m.meta?.needs_approval && (m.meta?.rows_preview?.length || m.meta?.sql) && (
                     <div className="max-w-[92%] mt-2 space-y-2">
