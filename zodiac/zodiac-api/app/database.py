@@ -62,6 +62,7 @@ def init_models():
         from .models.customer_certificate import CustomerCertificate
         from .models.certificate_renewal_request import CertificateRenewalRequest
         from .models.certificate_revocation import CertificateRevocation
+        from .models.ai_query_memory import AiQueryMemory
         # Models are now registered with Base.metadata
         print("✅ All models initialized and registered with Base.metadata")
     except ImportError as e:
