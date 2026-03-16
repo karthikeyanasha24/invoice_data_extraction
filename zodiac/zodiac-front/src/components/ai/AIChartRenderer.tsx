@@ -62,6 +62,8 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
   // Check if a key/column likely represents currency/money
   const isCurrencyField = (key: string): boolean => {
     const lowerKey = key.toLowerCase();
+    // Never treat quantity/count columns as currency
+    if (lowerKey.includes('quantity') || lowerKey.includes('invoice_count') || lowerKey === 'count') return false;
     return lowerKey.includes('sales') ||
            lowerKey.includes('revenue') ||
            lowerKey.includes('amount') ||
