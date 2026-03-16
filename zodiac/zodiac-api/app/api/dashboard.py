@@ -2819,8 +2819,6 @@ async def post_ai_analysis_approve_query(
         )
 
 
-
-
 def _do_approve_query(question: str, proposed_sql: str, time_scope: str, current_user, db):
     from ..services.ai_query_memory_service import store_approved_query, validate_sql_for_safe_execution
     from ..services.ai_analysis_orchestrator import orchestrator_payload
@@ -2868,7 +2866,11 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, current
             from ..services.ai_analysis_memory_store import load_memory, save_memory
             from ..services.ai_analysis_orchestrator import OrchestratorResult
             from ..services.ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
-            from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
+            try:
+                from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
+            except ImportError:
+                compute_metrics = None
+                generate_analytics_insights = None
             mem = load_memory(db, current_user.id)
             mem.last_sql = quoted_sql
             mem.last_rows_json = json.dumps(rows[:80], default=str)
@@ -2877,11 +2879,12 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, current
             preview = rows[:30]
             metrics_out = None
             analytics_insights_out = None
-            try:
-                metrics_out = compute_metrics(rows)
-                analytics_insights_out = generate_analytics_insights(question, rows, metrics=metrics_out, sql=quoted_sql)
-            except Exception:
-                pass
+            if compute_metrics and generate_analytics_insights:
+                try:
+                    metrics_out = compute_metrics(rows)
+                    analytics_insights_out = generate_analytics_insights(question, rows, metrics=metrics_out, sql=quoted_sql)
+                except Exception:
+                    pass
             charts_data = None
             try:
                 chart_specs = analyze_visualization_needs(rows, question, "new", quoted_sql)
@@ -2932,6 +2935,7 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
             sql_db.close()
+
 
 
 @router.post("/ai-analysis-multi-model")
