@@ -7,7 +7,7 @@ import {
   GitBranch, RefreshCw, Mic, MicOff,
   Activity, BarChart3, Clock, Zap, AlertTriangle, CheckCircle2,
   ArrowUpRight, ArrowDownRight, Minus, CalendarRange, Eye,
-  FlaskConical, TrendingDown, DollarSign,
+  FlaskConical, TrendingDown, DollarSign, XCircle, FileCode,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
 import MultiModelComparison from './ai/MultiModelComparison';
@@ -184,6 +184,8 @@ function ChatPanel({
   prompts,
   onSend,
   onApproveQuery,
+  onStoreQuery,
+  onSuggestSql,
   placeholder,
   useContext,
   setUseContext,
@@ -197,6 +199,8 @@ function ChatPanel({
   prompts: { label: string; query: string }[];
   onSend: (text: string) => void;
   onApproveQuery?: (question: string, proposedSql: string) => Promise<void>;
+  onStoreQuery?: (question: string, sql: string) => Promise<void>;
+  onSuggestSql?: (question: string) => Promise<string>;
   placeholder: string;
   useContext: boolean;
   setUseContext: (v: boolean) => void;
@@ -205,6 +209,11 @@ function ChatPanel({
   fullWidth?: boolean;
 }) {
   const [input, setInput] = useState('');
+  const [confirmedIndices, setConfirmedIndices] = useState<Set<number>>(new Set());
+  const [rejectingIndex, setRejectingIndex] = useState<number | null>(null);
+  const [suggestedSql, setSuggestedSql] = useState<string | null>(null);
+  const [manualSql, setManualSql] = useState('');
+  const [suggestLoading, setSuggestLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const {
     isListening, transcript, isSupported: isVoiceSupported,
@@ -303,7 +312,7 @@ function ChatPanel({
                       </div>
                     )}
                   </div>
-                  {/* Approve button when ChatGPT proposes SQL */}
+                  {/* Approve button when ChatGPT proposes SQL (AI failed case) */}
                   {m.role === 'assistant' && m.meta?.needs_approval && m.meta?.proposed_sql && onApproveQuery && (
                     <div className="max-w-[92%] mt-2">
                       <button
@@ -324,6 +333,136 @@ function ChatPanel({
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         Approve &amp; run query
                       </button>
+                    </div>
+                  )}
+                  {/* SQL confirmation for every successful query */}
+                  {m.role === 'assistant' && m.meta?.sql && !m.meta?.needs_approval && (m.meta?.rows_preview?.length || m.meta?.sql) && (
+                    <div className="max-w-[92%] mt-2 space-y-2">
+                      {confirmedIndices.has(i) ? (
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-medium">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Stored for future use
+                        </div>
+                      ) : rejectingIndex === i ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-amber-800">SQL incorrect. How would you like to fix it?</p>
+                            <button
+                              type="button"
+                              onClick={() => { setRejectingIndex(null); setSuggestedSql(null); setManualSql(''); }}
+                              className="text-[10px] text-amber-600 hover:text-amber-800 underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                                if (!prevUser || !onSuggestSql) return;
+                                setSuggestLoading(true);
+                                try {
+                                  const sql = await onSuggestSql(prevUser.content);
+                                  setSuggestedSql(sql);
+                                } catch (err) {
+                                  console.error('Suggest failed:', err);
+                                } finally {
+                                  setSuggestLoading(false);
+                                }
+                              }}
+                              disabled={suggestLoading || loading}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
+                            >
+                              <Sparkles className="h-3 w-3" />
+                              {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
+                            </button>
+                          </div>
+                          {suggestedSql && (
+                            <div className="space-y-2">
+                              <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql}</pre>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                                  if (prevUser && onApproveQuery) {
+                                    await onApproveQuery(prevUser.content, suggestedSql);
+                                    setSuggestedSql(null);
+                                    setRejectingIndex(null);
+                                  }
+                                }}
+                                disabled={loading}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
+                              >
+                                <CheckCircle2 className="h-3 w-3" />
+                                Use this SQL
+                              </button>
+                            </div>
+                          )}
+                          <div className="pt-2 border-t border-amber-200">
+                            <label className="text-xs font-medium text-amber-800 block mb-1">Or enter SQL manually:</label>
+                            <textarea
+                              value={manualSql}
+                              onChange={(e) => setManualSql(e.target.value)}
+                              placeholder="SELECT ... FROM ..."
+                              className="w-full text-[11px] font-mono bg-white border border-amber-300 rounded p-2 min-h-[80px] resize-y"
+                              rows={4}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                                if (prevUser && manualSql.trim() && onApproveQuery) {
+                                  await onApproveQuery(prevUser.content, manualSql.trim());
+                                  setManualSql('');
+                                  setRejectingIndex(null);
+                                }
+                              }}
+                              disabled={loading || !manualSql.trim()}
+                              className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium disabled:opacity-50"
+                            >
+                              <FileCode className="h-3 w-3" />
+                              Submit &amp; store
+                            </button>
+                          </div>
+                        </div>
+                      ) : onStoreQuery ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-600">Is this SQL correct?</span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                              if (prevUser && m.meta?.sql) {
+                                try {
+                                  await onStoreQuery(prevUser.content, m.meta.sql);
+                                  setConfirmedIndices((s) => new Set(s).add(i));
+                                } catch (err) {
+                                  console.error('Store failed:', err);
+                                }
+                              }
+                            }}
+                            disabled={loading}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="h-3 w-3" />
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectingIndex(i);
+                              setSuggestedSql(null);
+                              setManualSql('');
+                            }}
+                            disabled={loading}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium disabled:opacity-50"
+                          >
+                            <XCircle className="h-3 w-3" />
+                            No
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   )}
                   {/* Show SQL and data info for assistant messages */}
@@ -644,6 +783,22 @@ export default function DashboardAIAnalysis() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleStoreQuery = async (section: 'realtime' | 'historical', question: string, sql: string) => {
+    setError(null);
+    try {
+      await dashboardApi.postAIAnalysisStoreQuery(question, sql);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to store query.';
+      setError(msg);
+      throw err;
+    }
+  };
+
+  const handleSuggestSql = async (section: 'realtime' | 'historical', question: string): Promise<string> => {
+    const res = await dashboardApi.postAIAnalysisSuggestSql(question);
+    return res?.proposed_sql ?? '';
   };
 
   /* ── Derived stats ───────────────────────────────────────── */
@@ -969,6 +1124,8 @@ export default function DashboardAIAnalysis() {
                     setShowTimeScopeModal(true);
                   }}
                   onApproveQuery={(q, s) => handleApproveQuery('realtime', q, s)}
+                  onStoreQuery={(q, s) => handleStoreQuery('realtime', q, s)}
+                  onSuggestSql={(q) => handleSuggestSql('realtime', q)}
                   placeholder="Ask about live invoices, SAT docs, failures…"
                   useContext={useContext}
                   setUseContext={setUseContext}
@@ -1145,6 +1302,8 @@ export default function DashboardAIAnalysis() {
                       setShowTimeScopeModal(true);
                     }}
                     onApproveQuery={(q, s) => handleApproveQuery('historical', q, s)}
+                    onStoreQuery={(q, s) => handleStoreQuery('historical', q, s)}
+                    onSuggestSql={(q) => handleSuggestSql('historical', q)}
                     placeholder="Ask about trends, forecasts, period comparisons…"
                     useContext={useContext}
                     setUseContext={setUseContext}
