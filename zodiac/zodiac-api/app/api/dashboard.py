@@ -2869,6 +2869,12 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, current
                 "needs_approval": False,
                 "period_info": "All Periods" if time_scope == "both" else time_scope,
             }
+        # Apply product-name filter when user asked for a specific product (e.g. "profit margin for Fire fighting vehicle")
+        try:
+            from ..services.invoice_bot_helpers import filter_dataframe_by_product_name_if_requested
+            rows = filter_dataframe_by_product_name_if_requested(question, rows)
+        except Exception:
+            pass
         # Run full orchestrator flow for summarization (reuse last SQL path)
         ai_openai_key = _get_ai_analysis_config()
         if ai_openai_key:
