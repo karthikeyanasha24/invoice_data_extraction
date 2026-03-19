@@ -42,6 +42,10 @@ const HISTORICAL_PROMPTS = [
 /* ─── Types ───────────────────────────────────────────────────── */
 
 type AiAnalysisMeta = {
+  validation?: SqlValidationMeta;
+  proposed_validation?: SqlValidationMeta;
+  query_origin?: string;
+  suggestion_source?: string;
   action?: string; reason?: string; sql?: string;
   rows_preview?: Record<string, unknown>[];
   compare?: unknown; charts?: any[]; multiModel?: any;
@@ -63,6 +67,21 @@ type AiAnalysisMeta = {
     row_count?: number;
     chart_count?: number;
   };
+};
+
+type SqlValidationMeta = {
+  errors?: string[];
+  warnings?: string[];
+  tables?: string[];
+  columns?: string[];
+  date_normalizations?: string[];
+  aggregate_functions?: string[];
+};
+
+type SuggestedSqlResult = {
+  sql: string;
+  source?: string;
+  validation?: SqlValidationMeta;
 };
 
 type Message = {
@@ -133,6 +152,28 @@ function LivePulse() {
   );
 }
 
+function ValidationNotes({ validation }: { validation?: SqlValidationMeta }) {
+  if (!validation) return null;
+  const errors = validation.errors ?? [];
+  const warnings = validation.warnings ?? [];
+  const notes = validation.date_normalizations ?? [];
+  if (!errors.length && !warnings.length && !notes.length) return null;
+
+  return (
+    <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-900 space-y-1">
+      {errors.map((error, idx) => (
+        <div key={`error-${idx}`}>Blocked: {error}</div>
+      ))}
+      {warnings.map((warning, idx) => (
+        <div key={`warning-${idx}`}>Warning: {warning}</div>
+      ))}
+      {notes.map((note, idx) => (
+        <div key={`note-${idx}`}>Normalized: {note}</div>
+      ))}
+    </div>
+  );
+}
+
 /* ─── Stat Card ──────────────────────────────────────────────── */
 
 function StatCard({
@@ -184,6 +225,7 @@ function ChatPanel({
   prompts,
   onSend,
   onApproveQuery,
+  onRejectQuery,
   onStoreQuery,
   onSuggestSql,
   placeholder,
@@ -198,9 +240,10 @@ function ChatPanel({
   loading: boolean;
   prompts: { label: string; query: string }[];
   onSend: (text: string) => void;
-  onApproveQuery?: (question: string, proposedSql: string) => Promise<void>;
+  onApproveQuery?: (question: string, proposedSql: string, approvalSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<boolean>;
+  onRejectQuery?: (question: string, rejectedSql: string, attemptSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<void>;
   onStoreQuery?: (question: string, sql: string) => Promise<void>;
-  onSuggestSql?: (question: string) => Promise<string>;
+  onSuggestSql?: (question: string) => Promise<SuggestedSqlResult>;
   placeholder: string;
   useContext: boolean;
   setUseContext: (v: boolean) => void;
@@ -211,7 +254,7 @@ function ChatPanel({
   const [input, setInput] = useState('');
   const [confirmedIndices, setConfirmedIndices] = useState<Set<number>>(new Set());
   const [rejectingIndex, setRejectingIndex] = useState<number | null>(null);
-  const [suggestedSql, setSuggestedSql] = useState<string | null>(null);
+  const [suggestedSql, setSuggestedSql] = useState<SuggestedSqlResult | null>(null);
   const [manualSql, setManualSql] = useState('');
   const [suggestLoading, setSuggestLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -242,6 +285,19 @@ function ChatPanel({
 
   // In full-width mode, charts appear in a side panel at md+ breakpoint
   const chartPanelBreakpoint = fullWidth ? 'md' : 'lg';
+
+  const recordRejection = async (
+    question: string | undefined,
+    rejectedSql: string | undefined,
+    attemptSource: 'chatgpt' | 'manual' | 'assistant_sql',
+  ) => {
+    if (!question || !rejectedSql || !onRejectQuery) return;
+    try {
+      await onRejectQuery(question, rejectedSql, attemptSource);
+    } catch (err) {
+      console.error('Reject feedback failed:', err);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -322,6 +378,7 @@ function ChatPanel({
                         ) : (
                           <p className="text-[10px] text-slate-500 italic">(SQL not available — use Ask ChatGPT or enter manually below)</p>
                         )}
+                        <ValidationNotes validation={m.meta?.proposed_validation} />
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs text-slate-600">Is this SQL correct?</span>
                           {m.meta?.proposed_sql && onApproveQuery && (
@@ -331,8 +388,10 @@ function ChatPanel({
                                 const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
                                 if (prevUser && m.meta?.proposed_sql) {
                                   try {
-                                    await onApproveQuery(prevUser.content, m.meta.proposed_sql);
-                                    setConfirmedIndices((s) => new Set(s).add(i));
+                                    const stored = await onApproveQuery(prevUser.content, m.meta.proposed_sql, 'chatgpt');
+                                    if (stored) {
+                                      setConfirmedIndices((s) => new Set(s).add(i));
+                                    }
                                   } catch (err) {
                                     console.error('Approve failed:', err);
                                   }
@@ -347,7 +406,9 @@ function ChatPanel({
                           )}
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={async () => {
+                              const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                              await recordRejection(prevUser?.content, m.meta?.proposed_sql, 'chatgpt');
                               setRejectingIndex(rejectingIndex === i ? null : i);
                               setSuggestedSql(null);
                               // Keep manualSql - user may have typed their own SQL
@@ -390,16 +451,19 @@ function ChatPanel({
                             </div>
                             {suggestedSql && (
                               <div className="space-y-2">
-                                <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql}</pre>
+                                <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
+                                <ValidationNotes validation={suggestedSql.validation} />
                                 {onApproveQuery && (
                                   <button
                                     type="button"
                                     onClick={async () => {
                                       const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
                                       if (prevUser) {
-                                        await onApproveQuery(prevUser.content, suggestedSql);
-                                        setSuggestedSql(null);
-                                        setRejectingIndex(null);
+                                        const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
+                                        if (stored) {
+                                          setSuggestedSql(null);
+                                          setRejectingIndex(null);
+                                        }
                                       }
                                     }}
                                     disabled={loading}
@@ -426,9 +490,11 @@ function ChatPanel({
                                   onClick={async () => {
                                     const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
                                     if (prevUser && manualSql.trim()) {
-                                      await onApproveQuery(prevUser.content, manualSql.trim());
-                                      setManualSql('');
-                                      setRejectingIndex(null);
+                                      const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
+                                      if (stored) {
+                                        setManualSql('');
+                                        setRejectingIndex(null);
+                                      }
                                     }
                                   }}
                                   disabled={loading || !manualSql.trim()}
@@ -482,16 +548,19 @@ function ChatPanel({
                         </div>
                         {rejectingIndex === i && suggestedSql && (
                           <div className="space-y-2 pt-2 border-t border-slate-200">
-                            <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql}</pre>
+                            <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
+                            <ValidationNotes validation={suggestedSql.validation} />
                             {onApproveQuery && (
                               <button
                                 type="button"
                                 onClick={async () => {
                                   const prevUser = messages[i - 1];
                                   if (prevUser?.content) {
-                                    await onApproveQuery(prevUser.content, suggestedSql);
-                                    setSuggestedSql(null);
-                                    setRejectingIndex(null);
+                                    const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
+                                    if (stored) {
+                                      setSuggestedSql(null);
+                                      setRejectingIndex(null);
+                                    }
                                   }
                                 }}
                                 disabled={loading}
@@ -518,9 +587,11 @@ function ChatPanel({
                               onClick={async () => {
                                 const prevUser = messages[i - 1];
                                 if (prevUser?.content && manualSql.trim()) {
-                                  await onApproveQuery(prevUser.content, manualSql.trim());
-                                  setManualSql('');
-                                  setRejectingIndex(null);
+                                  const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
+                                  if (stored) {
+                                    setManualSql('');
+                                    setRejectingIndex(null);
+                                  }
                                 }
                               }}
                               disabled={loading || !manualSql.trim()}
@@ -579,15 +650,18 @@ function ChatPanel({
                           </div>
                           {suggestedSql && (
                             <div className="space-y-2">
-                              <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql}</pre>
+                              <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
+                              <ValidationNotes validation={suggestedSql.validation} />
                               <button
                                 type="button"
                                 onClick={async () => {
                                   const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
                                   if (prevUser && onApproveQuery) {
-                                    await onApproveQuery(prevUser.content, suggestedSql);
-                                    setSuggestedSql(null);
-                                    setRejectingIndex(null);
+                                    const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
+                                    if (stored) {
+                                      setSuggestedSql(null);
+                                      setRejectingIndex(null);
+                                    }
                                   }
                                 }}
                                 disabled={loading}
@@ -612,9 +686,11 @@ function ChatPanel({
                               onClick={async () => {
                                 const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
                                 if (prevUser && manualSql.trim() && onApproveQuery) {
-                                  await onApproveQuery(prevUser.content, manualSql.trim());
-                                  setManualSql('');
-                                  setRejectingIndex(null);
+                                  const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
+                                  if (stored) {
+                                    setManualSql('');
+                                    setRejectingIndex(null);
+                                  }
                                 }
                               }}
                               disabled={loading || !manualSql.trim()}
@@ -650,6 +726,8 @@ function ChatPanel({
                           <button
                             type="button"
                             onClick={() => {
+                              const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
+                              void recordRejection(prevUser?.content, m.meta?.sql, 'assistant_sql');
                               setRejectingIndex(i);
                               setSuggestedSql(null);
                               setManualSql('');
@@ -681,6 +759,7 @@ function ChatPanel({
                       )}
                       <div>
                         {m.meta.action && <span>Action: {m.meta.action}</span>}
+                        {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
                         {m.meta.sql && <span> • SQL executed</span>}
                         {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} rows</span>}
                         {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
@@ -695,6 +774,7 @@ function ChatPanel({
                           </pre>
                         </details>
                       )}
+                      <ValidationNotes validation={m.meta.validation} />
                       {m.meta.performance && (
                         <div className="text-slate-500">
                           ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
@@ -922,6 +1002,10 @@ export default function DashboardAIAnalysis() {
           action: res?.action,
           reason: res?.reason,
           sql: res?.sql,
+          validation: res?.validation,
+          proposed_validation: res?.proposed_validation,
+          query_origin: res?.query_origin,
+          suggestion_source: res?.suggestion_source,
           rows_preview: res?.rows_preview,
           compare: res?.compare,
           charts: res?.charts,
@@ -936,7 +1020,7 @@ export default function DashboardAIAnalysis() {
         console.log('📊 Extracted Charts:', meta.charts);
         console.log('📊 Has Charts:', Boolean(meta.charts && meta.charts.length > 0));
 
-        const hasMeta = Boolean(meta.action || meta.sql || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info || meta.needs_approval);
+        const hasMeta = Boolean(meta.action || meta.sql || meta.validation || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info || meta.needs_approval);
         setMsgs((prev) => [...prev, {
           role: 'assistant', content: reply,
           meta: hasMeta ? meta : undefined, section, ts: Date.now(),
@@ -951,34 +1035,47 @@ export default function DashboardAIAnalysis() {
     }
   };
 
-  const handleApproveQuery = async (section: 'realtime' | 'historical', question: string, proposedSql: string) => {
+  const handleApproveQuery = async (
+    section: 'realtime' | 'historical',
+    question: string,
+    proposedSql: string,
+    approvalSource: 'chatgpt' | 'manual' | 'assistant_sql' = 'chatgpt',
+  ): Promise<boolean> => {
     const setMsgs = section === 'realtime' ? setRealtimeMessages : setHistoricalMessages;
     const setLoading = section === 'realtime' ? setRealtimeLoading : setHistoricalLoading;
     setLoading(true);
     setError(null);
     try {
-      const res = await dashboardApi.postAIAnalysisApproveQuery(question, proposedSql, timeScope);
+      const res = await dashboardApi.postAIAnalysisApproveQuery(question, proposedSql, timeScope, approvalSource);
       const meta: AiAnalysisMeta = {
         action: res?.action,
         reason: res?.reason,
         sql: res?.sql,
+        validation: res?.validation,
+        proposed_validation: res?.proposed_validation,
+        query_origin: res?.query_origin,
+        suggestion_source: res?.suggestion_source,
         rows_preview: res?.rows_preview,
         charts: res?.charts,
         time_scope: res?.time_scope,
         date_range: res?.date_range,
         period_info: res?.period_info,
+        needs_approval: res?.needs_approval,
+        proposed_sql: res?.proposed_sql,
       };
       setMsgs((prev) => [...prev, {
         role: 'assistant',
         content: res?.reply ?? 'Query executed and stored for future use.',
-        meta: meta.sql || meta.rows_preview?.length ? meta : undefined,
+        meta: (meta.sql || meta.validation || meta.rows_preview?.length || meta.needs_approval) ? meta : undefined,
         section,
         ts: Date.now(),
       }]);
+      return !Boolean(res?.needs_approval);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to approve query.';
       setError(msg);
       setMsgs((prev) => [...prev, { role: 'assistant', content: `Error: ${msg}`, section, ts: Date.now() }]);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -987,7 +1084,7 @@ export default function DashboardAIAnalysis() {
   const handleStoreQuery = async (section: 'realtime' | 'historical', question: string, sql: string) => {
     setError(null);
     try {
-      await dashboardApi.postAIAnalysisStoreQuery(question, sql);
+      await dashboardApi.postAIAnalysisStoreQuery(question, sql, timeScope, 'assistant_sql');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to store query.';
       setError(msg);
@@ -995,9 +1092,22 @@ export default function DashboardAIAnalysis() {
     }
   };
 
-  const handleSuggestSql = async (section: 'realtime' | 'historical', question: string): Promise<string> => {
-    const res = await dashboardApi.postAIAnalysisSuggestSql(question);
-    return res?.proposed_sql ?? '';
+  const handleSuggestSql = async (section: 'realtime' | 'historical', question: string): Promise<SuggestedSqlResult> => {
+    const res = await dashboardApi.postAIAnalysisSuggestSql(question, timeScope);
+    return {
+      sql: res?.proposed_sql ?? '',
+      source: res?.suggestion_source,
+      validation: res?.validation,
+    };
+  };
+
+  const handleRejectQuery = async (
+    section: 'realtime' | 'historical',
+    question: string,
+    rejectedSql: string,
+    attemptSource: 'chatgpt' | 'manual' | 'assistant_sql' = 'assistant_sql',
+  ) => {
+    await dashboardApi.postAIAnalysisRejectQuery(question, rejectedSql, timeScope, attemptSource);
   };
 
   /* ── Derived stats ───────────────────────────────────────── */
@@ -1322,7 +1432,8 @@ export default function DashboardAIAnalysis() {
                     setPendingQuery({ section: 'realtime', text: t });
                     setShowTimeScopeModal(true);
                   }}
-                  onApproveQuery={(q, s) => handleApproveQuery('realtime', q, s)}
+                  onApproveQuery={(q, s, source) => handleApproveQuery('realtime', q, s, source)}
+                  onRejectQuery={(q, s, source) => handleRejectQuery('realtime', q, s, source)}
                   onStoreQuery={(q, s) => handleStoreQuery('realtime', q, s)}
                   onSuggestSql={(q) => handleSuggestSql('realtime', q)}
                   placeholder="Ask about live invoices, SAT docs, failures…"
@@ -1500,7 +1611,8 @@ export default function DashboardAIAnalysis() {
                       setPendingQuery({ section: 'historical', text: t });
                       setShowTimeScopeModal(true);
                     }}
-                    onApproveQuery={(q, s) => handleApproveQuery('historical', q, s)}
+                    onApproveQuery={(q, s, source) => handleApproveQuery('historical', q, s, source)}
+                    onRejectQuery={(q, s, source) => handleRejectQuery('historical', q, s, source)}
                     onStoreQuery={(q, s) => handleStoreQuery('historical', q, s)}
                     onSuggestSql={(q) => handleSuggestSql('historical', q)}
                     placeholder="Ask about trends, forecasts, period comparisons…"
