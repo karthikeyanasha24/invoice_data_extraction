@@ -2864,9 +2864,27 @@ def _generate_sql_json(
         )
     join_rules_block = ""
     if join_rules:
+        selected_upper = {str(t).upper() for t in selected_tables}
+        seen_join_rules = set()
+        prioritized_rules = []
+        fallback_rules = []
+        for r in join_rules:
+            left = str(r.get("left") or "")
+            right = str(r.get("right") or "")
+            on = str(r.get("on") or "")
+            key = (left.upper(), right.upper(), on.upper())
+            if key in seen_join_rules:
+                continue
+            seen_join_rules.add(key)
+            if left.upper() in selected_upper or right.upper() in selected_upper:
+                prioritized_rules.append(r)
+            else:
+                fallback_rules.append(r)
+        rules_for_prompt = prioritized_rules + fallback_rules
         join_rules_block = "\nConfigured join rules (schema_ai_config.json – use these when joining):\n" + "\n".join(
-            f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in join_rules[:30]  # increased: was 20
+            f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in rules_for_prompt[:80]
         ) + "\n"
+
 
     # Per-table SQL hints from sap_table_metadata.json (when available for selected tables)
     sap_meta = _load_sap_table_metadata()
