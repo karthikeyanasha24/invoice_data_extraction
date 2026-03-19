@@ -291,3 +291,4 @@ def get_metrics_text() -> str:
     for name, m in list(metrics.items())[:20]:
         lines.append(f"  {name}: {m.get('table')}.{m.get('column')} -> {m.get('aggregation', 'SUM')}")
     return "\n".join(lines)
+
