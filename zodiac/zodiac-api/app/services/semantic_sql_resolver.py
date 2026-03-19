@@ -278,8 +278,13 @@ def get_join_graph_text() -> str:
     data = load_semantic_dictionary()
     joins = data.get("joins") or []
     lines = ["Join graph (use for multi-table queries):"]
-    for j in joins[:25]:
-        lines.append(f"  {j.get('left_table')}.{j.get('left_key')} = {j.get('right_table')}.{j.get('right_key')}")
+    seen = set()
+    for j in joins:
+        line = f"  {j.get('left_table')}.{j.get('left_key')} = {j.get('right_table')}.{j.get('right_key')}"
+        if line in seen:
+            continue
+        seen.add(line)
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -291,4 +296,3 @@ def get_metrics_text() -> str:
     for name, m in list(metrics.items())[:20]:
         lines.append(f"  {name}: {m.get('table')}.{m.get('column')} -> {m.get('aggregation', 'SUM')}")
     return "\n".join(lines)
-
