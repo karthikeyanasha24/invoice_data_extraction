@@ -81,6 +81,39 @@ In SAP, COGS depends on **procurement type** (Make vs. Buy) and **valuation meth
 _TABLES_THAT_JOIN_TO_MAKT = (
     "MARA", "VBRP", "VBAP", "LIPS", "MBEW", "KEKO", "EKPO", "CKIS", "STPO", "EBAN", "MSEG", "MAST"
 )
+_TABLES_THAT_JOIN_TO_KNA1 = ("VBRK", "VBAK", "BSAD", "BSEG", "KNVV", "KNVP")
+_TABLES_THAT_JOIN_TO_LFA1 = ("EKKO", "RBKP", "LFB1", "LFM1", "EKPO", "RSEG")
+
+
+def _clean_named_entity_candidate(name: str) -> str:
+    if not name:
+        return ""
+    value = str(name).strip().strip("'\"")
+    value = re.sub(
+        r"\s+(?:in|during|for|by|with|from|between|across|over|where|whose|that)\b.*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip()
+    value = re.sub(r"\s+", " ", value)
+    if value.lower().startswith("the "):
+        value = value[4:].strip()
+    return value[:80].strip()
+
+
+def _extract_entity_name_with_patterns(user_query: str, patterns: Tuple[str, ...]) -> str:
+    if not user_query:
+        return ""
+    source = user_query.strip()
+    for pattern in patterns:
+        match = re.search(pattern, source, re.IGNORECASE)
+        if not match:
+            continue
+        candidate = source[match.start(1):match.end(1)].strip()
+        candidate = _clean_named_entity_candidate(candidate)
+        if candidate and candidate.lower() not in {"all", "details", "detail", "data"}:
+            return candidate
+    return ""
 
 
 def _extract_product_name_from_query(user_query: str) -> str:
@@ -120,7 +153,51 @@ def _extract_product_name_from_query(user_query: str) -> str:
         name = s[m.start(1) : m.end(1)].strip()
         if name and len(name) <= 40:
             return name
-    return ""
+    quoted = _extract_entity_name_with_patterns(
+        s,
+        (
+            r"(?:product|products|material|materials)\s+(?:named|called|containing|like)\s+['\"]([^'\"]{2,80})['\"]",
+            r"['\"]([^'\"]{2,80})['\"]\s+(?:product|products|material|materials)",
+        ),
+    )
+    return quoted
+
+
+def _extract_customer_name_from_query(user_query: str) -> str:
+    return _extract_entity_name_with_patterns(
+        user_query,
+        (
+            r"(?:for|of|about|show|list|find|give me|details for)\s+customer\s+([A-Za-z0-9][A-Za-z0-9 &_/\-\.]{1,80})",
+            r"customer(?:s)?\s+(?:named|called|containing|like)\s+['\"]?([^'\"]{2,80})['\"]?",
+            r"sales\s+for\s+([A-Za-z0-9][A-Za-z0-9 &_/\-\.]{1,80})\s+customer",
+        ),
+    )
+
+
+def _extract_vendor_name_from_query(user_query: str) -> str:
+    return _extract_entity_name_with_patterns(
+        user_query,
+        (
+            r"(?:for|of|about|show|list|find|give me|details for)\s+(?:vendor|supplier)\s+([A-Za-z0-9][A-Za-z0-9 &_/\-\.]{1,80})",
+            r"(?:vendor|supplier)s?\s+(?:named|called|containing|like)\s+['\"]?([^'\"]{2,80})['\"]?",
+            r"(?:spend|invoice|purchases?)\s+for\s+(?:vendor|supplier)\s+([A-Za-z0-9][A-Za-z0-9 &_/\-\.]{1,80})",
+        ),
+    )
+
+
+def get_specific_entity_request(user_query: str) -> Optional[Dict[str, str]]:
+    if not user_query or not isinstance(user_query, str):
+        return None
+    product_name = _extract_product_name_from_query(user_query)
+    if product_name:
+        return {"entity": "product", "value": product_name}
+    customer_name = _extract_customer_name_from_query(user_query)
+    if customer_name:
+        return {"entity": "customer", "value": customer_name}
+    vendor_name = _extract_vendor_name_from_query(user_query)
+    if vendor_name:
+        return {"entity": "vendor", "value": vendor_name}
+    return None
 
 
 def _extract_material_number_from_query(user_query: str) -> str:
@@ -242,8 +319,97 @@ def inject_product_name_filter_if_needed(user_query: str, json_spec: dict) -> di
     if has_maktx:
         return json_spec
     json_spec.setdefault("filters", [])
-    json_spec["filters"].append({"lhs": "MAKT.MAKTX", "operator": "=", "rhs": product_name})
+    escaped_product_name = product_name.replace("'", "''")
+    json_spec["filters"].append({"lhs": "MAKT.MAKTX", "operator": "ILIKE", "rhs": f"'%{escaped_product_name}%'"})
     inject_makt_single_language_if_needed(json_spec)
+    return json_spec
+
+
+def _collect_tables_from_spec(json_spec: dict) -> set[str]:
+    tables = set()
+    for c in json_spec.get("columns", []):
+        if c.get("table"):
+            tables.add(str(c.get("table")))
+    for j in json_spec.get("joins", []):
+        if j.get("left"):
+            tables.add(str(j.get("left")))
+        if j.get("right"):
+            tables.add(str(j.get("right")))
+    for t in json_spec.get("tables", []):
+        if isinstance(t, dict) and t.get("name"):
+            tables.add(str(t.get("name")))
+        elif isinstance(t, str):
+            tables.add(t)
+    return tables
+
+
+def inject_specific_entity_filter_if_needed(user_query: str, json_spec: dict) -> dict:
+    """Apply structured name filters for product, customer, and vendor queries."""
+    if not user_query or not json_spec:
+        return json_spec
+
+    entity_request = get_specific_entity_request(user_query)
+    if not entity_request:
+        return json_spec
+
+    entity = entity_request["entity"]
+    value = entity_request["value"]
+    if entity == "product":
+        return inject_product_name_filter_if_needed(user_query, json_spec)
+
+    tables = _collect_tables_from_spec(json_spec)
+    json_spec.setdefault("filters", [])
+    safe_value = value.replace("'", "''")
+
+    if entity == "customer":
+        if "KNA1" not in tables:
+            partner = next((t for t in _TABLES_THAT_JOIN_TO_KNA1 if t in tables), None)
+            if partner is not None:
+                json_spec.setdefault("joins", [])
+                join_map = {
+                    "VBRK": "VBRK.KUNAG = KNA1.KUNNR",
+                    "VBAK": "VBAK.KUNNR = KNA1.KUNNR",
+                    "BSAD": "BSAD.KUNNR = KNA1.KUNNR",
+                    "BSEG": "BSEG.KUNNR = KNA1.KUNNR",
+                    "KNVV": "KNVV.KUNNR = KNA1.KUNNR",
+                    "KNVP": "KNVP.KUNNR = KNA1.KUNNR",
+                }
+                if not any(j.get("right") == "KNA1" or j.get("left") == "KNA1" for j in json_spec["joins"]):
+                    json_spec["joins"].append({"left": partner, "right": "KNA1", "on": join_map[partner], "type": "left"})
+                if not any(c.get("table") == "KNA1" and c.get("name") == "NAME1" for c in json_spec.get("columns", [])):
+                    json_spec.setdefault("columns", []).append({"table": "KNA1", "name": "NAME1", "description": "customer_name"})
+                tables.add("KNA1")
+        if "KNA1" in tables and not any("KNA1.NAME1" in str(f.get("lhs", "")).upper() for f in json_spec["filters"]):
+            json_spec["filters"].append({"lhs": "KNA1.NAME1", "operator": "ILIKE", "rhs": f"'%{safe_value}%'"})
+        return json_spec
+
+    if entity == "vendor":
+        if "LFA1" not in tables:
+            partner = next((t for t in _TABLES_THAT_JOIN_TO_LFA1 if t in tables), None)
+            if partner is not None:
+                json_spec.setdefault("joins", [])
+                join_map = {
+                    "EKKO": "EKKO.LIFNR = LFA1.LIFNR",
+                    "RBKP": "RBKP.LIFNR = LFA1.LIFNR",
+                    "LFB1": "LFB1.LIFNR = LFA1.LIFNR",
+                    "LFM1": "LFM1.LIFNR = LFA1.LIFNR",
+                    "EKPO": "EKKO.LIFNR = LFA1.LIFNR",
+                    "RSEG": "RBKP.LIFNR = LFA1.LIFNR",
+                }
+                join_left = partner
+                if partner == "EKPO" and "EKKO" in tables:
+                    join_left = "EKKO"
+                if partner == "RSEG" and "RBKP" in tables:
+                    join_left = "RBKP"
+                if join_left in join_map and not any(j.get("right") == "LFA1" or j.get("left") == "LFA1" for j in json_spec["joins"]):
+                    json_spec["joins"].append({"left": join_left, "right": "LFA1", "on": join_map[join_left], "type": "left"})
+                if not any(c.get("table") == "LFA1" and c.get("name") == "NAME1" for c in json_spec.get("columns", [])):
+                    json_spec.setdefault("columns", []).append({"table": "LFA1", "name": "NAME1", "description": "vendor_name"})
+                tables.add("LFA1")
+        if "LFA1" in tables and not any("LFA1.NAME1" in str(f.get("lhs", "")).upper() for f in json_spec["filters"]):
+            json_spec["filters"].append({"lhs": "LFA1.NAME1", "operator": "ILIKE", "rhs": f"'%{safe_value}%'"})
+        return json_spec
+
     return json_spec
 
 
@@ -487,6 +653,16 @@ def _get_customer_name_column(cols: List[str]) -> str:
     return ""
 
 
+def _get_vendor_name_column(cols: List[str]) -> str:
+    for c in cols:
+        if not c:
+            continue
+        cu = (c or "").upper().replace(" ", "_")
+        if cu in ("VENDOR_NAME", "SUPPLIER_NAME", "NAME1") or ("VENDOR" in cu and "NAME" in cu) or ("SUPPLIER" in cu and "NAME" in cu):
+            return c
+    return ""
+
+
 def _find_numeric_value_column(cols: List[str], rows: List[Dict[str, Any]]) -> str:
     for c in cols:
         if not c:
@@ -606,6 +782,57 @@ def filter_dataframe_by_product_name_if_requested(
         if pn_upper in val.upper():
             out.append(r)
     return out if out else rows
+
+
+def filter_dataframe_by_specific_entity_if_requested(
+    user_query: str, rows: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Keep only rows matching the specific entity named in the question, if detectable."""
+    if not user_query or not rows:
+        return rows
+    entity_request = get_specific_entity_request(user_query)
+    if not entity_request:
+        return rows
+
+    cols = list(rows[0].keys())
+    entity = entity_request["entity"]
+    needle = entity_request["value"].upper()
+    candidate_cols: List[str] = []
+
+    if entity == "product":
+        desc_col = _get_product_display_column(cols)
+        if desc_col:
+            candidate_cols.append(desc_col)
+        matnr_col = _get_material_number_column(cols)
+        if matnr_col:
+            candidate_cols.append(matnr_col)
+    elif entity == "customer":
+        customer_name_col = _get_customer_name_column(cols)
+        if customer_name_col:
+            candidate_cols.append(customer_name_col)
+        candidate_cols.extend([c for c in cols if "CUSTOMER" in (c or "").upper()])
+    elif entity == "vendor":
+        vendor_name_col = _get_vendor_name_column(cols)
+        if vendor_name_col:
+            candidate_cols.append(vendor_name_col)
+        candidate_cols.extend([c for c in cols if any(k in (c or "").upper() for k in ("VENDOR", "SUPPLIER"))])
+
+    seen = set()
+    ordered_candidate_cols = []
+    for col in candidate_cols:
+        if col and col not in seen:
+            ordered_candidate_cols.append(col)
+            seen.add(col)
+
+    if not ordered_candidate_cols:
+        return rows
+
+    filtered = []
+    for row in rows:
+        haystack = " ".join(str(row.get(col, "") or "") for col in ordered_candidate_cols).upper()
+        if needle in haystack:
+            filtered.append(row)
+    return filtered if filtered else rows
 
 
 def apply_procurement_type_display(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
