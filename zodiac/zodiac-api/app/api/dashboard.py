@@ -2640,7 +2640,6 @@ def _validation_to_payload(validation) -> Dict[str, Any]:
     }
 
 
-
 def _non_blocking_validation_payload(validation) -> Dict[str, Any]:
     if not validation:
         return {}
@@ -2767,7 +2766,10 @@ async def post_ai_analysis_chat(
                 proposed_validation, _ = _validate_sql_candidate(validation_db, message or "", payload["proposed_sql"])
                 if proposed_validation:
                     payload["proposed_sql"] = proposed_validation.normalized_sql
-                    payload["proposed_validation"] = _validation_to_payload(proposed_validation)
+                    # Use non-blocking payload for proposed_sql so column availability errors
+                    # (e.g. 'vbrp.matnr not in schema') are surfaced as warnings rather than
+                    # hard "Blocked:" errors — the user can still review and approve the SQL.
+                    payload["proposed_validation"] = _non_blocking_validation_payload(proposed_validation)
         finally:
             if sap_session_for_sql is not None:
                 sap_session_for_sql.close()
@@ -2779,6 +2781,61 @@ async def post_ai_analysis_chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
+
+
+@router.post("/ai-analysis/store-query")
+async def post_ai_analysis_store_query(
+    question: str = Body(..., embed=True),
+    sql_query: str = Body(..., embed=True),
+    time_scope: str = Body(default="both", embed=True),
+    approval_source: str = Body(default="assistant_sql", embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Store user-confirmed SQL (Yes case). No execution - query was already run successfully.
+    """
+    from ..services.ai_query_memory_service import store_approved_query
+    from ..services.training_data_collector import log_query_feedback_attempt
+
+    sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+    try:
+        validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, sql_query)
+        if blocking_detail:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=blocking_detail)
+
+        normalized_sql = validation.normalized_sql if validation else sql_query
+        stored = store_approved_query(
+            db,
+            current_user.id,
+            question,
+            normalized_sql,
+            source="user",
+            model_used=None,
+            tables_used=list(validation.tables or []) if validation else None,
+        )
+        if not stored:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store query")
+
+        log_query_feedback_attempt(
+            db=db,
+            user_id=current_user.id,
+            user_query=question,
+            sql_query=normalized_sql,
+            feedback_status="approved",
+            attempt_source=approval_source or "assistant_sql",
+            time_scope=time_scope,
+            validation=_validation_to_payload(validation),
+            extra_metadata={"stored_for_reuse": True, "store_mode": "confirmed_existing_result"},
+        )
+        return {
+            "success": True,
+            "message": "Query stored for future use.",
+            "validation": _validation_to_payload(validation),
+        }
+    finally:
+        if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
+            sql_db.close()
 
 
 @router.post("/ai-analysis/reject-query")
