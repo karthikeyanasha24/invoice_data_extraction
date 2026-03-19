@@ -1,7 +1,7 @@
 """
 Dashboard API endpoints for statistics, analytics, and AI insights
 """
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, Numeric, inspect, text
@@ -2273,7 +2273,6 @@ def _get_sales_by_customer_product_country(db: Session, limit: int = 10) -> list
     return results
 
 
-
 def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db: Session, days: int = 30) -> str:
     """Build context string for AI analysis chat from requested context_keys.
     Uses V2 pipeline (InvoiceV2Document, InvoiceV2Validated, ConvertedInvoice) for outbound;
@@ -2628,6 +2627,54 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
     return "\n".join(parts) if parts else ""
 
 
+def _validation_to_payload(validation) -> Dict[str, Any]:
+    if not validation:
+        return {}
+    return {
+        "errors": list(getattr(validation, "errors", []) or []),
+        "warnings": list(getattr(validation, "warnings", []) or []),
+        "tables": list(getattr(validation, "tables", []) or []),
+        "columns": list(getattr(validation, "columns", []) or []),
+        "date_normalizations": list(getattr(validation, "date_normalizations", []) or []),
+        "aggregate_functions": list(getattr(validation, "aggregate_functions", []) or []),
+    }
+
+
+def _validation_warning_requires_refinement(warnings: List[str]) -> bool:
+    return any("Question mentions a year" in warning for warning in (warnings or []))
+
+
+def _format_validation_detail(prefix: str, errors: List[str], warnings: List[str]) -> str:
+    details = list(errors or []) or list(warnings or [])
+    if not details:
+        return prefix
+    return f"{prefix}: {' '.join(details[:2])}"
+
+
+def _validate_sql_candidate(sql_db: Session, question: str, sql: str):
+    from ..services.ai_query_memory_service import validate_sql_for_safe_execution
+    from ..services.sap_sql_precision_validator import validate_sql_precision_for_db
+
+    is_valid, err = validate_sql_for_safe_execution(sql)
+    if not is_valid:
+        return None, f"Invalid SQL: {err}"
+
+    validation = validate_sql_precision_for_db(sql_db, sql, question=question)
+    if not validation.is_valid:
+        return validation, _format_validation_detail(
+            "SQL blocked by SAP precision validation",
+            validation.errors,
+            validation.warnings,
+        )
+    if _validation_warning_requires_refinement(validation.warnings):
+        return validation, _format_validation_detail(
+            "SQL needs refinement before it can be used",
+            validation.errors,
+            validation.warnings,
+        )
+    return validation, None
+
+
 @router.post("/ai-analysis/chat")
 async def post_ai_analysis_chat(
     message: str = Body(..., embed=True),
@@ -2691,11 +2738,22 @@ async def post_ai_analysis_chat(
                 time_scope=time_scope or "current",
                 days=int(days),
             )
+            payload = orchestrator_payload(orch)
+            validation_db = sap_session_for_sql or db
+            if payload.get("sql"):
+                validation, _ = _validate_sql_candidate(validation_db, message or "", payload["sql"])
+                if validation:
+                    payload["validation"] = _validation_to_payload(validation)
+            if payload.get("proposed_sql"):
+                proposed_validation, _ = _validate_sql_candidate(validation_db, message or "", payload["proposed_sql"])
+                if proposed_validation:
+                    payload["proposed_sql"] = proposed_validation.normalized_sql
+                    payload["proposed_validation"] = _validation_to_payload(proposed_validation)
         finally:
             if sap_session_for_sql is not None:
                 sap_session_for_sql.close()
 
-        return orchestrator_payload(orch)
+        return payload
     except Exception as e:
         logger.warning(f"AI analysis chat failed: {e}")
         raise HTTPException(
@@ -2704,34 +2762,102 @@ async def post_ai_analysis_chat(
         )
 
 
+
+
 @router.post("/ai-analysis/store-query")
 async def post_ai_analysis_store_query(
     question: str = Body(..., embed=True),
     sql_query: str = Body(..., embed=True),
+    time_scope: str = Body(default="both", embed=True),
+    approval_source: str = Body(default="assistant_sql", embed=True),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Store user-confirmed SQL (Yes case). No execution - query was already run successfully.
     """
-    from ..services.ai_query_memory_service import store_approved_query, validate_sql_for_safe_execution
+    from ..services.ai_query_memory_service import store_approved_query
+    from ..services.training_data_collector import log_query_feedback_attempt
 
-    is_valid, err = validate_sql_for_safe_execution(sql_query)
-    if not is_valid:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid SQL: {err}")
+    sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+    try:
+        validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, sql_query)
+        if blocking_detail:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=blocking_detail)
 
-    stored = store_approved_query(
-        db, current_user.id, question, sql_query,
-        source="user", model_used=None,
-    )
-    if not stored:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store query")
-    return {"success": True, "message": "Query stored for future use."}
+        normalized_sql = validation.normalized_sql if validation else sql_query
+        stored = store_approved_query(
+            db,
+            current_user.id,
+            question,
+            normalized_sql,
+            source="user",
+            model_used=None,
+            tables_used=list(validation.tables or []) if validation else None,
+        )
+        if not stored:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store query")
+
+        log_query_feedback_attempt(
+            db=db,
+            user_id=current_user.id,
+            user_query=question,
+            sql_query=normalized_sql,
+            feedback_status="approved",
+            attempt_source=approval_source or "assistant_sql",
+            time_scope=time_scope,
+            validation=_validation_to_payload(validation),
+            extra_metadata={"stored_for_reuse": True, "store_mode": "confirmed_existing_result"},
+        )
+        return {
+            "success": True,
+            "message": "Query stored for future use.",
+            "validation": _validation_to_payload(validation),
+        }
+    finally:
+        if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
+            sql_db.close()
+
+
+@router.post("/ai-analysis/reject-query")
+async def post_ai_analysis_reject_query(
+    question: str = Body(..., embed=True),
+    rejected_sql: str = Body(..., embed=True),
+    time_scope: str = Body(default="both", embed=True),
+    attempt_source: str = Body(default="assistant_sql", embed=True),
+    feedback_reason: str = Body(default="rejected_by_user", embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services.training_data_collector import log_query_feedback_attempt
+
+    sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+    try:
+        validation = None
+        if rejected_sql and rejected_sql.strip():
+            validation, _ = _validate_sql_candidate(sql_db or db, question, rejected_sql)
+        record_id = log_query_feedback_attempt(
+            db=db,
+            user_id=current_user.id,
+            user_query=question,
+            sql_query=rejected_sql,
+            feedback_status="rejected",
+            attempt_source=attempt_source or "assistant_sql",
+            time_scope=time_scope,
+            feedback_reason=feedback_reason or "rejected_by_user",
+            validation=_validation_to_payload(validation),
+            extra_metadata={"stored_for_reuse": False},
+        )
+        return {"success": True, "feedback_record_id": record_id}
+    finally:
+        if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
+            sql_db.close()
 
 
 @router.post("/ai-analysis/suggest-sql")
 async def post_ai_analysis_suggest_sql(
     question: str = Body(..., embed=True),
+    time_scope: str = Body(default="both", embed=True),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -2740,25 +2866,11 @@ async def post_ai_analysis_suggest_sql(
     sql_catalog, then ChatGPT. Returns proposed_sql only (no execution).
     """
     from ..services.schema_loader import get_schema_text
-    from ..services.ai_query_memory_service import find_similar_stored_query, validate_sql_for_safe_execution
+    from ..services.ai_query_memory_service import (
+        find_similar_stored_query,
+    )
     from ..services.sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
     from ..config.config import USE_SAP_DB_FOR_AI
-
-    # 1) Try ai_query_memory first — user-approved SQL for this question (don't mark_used when just suggesting)
-    stored_sql = find_similar_stored_query(db, question, current_user.id, mark_used=False)
-    if stored_sql:
-        quoted = _quote_catalog_sql_tables(stored_sql)
-        is_valid, err = validate_sql_for_safe_execution(quoted)
-        if is_valid:
-            return {"proposed_sql": quoted}
-
-    # 2) Try catalog — has correct SQL for "highest spend by vendor", etc.
-    catalog_sql = _lookup_sql_catalog(question)
-    if catalog_sql:
-        quoted = _quote_catalog_sql_tables(catalog_sql)
-        is_valid, err = validate_sql_for_safe_execution(quoted)
-        if is_valid:
-            return {"proposed_sql": quoted}
 
     ai_openai_key = _get_ai_analysis_config()
     if not ai_openai_key or not openai_available:
@@ -2766,6 +2878,32 @@ async def post_ai_analysis_suggest_sql(
 
     sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
     try:
+        # 1) Try ai_query_memory first — user-approved SQL for this question (don't mark_used when just suggesting)
+        stored_sql = find_similar_stored_query(db, question, current_user.id, mark_used=False)
+        if stored_sql:
+            quoted = _quote_catalog_sql_tables(stored_sql)
+            validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, quoted)
+            if validation and not blocking_detail:
+                return {
+                    "proposed_sql": validation.normalized_sql,
+                    "validation": _validation_to_payload(validation),
+                    "suggestion_source": "approved_memory",
+                    "time_scope": time_scope,
+                }
+
+        # 2) Try catalog — has correct SQL for "highest spend by vendor", etc.
+        catalog_sql = _lookup_sql_catalog(question)
+        if catalog_sql:
+            quoted = _quote_catalog_sql_tables(catalog_sql)
+            validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, quoted)
+            if validation and not blocking_detail:
+                return {
+                    "proposed_sql": validation.normalized_sql,
+                    "validation": _validation_to_payload(validation),
+                    "suggestion_source": "sql_catalog",
+                    "time_scope": time_scope,
+                }
+
         schema_text = get_schema_text(sql_db, include_semantic_map=True)
         from openai import OpenAI
         client = OpenAI(api_key=ai_openai_key)
@@ -2796,10 +2934,15 @@ Generate a single PostgreSQL SELECT query. Rules:
         proposed_sql = raw if raw and "SELECT" in raw.upper() else None
         if not proposed_sql:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="ChatGPT could not generate valid SQL")
-        is_valid, err = validate_sql_for_safe_execution(proposed_sql)
-        if not is_valid:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"ChatGPT proposed invalid SQL: {err}")
-        return {"proposed_sql": proposed_sql}
+        validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, proposed_sql)
+        if blocking_detail:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=blocking_detail)
+        return {
+            "proposed_sql": validation.normalized_sql if validation else proposed_sql,
+            "validation": _validation_to_payload(validation),
+            "suggestion_source": "chatgpt",
+            "time_scope": time_scope,
+        }
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
             sql_db.close()
@@ -2810,6 +2953,7 @@ async def post_ai_analysis_approve_query(
     question: str = Body(..., embed=True),
     proposed_sql: str = Body(..., embed=True),
     time_scope: str = Body(default="both", embed=True),
+    approval_source: str = Body(default="chatgpt", embed=True),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -2818,7 +2962,7 @@ async def post_ai_analysis_approve_query(
     Stores question→SQL in ai_query_memory, executes, and returns full result.
     """
     try:
-        return _do_approve_query(question, proposed_sql, time_scope, current_user, db)
+        return _do_approve_query(question, proposed_sql, time_scope, approval_source, current_user, db)
     except HTTPException:
         raise
     except Exception as e:
@@ -2828,53 +2972,92 @@ async def post_ai_analysis_approve_query(
         )
 
 
-def _do_approve_query(question: str, proposed_sql: str, time_scope: str, current_user, db):
-    from ..services.ai_query_memory_service import store_approved_query, validate_sql_for_safe_execution
+def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approval_source: str, current_user, db):
+    from ..services.ai_query_memory_service import store_approved_query
     from ..services.ai_analysis_orchestrator import orchestrator_payload
-    from ..services.sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+    from ..services.sap_sql_agent import SqlAgentResult
+    from ..services.sap_sql_precision_validator import execute_sql_with_precision_checks
+    from ..services.training_data_collector import log_query_feedback_attempt
     from ..config.config import USE_SAP_DB_FOR_AI
-
-    is_valid, err = validate_sql_for_safe_execution(proposed_sql)
-    if not is_valid:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid SQL: {err}")
-
-    stored = store_approved_query(
-        db, current_user.id, question, proposed_sql,
-        source="chatgpt", model_used="gpt-4o",
-    )
-    if not stored:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store approved query")
 
     sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
     try:
-        quoted_sql = _quote_catalog_sql_tables(proposed_sql)
-        try:
-            rows = _run_sql(sql_db, quoted_sql)
-        except Exception as e:
-            err_msg = str(e)
-            if hasattr(e, "orig") and e.orig:
-                err_msg = str(e.orig)
+        execution = execute_sql_with_precision_checks(sql_db or db, proposed_sql, question=question)
+        validation_payload = _validation_to_payload(execution.validation)
+        if not execution.validation.is_valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"SQL execution failed: {err_msg}",
+                detail=_format_validation_detail(
+                    "SQL blocked by SAP precision validation",
+                    execution.validation.errors,
+                    execution.validation.warnings,
+                ),
             )
-        if not rows:
+
+        quoted_sql = execution.sql
+        rows = execution.rows
+        if execution.should_refine or not rows:
+            log_query_feedback_attempt(
+                db=db,
+                user_id=current_user.id,
+                user_query=question,
+                sql_query=quoted_sql,
+                feedback_status="rejected",
+                attempt_source=approval_source or "chatgpt",
+                time_scope=time_scope,
+                feedback_reason=execution.no_data_reason or "needs_refinement",
+                validation=validation_payload,
+                extra_metadata={"stored_for_reuse": False, "warnings": execution.warnings},
+            )
+            detail_message = _format_validation_detail(
+                "SQL ran but needs refinement before it can be stored",
+                [],
+                execution.warnings,
+            )
             return {
-                "reply": "The query ran successfully but returned no rows. The stored query will be reused for similar questions.",
+                "reply": detail_message,
                 "action": "new",
-                "reason": "approved_query_zero_rows",
+                "reason": execution.no_data_reason or "approved_query_needs_refinement",
                 "sql": quoted_sql,
                 "rows_preview": [],
                 "charts": None,
-                "needs_approval": False,
+                "needs_approval": True,
+                "proposed_sql": quoted_sql,
+                "validation": validation_payload,
                 "period_info": "All Periods" if time_scope == "both" else time_scope,
             }
+
         # Apply product-name filter when user asked for a specific product (e.g. "profit margin for Fire fighting vehicle")
         try:
             from ..services.invoice_bot_helpers import filter_dataframe_by_product_name_if_requested
             rows = filter_dataframe_by_product_name_if_requested(question, rows)
         except Exception:
             pass
+
+        stored = store_approved_query(
+            db,
+            current_user.id,
+            question,
+            quoted_sql,
+            source="user" if approval_source == "manual" else "chatgpt",
+            model_used="gpt-4o" if approval_source != "manual" else None,
+            tables_used=list(execution.validation.tables or []),
+        )
+        if not stored:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store approved query")
+
+        log_query_feedback_attempt(
+            db=db,
+            user_id=current_user.id,
+            user_query=question,
+            sql_query=quoted_sql,
+            feedback_status="approved",
+            attempt_source=approval_source or "chatgpt",
+            time_scope=time_scope,
+            validation=validation_payload,
+            extra_metadata={"stored_for_reuse": True, "row_count": len(rows)},
+        )
+
         # Run full orchestrator flow for summarization (reuse last SQL path)
         ai_openai_key = _get_ai_analysis_config()
         if ai_openai_key:
@@ -2940,12 +3123,15 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
                 period_info=period_info,
                 needs_approval=False,
             )
-            return orchestrator_payload(orch)
+            payload = orchestrator_payload(orch)
+            payload["validation"] = validation_payload
+            return payload
         return {
             "reply": "Query executed and stored for future use.",
             "sql": quoted_sql,
             "rows_preview": rows[:30],
             "needs_approval": False,
+            "validation": validation_payload,
         }
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
