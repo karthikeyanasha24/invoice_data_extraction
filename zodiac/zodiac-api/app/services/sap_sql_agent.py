@@ -294,15 +294,12 @@ def _quote_catalog_sql_tables(sql: str) -> str:
         # Replace "VBRP" (quoted) and VBRP (unquoted) with vbrp
         sql = re.sub(r'"' + re.escape(upper) + r'"', tbl, sql)
         sql = re.sub(r'\b' + re.escape(upper) + r'\b', tbl, sql)
-        
 
     # Only quote tables that are uppercase (lowercase tables like 'vbrp' don't need quotes)
     uppercase_tables = {t for t in actual_tables if t == t.upper() and not t.isdigit()}
 
     for tbl in sorted(uppercase_tables, key=len, reverse=True):  # longest first to avoid partial matches
         # Match the table name as a standalone word that is NOT already quoted
-        # Handles: FROM VBRK, JOIN VBRK, after comma, etc.
-        # Does NOT match if already quoted ("VBRK")
         pattern = r'(?<!")\b' + re.escape(tbl) + r'\b(?!")'
         replacement = f'"{tbl}"'
         sql = re.sub(pattern, replacement, sql)
@@ -415,8 +412,7 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
             w_clean = re.sub(r"\W", "", w)
             if (w_clean and w_clean[0].isupper() and not w_clean.isupper()
                     and w_clean not in _known_uppercase and len(w_clean) >= 3):
-                return None  # title-case proper noun → LLMlen(w_clean) >= 3):
-            return None  # title-case proper noun → LLM
+                return None  # title-case proper noun → LLM
     # If question contains a specific material/vendor code pattern (≥6 uppercase chars)
     code_pattern = re.findall(r"\b[A-Z0-9_-]{6,}\b", question)
     _common_abbreviations = {"FAGLFLEXA","EKKO","EKPO","RBKP","RSEG","VBRK","MAKT","MARC",
@@ -1497,6 +1493,7 @@ Task:
 - **"Show me last sales" / "best sales" / "recent sales" / "last best sales" / "top sales"**: always select VBRK, VBRP, and KNA1 (billing documents and customer). Do not return empty selected_tables.
 - **Sales/revenue by country or "X customers only"** (e.g. "Sales by Korean customers only", "revenue from India", "German customers"): use VBRK, VBRP, and KNA1 (customer country = KNA1.LAND1; or use VBRK.LAND1). Always include these tables so the query can filter by country code (e.g. KR, IN, DE).
 - **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). Group by year from VBRK.FKDAT or VBRK.GJAHR. Do not require a specific table name in the question.
+- **Year-specific billing questions**: if the question names a year like 2000 or 2001, the SQL MUST include a matching VBRK.FKDAT or GJAHR filter for that exact year. Do not reuse a different year's literal date range.
 - **Cost by profit center, cost by GL account, cost by profit center and GL account, cost by profit center and GL account for last N months**: use FAGLFLEXA only (columns: prctr=profit center, racct or cost_elem=GL account, hsl=amount in local currency, ryear, poper, budat for date). Do NOT use EKPO, RBKP, RSEG, or KEKO for profit center or GL account breakdowns.
 - **Any profit center cost/balance question** (total balance by profit center and fiscal year, top N profit centers by cost, monthly cost trend, segment, rcntr, company code, last fiscal year, unusually high costs, average cost per transaction, partner profit center pprctr, functional area rfarea): use FAGLFLEXA; add VBRK/VBRP/KNA1/MAKT only when the question explicitly asks to link costs to customers or products.
 - **Link FAGLFLEXA profit center costs back to customers/products / profit center and customer / cost by profit center and customer**: use FAGLFLEXA with VBRK, VBRP, KNA1, MAKT when the question asks to link or attribute costs to customers or products. Select FAGLFLEXA (prctr, hsl, racct, ryear, poper), VBRK/VBRP (revenue/customer), KNA1 (customer name), MAKT (material name). Join where document or segment allows; if no direct join in schema, still return FAGLFLEXA by profit center and optionally by cost element so the user gets cost breakdown.
@@ -1654,7 +1651,8 @@ Column mappings (table -> column -> description):
 **Highest sales by customer:** Use only VBRK, VBRP, KNA1; select KUNNR, NAME1, NETWR; do NOT add VBAK, VBFA, LIKP, LIPS. Order by NETWR DESC.
 **Sales by currency (e.g. total sales by WAERS/WAERK):** Use VBRK (WAERK) and VBRP (NETWR). Group by VBRK.WAERK; select WAERK, SUM(NETWR) as total_sales.
 **Process flow (billing, order, delivery):** Include billing doc (VBRK.VBELN), sales order (VBRP.AUBEL or VBAK.VBELN), delivery (LIKP.VBELN via VBFA), purchase order (VBAK.BSTNK). Join VBRP.AUBEL = VBAK.VBELN; VBRP to VBFA to LIKP.
-**Product by name filter:** When user asks for products matching a name (e.g. "Harley"): add filter MAKT.MAKTX with operator "=" and rhs the product name; use MAKT.SPRAS = 'E' for one language.
+**Product by name filter:** When user asks for products matching a name (e.g. "Harley"): add filter MAKT.MAKTX ILIKE '%Harley%' so partial matches still work; use MAKT.SPRAS = 'E' for one language.
+**Customer/vendor by name filter:** When user asks for a specific customer or vendor, add KNA1.NAME1 ILIKE '%name%' or LFA1.NAME1 ILIKE '%name%' instead of returning the whole population.
 **Cost of a product:** Use MBEW, KEKO, KEPH, MARA, MAKT. Select STPRS, VERPR, PEINH, VPRSV, MAKTX. Filter by MAKT.MAKTX for product name.
 **Link FAGLFLEXA to customers/products:** Return FAGLFLEXA columns (prctr, racct or cost_elem, hsl, ryear, poper). If VBRK/VBRP/KNA1/MAKT are in tables, add them: join FAGLFLEXA to billing/customer where schema allows (e.g. document or segment); select prctr, SUM(hsl) as total_cost, and customer/material name when available. If no join exists, return FAGLFLEXA grouped by prctr (and racct) with SUM(hsl). Never return empty columns.
 **Purchasing (EKPO):** Use EKKO, EKPO; join EKPO.EBELN = EKKO.EBELN. Select MATNR, WERKS (plant), NETPR, MENGE, and SUM for totals; add MAKT (MAKT.MATNR = EKPO.MATNR, SPRAS='E') for material name. Filter MAKT.MAKTX ILIKE '%jacket%' when user asks jacket products. Group by material/plant/vendor as needed.
@@ -2307,6 +2305,8 @@ def _build_minimal_faglflexa_spec(
     return spec
 
 
+
+
 def run_adaptive_sap_sql_agent(
     question: str,
     db: Session,
@@ -2354,14 +2354,14 @@ def run_adaptive_sap_sql_agent(
                     try:
                         from .invoice_bot_helpers import (
                             fix_date_filters,
-                            inject_product_name_filter_if_needed,
+                            inject_specific_entity_filter_if_needed,
                             inject_material_number_filter_if_needed,
                             inject_makt_single_language_if_needed,
                             ensure_delivery_chain_in_spec,
                             inject_country_filter_if_needed,
                         )
                         fix_date_filters(spec)
-                        inject_product_name_filter_if_needed(question, spec)
+                        inject_specific_entity_filter_if_needed(question, spec)
                         inject_material_number_filter_if_needed(question, spec)
                         inject_makt_single_language_if_needed(spec)
                         ensure_delivery_chain_in_spec(spec)
@@ -2405,14 +2405,14 @@ def run_adaptive_sap_sql_agent(
                     try:
                         from .invoice_bot_helpers import (
                             fix_date_filters,
-                            inject_product_name_filter_if_needed,
+                            inject_specific_entity_filter_if_needed,
                             inject_material_number_filter_if_needed,
                             inject_makt_single_language_if_needed,
                             ensure_delivery_chain_in_spec,
                             inject_country_filter_if_needed,
                         )
                         fix_date_filters(spec)
-                        inject_product_name_filter_if_needed(question, spec)
+                        inject_specific_entity_filter_if_needed(question, spec)
                         inject_material_number_filter_if_needed(question, spec)
                         inject_makt_single_language_if_needed(spec)
                         ensure_delivery_chain_in_spec(spec)
@@ -2453,14 +2453,14 @@ def run_adaptive_sap_sql_agent(
                     try:
                         from .invoice_bot_helpers import (
                             fix_date_filters,
-                            inject_product_name_filter_if_needed,
+                            inject_specific_entity_filter_if_needed,
                             inject_material_number_filter_if_needed,
                             inject_makt_single_language_if_needed,
                             ensure_delivery_chain_in_spec,
                             inject_country_filter_if_needed,
                         )
                         fix_date_filters(spec)
-                        inject_product_name_filter_if_needed(question, spec)
+                        inject_specific_entity_filter_if_needed(question, spec)
                         inject_material_number_filter_if_needed(question, spec)
                         inject_makt_single_language_if_needed(spec)
                         ensure_delivery_chain_in_spec(spec)
@@ -2498,14 +2498,14 @@ def run_adaptive_sap_sql_agent(
                     try:
                         from .invoice_bot_helpers import (
                             fix_date_filters,
-                            inject_product_name_filter_if_needed,
+                            inject_specific_entity_filter_if_needed,
                             inject_material_number_filter_if_needed,
                             inject_makt_single_language_if_needed,
                             ensure_delivery_chain_in_spec,
                             inject_country_filter_if_needed,
                         )
                         fix_date_filters(spec)
-                        inject_product_name_filter_if_needed(question, spec)
+                        inject_specific_entity_filter_if_needed(question, spec)
                         inject_material_number_filter_if_needed(question, spec)
                         inject_makt_single_language_if_needed(spec)
                         ensure_delivery_chain_in_spec(spec)
@@ -2532,7 +2532,6 @@ def run_adaptive_sap_sql_agent(
                 "faglflexa" in q_lower and ("customer" in q_lower or "product" in q_lower or "link" in q_lower)
             ):
                 selected_tables = ["FAGLFLEXA", "VBRK", "VBRP", "KNA1", "MAKT"]
-            
             elif any(x in q_lower for x in ("profit center", "gl account", "cost by profit", "cost by gl", "compare cost", "costs between", "two profit center", "top 20 profit centers", "top 10 profit centers", "list top", "profit centers by cost", "highest total cost", "total cost by profit center", "which profit centers", "current fiscal year")):
                 selected_tables = ["FAGLFLEXA"]
             elif any(x in q_lower for x in ("jacket", "harley")) and any(x in q_lower for x in ("profit center", "profit centre")) and any(x in q_lower for x in ("cost", "postings")):
@@ -2732,14 +2731,14 @@ def run_adaptive_sap_sql_agent(
         try:
             from .invoice_bot_helpers import (
                 fix_date_filters,
-                inject_product_name_filter_if_needed,
+                inject_specific_entity_filter_if_needed,
                 inject_material_number_filter_if_needed,
                 inject_makt_single_language_if_needed,
                 ensure_delivery_chain_in_spec,
                 inject_country_filter_if_needed,
             )
             fix_date_filters(spec)
-            inject_product_name_filter_if_needed(question, spec)
+            inject_specific_entity_filter_if_needed(question, spec)
             inject_material_number_filter_if_needed(question, spec)
             inject_makt_single_language_if_needed(spec)
             ensure_delivery_chain_in_spec(spec)
@@ -2884,7 +2883,6 @@ def _generate_sql_json(
         join_rules_block = "\nConfigured join rules (schema_ai_config.json – use these when joining):\n" + "\n".join(
             f"- {r.get('left')} + {r.get('right')}: {r.get('on', '')}" for r in rules_for_prompt[:80]
         ) + "\n"
-
 
     # Per-table SQL hints from sap_table_metadata.json (when available for selected tables)
     sap_meta = _load_sap_table_metadata()
