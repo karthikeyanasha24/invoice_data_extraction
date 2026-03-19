@@ -126,9 +126,9 @@
     "ENMNG": "Issued/withdrawn quantity in RESB \u2013 quantity already withdrawn from reservation. Open qty = bdmng - enmng."
   },
   "table_semantic_hints": {
-    "VBRP": "Billing document item \u2013 sales by product, amounts, quantities, compreas (complaint reason). Join VBRK for header, KNA1 for customer. Use compreas for complaint/claim analysis.",
+    "VBRP": "Billing document item \u2013 sales by product, amounts, quantities, compreas (complaint reason). ALWAYS join VBRK on VBELN for billing analysis before using dates, customer, currency, or pricing conditions. Use compreas for complaint/claim analysis.",
     "vbrp": "Same as VBRP \u2013 billing item for sales analysis.",
-    "VBRK": "Billing document header \u2013 invoice dates, customer (KUNAG=sold-to), currency (WAERK), country (LAND1 – use this directly for country grouping), kdgrp (customer group), vkorg (sales org), vtweg (distribution channel). PREFERRED for 'by country' queries: use VBRK.LAND1 directly. PREFERRED for 'by customer' queries: group by VBRK.KUNAG.",
+    "VBRK": "Billing document header \u2013 invoice dates, customer (KUNAG=sold-to), currency (WAERK), country (LAND1 – use this directly for country grouping), kdgrp (customer group), vkorg (sales org), vtweg (distribution channel). PREFERRED for 'by country' queries: use VBRK.LAND1 directly. PREFERRED for 'by customer' queries: group by VBRK.KUNAG. For year-specific billing questions, filter by VBRK.FKDAT or GJAHR and do not reuse a different year's literal filter.",
     "KNA1": "Customer master \u2013 names, country (LAND1), industry (brsch). Use T016T for industry text.",
     "MAKT": "Material descriptions \u2013 MAKTX for product names. Join on MATNR.",
     "T016T": "Industry descriptions \u2013 BRTXT for industry names. Join KNA1.brsch = T016T.brsch.",
@@ -192,7 +192,7 @@
       "left": "VBRP",
       "right": "VBRK",
       "on": "VBRP.VBELN = VBRK.VBELN",
-      "note": "Billing item to header"
+      "note": "Billing item to header; mandatory for billing dates, customer context, and pricing joins"
     },
     {
       "left": "vbrp",
