@@ -122,25 +122,32 @@ def _extract_column_refs(sql: str) -> List[Tuple[str, str]]:
     return refs
 
 
+def _extract_expression_column_refs(expr: str) -> List[Tuple[str, str]]:
+    return _extract_column_refs(expr or "")
+
+
 def _extract_join_column_pairs(sql: str, alias_map: Dict[str, str]) -> Dict[frozenset[str], Set[frozenset[str]]]:
     pairs: Dict[frozenset[str], Set[frozenset[str]]] = {}
     eq_pattern = re.compile(
-        r'("?([A-Za-z_][A-Za-z0-9_]*)"?)\.("?([A-Za-z_][A-Za-z0-9_]*)"?)\s*=\s*'
-        r'("?([A-Za-z_][A-Za-z0-9_]*)"?)\.("?([A-Za-z_][A-Za-z0-9_]*)"?)',
+        r'(?P<left>(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*)*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\))*)'
+        r'\s*=\s*'
+        r'(?P<right>(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*)*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\))*)',
         re.IGNORECASE,
     )
     for match in eq_pattern.finditer(sql or ""):
-        left_alias = _clean_identifier(match.group(2)).upper()
-        left_col = _clean_identifier(match.group(4)).upper()
-        right_alias = _clean_identifier(match.group(6)).upper()
-        right_col = _clean_identifier(match.group(8)).upper()
-        left_table = alias_map.get(left_alias)
-        right_table = alias_map.get(right_alias)
-        if not left_table or not right_table or left_table.upper() == right_table.upper():
+        left_refs = _extract_expression_column_refs(match.group("left"))
+        right_refs = _extract_expression_column_refs(match.group("right"))
+        if not left_refs or not right_refs:
             continue
-        pair_key = frozenset({left_table.upper(), right_table.upper()})
-        col_key = frozenset({left_col, right_col})
-        pairs.setdefault(pair_key, set()).add(col_key)
+        for left_alias, left_col in left_refs:
+            for right_alias, right_col in right_refs:
+                left_table = alias_map.get(left_alias.upper())
+                right_table = alias_map.get(right_alias.upper())
+                if not left_table or not right_table or left_table.upper() == right_table.upper():
+                    continue
+                pair_key = frozenset({left_table.upper(), right_table.upper()})
+                col_key = frozenset({left_col.upper(), right_col.upper()})
+                pairs.setdefault(pair_key, set()).add(col_key)
     return pairs
 
 
