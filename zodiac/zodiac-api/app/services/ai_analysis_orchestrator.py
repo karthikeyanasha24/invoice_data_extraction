@@ -1057,7 +1057,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
             deduplicate_material_price_rows,
             deduplicate_supplier_per_part_rows,
             aggregate_by_customer_sales,
-            filter_dataframe_by_product_name_if_requested,
+            filter_dataframe_by_specific_entity_if_requested,
             apply_procurement_type_display,
             apply_industry_display,
             is_sales_by_customer_query,
@@ -1067,7 +1067,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
         rows, _ = deduplicate_supplier_per_part_rows(rows)
         if is_sales_by_customer_query(user_query):
             rows, _ = aggregate_by_customer_sales(rows)
-        rows = filter_dataframe_by_product_name_if_requested(user_query, rows)
+        rows = filter_dataframe_by_specific_entity_if_requested(user_query, rows)
         rows = apply_procurement_type_display(rows)
         rows = apply_industry_display(rows)
         result = type(result)(sql=result.sql, rows=rows)
@@ -1096,10 +1096,51 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     # we should clearly say that the precise item-level answer is not available instead of
     # talking about unrelated aggregates (e.g. vendor totals).
     q_tokens = {t for t in re.split(r"\W+", (user_query or "").lower()) if t}
+    specific_entity = None
+    try:
+        from .invoice_bot_helpers import get_specific_entity_request
+        specific_entity = get_specific_entity_request(user_query)
+    except Exception:
+        specific_entity = None
     focus_terms = {t for t in q_tokens if len(t) >= 4}
+    if specific_entity and specific_entity.get("value"):
+        focus_terms = {specific_entity["value"].lower()}
     row_text = " ".join(json.dumps(r, default=str).lower() for r in preview) if preview else ""
     missing_focus = focus_terms and not any(term in row_text for term in focus_terms)
     asks_for_cost = any(w in q_tokens for w in {"cost", "price", "margin"})
+    if specific_entity and missing_focus:
+        safe_reply = (
+            "I ran a fresh SQL query, but the returned rows do not contain the specific "
+            f"{specific_entity.get('entity', 'item')} you asked about ({specific_entity.get('value')}). "
+            "The result is still broader than the question, so I cannot give a reliable item-level answer from it. "
+            "The SQL needs an explicit filter for that exact record."
+        )
+        timings["summarization_ms"] = 0
+        timings["insights_model"] = None
+        mem.last_user_query = user_query
+        mem.last_sql = result.sql
+        mem.last_rows_json = json.dumps(preview, default=str)
+        mem.last_reply = safe_reply
+        mem.last_charts_json = "[]"
+        save_memory(db, mem)
+        total_time = int((time.time() - perf_start) * 1000)
+        timings["total_ms"] = total_time
+        timings["row_count"] = len(result.rows)
+        timings["chart_count"] = 0
+        timings["used_cache"] = False
+        return OrchestratorResult(
+            reply=safe_reply,
+            action="new",
+            reason=reason or "specific_entity_not_present_in_rows",
+            sql=result.sql,
+            rows_preview=preview,
+            memory_updated=True,
+            charts=None,
+            performance=timings,
+            time_scope=time_scope,
+            date_range=date_range,
+            period_info=period_info,
+        )
     if asks_for_cost and missing_focus:
         safe_reply = (
             "I ran a fresh SQL query, but the returned rows do not contain the specific item or text you asked about "
