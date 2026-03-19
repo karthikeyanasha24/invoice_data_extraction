@@ -1109,38 +1109,83 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     missing_focus = focus_terms and not any(term in row_text for term in focus_terms)
     asks_for_cost = any(w in q_tokens for w in {"cost", "price", "margin"})
     if specific_entity and missing_focus:
-        safe_reply = (
-            "I ran a fresh SQL query, but the returned rows do not contain the specific "
-            f"{specific_entity.get('entity', 'item')} you asked about ({specific_entity.get('value')}). "
-            "The result is still broader than the question, so I cannot give a reliable item-level answer from it. "
-            "The SQL needs an explicit filter for that exact record."
-        )
-        timings["summarization_ms"] = 0
-        timings["insights_model"] = None
-        mem.last_user_query = user_query
-        mem.last_sql = result.sql
-        mem.last_rows_json = json.dumps(preview, default=str)
-        mem.last_reply = safe_reply
-        mem.last_charts_json = "[]"
-        save_memory(db, mem)
-        total_time = int((time.time() - perf_start) * 1000)
-        timings["total_ms"] = total_time
-        timings["row_count"] = len(result.rows)
-        timings["chart_count"] = 0
-        timings["used_cache"] = False
-        return OrchestratorResult(
-            reply=safe_reply,
-            action="new",
-            reason=reason or "specific_entity_not_present_in_rows",
-            sql=result.sql,
-            rows_preview=preview,
-            memory_updated=True,
-            charts=None,
-            performance=timings,
-            time_scope=time_scope,
-            date_range=date_range,
-            period_info=period_info,
-        )
+        # Before giving up, attempt one targeted retry with an explicit filter instruction embedded
+        # in the question. This catches cases where the first SQL pass missed the entity filter.
+        _entity_type = specific_entity.get("entity", "item")
+        _entity_val = specific_entity.get("value", "")
+        _retry_result = None
+        try:
+            if _entity_type == "customer":
+                _filter_hint = (
+                    f" [MANDATORY: Filter WHERE KNA1.name1 ILIKE '%{_entity_val}%',"
+                    f" JOIN KNA1 ON VBRK.kunag = KNA1.kunnr if not already joined.]"
+                )
+            elif _entity_type == "vendor":
+                _filter_hint = (
+                    f" [MANDATORY: Filter WHERE LFA1.name1 ILIKE '%{_entity_val}%',"
+                    f" JOIN LFA1 ON RBKP.lifnr = LFA1.lifnr if not already joined.]"
+                )
+            elif _entity_type == "product":
+                _filter_hint = (
+                    f" [MANDATORY: Filter WHERE MAKT.maktx ILIKE '%{_entity_val}%' AND MAKT.spras = 'E',"
+                    f" JOIN MAKT ON fact_table.matnr = MAKT.matnr if not already joined.]"
+                )
+            else:
+                _filter_hint = f" [MANDATORY: Filter results to only include '{_entity_val}'.]"
+            _augmented_q = user_query + _filter_hint
+            logger.info(
+                "missing_focus retry: entity '%s' not in rows, retrying with explicit filter hint for %s",
+                _entity_val, _entity_type,
+            )
+            _retry_result = run_schema_driven_sql_agent(_augmented_q, sql_db, few_shot_examples=_few_shot)
+            if not (_retry_result and _retry_result.rows):
+                _retry_result = run_sap_sql_agent(_augmented_q, sql_db, max_retries=1)
+        except Exception as _retry_err:
+            logger.debug("missing_focus entity retry failed: %s", _retry_err)
+
+        if _retry_result and _retry_result.rows:
+            # Retry succeeded — update result and allow normal summarisation to proceed
+            logger.info("missing_focus retry succeeded with %d rows", len(_retry_result.rows))
+            result = _retry_result
+            preview = _rows_preview(result.rows, limit=20)
+            # Re-evaluate missing_focus with the new rows
+            _new_row_text = " ".join(json.dumps(r, default=str).lower() for r in preview) if preview else ""
+            missing_focus = focus_terms and not any(term in _new_row_text for term in focus_terms)
+
+        if missing_focus:
+            # Retry still didn't place the entity in rows — return the informative message
+            safe_reply = (
+                "I ran a fresh SQL query, but the returned rows do not contain the specific "
+                f"{_entity_type} you asked about ({_entity_val}). "
+                "The result is still broader than the question, so I cannot give a reliable item-level answer from it. "
+                "The SQL needs an explicit filter for that exact record."
+            )
+            timings["summarization_ms"] = 0
+            timings["insights_model"] = None
+            mem.last_user_query = user_query
+            mem.last_sql = result.sql
+            mem.last_rows_json = json.dumps(preview, default=str)
+            mem.last_reply = safe_reply
+            mem.last_charts_json = "[]"
+            save_memory(db, mem)
+            total_time = int((time.time() - perf_start) * 1000)
+            timings["total_ms"] = total_time
+            timings["row_count"] = len(result.rows)
+            timings["chart_count"] = 0
+            timings["used_cache"] = False
+            return OrchestratorResult(
+                reply=safe_reply,
+                action="new",
+                reason=reason or "specific_entity_not_present_in_rows",
+                sql=result.sql,
+                rows_preview=preview,
+                memory_updated=True,
+                charts=None,
+                performance=timings,
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info,
+            )
     if asks_for_cost and missing_focus:
         safe_reply = (
             "I ran a fresh SQL query, but the returned rows do not contain the specific item or text you asked about "
