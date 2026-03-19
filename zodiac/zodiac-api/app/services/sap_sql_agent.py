@@ -2305,8 +2305,6 @@ def _build_minimal_faglflexa_spec(
     return spec
 
 
-
-
 def run_adaptive_sap_sql_agent(
     question: str,
     db: Session,
@@ -3150,6 +3148,9 @@ def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
     logger.info("Auto-injected HAVING %s > 0 for ranking query", human_safe)
 
 
+
+
+
 def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
     """
     Post-process LLM-generated SQL spec to enforce three mandatory context columns:
@@ -3991,6 +3992,36 @@ def run_schema_driven_sql_agent(
         if not tables:
             logger.warning("schema_driven_agent: no tables selected for question: %s", (question or "")[:80])
             return None
+
+        # Entity table injection: ensure KNA1/LFA1/MAKT are in tables when a named entity is detected.
+        # This guarantees the SQL generator has the correct join table in scope.
+        try:
+            from .invoice_bot_helpers import get_specific_entity_request
+            entity_spec = get_specific_entity_request(question)
+            if entity_spec:
+                entity_type = entity_spec.get("entity", "")
+                available_upper = {t.upper(): t for t in available_tables}
+                if entity_type == "customer":
+                    for tbl in ("KNA1",):
+                        orig = available_upper.get(tbl)
+                        if orig and orig not in tables:
+                            tables.append(orig)
+                            logger.info("schema_driven_agent: injected entity table %s for customer filter", orig)
+                elif entity_type == "vendor":
+                    for tbl in ("LFA1",):
+                        orig = available_upper.get(tbl)
+                        if orig and orig not in tables:
+                            tables.append(orig)
+                            logger.info("schema_driven_agent: injected entity table %s for vendor filter", orig)
+                elif entity_type == "product":
+                    for tbl in ("MAKT",):
+                        orig = available_upper.get(tbl)
+                        if orig and orig not in tables:
+                            tables.append(orig)
+                            logger.info("schema_driven_agent: injected entity table %s for product filter", orig)
+        except Exception as _ent_err:
+            logger.debug("schema_driven_agent: entity table injection error: %s", _ent_err)
+
         logger.info("schema_driven_agent: selected_tables=%s", tables)
         schema_subset = schema_to_text(schema, table_subset=tables)
         # Optional: similar past queries as few-shot examples
