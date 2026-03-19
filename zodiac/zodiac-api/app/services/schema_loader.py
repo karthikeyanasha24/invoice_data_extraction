@@ -322,3 +322,4 @@ def get_schema_dict(db: Session) -> Dict[str, List[str]]:
         if table not in schema:
             schema[table] = cols
     return schema
+
