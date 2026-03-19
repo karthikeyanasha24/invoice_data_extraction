@@ -76,6 +76,13 @@ def resolve_dimension(question: str) -> Optional[Tuple[str, str, str, Optional[s
             table = (d.get("table") or "").strip()
             column = (d.get("column") or "").strip()
             return ("material_warehouse", table, column, d.get("name_column"), d.get("name_table"), None, None)
+    # Prefer material_purchasing when question is about purchase/ekpo/procurement
+    is_purchasing_context = any(x in q for x in ("purchase", "purchased", "ekpo", "po ", "procurement", "vendor spend"))
+    if is_purchasing_context and "material" in (dim_phrase + " " + q):
+        entities = data.get("entities") or {}
+        purch = entities.get("purchasing") or {}
+        pt = purch.get("primary_table") or "EKPO"
+        return ("material_purchasing", pt, "matnr", "maktx", "MAKT", None, "matnr")
     # Prefer material_billing/material_order when question is about revenue/order/invoice
     is_sales_context = "revenue" in q or "order" in q or "invoice" in q or "sales" in q or "billing" in q
     if is_sales_context and "material" in (dim_phrase + " " + q):
