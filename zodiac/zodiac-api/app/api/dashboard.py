@@ -3157,6 +3157,12 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
             sql_db.close()
 
 
+
+
+
+
+
+
 @router.post("/ai-analysis-multi-model")
 async def ai_analysis_multi_model_chat(
     message: str = Query(..., description="User's natural language query"),
