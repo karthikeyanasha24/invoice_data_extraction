@@ -36,6 +36,48 @@ def _get_semantic_context(question: Optional[str] = None) -> str:
         return ""
 
 
+def _build_entity_filter_block(question: str) -> str:
+    """
+    Detect a named entity (customer, vendor, product) in the question and return
+    a MANDATORY filter instruction for the LLM prompt.
+    Returns an empty string when no specific entity is found.
+    """
+    try:
+        from .invoice_bot_helpers import get_specific_entity_request
+        entity = get_specific_entity_request(question)
+        if not entity:
+            return ""
+        entity_type = entity.get("entity", "")
+        entity_value = entity.get("value", "")
+        if not entity_value:
+            return ""
+        safe = entity_value.replace("'", "''")
+        if entity_type == "customer":
+            return (
+                f"\n⚠️  MANDATORY FILTER: The question asks specifically about customer '{entity_value}'.\n"
+                f"   You MUST include: WHERE KNA1.name1 ILIKE '%{safe}%'\n"
+                f"   If KNA1 is not yet in the FROM/JOIN, add: JOIN \"KNA1\" ON \"VBRK\".kunag = \"KNA1\".kunnr\n"
+                f"   Do NOT return a broad query without this filter.\n"
+            )
+        if entity_type == "vendor":
+            return (
+                f"\n⚠️  MANDATORY FILTER: The question asks specifically about vendor '{entity_value}'.\n"
+                f"   You MUST include: WHERE LFA1.name1 ILIKE '%{safe}%'\n"
+                f"   If LFA1 is not yet in the FROM/JOIN, add: JOIN \"LFA1\" ON \"RBKP\".lifnr = \"LFA1\".lifnr  (or EKKO.lifnr)\n"
+                f"   Do NOT return a broad query without this filter.\n"
+            )
+        if entity_type == "product":
+            return (
+                f"\n⚠️  MANDATORY FILTER: The question asks specifically about product '{entity_value}'.\n"
+                f"   You MUST include: WHERE \"MAKT\".maktx ILIKE '%{safe}%' AND \"MAKT\".spras = 'E'\n"
+                f"   If MAKT is not yet in the FROM/JOIN, add: JOIN \"MAKT\" ON <fact_table>.matnr = \"MAKT\".matnr\n"
+                f"   Do NOT return a broad query without this filter.\n"
+            )
+    except Exception:
+        pass
+    return ""
+
+
 def generate_sql(
     question: str,
     tables: List[str],
@@ -61,10 +103,13 @@ def generate_sql(
     if semantic_block:
         semantic_block = semantic_block + "\n\n"
 
+    # Build entity-specific filter block (empty string when no entity detected)
+    entity_filter_block = _build_entity_filter_block(question)
+
     # Restrict schema to selected tables only (subset of full schema)
     prompt = f"""You are a PostgreSQL SAP expert. Write a single SQL query to answer the user's question.
 
-{semantic_block}User question:
+{semantic_block}{entity_filter_block}User question:
 {question}
 
 Relevant tables (use ONLY these):
@@ -78,6 +123,7 @@ Rules:
 - Return ONLY the SQL query, no explanation.
 - Use PostgreSQL syntax (e.g. LIMIT not TOP, :: for cast, ILIKE for case-insensitive like).
 - Always add LIMIT 100 (or a reasonable limit).
+- ENTITY FILTER (CRITICAL): If the question names a specific customer (e.g. "for customer Siemens"), add WHERE KNA1.name1 ILIKE '%Siemens%' and JOIN KNA1 if needed. If it names a vendor (e.g. "vendor named Bosch"), add WHERE LFA1.name1 ILIKE '%Bosch%'. If it names a product (e.g. "Harley", "jacket"), add WHERE MAKT.maktx ILIKE '%Harley%'. NEVER return a broad unfiltered result when a specific entity is requested.
 - For "cost by profit center" or "postings by profit center": use FAGLFLEXA, group by prctr, SUM(hsl) as total_cost.
 - For "jacket" or product name filter: use MAKT.MAKTX ILIKE '%jacket%' and MAKT.SPRAS = 'E' when MAKT is in tables.
 - For sales/revenue: use VBRK, VBRP; join on VBELN; NETWR is amount; FKDAT is billing date; use KNA1 for customer (KUNAG = KUNNR).
