@@ -307,6 +307,21 @@ def _quote_catalog_sql_tables(sql: str) -> str:
     return sql
 
 
+def _is_entity_specific_question(question: str) -> bool:
+    """Return True when the question names a specific customer, vendor, or product.
+    Used to bypass deterministic / semantic fast-paths that produce broad SQL
+    without entity-level WHERE clauses.
+    """
+    try:
+        from .invoice_bot_helpers import get_specific_entity_request
+        entity = get_specific_entity_request(question)
+        if entity and entity.get("value"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _lookup_sql_catalog(question: str) -> Optional[str]:
     """
     Fast-path: score every catalog entry against the question using keyword matching.
@@ -2226,6 +2241,7 @@ def _run_faglflexa_cost_by_profit_center_sql(
     return None
 
 
+
 def _build_minimal_faglflexa_spec(
     question: str,
     selected_tables: List[str],
@@ -3148,9 +3164,6 @@ def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
     logger.info("Auto-injected HAVING %s > 0 for ranking query", human_safe)
 
 
-
-
-
 def _auto_enrich_spec(spec: Dict[str, Any], question: str) -> None:
     """
     Post-process LLM-generated SQL spec to enforce three mandatory context columns:
@@ -3933,8 +3946,11 @@ def run_schema_driven_sql_agent(
         schema_table_case = {t.upper(): t for t in available_tables}
 
         # Layer 1: Deterministic resolver (intent + semantic mapping + templates)
+        # BYPASS for entity-specific questions: deterministic templates produce broad SQL
+        # without entity WHERE clauses (e.g. customer/vendor/product name filters).
+        _skip_deterministic = _is_entity_specific_question(question)
         template_sql = None
-        if resolve_deterministic_sql:
+        if not _skip_deterministic and resolve_deterministic_sql:
             try:
                 template_sql = resolve_deterministic_sql(
                     question,
@@ -3945,8 +3961,10 @@ def run_schema_driven_sql_agent(
                     logger.info("schema_driven_agent: deterministic resolver produced SQL")
             except Exception as det_err:
                 logger.debug("deterministic_sql_resolver: %s", det_err)
+        elif _skip_deterministic:
+            logger.info("schema_driven_agent: skipping deterministic/semantic resolver — entity-specific question detected")
         # Layer 2: Query resolver (metric+dimension from dictionary)
-        if not template_sql and try_resolve_and_build_sql:
+        if not template_sql and not _skip_deterministic and try_resolve_and_build_sql:
             template_sql = try_resolve_and_build_sql(
                 question,
                 available_tables=available_tables,
@@ -4075,7 +4093,9 @@ def run_sap_sql_agent(
 
     # ── SEMANTIC DICTIONARY FAST-PATH ────────────────────────────────────────
     # Layer 1: Deterministic (intent + semantic + templates), Layer 2: semantic_sql_resolver
-    if _SCHEMA_DRIVEN_AVAILABLE:
+    # BYPASS for entity-specific questions: these resolvers produce broad SQL without
+    # entity-level WHERE clauses (e.g. no filter for a named customer, vendor, or product).
+    if _SCHEMA_DRIVEN_AVAILABLE and not _is_entity_specific_question(question):
         try:
             schema = get_schema_dict(db)
             if schema:
@@ -4108,6 +4128,8 @@ def run_sap_sql_agent(
                 db.rollback()
             except Exception:
                 pass
+    elif _is_entity_specific_question(question):
+        logger.info("run_sap_sql_agent: skipping semantic fast-path — entity-specific question detected")
     # ── END SEMANTIC DICTIONARY FAST-PATH ────────────────────────────────────
 
     attempt = 0
