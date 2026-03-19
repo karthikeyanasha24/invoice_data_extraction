@@ -379,6 +379,318 @@
       "right": "BSEG",
       "on": "FAGLFLEXA.RBUKRS = BSEG.BUKRS AND FAGLFLEXA.BELNR = BSEG.BELNR AND FAGLFLEXA.GJAHR = BSEG.GJAHR",
       "note": "Link GL line items to FI line items for customer (BSEG.KUNNR), material (BSEG.MATNR), vendor (BSEG.LIFNR)"
+    },
+    {
+      "left": "AFKO",
+      "right": "AUFK",
+      "on": "AFKO.AUFNR = AUFK.AUFNR",
+      "note": "Production order header to order master"
+    },
+    {
+      "left": "AFKO",
+      "right": "AFPO",
+      "on": "AFKO.AUFNR = AFPO.AUFNR",
+      "note": "Production order header to order items"
+    },
+    {
+      "left": "AFPO",
+      "right": "MAKT",
+      "on": "AFPO.MATNR = MAKT.MATNR",
+      "note": "Production order item to material description"
+    },
+    {
+      "left": "AFPO",
+      "right": "MARA",
+      "on": "AFPO.MATNR = MARA.MATNR",
+      "note": "Production order item to material master"
+    },
+    {
+      "left": "AFPO",
+      "right": "CKMLHD",
+      "on": "AFPO.KALNR = CKMLHD.KALNR",
+      "note": "Production order item to material ledger header"
+    },
+    {
+      "left": "AFPO",
+      "right": "CKMLCR",
+      "on": "AFPO.KALNR = CKMLCR.KALNR",
+      "note": "Production order item to material ledger cumulative values"
+    },
+    {
+      "left": "AFPO",
+      "right": "CKMLPR",
+      "on": "AFPO.KALNR = CKMLPR.KALNR",
+      "note": "Production order item to material ledger prices"
+    },
+    {
+      "left": "AUSP",
+      "right": "CABN",
+      "on": "AUSP.ATINN = CABN.ATINN",
+      "note": "Classification values to characteristic master"
+    },
+    {
+      "left": "CABN",
+      "right": "KLAH",
+      "on": "CABN.CLINT = KLAH.CLINT",
+      "note": "Characteristic master to class header"
+    },
+    {
+      "left": "BKPF",
+      "right": "BSEG",
+      "on": "BKPF.BUKRS = BSEG.BUKRS AND BKPF.BELNR = BSEG.BELNR AND BKPF.GJAHR = BSEG.GJAHR",
+      "note": "Accounting document header to FI line items"
+    },
+    {
+      "left": "BKPF",
+      "right": "BSAD",
+      "on": "BKPF.BUKRS = BSAD.BUKRS AND BKPF.BELNR = BSAD.BELNR AND BKPF.GJAHR = BSAD.GJAHR",
+      "note": "Accounting document header to cleared customer items"
+    },
+    {
+      "left": "BKPF",
+      "right": "FAGLFLEXA",
+      "on": "BKPF.BUKRS = FAGLFLEXA.RBUKRS AND BKPF.BELNR = FAGLFLEXA.BELNR AND BKPF.GJAHR = FAGLFLEXA.GJAHR",
+      "note": "Accounting document header to new GL line items"
+    },
+    {
+      "left": "CE1BGIS",
+      "right": "CEPC",
+      "on": "CE1BGIS.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1IDEA",
+      "right": "CEPC",
+      "on": "CE1IDEA.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1INT1",
+      "right": "CEPC",
+      "on": "CE1INT1.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1PR22",
+      "right": "CEPC",
+      "on": "CE1PR22.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1R300",
+      "right": "CEPC",
+      "on": "CE1R300.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1S_AL",
+      "right": "CEPC",
+      "on": "CE1S_AL.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1S_CP",
+      "right": "CEPC",
+      "on": "CE1S_CP.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE1S_GO",
+      "right": "CEPC",
+      "on": "CE1S_GO.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA line items to profit center master"
+    },
+    {
+      "left": "CE2BGIS",
+      "right": "CEPC",
+      "on": "CE2BGIS.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA summary records to profit center master"
+    },
+    {
+      "left": "CE2IDEA",
+      "right": "CEPC",
+      "on": "CE2IDEA.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA summary records to profit center master"
+    },
+    {
+      "left": "CE2S_AL",
+      "right": "CEPC",
+      "on": "CE2S_AL.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA summary records to profit center master"
+    },
+    {
+      "left": "CE2S_CP",
+      "right": "CEPC",
+      "on": "CE2S_CP.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA summary records to profit center master"
+    },
+    {
+      "left": "CS2S_GO",
+      "right": "CEPC",
+      "on": "CS2S_GO.PRCTR = CEPC.PRCTR",
+      "note": "CO-PA summary records to profit center master"
+    },
+    {
+      "left": "CKMLPR",
+      "right": "CKMLCR",
+      "on": "CKMLPR.KALNR = CKMLCR.KALNR",
+      "note": "Material ledger prices to cumulative values"
+    },
+    {
+      "left": "CKMLPR",
+      "right": "CKMLHD",
+      "on": "CKMLPR.KALNR = CKMLHD.KALNR",
+      "note": "Material ledger prices to header"
+    },
+    {
+      "left": "CKMLPR",
+      "right": "MBEW",
+      "on": "CKMLPR.KALNR = MBEW.KALNR",
+      "note": "Material ledger prices to material valuation"
+    },
+    {
+      "left": "COSS",
+      "right": "AUFK",
+      "on": "COSS.OBJNR = AUFK.OBJNR",
+      "note": "Cost totals to order master"
+    },
+    {
+      "left": "COSS",
+      "right": "COEP",
+      "on": "COSS.OBJNR = COEP.OBJNR AND COSS.GJAHR = COEP.GJAHR",
+      "note": "Cost totals to CO line items"
+    },
+    {
+      "left": "CSKT",
+      "right": "CSKS",
+      "on": "CSKT.KOKRS = CSKS.KOKRS AND CSKT.KOSTL = CSKS.KOSTL",
+      "note": "Cost center text to cost center master"
+    },
+    {
+      "left": "CSKT",
+      "right": "COEP",
+      "on": "CSKT.KOKRS = COEP.KOKRS AND CSKT.KOSTL = COEP.KOSTL",
+      "note": "Cost center text to CO line items"
+    },
+    {
+      "left": "DFKKOP",
+      "right": "CEPC",
+      "on": "DFKKOP.PRCTR = CEPC.PRCTR",
+      "note": "FI-CA open items to profit center master"
+    },
+    {
+      "left": "EINA",
+      "right": "EINE",
+      "on": "EINA.INFNR = EINE.INFNR",
+      "note": "Purchasing info record general to purchasing org data"
+    },
+    {
+      "left": "EINA",
+      "right": "LFA1",
+      "on": "EINA.LIFNR = LFA1.LIFNR",
+      "note": "Purchasing info record to vendor master"
+    },
+    {
+      "left": "EINA",
+      "right": "MAKT",
+      "on": "EINA.MATNR = MAKT.MATNR",
+      "note": "Purchasing info record to material description"
+    },
+    {
+      "left": "EINA",
+      "right": "MARA",
+      "on": "EINA.MATNR = MARA.MATNR",
+      "note": "Purchasing info record to material master"
+    },
+    {
+      "left": "KNBK",
+      "right": "KNA1",
+      "on": "KNBK.KUNNR = KNA1.KUNNR",
+      "note": "Customer bank details to customer master"
+    },
+    {
+      "left": "MARA",
+      "right": "MARD",
+      "on": "MARA.MATNR = MARD.MATNR",
+      "note": "Material master to storage location stock"
+    },
+    {
+      "left": "MARA",
+      "right": "MBEWH",
+      "on": "MARA.MATNR = MBEWH.MATNR",
+      "note": "Material master to historical valuation"
+    },
+    {
+      "left": "MARA",
+      "right": "MCHB",
+      "on": "MARA.MATNR = MCHB.MATNR",
+      "note": "Material master to batch stock"
+    },
+    {
+      "left": "MARA",
+      "right": "MLAN",
+      "on": "MARA.MATNR = MLAN.MATNR",
+      "note": "Material master to material tax records"
+    },
+    {
+      "left": "MARA",
+      "right": "MSLB",
+      "on": "MARA.MATNR = MSLB.MATNR",
+      "note": "Material master to vendor special stock"
+    },
+    {
+      "left": "MARD",
+      "right": "MARC",
+      "on": "MARD.MATNR = MARC.MATNR AND MARD.WERKS = MARC.WERKS",
+      "note": "Storage location stock to plant material"
+    },
+    {
+      "left": "MARD",
+      "right": "MCHB",
+      "on": "MARD.MATNR = MCHB.MATNR AND MARD.WERKS = MCHB.WERKS AND MARD.LGORT = MCHB.LGORT",
+      "note": "Storage location stock to batch stock"
+    },
+    {
+      "left": "MBEW",
+      "right": "MBEWH",
+      "on": "MBEW.MATNR = MBEWH.MATNR AND MBEW.BWKEY = MBEWH.BWKEY AND MBEW.BWTAR = MBEWH.BWTAR",
+      "note": "Current valuation to historical valuation"
+    },
+    {
+      "left": "MBEW",
+      "right": "CKMLHD",
+      "on": "MBEW.KALNR = CKMLHD.KALNR",
+      "note": "Material valuation to material ledger header"
+    },
+    {
+      "left": "MBEW",
+      "right": "CKMLCR",
+      "on": "MBEW.KALNR = CKMLCR.KALNR",
+      "note": "Material valuation to material ledger cumulative values"
+    },
+    {
+      "left": "MBEW",
+      "right": "CKMLPR",
+      "on": "MBEW.KALNR = CKMLPR.KALNR",
+      "note": "Material valuation to material ledger prices"
+    },
+    {
+      "left": "MCHB",
+      "right": "MSLB",
+      "on": "MCHB.MATNR = MSLB.MATNR AND MCHB.WERKS = MSLB.WERKS AND MCHB.CHARG = MSLB.CHARG",
+      "note": "Batch stock to vendor special stock"
+    },
+    {
+      "left": "MSLB",
+      "right": "LFA1",
+      "on": "MSLB.LIFNR = LFA1.LIFNR",
+      "note": "Vendor special stock to vendor master"
+    },
+    {
+      "left": "TCKH1",
+      "right": "TCKH2",
+      "on": "TCKH1.ELEHK = TCKH2.ELEHK AND TCKH1.ELEMT = TCKH2.ELEMT",
+      "note": "Cost component text to cost component hierarchy"
     }
   ]
 }
