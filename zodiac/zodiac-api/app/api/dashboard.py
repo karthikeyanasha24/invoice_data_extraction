@@ -2991,7 +2991,6 @@ async def post_ai_analysis_approve_query(
         )
 
 
-
 def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approval_source: str, current_user, db):
     from ..services.ai_query_memory_service import store_approved_query
     from ..services.ai_analysis_orchestrator import orchestrator_payload
@@ -3001,8 +3000,79 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
     from ..config.config import USE_SAP_DB_FOR_AI
 
     sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
-    try:
-        execution = execute_sql_with_precision_checks(sql_db or db, proposed_sql, question=question)
+    try:  # outer try — finally block ensures sql_db.close() always runs
+        # ── Step 1: Execute SQL with precision checks ──────────────────────────
+        execution = None
+        try:
+            execution = execute_sql_with_precision_checks(sql_db or db, proposed_sql, question=question)
+        except HTTPException:
+            raise
+        except Exception as _exec_err:
+            # DB execution error (e.g. type mismatch, column not found).
+            # Auto-fix using ChatGPT with the error context and offer fixed SQL.
+            _err_str = str(_exec_err)
+            logger.warning("_do_approve_query: execution error: %s", _err_str[:300])
+            # Roll back the failed transaction so the session is still usable
+            try:
+                (sql_db or db).rollback()
+            except Exception:
+                pass
+            _fixed_sql = None
+            try:
+                from openai import OpenAI
+                _ai_key = _get_ai_analysis_config()
+                if _ai_key:
+                    _fix_prompt = f"""The following PostgreSQL SQL failed with an error. Fix it and return ONLY the corrected SQL.
+
+Original SQL:
+{proposed_sql}
+
+Error message:
+{_err_str[:500]}
+
+Key rules for SAP data:
+- CKIS.wertn and CKIS.gpreis are TEXT columns. Use SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) NOT COALESCE(wertn, 0).
+- Safe CKIS subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c
+- vbrp.netwr is also TEXT in some installs; cast with NULLIF(TRIM(netwr::text), '')::NUMERIC if needed.
+- Return ONLY the fixed SQL, no explanation."""
+                    _client = OpenAI(api_key=_ai_key)
+                    _resp = _client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[{"role": "user", "content": _fix_prompt}],
+                        temperature=0,
+                        max_tokens=1000,
+                    )
+                    _raw = (_resp.choices[0].message.content or "").strip()
+                    if "```" in _raw:
+                        import re as _re2
+                        _m = _re2.search(r"```(?:\w+)?\s*([\s\S]*?)```", _raw)
+                        if _m:
+                            _raw = _m.group(1).strip()
+                    if _raw and "SELECT" in _raw.upper():
+                        _fixed_sql = _raw
+            except Exception as _fix_err:
+                logger.debug("auto-fix SQL failed: %s", _fix_err)
+            if _fixed_sql:
+                return {
+                    "reply": (
+                        f"The SQL ran into a database error: {_err_str[:200]}. "
+                        "I've generated a corrected version below — please review and approve."
+                    ),
+                    "action": "new",
+                    "reason": "sql_execution_error_auto_fixed",
+                    "sql": proposed_sql,
+                    "rows_preview": [],
+                    "charts": None,
+                    "needs_approval": True,
+                    "proposed_sql": _fixed_sql,
+                    "validation": {},
+                    "period_info": "All Periods" if time_scope == "both" else time_scope,
+                }
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Approve failed: {_err_str[:400]}",
+            )
+
         validation_payload = _validation_to_payload(execution.validation)
         if not execution.validation.is_valid:
             raise HTTPException(
@@ -3014,6 +3084,7 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
                 ),
             )
 
+        # ── Step 2: Storage + summarisation ───────────────────────────────────
         quoted_sql = execution.sql
         rows = execution.rows
 
@@ -3032,10 +3103,11 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
         except Exception:
             pass
 
-        # Block storage only when: hard validation failure OR NULL aggregate result.
-        # Allow storage (with a warning) when: 0 rows on an entity-specific query
-        # (the SQL is correct, the customer/vendor/product just has no data).
-        _should_block_storage = _is_null_aggregate or (execution.should_refine and not _is_entity_query)
+        # Block storage only for non-entity queries with NULL aggregates or 0 rows.
+        # For entity-specific queries (customer/vendor/product by name), NULL SUM or 0 rows
+        # simply means the named entity has no billing records — the SQL is correct and
+        # should be stored so the user can reuse it later.
+        _should_block_storage = (_is_null_aggregate and not _is_entity_query) or (execution.should_refine and not _is_entity_query)
 
         if _should_block_storage or (not rows and not _is_entity_query):
             log_query_feedback_attempt(
@@ -3136,8 +3208,9 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
             summarization_prompt = f"""You are a data analyst. The user asked: "{question}"
 
 SQL executed:
-{quoted_sql[:1500]}
+{quoted_sql[:1500]} 
 
+    
 Result preview (first 20 rows):
 {json.dumps(preview[:20], default=str, indent=2)}
 
