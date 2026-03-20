@@ -2991,6 +2991,7 @@ async def post_ai_analysis_approve_query(
         )
 
 
+
 def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approval_source: str, current_user, db):
     from ..services.ai_query_memory_service import store_approved_query
     from ..services.ai_analysis_orchestrator import orchestrator_payload
@@ -3015,7 +3016,28 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
 
         quoted_sql = execution.sql
         rows = execution.rows
-        if execution.should_refine or not rows:
+
+        # Determine whether this is a hard "NULL aggregate" failure vs. a soft
+        # "no rows found" result.  For entity-specific queries (customer/vendor/
+        # product by name), zero rows means the entity simply has no data in the
+        # current period — the SQL itself is correct and should still be stored so
+        # the user can reuse it.  We only block storage for genuinely malformed
+        # results (NULL aggregates) or when the "should_refine" flag is set for
+        # reasons other than a sparse/filtered dataset.
+        _is_null_aggregate = execution.no_data_reason == "null_aggregate"
+        _is_entity_query = False
+        try:
+            from ..services.sap_sql_agent import _is_entity_specific_question
+            _is_entity_query = _is_entity_specific_question(question)
+        except Exception:
+            pass
+
+        # Block storage only when: hard validation failure OR NULL aggregate result.
+        # Allow storage (with a warning) when: 0 rows on an entity-specific query
+        # (the SQL is correct, the customer/vendor/product just has no data).
+        _should_block_storage = _is_null_aggregate or (execution.should_refine and not _is_entity_query)
+
+        if _should_block_storage or (not rows and not _is_entity_query):
             log_query_feedback_attempt(
                 db=db,
                 user_id=current_user.id,
@@ -3046,10 +3068,10 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
                 "period_info": "All Periods" if time_scope == "both" else time_scope,
             }
 
-        # Apply product-name filter when user asked for a specific product (e.g. "profit margin for Fire fighting vehicle")
+        # Narrow broad result sets when the approved question targets a specific item.
         try:
-            from ..services.invoice_bot_helpers import filter_dataframe_by_product_name_if_requested
-            rows = filter_dataframe_by_product_name_if_requested(question, rows)
+            from ..services.invoice_bot_helpers import filter_dataframe_by_specific_entity_if_requested
+            rows = filter_dataframe_by_specific_entity_if_requested(question, rows)
         except Exception:
             pass
 
@@ -3155,12 +3177,6 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
             sql_db.close()
-
-
-
-
-
-
 
 
 @router.post("/ai-analysis-multi-model")
