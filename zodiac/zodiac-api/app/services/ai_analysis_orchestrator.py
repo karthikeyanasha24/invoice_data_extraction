@@ -987,6 +987,37 @@ If result is empty, say so and suggest a refined question.
                     from .schema_loader import get_schema_text
                     from .ai_query_memory_service import validate_sql_for_safe_execution
                     schema_text = get_schema_text(sql_db, include_semantic_map=True)
+                    # Build entity filter hint so ChatGPT uses ILIKE (not exact match)
+                    _chatgpt_entity_hint = ""
+                    try:
+                        from .invoice_bot_helpers import get_specific_entity_request
+                        _ce = get_specific_entity_request(user_query)
+                        if _ce and _ce.get("value"):
+                            _cv = _ce["value"].replace("'", "''")
+                            if _ce.get("entity") == "customer":
+                                _chatgpt_entity_hint = (
+                                    f'\n- ENTITY FILTER (CRITICAL): The question asks about customer "{_ce["value"]}".'
+                                    f' You MUST use: WHERE "KNA1".name1 ILIKE \'%{_cv}%\''
+                                    f' with JOIN "KNA1" ON "VBRK".kunag = "KNA1".kunnr'
+                                    f' and JOIN "VBRP" ON "VBRK".vbeln = "VBRP".vbeln.'
+                                    f' NEVER use exact = match for customer names — always use ILIKE.'
+                                )
+                            elif _ce.get("entity") == "vendor":
+                                _chatgpt_entity_hint = (
+                                    f'\n- ENTITY FILTER (CRITICAL): The question asks about vendor "{_ce["value"]}".'
+                                    f' You MUST use: WHERE "LFA1".name1 ILIKE \'%{_cv}%\''
+                                    f' with JOIN "LFA1" ON "RBKP".lifnr = "LFA1".lifnr.'
+                                    f' NEVER use exact = match for vendor names — always use ILIKE.'
+                                )
+                            elif _ce.get("entity") == "product":
+                                _chatgpt_entity_hint = (
+                                    f'\n- ENTITY FILTER (CRITICAL): The question asks about product "{_ce["value"]}".'
+                                    f' You MUST use: WHERE "MAKT".maktx ILIKE \'%{_cv}%\' AND "MAKT".spras = \'E\''
+                                    f' with JOIN "MAKT" ON "VBRP".matnr = "MAKT".matnr.'
+                                    f' NEVER use exact = match for product names — always use ILIKE.'
+                                )
+                    except Exception:
+                        pass
                     prompt = f"""You are an SAP SQL expert. The user asked: "{user_query}"
 
 Database schema (PostgreSQL, table names may need double quotes for uppercase):
@@ -995,7 +1026,7 @@ Database schema (PostgreSQL, table names may need double quotes for uppercase):
 Generate a single PostgreSQL SELECT query to answer this. Rules:
 - Use only SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
 - No DELETE, UPDATE, DROP, INSERT
-- Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.
+- Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.{_chatgpt_entity_hint}
 - Return ONLY the SQL, no explanation. No markdown code blocks."""
                     resp = client.chat.completions.create(
                         model="gpt-4o",
@@ -1474,5 +1505,4 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
     if payload.get("performance"):
         logger.debug(f"Performance data: {payload['performance']}")
     return payload
-
 
