@@ -54,24 +54,34 @@ def _build_entity_filter_block(question: str) -> str:
         safe = entity_value.replace("'", "''")
         if entity_type == "customer":
             return (
-                f"\n⚠️  MANDATORY FILTER: The question asks specifically about customer '{entity_value}'.\n"
-                f"   You MUST include: WHERE KNA1.name1 ILIKE '%{safe}%'\n"
-                f"   If KNA1 is not yet in the FROM/JOIN, add: JOIN \"KNA1\" ON \"VBRK\".kunag = \"KNA1\".kunnr\n"
-                f"   Do NOT return a broad query without this filter.\n"
+                f"\n⚠️  MANDATORY FILTER — DO NOT IGNORE:\n"
+                f"   The question asks specifically about customer '{entity_value}'.\n"
+                f"   You MUST include this exact clause: WHERE \"KNA1\".name1 ILIKE '%{safe}%'\n"
+                f"   NEVER use exact match (= '{safe}') — always use ILIKE for name comparisons.\n"
+                f"   The customer name in the DB may include extra words (e.g. 'Siemens AG', 'SIEMENS CORP').\n"
+                f"   If KNA1 is not yet joined, add: JOIN \"KNA1\" ON \"VBRK\".kunag = \"KNA1\".kunnr\n"
+                f"   and ensure VBRK is joined to VBRP via: JOIN \"VBRK\" ON \"VBRK\".vbeln = vbrp.vbeln\n"
+                f"   FAILURE to include this filter makes the query WRONG — do not skip it.\n"
             )
         if entity_type == "vendor":
             return (
-                f"\n⚠️  MANDATORY FILTER: The question asks specifically about vendor '{entity_value}'.\n"
-                f"   You MUST include: WHERE LFA1.name1 ILIKE '%{safe}%'\n"
-                f"   If LFA1 is not yet in the FROM/JOIN, add: JOIN \"LFA1\" ON \"RBKP\".lifnr = \"LFA1\".lifnr  (or EKKO.lifnr)\n"
-                f"   Do NOT return a broad query without this filter.\n"
+                f"\n⚠️  MANDATORY FILTER — DO NOT IGNORE:\n"
+                f"   The question asks specifically about vendor '{entity_value}'.\n"
+                f"   You MUST include this exact clause: WHERE \"LFA1\".name1 ILIKE '%{safe}%'\n"
+                f"   NEVER use exact match (= '{safe}') — always use ILIKE for name comparisons.\n"
+                f"   The vendor name in the DB may include extra words (e.g. 'Bosch GmbH', 'BOSCH AG').\n"
+                f"   If LFA1 is not yet joined, add: JOIN \"LFA1\" ON \"RBKP\".lifnr = \"LFA1\".lifnr  (or EKKO.lifnr)\n"
+                f"   FAILURE to include this filter makes the query WRONG — do not skip it.\n"
             )
         if entity_type == "product":
             return (
-                f"\n⚠️  MANDATORY FILTER: The question asks specifically about product '{entity_value}'.\n"
+                f"\n⚠️  MANDATORY FILTER — DO NOT IGNORE:\n"
+                f"   The question asks specifically about product '{entity_value}'.\n"
                 f"   You MUST include: WHERE \"MAKT\".maktx ILIKE '%{safe}%' AND \"MAKT\".spras = 'E'\n"
-                f"   If MAKT is not yet in the FROM/JOIN, add: JOIN \"MAKT\" ON <fact_table>.matnr = \"MAKT\".matnr\n"
-                f"   Do NOT return a broad query without this filter.\n"
+                f"   NEVER use exact match (= '{safe}') — always use ILIKE for name comparisons.\n"
+                f"   The product description in the DB may include extra words (e.g. 'Harley leather jacket').\n"
+                f"   If MAKT is not yet joined, add: JOIN \"MAKT\" ON <fact_table>.matnr = \"MAKT\".matnr\n"
+                f"   FAILURE to include this filter makes the query WRONG — do not skip it.\n"
             )
     except Exception:
         pass
@@ -175,4 +185,3 @@ def _extract_sql(text: str) -> Optional[str]:
     if "SELECT" in first.upper():
         return first + ";"
     return text if ("SELECT" in text.upper()) else None
-
