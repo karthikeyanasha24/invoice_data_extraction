@@ -322,6 +322,77 @@ def _is_entity_specific_question(question: str) -> bool:
     return False
 
 
+def _diagnose_entity_no_results(db, entity_type: str, entity_value: str) -> str:
+    """
+    When an entity-filtered query returns 0 / NULL rows, run quick diagnostic
+    SQL to find similar names in the relevant master table (KNA1, LFA1, MAKT).
+    Returns a human-readable diagnostic string, or empty string if unavailable.
+    """
+    try:
+        safe = entity_value.replace("'", "''")
+        if entity_type == "customer":
+            # 1) Look for name1 matches in KNA1
+            similar_sql = f"SELECT DISTINCT name1 FROM \"KNA1\" WHERE name1 ILIKE '%{safe}%' LIMIT 5"
+            rows = _run_sql(db, similar_sql)
+            names = [str(r.get("name1", "")) for r in (rows or []) if r.get("name1")]
+            if names:
+                return (
+                    f" Note: customers matching '{entity_value}' in the master data: "
+                    + ", ".join(f"'{n}'" for n in names)
+                    + ". The billing tables may not have invoices linked to these customers."
+                )
+            # 2) No match — sample a few customer names so the user can pick the right one
+            sample_sql = "SELECT DISTINCT name1 FROM \"KNA1\" WHERE name1 IS NOT NULL AND name1 != '' ORDER BY name1 LIMIT 10"
+            rows = _run_sql(db, sample_sql)
+            names = [str(r.get("name1", "")) for r in (rows or []) if r.get("name1")]
+            if names:
+                return (
+                    f" No customer named '{entity_value}' found in the database. "
+                    f"Some available customers: " + ", ".join(f"'{n}'" for n in names[:6]) + ". "
+                    "Try one of these names."
+                )
+        elif entity_type == "vendor":
+            similar_sql = f"SELECT DISTINCT name1 FROM \"LFA1\" WHERE name1 ILIKE '%{safe}%' LIMIT 5"
+            rows = _run_sql(db, similar_sql)
+            names = [str(r.get("name1", "")) for r in (rows or []) if r.get("name1")]
+            if names:
+                return (
+                    f" Note: vendors matching '{entity_value}': "
+                    + ", ".join(f"'{n}'" for n in names)
+                    + ". The invoice tables may not have matching records."
+                )
+            sample_sql = "SELECT DISTINCT name1 FROM \"LFA1\" WHERE name1 IS NOT NULL AND name1 != '' ORDER BY name1 LIMIT 10"
+            rows = _run_sql(db, sample_sql)
+            names = [str(r.get("name1", "")) for r in (rows or []) if r.get("name1")]
+            if names:
+                return (
+                    f" No vendor named '{entity_value}' found. "
+                    f"Some available vendors: " + ", ".join(f"'{n}'" for n in names[:6]) + ". "
+                    "Try one of these names."
+                )
+        elif entity_type == "product":
+            similar_sql = f"SELECT DISTINCT maktx FROM \"MAKT\" WHERE maktx ILIKE '%{safe}%' AND spras = 'E' LIMIT 5"
+            rows = _run_sql(db, similar_sql)
+            names = [str(r.get("maktx", "")) for r in (rows or []) if r.get("maktx")]
+            if names:
+                return (
+                    f" Note: products matching '{entity_value}': "
+                    + ", ".join(f"'{n}'" for n in names)
+                    + "."
+                )
+            sample_sql = "SELECT DISTINCT maktx FROM \"MAKT\" WHERE maktx IS NOT NULL AND spras = 'E' ORDER BY maktx LIMIT 10"
+            rows = _run_sql(db, sample_sql)
+            names = [str(r.get("maktx", "")) for r in (rows or []) if r.get("maktx")]
+            if names:
+                return (
+                    f" No product named '{entity_value}' found. "
+                    f"Some available products: " + ", ".join(f"'{n}'" for n in names[:6]) + "."
+                )
+    except Exception as _diag_err:
+        logger.debug("_diagnose_entity_no_results: %s", _diag_err)
+    return ""
+
+
 def _lookup_sql_catalog(question: str) -> Optional[str]:
     """
     Fast-path: score every catalog entry against the question using keyword matching.
@@ -2241,7 +2312,6 @@ def _run_faglflexa_cost_by_profit_center_sql(
     return None
 
 
-
 def _build_minimal_faglflexa_spec(
     question: str,
     selected_tables: List[str],
@@ -3134,6 +3204,7 @@ Rules:
         question,
     )
     return {}
+
 
 
 def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
