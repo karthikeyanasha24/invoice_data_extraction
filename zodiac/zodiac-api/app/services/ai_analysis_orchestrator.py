@@ -1027,6 +1027,8 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
 - Use only SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
 - No DELETE, UPDATE, DROP, INSERT
 - Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.{_chatgpt_entity_hint}
+- CKIS TEXT COLUMNS (CRITICAL): The CKIS.wertn and CKIS.gpreis columns are stored as TEXT, not numeric. NEVER use COALESCE(wertn, 0) — it fails with type mismatch. ALWAYS cast with: SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC). Safe subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c.
+- For profit margin: revenue from vbrp.netwr (cast via NULLIF(TRIM(netwr::text),'')::NUMERIC), cost from CKIS subquery above. Join vbrp→MAKT for product name, vbrp→CKIS on matnr.
 - Return ONLY the SQL, no explanation. No markdown code blocks."""
                     resp = client.chat.completions.create(
                         model="gpt-4o",
@@ -1050,12 +1052,29 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                 except Exception as chat_err:
                     logger.debug("ChatGPT fallback failed: %s", chat_err)
 
+            # --- Entity diagnostic: check if the named entity actually exists in the DB
+            # before offering ChatGPT SQL or a bare "no data" message.
+            _entity_diag_msg = ""
+            try:
+                from .invoice_bot_helpers import get_specific_entity_request
+                from .sap_sql_agent import _diagnose_entity_no_results
+                _diag_entity = get_specific_entity_request(user_query)
+                if _diag_entity and _diag_entity.get("value"):
+                    _entity_diag_msg = _diagnose_entity_no_results(
+                        sql_db, _diag_entity.get("entity", ""), _diag_entity.get("value", "")
+                    )
+                    if _entity_diag_msg:
+                        logger.info("entity diagnostic: %s", _entity_diag_msg[:160])
+            except Exception as _diag_ex:
+                logger.debug("entity diagnostic error: %s", _diag_ex)
+
             if proposed_sql:
                 return OrchestratorResult(
                     reply=(
                         "I couldn't generate a query automatically, but I have a suggested SQL from ChatGPT. "
                         "**Review it below and click Approve** to run it and save it for future similar questions. "
                         "Or try rephrasing your question."
+                        + (f"\n\n⚠️ {_entity_diag_msg.strip()}" if _entity_diag_msg else "")
                     ),
                     action="new",
                     reason="chatgpt_fallback_needs_approval",
@@ -1071,6 +1090,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                 reply=(
                     "No data was found for that query. "
                     + ("The SQL ran but returned 0 rows — the table may not have matching records for those filters. " if sql_attempted else "A SQL query could not be generated for this request. ")
+                    + ("" if not _entity_diag_msg else _entity_diag_msg + " ")
                     + "Try rephrasing with a specific table name, material, customer, plant, or time period."
                 ),
                 action="new",
