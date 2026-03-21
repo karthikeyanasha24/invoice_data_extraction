@@ -10,6 +10,7 @@ from collections import defaultdict
 import logging
 import json
 import os
+import re
 
 from ..database import get_db
 from ..models.user import ZodiacUser
@@ -2681,8 +2682,7 @@ def _validate_sql_candidate(sql_db: Session, question: str, sql: str):
             validation.warnings,
         )
     return validation, None
-
-
+    
 @router.post("/ai-analysis/chat")
 async def post_ai_analysis_chat(
     message: str = Body(..., embed=True),
@@ -3031,6 +3031,10 @@ Error message:
 {_err_str[:500]}
 
 Key rules for SAP data:
+- Keep the user's filter intent intact. Do NOT broaden the query, remove year filters, or switch to all periods unless the error explicitly requires it.
+- Do NOT invent or prepend schemas like public. Use the actual SAP table names already present in the SQL.
+- Preserve SAP table casing exactly. In this database, examples include lowercase vbrp and quoted uppercase "VBRK".
+- If the SQL already joins the right tables, prefer the minimal fix instead of rewriting the whole query.
 - CKIS.wertn and CKIS.gpreis are TEXT columns. Use SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) NOT COALESCE(wertn, 0).
 - Safe CKIS subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c
 - vbrp.netwr is also TEXT in some installs; cast with NULLIF(TRIM(netwr::text), '')::NUMERIC if needed.
@@ -3097,19 +3101,28 @@ Key rules for SAP data:
         # reasons other than a sparse/filtered dataset.
         _is_null_aggregate = execution.no_data_reason == "null_aggregate"
         _is_entity_query = False
+        _has_explicit_time_filter = False
         try:
-            from ..services.sap_sql_agent import _is_entity_specific_question
+            from ..services.sap_sql_agent import _is_entity_specific_question, _question_has_explicit_time_constraint
             _is_entity_query = _is_entity_specific_question(question)
+            _has_explicit_time_filter = _question_has_explicit_time_constraint(question)
         except Exception:
             pass
+        if not _has_explicit_time_filter and proposed_sql:
+            _has_explicit_time_filter = bool(
+                re.search(r"\b(?:GJAHR|RYEAR|FKDAT|BUDAT|AUDAT|BEDAT|ERDAT|AUGDT|LFDAT|DATUV)\b\s*(?:=|>=|<=|>|<|BETWEEN|IN)", proposed_sql, re.IGNORECASE)
+                or re.search(r"EXTRACT\s*\(\s*YEAR\s+FROM", proposed_sql, re.IGNORECASE)
+                or re.search(r"\b(?:19|20)\d{2}\b", proposed_sql)
+            )
 
         # Block storage only for non-entity queries with NULL aggregates or 0 rows.
         # For entity-specific queries (customer/vendor/product by name), NULL SUM or 0 rows
         # simply means the named entity has no billing records — the SQL is correct and
         # should be stored so the user can reuse it later.
-        _should_block_storage = (_is_null_aggregate and not _is_entity_query) or (execution.should_refine and not _is_entity_query)
+        _allow_empty_result = _is_entity_query or _has_explicit_time_filter
+        _should_block_storage = (_is_null_aggregate and not _allow_empty_result) or (execution.should_refine and not _allow_empty_result)
 
-        if _should_block_storage or (not rows and not _is_entity_query):
+        if _should_block_storage or (not rows and not _allow_empty_result):
             log_query_feedback_attempt(
                 db=db,
                 user_id=current_user.id,
@@ -3208,20 +3221,22 @@ Key rules for SAP data:
             summarization_prompt = f"""You are a data analyst. The user asked: "{question}"
 
 SQL executed:
-{quoted_sql[:1500]} 
+{quoted_sql[:1500]}
 
-    
 Result preview (first 20 rows):
 {json.dumps(preview[:20], default=str, indent=2)}
 
 Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbers. Use bullet points if listing items."""
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": summarization_prompt}],
-                temperature=0.4,
-                max_tokens=700,
-            )
-            reply = (resp.choices[0].message.content or "").strip()
+            if rows:
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": summarization_prompt}],
+                    temperature=0.4,
+                    max_tokens=700,
+                )
+                reply = (resp.choices[0].message.content or "").strip()
+            else:
+                reply = "The SQL executed successfully but returned **0 rows** for the requested filters."
             period_info, date_range = ("All Periods (1994-2026)", {"min_date": "1994-01-01", "max_date": "2026-12-31"}) if time_scope == "both" else ("Last 30 days", {})
             orch = OrchestratorResult(
                 reply=reply or "Query executed successfully.",
