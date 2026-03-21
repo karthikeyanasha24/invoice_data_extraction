@@ -45,11 +45,11 @@ USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
 UPLOAD_DIR = Path("uploads")
 EDI_DIR = Path("converted")
 
-# Generative AI context source: "zodiac" (default, use app DB) or "sap" (use SAP database)
+# The web app now uses a single database connection via DATABASE_URL.
+# Keep these names as compatibility constants for older imports, but route them
+# to the primary database instead of reading SAP_* environment variables.
 AI_CONTEXT_SOURCE = os.getenv("AI_CONTEXT_SOURCE", "zodiac").lower().strip()
-# SAP database URL for Generative AI context (only used when AI_CONTEXT_SOURCE=sap).
-# Examples: SAP HANA "hana://user:pass@host:30015", SQL Server "mssql+pyodbc://...", Oracle "oracle+cx_oracle://..."
-SAP_DATABASE_URL = os.getenv("SAP_DATABASE_URL") or os.getenv("SAP_DB_URL")
+SAP_DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("\ufeffDATABASE_URL")
 USE_SAP_DB_FOR_AI = AI_CONTEXT_SOURCE == "sap" and bool(SAP_DATABASE_URL)
 
 # AI Query Optimization Settings
