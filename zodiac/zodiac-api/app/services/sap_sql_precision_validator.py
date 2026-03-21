@@ -241,6 +241,23 @@ def _normalize_sap_date_filters(sql: str) -> Tuple[str, List[str]]:
     return normalized, notes
 
 
+def _normalize_numeric_text_casts(sql: str) -> str:
+    """Rewrite mixed-type numeric casts into a text-safe numeric conversion."""
+    if not sql:
+        return sql
+
+    pattern = re.compile(
+        r'CAST\(\s*COALESCE\(\s*(?P<expr>(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?)\s*,\s*0\s*\)\s*AS\s+NUMERIC\s*\)',
+        re.IGNORECASE,
+    )
+
+    def _replace(match: re.Match[str]) -> str:
+        expr = match.group("expr")
+        return f"CAST(COALESCE(NULLIF(TRIM(CAST({expr} AS TEXT)), ''), '0') AS NUMERIC)"
+
+    return pattern.sub(_replace, sql)
+
+
 def _extract_aggregate_functions(sql: str) -> List[str]:
     return sorted({m.upper() for m in re.findall(r"\b(SUM|AVG|COUNT|MIN|MAX)\s*\(", sql or "", re.IGNORECASE)})
 
@@ -251,6 +268,7 @@ def validate_sql_precision(
     question: Optional[str] = None,
 ) -> SapSqlValidationResult:
     normalized_sql, date_normalizations = _normalize_sap_date_filters(sql)
+    normalized_sql = _normalize_numeric_text_casts(normalized_sql)
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -355,8 +373,7 @@ def execute_sql_with_precision_checks(
     if not rows:
         no_data_reason = "no_rows"
         if any(func in RISKY_AGGREGATES for func in validation.aggregate_functions):
-            warnings.append("Aggregate query returned no rows after SAP precision checks.")
-            should_refine = True
+            warnings.append("Aggregate query returned no rows after SAP precision checks. This can be valid when the filters are very specific.")
     elif any(func in RISKY_AGGREGATES for func in validation.aggregate_functions):
         first_row = rows[0] if isinstance(rows[0], dict) else {}
         if first_row and all(value is None for value in first_row.values()):
