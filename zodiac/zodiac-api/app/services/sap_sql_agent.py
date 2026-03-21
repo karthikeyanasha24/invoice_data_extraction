@@ -287,6 +287,30 @@ def _quote_catalog_sql_tables(sql: str) -> str:
     if not actual_tables:
         return sql
 
+    actual_lookup = {t.upper(): t for t in actual_tables if t and not t.isdigit()}
+
+    # Strip incorrect schema qualifiers such as public.VBRK/public.vbrp and normalize
+    # table casing from the actual DB mapping.
+    table_ref_pattern = re.compile(
+        r'\b(?P<kw>FROM|JOIN)\s+'
+        r'(?:(?P<schema>"?[A-Za-z_][A-Za-z0-9_]*"?)[.])?'
+        r'(?P<table>"?[A-Za-z_][A-Za-z0-9_]*"?)'
+        r'(?P<alias>\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_]*)?'
+        r'(?=\s+(?:ON|WHERE|GROUP|ORDER|JOIN|LEFT|RIGHT|INNER|FULL|CROSS|LIMIT|UNION)\b|\s*$)',
+        re.IGNORECASE,
+    )
+
+    def _normalize_table_ref(match: re.Match) -> str:
+        table_token = (match.group("table") or "").strip('"')
+        actual = actual_lookup.get(table_token.upper())
+        if not actual:
+            return match.group(0)
+        rendered = actual if actual == actual.lower() else f'"{actual}"'
+        alias = match.group("alias") or ""
+        return f'{match.group("kw")} {rendered}{alias}'
+
+    sql = table_ref_pattern.sub(_normalize_table_ref, sql)
+
     # Tables stored as lowercase in mapping — DB has them lowercase; use vbrp not "VBRP"
     lowercase_tables = {t for t in actual_tables if t == t.lower() and not t.isdigit()}
     for tbl in sorted(lowercase_tables, key=len, reverse=True):
@@ -320,6 +344,68 @@ def _is_entity_specific_question(question: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def _question_has_explicit_time_constraint(question: str) -> bool:
+    """Detect year/date/range wording where empty results should preserve the filter."""
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    if re.search(r"\b(?:19|20)\d{2}\b", q):
+        return True
+    if re.search(r"\b\d{4}[-/]\d{2}[-/]\d{2}\b", q):
+        return True
+    phrases = (
+        "this year",
+        "last year",
+        "current year",
+        "this month",
+        "last month",
+        "this week",
+        "last week",
+        "today",
+        "yesterday",
+        "last 7 days",
+        "last 30 days",
+        "last 90 days",
+        "past 7 days",
+        "past 30 days",
+        "past 90 days",
+    )
+    if any(phrase in q for phrase in phrases):
+        return True
+    if re.search(r"\b(?:last|past|previous)\s+\d+\s+(?:day|days|week|weeks|month|months|year|years)\b", q):
+        return True
+    if re.search(r"\bbetween\b.+\band\b", q):
+        return True
+    if re.search(r"\bfrom\b.+\bto\b", q):
+        return True
+    return False
+
+
+def _spec_has_explicit_time_filter(spec: Optional[Dict[str, Any]]) -> bool:
+    """Detect date/year filters already present in the JSON spec."""
+    if not spec:
+        return False
+    try:
+        filters_blob = json.dumps(spec.get("filters") or [], default=str)
+    except Exception:
+        return False
+    return bool(re.search(r"\b(?:GJAHR|RYEAR|FKDAT|BUDAT|AUDAT|BEDAT|ERDAT|AUGDT|LFDAT|DATUV)\b", filters_blob, re.IGNORECASE))
+
+
+def _should_refine_after_zero_rows(question: str, spec: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Empty results are valid for strict entity/date/year filters. Only auto-broaden
+    broad exploratory questions where the LLM likely over-constrained the query.
+    """
+    if _is_entity_specific_question(question):
+        return False
+    if _question_has_explicit_time_constraint(question):
+        return False
+    if _spec_has_explicit_time_filter(spec):
+        return False
+    return True
 
 
 def _diagnose_entity_no_results(db, entity_type: str, entity_value: str) -> str:
@@ -1996,19 +2082,6 @@ def _build_minimal_last_sales_spec(
     order_by = []
     if order_col and has_col(order_table, order_col):
         order_by.append({"table": order_table, "column": col_name(order_table, order_col), "direction": "DESC"})
-
-    spec: Dict[str, Any] = {
-        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
-        "columns": columns,
-        "joins": joins,
-        "filters": filters if by_product else [],
-        "order_by": order_by,
-        "group_by": group_by,
-        "limit": 100,
-    }
-    return spec
-
-
 def _build_minimal_ekpo_spec(
     question: str,
     selected_tables: List[str],
@@ -2848,18 +2921,20 @@ def run_adaptive_sap_sql_agent(
             logger.info("run_adaptive_sap_sql_agent: success, %d rows", len(rows))
             return SqlAgentResult(sql=sql, rows=rows)
 
-        # One retry with refinement when 0 rows
-        spec = refine_query_on_error(
-            client,
-            question,
-            "Query returned no rows. Simplify joins or remove strict filters; use all periods if needed.",
-            spec,
-        )
-        if spec:
-            sql = _json_to_sql_postgres(spec, column_mappings)
-            rows = _run_sql(db, sql)
-            if rows:
-                return SqlAgentResult(sql=sql, rows=rows)
+        # Only broaden broad exploratory questions. If the user asked for a specific
+        # year/date/entity, an empty result is a valid answer and should not be rewritten.
+        if _should_refine_after_zero_rows(question, spec):
+            spec = refine_query_on_error(
+                client,
+                question,
+                "Query returned no rows. Simplify joins or remove strict filters; use all periods if needed.",
+                spec,
+            )
+            if spec:
+                sql = _json_to_sql_postgres(spec, column_mappings)
+                rows = _run_sql(db, sql)
+                if rows:
+                    return SqlAgentResult(sql=sql, rows=rows)
     except Exception as e:
         logger.warning("run_adaptive_sap_sql_agent failed for %r: %s", question[:80], e)
     return None
@@ -3204,7 +3279,6 @@ Rules:
         question,
     )
     return {}
-
 
 
 def _ensure_having_for_aggregates(spec: Dict[str, Any], question: str) -> None:
@@ -4266,10 +4340,10 @@ def run_sap_sql_agent(
                     logger.info(f"✅ SQL returned {len(rows)} rows")
                     return SqlAgentResult(sql=sql, rows=rows)
 
-                # Query returned no rows — retry with simpler query
+                # Query returned no rows — retry with simpler query only for broad questions.
                 logger.warning(f"⚠️ SQL returned no rows for question: {question}")
                 logger.warning(f"📊 SQL query:\n{sql}")
-                if attempt < max_retries:
+                if attempt < max_retries and _should_refine_after_zero_rows(question, spec):
                     try:
                         db.rollback()
                     except Exception:
@@ -4348,3 +4422,15 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
+
+
+    spec: Dict[str, Any] = {
+        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "columns": columns,
+        "joins": joins,
+        "filters": filters if by_product else [],
+        "order_by": order_by,
+        "group_by": group_by,
+        "limit": 100,
+    }
+    return spec
