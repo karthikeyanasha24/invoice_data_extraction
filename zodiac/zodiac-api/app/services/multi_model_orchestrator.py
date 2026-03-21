@@ -57,16 +57,41 @@ async def _call_openai_async(prompt: str, context: str) -> ModelResponse:
         
         client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         
+        structured_prompt = f"""You are an expert SAP business intelligence analyst. Provide a well-structured analysis.
+
+CONTEXT:
+{context[:4000]}
+
+USER QUESTION:
+{prompt}
+
+INSTRUCTIONS:
+- Provide a clear, structured response
+- Use bullet points or numbered lists where appropriate
+- Start with a brief summary (1-2 sentences)
+- Include specific metrics and insights
+- Keep it concise but comprehensive (5-8 key points)
+- Use **bold** for emphasis on key findings
+- Format numbers clearly (e.g., $2.5M, 92%)
+
+Structure your response as:
+**Summary:** [Brief overview]
+**Key Findings:**
+- [Finding 1]
+- [Finding 2]
+...
+**Recommendation:** [If applicable]"""
+
         messages = [
-            {"role": "system", "content": f"You are an expert SAP data analyst.\n\nContext:\n{context[:4000]}"},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": "You are an expert SAP data analyst providing structured business intelligence insights."},
+            {"role": "user", "content": structured_prompt},
         ]
         
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            temperature=0.4,
-            max_tokens=800,
+            temperature=0.3,
+            max_tokens=1000,
         )
         
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -96,12 +121,12 @@ async def _call_openai_async(prompt: str, context: str) -> ModelResponse:
 
 
 async def _call_gemini_async(prompt: str, context: str) -> ModelResponse:
-    """Call Google Gemini 1.5 Flash asynchronously."""
+    """Call Google Gemini 2.5 Flash asynchronously."""
     start_time = time.time()
     try:
         if not GOOGLE_API_KEY:
             return ModelResponse(
-                model_name="Google Gemini 1.5 Flash",
+                model_name="Google Gemini 2.5 Flash",
                 content="",
                 response_time_ms=0,
                 success=False,
@@ -111,17 +136,35 @@ async def _call_gemini_async(prompt: str, context: str) -> ModelResponse:
         import google.generativeai as genai
         
         genai.configure(api_key=GOOGLE_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Use Gemini 2.5 Flash model (fast, better free tier limits)
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
         
-        full_prompt = f"""You are an expert SAP data analyst.
+        full_prompt = f"""You are an expert SAP business intelligence analyst. Provide a well-structured analysis.
 
-Context:
+CONTEXT:
 {context[:4000]}
 
-User question:
+USER QUESTION:
 {prompt}
 
-Provide a clear, concise answer (3-10 sentences)."""
+INSTRUCTIONS:
+- Provide a clear, structured response
+- Use bullet points or numbered lists where appropriate
+- Start with a brief summary (1-2 sentences)
+- Include specific metrics and insights from the context
+- Keep it concise but comprehensive (5-8 key points)
+- Use **bold** for emphasis on key findings
+- Format numbers clearly (e.g., $2.5M, 92%)
+
+Structure your response as:
+**Summary:** [Brief overview]
+
+**Key Findings:**
+• [Finding 1]
+• [Finding 2]
+• [Finding 3]
+
+**Recommendation:** [If applicable]"""
         
         # Gemini doesn't have async support in the current SDK, so we run in executor
         loop = asyncio.get_event_loop()
@@ -134,7 +177,7 @@ Provide a clear, concise answer (3-10 sentences)."""
         content = response.text if response and hasattr(response, 'text') else ""
         
         return ModelResponse(
-            model_name="Google Gemini 1.5 Flash",
+            model_name="Google Gemini 2.5 Flash",
             content=content,
             response_time_ms=elapsed_ms,
             success=True,
@@ -144,7 +187,7 @@ Provide a clear, concise answer (3-10 sentences)."""
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.error(f"Gemini call failed: {e}")
         return ModelResponse(
-            model_name="Google Gemini 1.5 Flash",
+            model_name="Google Gemini 2.5 Flash",
             content="",
             response_time_ms=elapsed_ms,
             success=False,
@@ -167,15 +210,43 @@ async def _call_claude_async(prompt: str, context: str) -> ModelResponse:
         
         client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         
-        system_message = f"You are an expert SAP data analyst.\n\nContext:\n{context[:4000]}"
+        system_message = "You are an expert SAP business intelligence analyst providing structured, actionable insights."
+        
+        structured_prompt = f"""Analyze the following business data and provide a well-structured response.
+
+CONTEXT:
+{context[:4000]}
+
+USER QUESTION:
+{prompt}
+
+INSTRUCTIONS:
+- Provide a clear, structured response with logical sections
+- Use bullet points or numbered lists for clarity
+- Start with an executive summary (1-2 sentences)
+- Include specific metrics and data-driven insights
+- Provide 5-8 key findings or points
+- Use **bold** for emphasis on critical findings
+- Format numbers clearly (e.g., $2.5M, 92%)
+- End with actionable recommendations if applicable
+
+Structure your response as:
+**Executive Summary:** [Brief overview]
+
+**Key Insights:**
+• [Insight 1 with supporting data]
+• [Insight 2 with supporting data]
+• [Insight 3 with supporting data]
+
+**Recommendations:** [Strategic actions]"""
         
         response = await client.messages.create(
             model="claude-3-5-sonnet-20241022",
-            max_tokens=800,
-            temperature=0.4,
+            max_tokens=1000,
+            temperature=0.3,
             system=system_message,
             messages=[
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": structured_prompt}
             ]
         )
         
@@ -319,22 +390,29 @@ async def _synthesize_responses(
             for r in responses
         ])
         
-        synthesis_prompt = f"""You are comparing answers from multiple AI models to the same question.
+        synthesis_prompt = f"""You are synthesizing answers from multiple AI models to provide the best possible response.
 
-User question: "{user_query}"
+USER QUESTION: "{user_query}"
 
-Model responses:
+MODEL RESPONSES:
 {responses_text}
 
-Task:
+TASK:
 1. Identify which model gave the best answer (most accurate, complete, and clear)
-2. Synthesize a final answer that combines the best insights from all models
-3. Keep it concise (3-10 sentences)
+2. Synthesize a final answer that combines the best insights from ALL models
+3. Create a well-structured response with:
+   - Executive summary (1-2 sentences)
+   - Key findings (bullet points)
+   - Specific metrics and data points
+   - Recommendations if applicable
+4. Use **bold** for emphasis on critical points
+5. Format numbers clearly (e.g., $2.5M, 92%)
+6. Keep it comprehensive but concise
 
-Return JSON only:
+Return JSON only with this exact structure:
 {{
   "best_model": "model name",
-  "synthesized_answer": "final answer combining best insights"
+  "synthesized_answer": "**Summary:** [Brief overview]\\n\\n**Key Findings:**\\n• [Finding 1]\\n• [Finding 2]\\n• [Finding 3]\\n\\n**Recommendations:** [If applicable]"
 }}
 """
         
