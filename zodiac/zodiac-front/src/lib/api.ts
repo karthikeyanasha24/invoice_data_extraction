@@ -1728,6 +1728,88 @@ export const dashboardApi = {
             throw new Error(error.response?.data?.detail || 'Failed to get multi-model AI response.');
         }
     },
+
+    postAIAnalysisApproveQuery: async (
+        question: string,
+        proposedSql: string,
+        timeScope: 'current' | 'historical' | 'both' = 'both',
+        approvalSource: 'chatgpt' | 'manual' | 'assistant_sql' = 'chatgpt'
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/approve-query', {
+                question,
+                proposed_sql: proposedSql,
+                time_scope: timeScope,
+                approval_source: approvalSource,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI approve query failed:', error);
+            const detail = error.response?.data?.detail;
+            const msg = typeof detail === 'string' ? detail
+                : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? d).join('; ')
+                : 'Failed to approve and run query.';
+            throw new Error(msg);
+        }
+    },
+
+    postAIAnalysisStoreQuery: async (
+        question: string,
+        sqlQuery: string,
+        timeScope: 'current' | 'historical' | 'both' = 'both',
+        approvalSource: 'assistant_sql' | 'manual' = 'assistant_sql'
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/store-query', {
+                question,
+                sql_query: sqlQuery,
+                time_scope: timeScope,
+                approval_source: approvalSource,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI store query failed:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to store query.');
+        }
+    },
+
+    postAIAnalysisSuggestSql: async (
+        question: string,
+        timeScope: 'current' | 'historical' | 'both' = 'both'
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/suggest-sql', {
+                question,
+                time_scope: timeScope,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI suggest SQL failed:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to get SQL suggestion.');
+        }
+    },
+
+    postAIAnalysisRejectQuery: async (
+        question: string,
+        rejectedSql: string,
+        timeScope: 'current' | 'historical' | 'both' = 'both',
+        attemptSource: 'chatgpt' | 'manual' | 'assistant_sql' = 'assistant_sql',
+        feedbackReason: string = 'rejected_by_user'
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/reject-query', {
+                question,
+                rejected_sql: rejectedSql,
+                time_scope: timeScope,
+                attempt_source: attemptSource,
+                feedback_reason: feedbackReason,
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error('AI reject query failed:', error);
+            throw new Error(error.response?.data?.detail || 'Failed to record rejected SQL.');
+        }
+    },
 };
 
 // Admin API

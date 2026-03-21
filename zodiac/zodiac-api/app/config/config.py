@@ -13,7 +13,7 @@ logger = logging.getLogger("zodiac-api.config")
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GEMINI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ENABLE_MULTI_MODEL = os.getenv("ENABLE_MULTI_MODEL", "false").lower() == "true"
@@ -38,18 +38,18 @@ except ImportError:
     logger.warning("⚠️ Vercel Blob not available - will use local storage only")
 
 # Determine if we MUST use blob storage (PROD + token provided)
-MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and BLOB_READ_WRITE_TOKEN is not None
+MUST_USE_BLOB_STORAGE = DEPLOY_ENV == "PROD" and bool(BLOB_READ_WRITE_TOKEN)
 USE_BLOB_STORAGE = MUST_USE_BLOB_STORAGE and VERCEL_BLOB_AVAILABLE
 
 # Local storage directories
 UPLOAD_DIR = Path("uploads")
 EDI_DIR = Path("converted")
 
-# Generative AI context source: "zodiac" (default, use app DB) or "sap" (use SAP database)
+# The web app now uses a single database connection via DATABASE_URL.
+# Keep these names as compatibility constants for older imports, but route them
+# to the primary database instead of reading SAP_* environment variables.
 AI_CONTEXT_SOURCE = os.getenv("AI_CONTEXT_SOURCE", "zodiac").lower().strip()
-# SAP database URL for Generative AI context (only used when AI_CONTEXT_SOURCE=sap).
-# Examples: SAP HANA "hana://user:pass@host:30015", SQL Server "mssql+pyodbc://...", Oracle "oracle+cx_oracle://..."
-SAP_DATABASE_URL = os.getenv("SAP_DATABASE_URL") or os.getenv("SAP_DB_URL")
+SAP_DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("\ufeffDATABASE_URL")
 USE_SAP_DB_FOR_AI = AI_CONTEXT_SOURCE == "sap" and bool(SAP_DATABASE_URL)
 
 # AI Query Optimization Settings

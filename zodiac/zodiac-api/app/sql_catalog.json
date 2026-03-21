@@ -1,0 +1,3397 @@
+[
+  {
+    "id": "sales_total_overall",
+    "description": "Grand total sales/revenue (all periods)",
+    "question_patterns": [
+      "what is the total sales",
+      "total revenue overall",
+      "overall billing amount",
+      "grand total sales",
+      "what is the total revenue",
+      "overall sales total"
+    ],
+    "keywords": [
+      "total",
+      "sales",
+      "revenue",
+      "overall",
+      "billing",
+      "grand",
+      "total revenue",
+      "what is the total",
+      "overall revenue",
+      "overall sales"
+    ],
+    "neg_keywords": [
+      "by year",
+      "by month",
+      "by country",
+      "by customer",
+      "by product",
+      "by industry"
+    ],
+    "tables": [
+      "VBRK",
+      "vbrp"
+    ],
+    "sql": "SELECT SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL\nGROUP BY vk.waerk\nORDER BY total_sales DESC",
+    "priority": 1
+  },
+  {
+    "id": "sales_by_year",
+    "description": "Total sales by year",
+    "question_patterns": [
+      "sales by year",
+      "revenue by year",
+      "annual sales",
+      "yearly sales",
+      "sales per year",
+      "sales each year",
+      "sales trend by year"
+    ],
+    "keywords": [
+      "sales",
+      "year",
+      "annual",
+      "yearly",
+      "revenue",
+      "trend",
+      "billing",
+      "by year",
+      "per year",
+      "each year"
+    ],
+    "neg_keywords": [
+      "month",
+      "by country",
+      "by customer",
+      "by product"
+    ],
+    "tables": [
+      "VBRK",
+      "vbrp"
+    ],
+    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, vk.waerk\nORDER BY year ASC",
+    "priority": 2
+  },
+  {
+    "id": "sales_by_year_month",
+    "description": "Total sales by year and month (monthly trend)",
+    "question_patterns": [
+      "monthly sales",
+      "sales by month",
+      "monthly revenue",
+      "monthly billing",
+      "sales trend monthly"
+    ],
+    "keywords": [
+      "sales",
+      "month",
+      "monthly",
+      "revenue",
+      "trend",
+      "billing"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK",
+      "vbrp"
+    ],
+    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUBSTRING(vk.fkdat, 5, 2) AS month,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, month, vk.waerk\nORDER BY year ASC, month ASC",
+    "priority": 3
+  },
+  {
+    "id": "sales_by_country_top20",
+    "description": "Top 20 countries by total sales",
+    "question_patterns": [
+      "highest sales by country",
+      "top countries by sales",
+      "sales by country",
+      "revenue by country",
+      "which country has highest sales",
+      "best countries by revenue",
+      "top 20 countries by sales"
+    ],
+    "keywords": [
+      "country",
+      "sales",
+      "revenue",
+      "top",
+      "highest",
+      "land1",
+      "countries"
+    ],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
+    "tables": [
+      "VBRK"
+    ],
+    "sql": "SELECT vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nWHERE vk.land1 IS NOT NULL AND vk.land1 != ''\nGROUP BY vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 4
+  },
+  {
+    "id": "sales_by_country_bottom20",
+    "description": "Bottom 20 countries by total sales (lowest)",
+    "question_patterns": [
+      "lowest sales by country",
+      "least sales by country",
+      "countries with lowest revenue",
+      "bottom countries by sales",
+      "bottom 20 countries by sales"
+    ],
+    "keywords": [
+      "country",
+      "sales",
+      "lowest",
+      "bottom",
+      "least",
+      "revenue"
+    ],
+    "neg_keywords": [
+      "highest",
+      "max",
+      "best",
+      "top",
+      "maximum"
+    ],
+    "tables": [
+      "VBRK"
+    ],
+    "sql": "SELECT vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nWHERE vk.land1 IS NOT NULL AND vk.land1 != ''\nGROUP BY vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_vendor_top50",
+    "description": "Top 50 vendors (sold-to customers) by total sales",
+    "question_patterns": [
+      "highest sell by vendor",
+      "highest sales by vendor",
+      "top vendors by sales",
+      "top vendors by revenue"
+    ],
+    "keywords": [
+      "vendor",
+      "sales",
+      "sell",
+      "revenue",
+      "top",
+      "highest"
+    ],
+    "neg_keywords": [
+      "spend",
+      "purchase",
+      "invoice",
+      "ap"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT v.\"kunag\" AS vendor_id,\n       MAX(COALESCE(TRIM(k.\"name1\"), v.\"kunag\"::text)) AS vendor_name,\n       v.\"waerk\" AS currency,\n       SUM(COALESCE(v.\"netwr\"::numeric, 0)) AS total_sales,\n       COUNT(DISTINCT v.\"vbeln\") AS invoice_count\nFROM \"VBRK\" v\nLEFT JOIN \"KNA1\" k ON k.\"mandt\" = v.\"mandt\" AND k.\"kunnr\" = v.\"kunag\"\nWHERE v.\"netwr\" IS NOT NULL\nGROUP BY v.\"kunag\", v.\"waerk\"\nHAVING SUM(COALESCE(v.\"netwr\"::numeric, 0)) > 0\nORDER BY total_sales DESC\nLIMIT 50",
+    "priority": 6
+  },
+  {
+    "id": "sales_by_customer_top20",
+    "description": "Top 20 customers by total sales",
+    "question_patterns": [
+      "highest sales by customer",
+      "top customers by sales",
+      "top customers by revenue",
+      "top 20 customers",
+      "which customer has highest sales",
+      "best customers",
+      "largest customers by revenue",
+      "top customers"
+    ],
+    "keywords": [
+      "customer",
+      "sales",
+      "revenue",
+      "top",
+      "highest",
+      "best",
+      "kunag",
+      "biggest",
+      "customers"
+    ],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, k.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 5
+  },
+  {
+    "id": "sales_by_customer_bottom20",
+    "description": "Bottom 20 customers by total sales (lowest)",
+    "question_patterns": [
+      "lowest sales by customer",
+      "customers with least revenue",
+      "bottom customers by sales",
+      "customers with lowest purchases",
+      "bottom 20 customers by sales"
+    ],
+    "keywords": [
+      "customer",
+      "sales",
+      "lowest",
+      "bottom",
+      "least",
+      "revenue",
+      "customers"
+    ],
+    "neg_keywords": [
+      "highest",
+      "max",
+      "best",
+      "top",
+      "maximum"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, k.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_product_top20",
+    "description": "Top 20 products/materials by total sales",
+    "question_patterns": [
+      "show me highest sales by product",
+      "highest sales by product",
+      "top products by sales",
+      "top 20 products by revenue",
+      "best selling products",
+      "which product has highest sales",
+      "top selling materials",
+      "highest revenue products",
+      "top materials by sales",
+      "products by revenue"
+    ],
+    "keywords": [
+      "product",
+      "material",
+      "sales",
+      "revenue",
+      "top",
+      "highest",
+      "selling",
+      "matnr",
+      "products",
+      "materials"
+    ],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS total_quantity,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 5
+  },
+  {
+    "id": "sales_by_product_bottom20",
+    "description": "Bottom 20 products/materials by total sales (lowest)",
+    "question_patterns": [
+      "lowest sales by product",
+      "least sold products",
+      "bottom products by sales",
+      "products with lowest revenue",
+      "bottom 20 products by sales"
+    ],
+    "keywords": [
+      "product",
+      "material",
+      "sales",
+      "lowest",
+      "bottom",
+      "least",
+      "revenue",
+      "products"
+    ],
+    "neg_keywords": [
+      "highest",
+      "max",
+      "best",
+      "top",
+      "maximum"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS total_quantity,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales ASC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "quantity_by_product_top20",
+    "description": "Top 20 products by total quantity sold",
+    "question_patterns": [
+      "top products by quantity sold",
+      "most sold products by quantity",
+      "highest quantity sold by product",
+      "products with highest quantity",
+      "top 20 products by quantity"
+    ],
+    "keywords": [
+      "product",
+      "material",
+      "quantity",
+      "sold",
+      "top",
+      "highest",
+      "fkimg",
+      "most"
+    ],
+    "neg_keywords": [
+      "purchase",
+      "cost",
+      "vendor"
+    ],
+    "tables": [
+      "vbrp",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       TRIM(v.matnr) AS material_number,\n       SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS total_quantity,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales\nFROM vbrp v\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nWHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\nGROUP BY TRIM(v.matnr), m.maktx\nHAVING SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) > 0\nORDER BY total_quantity DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_industry_top20",
+    "description": "Top 20 industries by total sales",
+    "question_patterns": [
+      "sales by industry",
+      "highest sales by industry",
+      "which industry has highest sales",
+      "top industries by revenue",
+      "revenue by industry",
+      "industry breakdown by sales"
+    ],
+    "keywords": [
+      "industry",
+      "sales",
+      "revenue",
+      "top",
+      "highest",
+      "brsch",
+      "industries",
+      "invoices by industry",
+      "invoice industry",
+      "billing by industry",
+      "industry revenue",
+      "industry sales"
+    ],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1",
+      "T016T"
+    ],
+    "sql": "SELECT t.brtxt AS industry_name,\n       k.brsch AS industry_code,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.kunag) AS customer_count\nFROM VBRK vk\nJOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN T016T t ON k.brsch = t.brsch\nWHERE k.brsch IS NOT NULL AND k.brsch != ''\nGROUP BY k.brsch, t.brtxt, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 5
+  },
+  {
+    "id": "sales_by_customer_country_top20",
+    "description": "Top 20 customers with country by total sales",
+    "question_patterns": [
+      "highest sales by customer and country",
+      "top customers by sales and country",
+      "sales by customer with country",
+      "customer sales by country"
+    ],
+    "keywords": [
+      "customer",
+      "country",
+      "sales",
+      "top",
+      "highest",
+      "revenue"
+    ],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       vk.land1 AS country,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.land1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_customer_product_top20",
+    "description": "Top 20 customer-product combinations by total sales",
+    "question_patterns": [
+      "highest sales by customer and product",
+      "top sales by customer and product",
+      "which customer bought which product the most",
+      "customer product revenue breakdown"
+    ],
+    "keywords": [
+      "customer",
+      "product",
+      "material",
+      "sales",
+      "top",
+      "highest",
+      "revenue"
+    ],
+    "neg_keywords": [
+      "lowest",
+      "worst",
+      "bottom",
+      "min",
+      "minimum",
+      "least"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "KNA1",
+      "MAKT"
+    ],
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       m.maktx AS material_name,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND m.spras = 'E'\nGROUP BY vk.kunag, k.name1, m.maktx, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "revenue_by_sales_org_and_distribution_channel",
+    "description": "Revenue by sales organization and distribution channel (VBRK.vkorg, VBRK.vtweg)",
+    "question_patterns": [
+      "revenue by sales organization and distribution channel",
+      "sales by vkorg and vtweg",
+      "revenue by vkorg vtweg",
+      "sales org and distribution channel"
+    ],
+    "keywords": [
+      "revenue",
+      "sales",
+      "organization",
+      "distribution",
+      "channel",
+      "vkorg",
+      "vtweg"
+    ],
+    "neg_keywords": [],
+    "tables": ["VBRK", "vbrp"],
+    "sql": "SELECT vk.vkorg AS sales_org, vk.vtweg AS distribution_channel, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_revenue, vk.waerk AS currency FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) WHERE vk.vkorg IS NOT NULL AND vk.vtweg IS NOT NULL GROUP BY vk.vkorg, vk.vtweg, vk.waerk HAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 ORDER BY total_revenue DESC LIMIT 100",
+    "priority": 3
+  },
+  {
+    "id": "sales_by_sales_org",
+    "description": "Sales by sales organization",
+    "question_patterns": [
+      "sales by sales organization",
+      "revenue by sales org",
+      "sales org breakdown",
+      "vkorg sales"
+    ],
+    "keywords": [
+      "sales",
+      "organization",
+      "org",
+      "vkorg",
+      "sales org"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK"
+    ],
+    "sql": "SELECT vk.vkorg AS sales_org,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count\nFROM VBRK vk\nGROUP BY vk.vkorg, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_distribution_channel",
+    "description": "Sales by distribution channel",
+    "question_patterns": [
+      "sales by distribution channel",
+      "revenue by channel",
+      "distribution channel sales",
+      "vtweg sales"
+    ],
+    "keywords": [
+      "distribution",
+      "channel",
+      "sales",
+      "vtweg",
+      "revenue"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK"
+    ],
+    "sql": "SELECT vk.vtweg AS distribution_channel,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nGROUP BY vk.vtweg, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
+    "priority": 0
+  },
+  {
+    "id": "invoice_count_by_customer",
+    "description": "Number of invoices per customer (top 20)",
+    "question_patterns": [
+      "invoice count by customer",
+      "how many invoices per customer",
+      "number of invoices by customer",
+      "customers with most invoices",
+      "invoices per customer"
+    ],
+    "keywords": [
+      "invoice",
+      "count",
+      "customer",
+      "number",
+      "how many",
+      "invoices"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.waerk\nORDER BY invoice_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_avg_per_customer",
+    "description": "Average sales per customer",
+    "question_patterns": [
+      "average sales per customer",
+      "average revenue per customer",
+      "mean sales per customer",
+      "avg revenue by customer"
+    ],
+    "keywords": [
+      "average",
+      "avg",
+      "mean",
+      "sales",
+      "customer",
+      "revenue",
+      "per"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "sql": "SELECT vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       AVG(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS avg_invoice_value,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nGROUP BY vk.kunag, k.name1, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY avg_invoice_value DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_division",
+    "description": "Sales by division/product group (spart)",
+    "question_patterns": [
+      "sales by division",
+      "revenue by division",
+      "sales by product group",
+      "division breakdown"
+    ],
+    "keywords": [
+      "division",
+      "spart",
+      "product",
+      "group",
+      "sales",
+      "revenue"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK"
+    ],
+    "sql": "SELECT vk.spart AS division,\n       SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM VBRK vk\nWHERE vk.spart IS NOT NULL AND vk.spart != ''\nGROUP BY vk.spart, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC",
+    "priority": 0
+  },
+  {
+    "id": "sales_year_comparison",
+    "description": "Sales comparison across years (year-over-year)",
+    "question_patterns": [
+      "compare sales by year",
+      "year over year sales",
+      "yoy sales",
+      "sales comparison by year",
+      "how did sales change by year",
+      "sales growth by year"
+    ],
+    "keywords": [
+      "compare",
+      "year",
+      "sales",
+      "yoy",
+      "growth",
+      "change",
+      "revenue",
+      "year over year",
+      "yoy comparison",
+      "year comparison"
+    ],
+    "neg_keywords": [
+      "total sales by year",
+      "by year only"
+    ],
+    "tables": [
+      "VBRK",
+      "vbrp"
+    ],
+    "sql": "SELECT SUBSTRING(vk.fkdat, 1, 4) AS year,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       COUNT(DISTINCT vk.vbeln) AS invoice_count,\n       COUNT(DISTINCT vk.kunag) AS customer_count,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE vk.fkdat IS NOT NULL AND vk.fkdat != ''\nGROUP BY year, vk.waerk\nORDER BY year ASC",
+    "priority": 3
+  },
+  {
+    "id": "customer_list",
+    "description": "List all customers with country",
+    "question_patterns": [
+      "list all customers",
+      "show all customers",
+      "all customers",
+      "customer names",
+      "customer list",
+      "show me customers",
+      "who are my customers",
+      "list customer names"
+    ],
+    "keywords": [
+      "customer",
+      "list",
+      "all",
+      "show",
+      "names",
+      "customers",
+      "kna1"
+    ],
+    "neg_keywords": [
+      "sales",
+      "revenue",
+      "by",
+      "top",
+      "purchase",
+      "invoice"
+    ],
+    "tables": [
+      "KNA1"
+    ],
+    "sql": "SELECT k.kunnr AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       k.ort01 AS city,\n       k.brsch AS industry_code\nFROM KNA1 k\nWHERE k.name1 IS NOT NULL AND k.name1 != ''\nORDER BY k.name1 ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "customer_count_by_country",
+    "description": "Number of customers by country",
+    "question_patterns": [
+      "customer count by country",
+      "how many customers per country",
+      "customers per country",
+      "number of customers by country",
+      "customers in each country"
+    ],
+    "keywords": [
+      "customer",
+      "count",
+      "country",
+      "how many",
+      "per",
+      "number"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KNA1"
+    ],
+    "sql": "SELECT k.land1 AS country,\n       COUNT(DISTINCT k.kunnr) AS customer_count\nFROM KNA1 k\nWHERE k.land1 IS NOT NULL AND k.land1 != ''\nGROUP BY k.land1\nORDER BY customer_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "customer_count_by_industry",
+    "description": "Number of customers by industry",
+    "question_patterns": [
+      "customer count by industry",
+      "customers per industry",
+      "how many customers in each industry",
+      "number of customers by industry",
+      "industry breakdown of customers"
+    ],
+    "keywords": [
+      "customer",
+      "count",
+      "industry",
+      "per",
+      "how many",
+      "number",
+      "brsch"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KNA1",
+      "T016T"
+    ],
+    "sql": "SELECT t.brtxt AS industry_name,\n       k.brsch AS industry_code,\n       COUNT(DISTINCT k.kunnr) AS customer_count\nFROM KNA1 k\nLEFT JOIN T016T t ON k.brsch = t.brsch\nWHERE k.brsch IS NOT NULL AND k.brsch != ''\nGROUP BY k.brsch, t.brtxt\nORDER BY customer_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "customers_by_country_list",
+    "description": "List customers in each country",
+    "question_patterns": [
+      "customers by country",
+      "list customers by country",
+      "which customers are in each country"
+    ],
+    "keywords": [
+      "customer",
+      "country",
+      "list",
+      "names",
+      "land1"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KNA1"
+    ],
+    "sql": "SELECT k.land1 AS country,\n       k.kunnr AS customer_number,\n       k.name1 AS customer_name,\n       k.ort01 AS city\nFROM KNA1 k\nWHERE k.land1 IS NOT NULL AND k.land1 != ''\nORDER BY k.land1 ASC, k.name1 ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "purchase_total",
+    "description": "Grand total purchase amount (all vendors)",
+    "question_patterns": [
+      "total purchase amount",
+      "total procurement",
+      "overall purchase value",
+      "total purchasing spend"
+    ],
+    "keywords": [
+      "total",
+      "purchase",
+      "procurement",
+      "purchasing",
+      "overall",
+      "spend",
+      "total purchase",
+      "purchase total",
+      "total procurement"
+    ],
+    "neg_keywords": [
+      "by vendor",
+      "by material",
+      "by year",
+      "by plant",
+      "top",
+      "highest"
+    ],
+    "tables": [
+      "EKPO",
+      "EKKO"
+    ],
+    "sql": "SELECT SUM(ep.netwr) AS total_purchase_amount,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ep.netwr IS NOT NULL\nGROUP BY ek.waers\nORDER BY total_purchase_amount DESC",
+    "priority": 0
+  },
+  {
+    "id": "purchase_by_vendor_top20",
+    "description": "Top 20 vendors by total purchase amount",
+    "question_patterns": [
+      "top vendors by purchase",
+      "highest purchase by vendor",
+      "top 20 vendors by spend",
+      "vendors by purchase amount",
+      "which vendor has highest purchases",
+      "top suppliers by purchase",
+      "vendor purchase ranking",
+      "largest vendors by order value",
+      "purchase by vendor",
+      "purchases by vendor",
+      "vendor purchases"
+    ],
+    "keywords": [
+      "vendor",
+      "purchase",
+      "top",
+      "highest",
+      "supplier",
+      "spend",
+      "amount",
+      "vendors",
+      "suppliers",
+      "by vendor",
+      "purchase by vendor"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO",
+      "LFA1"
+    ],
+    "sql": "SELECT l.name1 AS vendor_name,\n       ek.lifnr AS vendor_number,\n       SUM(ep.netwr) AS total_purchase_amount,\n       SUM(ep.menge) AS total_quantity,\n       COUNT(DISTINCT ek.ebeln) AS po_count,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nLEFT JOIN LFA1 l ON ek.lifnr = l.lifnr\nWHERE ep.netwr IS NOT NULL\nGROUP BY ek.lifnr, l.name1, ek.waers\nHAVING SUM(ep.netwr) > 0\nORDER BY total_purchase_amount DESC\nLIMIT 20",
+    "priority": 5
+  },
+  {
+    "id": "purchase_by_material_top20",
+    "description": "Top 20 materials by total purchase amount",
+    "question_patterns": [
+      "top materials by purchase amount",
+      "purchased materials by cost",
+      "top 20 materials by cost",
+      "total purchase cost by material",
+      "materials with highest purchase cost",
+      "what materials are purchased most by value"
+    ],
+    "keywords": [
+      "material",
+      "purchase",
+      "top",
+      "highest",
+      "cost",
+      "amount",
+      "materials",
+      "purchased"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       ep.matnr AS material_number,\n       SUM(ep.netwr) AS total_purchase_amount,\n       SUM(ep.menge) AS total_quantity,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nWHERE ep.matnr IS NOT NULL AND ep.matnr != '' AND ep.netwr IS NOT NULL\nGROUP BY ep.matnr, m.maktx, ek.waers\nHAVING SUM(ep.netwr) > 0\nORDER BY total_purchase_amount DESC\nLIMIT 20",
+    "priority": 5
+  },
+  {
+    "id": "purchase_quantity_by_material_top20",
+    "description": "Top 20 materials by total purchase quantity",
+    "question_patterns": [
+      "top materials by quantity purchased",
+      "most purchased materials by quantity",
+      "highest quantity purchased by material",
+      "materials ordered most by quantity",
+      "what is total purchase quantity by material",
+      "top 10 products by total purchase quantity and cost"
+    ],
+    "keywords": [
+      "material",
+      "quantity",
+      "purchase",
+      "top",
+      "purchased",
+      "most",
+      "menge",
+      "ordered"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       ep.matnr AS material_number,\n       SUM(ep.menge) AS total_quantity,\n       SUM(ep.netwr) AS total_purchase_amount\nFROM EKPO ep\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nWHERE ep.matnr IS NOT NULL AND ep.matnr != '' AND ep.menge IS NOT NULL\nGROUP BY ep.matnr, m.maktx\nHAVING SUM(ep.menge) > 0\nORDER BY total_quantity DESC\nLIMIT 20",
+    "priority": 5
+  },
+  {
+    "id": "purchase_by_year",
+    "description": "Total purchase amount by year",
+    "question_patterns": [
+      "purchases by year",
+      "annual purchasing",
+      "purchase trend by year",
+      "yearly purchasing",
+      "purchasing by year",
+      "procurement by year"
+    ],
+    "keywords": [
+      "purchase",
+      "year",
+      "annual",
+      "yearly",
+      "trend",
+      "procurement"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO"
+    ],
+    "sql": "SELECT SUBSTRING(ek.bedat, 1, 4) AS year,\n       SUM(ep.netwr) AS total_purchase_amount,\n       COUNT(DISTINCT ek.ebeln) AS po_count,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ek.bedat IS NOT NULL AND ek.bedat != '' AND ep.netwr IS NOT NULL\nGROUP BY year, ek.waers\nORDER BY year ASC",
+    "priority": 0
+  },
+  {
+    "id": "purchase_by_month",
+    "description": "Total purchase amount by year and month",
+    "question_patterns": [
+      "purchases by month",
+      "monthly purchasing",
+      "monthly procurement",
+      "purchase trend by month"
+    ],
+    "keywords": [
+      "purchase",
+      "month",
+      "monthly",
+      "procurement",
+      "trend"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO"
+    ],
+    "sql": "SELECT SUBSTRING(ek.bedat, 1, 4) AS year,\n       SUBSTRING(ek.bedat, 5, 2) AS month,\n       SUM(ep.netwr) AS total_purchase_amount,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ek.bedat IS NOT NULL AND ek.bedat != '' AND ep.netwr IS NOT NULL\nGROUP BY year, month, ek.waers\nORDER BY year ASC, month ASC",
+    "priority": 0
+  },
+  {
+    "id": "po_count_by_vendor",
+    "description": "Number of purchase orders by vendor (top 20)",
+    "question_patterns": [
+      "purchase order count by vendor",
+      "how many orders per vendor",
+      "po count by vendor",
+      "number of pos per vendor",
+      "vendors with most purchase orders"
+    ],
+    "keywords": [
+      "purchase",
+      "order",
+      "count",
+      "vendor",
+      "number",
+      "how many",
+      "po",
+      "orders"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKKO",
+      "LFA1"
+    ],
+    "sql": "SELECT l.name1 AS vendor_name,\n       ek.lifnr AS vendor_number,\n       COUNT(DISTINCT ek.ebeln) AS po_count,\n       SUM(ep.netwr) AS total_amount,\n       ek.waers AS currency\nFROM EKKO ek\nLEFT JOIN LFA1 l ON ek.lifnr = l.lifnr\nLEFT JOIN EKPO ep ON ek.ebeln = ep.ebeln\nGROUP BY ek.lifnr, l.name1, ek.waers\nORDER BY po_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "purchase_by_material_vendor",
+    "description": "Top 20 material-vendor combinations by purchase amount",
+    "question_patterns": [
+      "purchase by material and vendor",
+      "materials from each vendor",
+      "vendor material cost breakdown",
+      "which vendor supplies which material at what cost"
+    ],
+    "keywords": [
+      "material",
+      "vendor",
+      "purchase",
+      "cost",
+      "supplier",
+      "supply"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO",
+      "MAKT",
+      "LFA1"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       l.name1 AS vendor_name,\n       SUM(ep.netwr) AS total_amount,\n       SUM(ep.menge) AS total_quantity,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nLEFT JOIN LFA1 l ON ek.lifnr = l.lifnr\nWHERE ep.matnr IS NOT NULL\nGROUP BY m.maktx, l.name1, ek.waers\nHAVING SUM(ep.netwr) > 0\nORDER BY total_amount DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "purchase_by_plant",
+    "description": "Purchase amount by plant (top 20)",
+    "question_patterns": [
+      "purchase by plant",
+      "procurement by plant",
+      "purchasing by plant",
+      "plant purchase breakdown"
+    ],
+    "keywords": [
+      "purchase",
+      "plant",
+      "werks",
+      "procurement"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO"
+    ],
+    "sql": "SELECT ep.werks AS plant,\n       SUM(ep.netwr) AS total_purchase_amount,\n       COUNT(DISTINCT ek.ebeln) AS po_count,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ep.werks IS NOT NULL AND ep.werks != '' AND ep.netwr IS NOT NULL\nGROUP BY ep.werks, ek.waers\nHAVING SUM(ep.netwr) > 0\nORDER BY total_purchase_amount DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "vendor_invoice_total",
+    "description": "Grand total vendor invoice amount (accounts payable)",
+    "question_patterns": [
+      "total vendor invoice amount",
+      "total accounts payable",
+      "total vendor spend",
+      "total ap amount",
+      "total invoice value"
+    ],
+    "keywords": [
+      "total",
+      "vendor",
+      "invoice",
+      "spend",
+      "accounts",
+      "payable",
+      "ap",
+      "overall",
+      "total vendor invoice",
+      "total accounts payable",
+      "total invoice amount"
+    ],
+    "neg_keywords": [
+      "by vendor",
+      "by material",
+      "by year",
+      "by month",
+      "top",
+      "highest"
+    ],
+    "tables": [
+      "RBKP"
+    ],
+    "sql": "SELECT SUM(rb.rmwwr) AS total_invoice_amount,\n       rb.waers AS currency,\n       COUNT(DISTINCT rb.belnr) AS invoice_count\nFROM RBKP rb\nWHERE rb.rmwwr IS NOT NULL\nGROUP BY rb.waers\nORDER BY total_invoice_amount DESC",
+    "priority": 0
+  },
+  {
+    "id": "vendor_spend_top20",
+    "description": "Top 20 vendors by total invoice/spend amount (AP)",
+    "question_patterns": [
+      "highest spend by vendor",
+      "top vendors by spend",
+      "largest vendor invoices",
+      "top 20 vendors by invoice",
+      "vendors with highest spend",
+      "which vendor has highest spend",
+      "top vendor spend",
+      "total spend by vendor",
+      "vendor spend ranking",
+      "vendor ap spend"
+    ],
+    "keywords": [
+      "vendor",
+      "spend",
+      "invoice",
+      "top",
+      "highest",
+      "largest",
+      "supplier",
+      "ap",
+      "accounts",
+      "payable",
+      "rbkp"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "RBKP",
+      "LFA1"
+    ],
+    "sql": "SELECT l.name1 AS vendor_name,\n       rb.lifnr AS vendor_number,\n       SUM(rb.rmwwr) AS total_invoice_amount,\n       COUNT(DISTINCT rb.belnr) AS invoice_count,\n       rb.waers AS currency\nFROM RBKP rb\nLEFT JOIN LFA1 l ON rb.lifnr = l.lifnr\nWHERE rb.rmwwr IS NOT NULL\nGROUP BY rb.lifnr, l.name1, rb.waers\nHAVING SUM(rb.rmwwr) > 0\nORDER BY total_invoice_amount DESC\nLIMIT 20",
+    "priority": 6
+  },
+  {
+    "id": "vendor_invoice_by_year",
+    "description": "Vendor invoice amount by year",
+    "question_patterns": [
+      "vendor invoices by year",
+      "accounts payable by year",
+      "invoice trend by year",
+      "yearly vendor invoices",
+      "annual vendor spend"
+    ],
+    "keywords": [
+      "vendor",
+      "invoice",
+      "year",
+      "annual",
+      "yearly",
+      "ap",
+      "spend"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "RBKP"
+    ],
+    "sql": "SELECT SUBSTRING(rb.budat, 1, 4) AS year,\n       SUM(rb.rmwwr) AS total_invoice_amount,\n       COUNT(DISTINCT rb.belnr) AS invoice_count,\n       rb.waers AS currency\nFROM RBKP rb\nWHERE rb.budat IS NOT NULL AND rb.budat != '' AND rb.rmwwr IS NOT NULL\nGROUP BY year, rb.waers\nORDER BY year ASC",
+    "priority": 0
+  },
+  {
+    "id": "vendor_invoice_by_month",
+    "description": "Vendor invoice amount by year and month",
+    "question_patterns": [
+      "vendor invoices by month",
+      "monthly vendor invoices",
+      "monthly accounts payable",
+      "monthly vendor spend"
+    ],
+    "keywords": [
+      "vendor",
+      "invoice",
+      "month",
+      "monthly",
+      "ap",
+      "spend"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "RBKP"
+    ],
+    "sql": "SELECT SUBSTRING(rb.budat, 1, 4) AS year,\n       SUBSTRING(rb.budat, 5, 2) AS month,\n       SUM(rb.rmwwr) AS total_invoice_amount,\n       rb.waers AS currency\nFROM RBKP rb\nWHERE rb.budat IS NOT NULL AND rb.budat != '' AND rb.rmwwr IS NOT NULL\nGROUP BY year, month, rb.waers\nORDER BY year ASC, month ASC",
+    "priority": 0
+  },
+  {
+    "id": "invoice_count_by_vendor",
+    "description": "Number of vendor invoices by vendor (top 20)",
+    "question_patterns": [
+      "invoice count by vendor",
+      "how many invoices per vendor",
+      "number of invoices by vendor",
+      "vendors with most invoices",
+      "invoice frequency by vendor"
+    ],
+    "keywords": [
+      "invoice",
+      "count",
+      "vendor",
+      "number",
+      "how many",
+      "frequency"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "RBKP",
+      "LFA1"
+    ],
+    "sql": "SELECT l.name1 AS vendor_name,\n       rb.lifnr AS vendor_number,\n       COUNT(DISTINCT rb.belnr) AS invoice_count,\n       SUM(rb.rmwwr) AS total_amount,\n       rb.waers AS currency\nFROM RBKP rb\nLEFT JOIN LFA1 l ON rb.lifnr = l.lifnr\nGROUP BY rb.lifnr, l.name1, rb.waers\nORDER BY invoice_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "vendor_invoice_by_material",
+    "description": "Top 20 materials by vendor invoice amount (RSEG)",
+    "question_patterns": [
+      "materials in vendor invoices by cost",
+      "top materials by invoice amount",
+      "vendor invoice by material",
+      "what materials appear in vendor invoices"
+    ],
+    "keywords": [
+      "material",
+      "vendor",
+      "invoice",
+      "rseg",
+      "cost",
+      "amount",
+      "materials"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "RSEG",
+      "RBKP",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       rs.matnr AS material_number,\n       SUM(rs.wrbtr) AS total_amount,\n       rb.waers AS currency\nFROM RSEG rs\nJOIN RBKP rb ON rs.belnr = rb.belnr AND rs.gjahr = rb.gjahr\nLEFT JOIN MAKT m ON rs.matnr = m.matnr AND m.spras = 'E'\nWHERE rs.matnr IS NOT NULL AND rs.matnr != '' AND rs.wrbtr IS NOT NULL\nGROUP BY rs.matnr, m.maktx, rb.waers\nHAVING SUM(rs.wrbtr) > 0\nORDER BY total_amount DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "vendor_list",
+    "description": "List all vendors",
+    "question_patterns": [
+      "list all vendors",
+      "show all vendors",
+      "all vendors",
+      "vendor names",
+      "vendor list",
+      "show me vendors",
+      "who are my vendors",
+      "list vendor names",
+      "list suppliers"
+    ],
+    "keywords": [
+      "vendor",
+      "list",
+      "all",
+      "show",
+      "names",
+      "vendors",
+      "suppliers",
+      "lfa1"
+    ],
+    "neg_keywords": [
+      "spend",
+      "invoice",
+      "purchase",
+      "top",
+      "by",
+      "count"
+    ],
+    "tables": [
+      "LFA1"
+    ],
+    "sql": "SELECT l.lifnr AS vendor_number,\n       l.name1 AS vendor_name,\n       l.land1 AS country,\n       l.ort01 AS city\nFROM LFA1 l\nWHERE l.name1 IS NOT NULL AND l.name1 != ''\nORDER BY l.name1 ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "vendor_count_by_country",
+    "description": "Number of vendors by country",
+    "question_patterns": [
+      "vendor count by country",
+      "vendors per country",
+      "how many vendors by country",
+      "number of vendors by country",
+      "vendors in each country"
+    ],
+    "keywords": [
+      "vendor",
+      "count",
+      "country",
+      "per",
+      "how many",
+      "number",
+      "vendors"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "LFA1"
+    ],
+    "sql": "SELECT l.land1 AS country,\n       COUNT(DISTINCT l.lifnr) AS vendor_count\nFROM LFA1 l\nWHERE l.land1 IS NOT NULL AND l.land1 != ''\nGROUP BY l.land1\nORDER BY vendor_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "gl_by_year",
+    "description": "Total GL posting amount by fiscal year (FAGLFLEXA)",
+    "question_patterns": [
+      "GL amount by year",
+      "general ledger by year",
+      "FAGLFLEXA by year",
+      "GL entries by year",
+      "total gl by year",
+      "GL total per year"
+    ],
+    "keywords": [
+      "gl",
+      "general",
+      "ledger",
+      "year",
+      "fiscal",
+      "faglflexa",
+      "posting",
+      "ryear"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "FAGLFLEXA"
+    ],
+    "sql": "SELECT fg.ryear AS fiscal_year,\n       SUM(fg.hsl) AS total_local_amount,\n       SUM(fg.wsl) AS total_transaction_amount,\n       fg.rtcur AS currency,\n       COUNT(*) AS entry_count\nFROM FAGLFLEXA fg\nGROUP BY fg.ryear, fg.rtcur\nORDER BY fg.ryear ASC",
+    "priority": 0
+  },
+  {
+    "id": "gl_by_period",
+    "description": "GL posting amount by fiscal year and period (FAGLFLEXA)",
+    "question_patterns": [
+      "GL amount by period",
+      "general ledger by period",
+      "GL entries by period",
+      "FAGLFLEXA by period",
+      "GL monthly breakdown",
+      "posting period analysis"
+    ],
+    "keywords": [
+      "gl",
+      "period",
+      "ledger",
+      "fiscal",
+      "faglflexa",
+      "poper",
+      "posting"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "FAGLFLEXA"
+    ],
+    "sql": "SELECT fg.ryear AS fiscal_year,\n       fg.poper AS posting_period,\n       SUM(fg.hsl) AS total_local_amount,\n       fg.rtcur AS currency\nFROM FAGLFLEXA fg\nGROUP BY fg.ryear, fg.poper, fg.rtcur\nORDER BY fg.ryear ASC, fg.poper ASC",
+    "priority": 0
+  },
+  {
+    "id": "gl_by_account",
+    "description": "GL amount by GL account (top 20 by absolute value)",
+    "question_patterns": [
+      "GL by account",
+      "GL entries by account number",
+      "which GL account has highest amount",
+      "top GL accounts by amount",
+      "account balance from FAGLFLEXA"
+    ],
+    "keywords": [
+      "gl",
+      "account",
+      "ledger",
+      "faglflexa",
+      "racct",
+      "amount"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "FAGLFLEXA"
+    ],
+    "sql": "SELECT fg.racct AS gl_account,\n       SUM(fg.hsl) AS net_local_amount,\n       SUM(CASE WHEN fg.hsl > 0 THEN fg.hsl ELSE 0 END) AS debit_amount,\n       SUM(CASE WHEN fg.hsl < 0 THEN ABS(fg.hsl) ELSE 0 END) AS credit_amount,\n       fg.rtcur AS currency,\n       COUNT(*) AS entry_count\nFROM FAGLFLEXA fg\nWHERE fg.racct IS NOT NULL\nGROUP BY fg.racct, fg.rtcur\nORDER BY ABS(SUM(fg.hsl)) DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "gl_by_company_code",
+    "description": "GL amount by company code",
+    "question_patterns": [
+      "GL by company code",
+      "FAGLFLEXA by company",
+      "general ledger by company code",
+      "company code GL summary"
+    ],
+    "keywords": [
+      "gl",
+      "company",
+      "code",
+      "bukrs",
+      "rbukrs",
+      "ledger",
+      "faglflexa"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "FAGLFLEXA"
+    ],
+    "sql": "SELECT fg.rbukrs AS company_code,\n       fg.ryear AS fiscal_year,\n       SUM(fg.hsl) AS total_local_amount,\n       fg.rtcur AS currency\nFROM FAGLFLEXA fg\nGROUP BY fg.rbukrs, fg.ryear, fg.rtcur\nORDER BY fg.rbukrs ASC, fg.ryear ASC",
+    "priority": 0
+  },
+  {
+    "id": "cost_by_profit_center_faglflexa",
+    "description": "Total cost by profit center from FAGLFLEXA",
+    "question_patterns": [
+      "total cost by profit center",
+      "cost by profit center",
+      "FAGLFLEXA cost by profit center",
+      "top profit centers by cost",
+      "which profit centers have highest cost",
+      "which profit centers have the highest total cost",
+      "profit centers with highest total cost",
+      "highest total cost by profit center"
+    ],
+    "keywords": [
+      "cost",
+      "profit center",
+      "faglflexa",
+      "total cost",
+      "postings",
+      "balance"
+    ],
+    "neg_keywords": ["customer", "product", "link", "material"],
+    "tables": ["FAGLFLEXA", "CEPC"],
+    "priority": 2,
+    "sql": "SELECT fg.prctr AS profit_center, COALESCE(c.name1, fg.prctr) AS profit_center_name, SUM(fg.hsl) AS total_cost, fg.rtcur AS currency FROM FAGLFLEXA fg LEFT JOIN CEPC c ON fg.prctr = c.prctr WHERE fg.prctr IS NOT NULL AND TRIM(fg.prctr) != '' GROUP BY fg.prctr, c.name1, fg.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "standard_cost_by_material",
+    "description": "Standard cost/price by material (top 20 highest)",
+    "question_patterns": [
+      "standard cost by material",
+      "material standard cost",
+      "highest standard cost",
+      "top materials by standard cost",
+      "standard price by material",
+      "standard price list"
+    ],
+    "keywords": [
+      "standard",
+      "cost",
+      "material",
+      "price",
+      "keko",
+      "highest",
+      "stprs"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KEKO",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       k.matnr AS material_number,\n       k.stprs AS standard_price,\n       k.peinh AS price_unit,\n       k.hwaer AS currency,\n       k.werks AS plant\nFROM KEKO k\nLEFT JOIN MAKT m ON k.matnr = m.matnr AND m.spras = 'E'\nWHERE k.stprs IS NOT NULL AND CAST(k.stprs AS TEXT) != '0'\nORDER BY k.stprs DESC\nLIMIT 20",
+    "priority": 3
+  },
+  {
+    "id": "cost_details_by_material",
+    "description": "Top 20 materials by total itemized cost value (CKIS) - includes manufacturing/production costs",
+    "question_patterns": [
+      "costing by material",
+      "cost elements by material",
+      "production cost by material",
+      "itemized cost by material",
+      "CKIS cost by material",
+      "costs of manufacturing",
+      "manufacturing cost",
+      "cost of manufacturing",
+      "manufacturing costs",
+      "cost of manufacturings",
+      "production costs",
+      "costs and similar queries"
+    ],
+    "keywords": [
+      "cost",
+      "costing",
+      "material",
+      "ckis",
+      "element",
+      "production",
+      "itemized",
+      "wertn",
+      "manufacturing"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "CKIS",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       ci.matnr AS material_number,\n       SUM(ci.wertn) AS total_cost_value,\n       ci.hwaer AS currency\nFROM CKIS ci\nLEFT JOIN MAKT m ON ci.matnr = m.matnr AND m.spras = 'E'\nWHERE ci.matnr IS NOT NULL AND ci.wertn IS NOT NULL\nGROUP BY ci.matnr, m.maktx, ci.hwaer\nHAVING SUM(ci.wertn) > 0\nORDER BY total_cost_value DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "standard_cost_by_plant",
+    "description": "Standard cost by plant",
+    "question_patterns": [
+      "standard cost by plant",
+      "material cost by plant",
+      "KEKO by plant"
+    ],
+    "keywords": [
+      "standard",
+      "cost",
+      "plant",
+      "werks",
+      "keko"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KEKO",
+      "MAKT"
+    ],
+    "sql": "SELECT k.werks AS plant,\n       COUNT(DISTINCT k.matnr) AS material_count,\n       AVG(k.stprs) AS avg_standard_price,\n       k.hwaer AS currency\nFROM KEKO k\nWHERE k.stprs IS NOT NULL\nGROUP BY k.werks, k.hwaer\nORDER BY avg_standard_price DESC",
+    "priority": 0
+  },
+  {
+    "id": "actual_cost_by_period",
+    "description": "Actual material cost by period (CKMLCR)",
+    "question_patterns": [
+      "actual cost by period",
+      "material actual cost",
+      "CKMLCR cost",
+      "moving average price by period"
+    ],
+    "keywords": [
+      "actual",
+      "cost",
+      "period",
+      "ckmlcr",
+      "moving",
+      "average",
+      "price"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "CKMLCR",
+      "CKMLHD",
+      "MAKT"
+    ],
+    "sql": "SELECT cr.bdatj AS fiscal_year,\n       cr.poper AS period,\n       cr.stprs AS standard_price,\n       cr.pvprs AS moving_avg_price,\n       hd.matnr AS material_number,\n       m.maktx AS material_name\nFROM CKMLCR cr\nJOIN CKMLHD hd ON cr.kalnr = hd.kalnr\nLEFT JOIN MAKT m ON hd.matnr = m.matnr AND m.spras = 'E'\nWHERE cr.stprs IS NOT NULL\nORDER BY cr.bdatj ASC, cr.poper ASC\nLIMIT 200",
+    "priority": 0
+  },
+  {
+    "id": "all_materials",
+    "description": "List all materials with descriptions",
+    "question_patterns": [
+      "list all materials",
+      "show all materials",
+      "all products",
+      "material list",
+      "list of products",
+      "show me all materials",
+      "all material descriptions",
+      "material catalog"
+    ],
+    "keywords": [
+      "material",
+      "list",
+      "all",
+      "show",
+      "products",
+      "makt",
+      "catalog",
+      "descriptions"
+    ],
+    "neg_keywords": [
+      "sales",
+      "purchase",
+      "cost",
+      "vendor",
+      "top",
+      "highest",
+      "by"
+    ],
+    "tables": [
+      "MAKT"
+    ],
+    "sql": "SELECT m.matnr AS material_number,\n       m.maktx AS material_description\nFROM MAKT m\nWHERE m.spras = 'E' AND m.maktx IS NOT NULL AND m.maktx != ''\nORDER BY m.maktx ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "materials_by_plant",
+    "description": "Materials assigned to each plant (MARC)",
+    "question_patterns": [
+      "materials by plant",
+      "material plant assignment",
+      "which materials are in each plant",
+      "plants per material",
+      "materials per plant"
+    ],
+    "keywords": [
+      "material",
+      "plant",
+      "werks",
+      "marc",
+      "assigned",
+      "plants"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARC",
+      "MAKT"
+    ],
+    "sql": "SELECT mc.werks AS plant,\n       mc.matnr AS material_number,\n       m.maktx AS material_name,\n       mc.maabc AS abc_class,\n       mc.dismm AS mrp_type,\n       mc.prctr AS profit_center\nFROM MARC mc\nLEFT JOIN MAKT m ON mc.matnr = m.matnr AND m.spras = 'E'\nWHERE mc.matnr IS NOT NULL\nORDER BY mc.werks ASC, m.maktx ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "material_count_by_plant",
+    "description": "Number of materials per plant",
+    "question_patterns": [
+      "material count by plant",
+      "how many materials per plant",
+      "number of materials by plant",
+      "materials in each plant count"
+    ],
+    "keywords": [
+      "material",
+      "count",
+      "plant",
+      "how many",
+      "number",
+      "per",
+      "werks"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARC"
+    ],
+    "sql": "SELECT mc.werks AS plant,\n       COUNT(DISTINCT mc.matnr) AS material_count\nFROM MARC mc\nGROUP BY mc.werks\nORDER BY material_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "batch_managed_materials",
+    "description": "Materials with batch management active (xchar='X')",
+    "question_patterns": [
+      "batch managed materials",
+      "materials with batch",
+      "batch materials",
+      "batch tracking materials"
+    ],
+    "keywords": [
+      "batch",
+      "material",
+      "xchar",
+      "managed",
+      "tracking"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARC",
+      "MAKT"
+    ],
+    "sql": "SELECT mc.matnr AS material_number,\n       m.maktx AS material_name,\n       mc.werks AS plant\nFROM MARC mc\nLEFT JOIN MAKT m ON mc.matnr = m.matnr AND m.spras = 'E'\nWHERE mc.xchar = 'X'\nORDER BY m.maktx ASC\nLIMIT 200",
+    "priority": 0
+  },
+  {
+    "id": "material_count_by_abc",
+    "description": "Material count by ABC class",
+    "question_patterns": [
+      "material count by ABC class",
+      "ABC classification materials",
+      "how many materials in each ABC class",
+      "ABC indicator breakdown"
+    ],
+    "keywords": [
+      "material",
+      "abc",
+      "class",
+      "classification",
+      "count",
+      "indicator"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARC"
+    ],
+    "sql": "SELECT mc.maabc AS abc_class,\n       mc.werks AS plant,\n       COUNT(DISTINCT mc.matnr) AS material_count\nFROM MARC mc\nWHERE mc.maabc IS NOT NULL AND mc.maabc != ''\nGROUP BY mc.maabc, mc.werks\nORDER BY mc.maabc ASC",
+    "priority": 0
+  },
+  {
+    "id": "material_count_by_mrp_type",
+    "description": "Material count by MRP type (dismm)",
+    "question_patterns": [
+      "material count by MRP type",
+      "MRP type breakdown",
+      "materials by planning type"
+    ],
+    "keywords": [
+      "material",
+      "mrp",
+      "planning",
+      "dismm",
+      "type",
+      "count"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARC"
+    ],
+    "sql": "SELECT mc.dismm AS mrp_type,\n       COUNT(DISTINCT mc.matnr) AS material_count\nFROM MARC mc\nWHERE mc.dismm IS NOT NULL AND mc.dismm != ''\nGROUP BY mc.dismm\nORDER BY material_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "ar_by_customer_top20",
+    "description": "Top 20 customers by cleared AR amount (BSAD)",
+    "question_patterns": [
+      "accounts receivable by customer",
+      "cleared AR by customer",
+      "BSAD top customers",
+      "customer AR balance",
+      "top customers by AR"
+    ],
+    "keywords": [
+      "accounts",
+      "receivable",
+      "ar",
+      "bsad",
+      "cleared",
+      "customer"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "BSAD",
+      "KNA1"
+    ],
+    "sql": "SELECT k.name1 AS customer_name,\n       bs.kunnr AS customer_number,\n       SUM(bs.dmbtr) AS total_amount,\n       bs.waers AS currency,\n       COUNT(DISTINCT bs.belnr) AS document_count\nFROM BSAD bs\nLEFT JOIN KNA1 k ON bs.kunnr = k.kunnr\nWHERE bs.dmbtr IS NOT NULL\nGROUP BY bs.kunnr, k.name1, bs.waers\nHAVING SUM(bs.dmbtr) > 0\nORDER BY total_amount DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "ar_by_year",
+    "description": "Accounts receivable amount by year (BSAD)",
+    "question_patterns": [
+      "AR by year",
+      "accounts receivable by year",
+      "BSAD by year",
+      "AR trend by year"
+    ],
+    "keywords": [
+      "accounts",
+      "receivable",
+      "ar",
+      "bsad",
+      "year",
+      "gjahr"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "BSAD"
+    ],
+    "sql": "SELECT bs.gjahr AS fiscal_year,\n       SUM(bs.dmbtr) AS total_amount,\n       bs.waers AS currency\nFROM BSAD bs\nWHERE bs.dmbtr IS NOT NULL\nGROUP BY bs.gjahr, bs.waers\nORDER BY bs.gjahr ASC",
+    "priority": 0
+  },
+  {
+    "id": "cost_by_cost_center_top20",
+    "description": "Top 20 cost centers by actual cost (COEP)",
+    "question_patterns": [
+      "cost by cost center",
+      "top cost centers",
+      "highest cost centers",
+      "actual cost by cost center",
+      "cost center spending"
+    ],
+    "keywords": [
+      "cost",
+      "center",
+      "actual",
+      "coep",
+      "csks",
+      "highest",
+      "top",
+      "spending",
+      "kostl"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "COEP",
+      "CSKS"
+    ],
+    "sql": "SELECT cp.kostl AS cost_center,\n       cs.ltext AS cost_center_name,\n       SUM(cp.wtgbtr) AS total_actual_cost,\n       cp.kokrs AS controlling_area\nFROM COEP cp\nLEFT JOIN CSKS cs ON cp.kostl = cs.kostl AND cp.kokrs = cs.kokrs\nWHERE cp.wtgbtr IS NOT NULL\nGROUP BY cp.kostl, cs.ltext, cp.kokrs\nHAVING SUM(cp.wtgbtr) > 0\nORDER BY total_actual_cost DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "cost_by_year_coep",
+    "description": "Actual cost by year from COEP",
+    "question_patterns": [
+      "actual cost by year",
+      "COEP by year",
+      "cost center cost by year"
+    ],
+    "keywords": [
+      "cost",
+      "actual",
+      "year",
+      "coep",
+      "period",
+      "fiscal"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "COEP"
+    ],
+    "sql": "SELECT SUBSTRING(cp.perio, 1, 4) AS fiscal_year,\n       SUM(cp.wtgbtr) AS total_actual_cost,\n       COUNT(*) AS entry_count\nFROM COEP cp\nWHERE cp.wtgbtr IS NOT NULL AND cp.perio IS NOT NULL AND cp.perio != ''\nGROUP BY fiscal_year\nORDER BY fiscal_year ASC",
+    "priority": 0
+  },
+  {
+    "id": "deliveries_by_customer_top20",
+    "description": "Top 20 customers by number of deliveries",
+    "question_patterns": [
+      "deliveries by customer",
+      "top customers by delivery",
+      "how many deliveries per customer"
+    ],
+    "keywords": [
+      "delivery",
+      "customer",
+      "top",
+      "count",
+      "deliveries",
+      "likp",
+      "lips"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "LIKP",
+      "KNA1"
+    ],
+    "sql": "SELECT lk.kunnr AS customer_number,\n       k.name1 AS customer_name,\n       COUNT(DISTINCT lk.vbeln) AS delivery_count,\n       lk.vstel AS shipping_point\nFROM LIKP lk\nLEFT JOIN KNA1 k ON lk.kunnr = k.kunnr\nWHERE lk.kunnr IS NOT NULL\nGROUP BY lk.kunnr, k.name1, lk.vstel\nORDER BY delivery_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "deliveries_by_year",
+    "description": "Delivery count by year",
+    "question_patterns": [
+      "deliveries by year",
+      "delivery trend by year",
+      "annual deliveries"
+    ],
+    "keywords": [
+      "delivery",
+      "year",
+      "annual",
+      "deliveries",
+      "likp"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "LIKP"
+    ],
+    "sql": "SELECT SUBSTRING(lk.erdat, 1, 4) AS year,\n       COUNT(DISTINCT lk.vbeln) AS delivery_count\nFROM LIKP lk\nWHERE lk.erdat IS NOT NULL AND lk.erdat != ''\nGROUP BY year\nORDER BY year ASC",
+    "priority": 0
+  },
+  {
+    "id": "bom_by_material",
+    "description": "BOM component count per material (top 20 most complex)",
+    "question_patterns": [
+      "BOM by material",
+      "bill of materials components",
+      "number of components per product",
+      "BOM structure",
+      "most complex products by components"
+    ],
+    "keywords": [
+      "bom",
+      "bill",
+      "materials",
+      "components",
+      "stko",
+      "stpo",
+      "structure"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "STKO",
+      "STPO"
+    ],
+    "sql": "SELECT st.stlnr AS bom_number,\n       st.stlty AS bom_type,\n       COUNT(sp.stlkn) AS component_count\nFROM STKO st\nJOIN STPO sp ON st.stlnr = sp.stlnr AND st.stlal = sp.stlal\nGROUP BY st.stlnr, st.stlty\nORDER BY component_count DESC\nLIMIT 50",
+    "priority": 0
+  },
+  {
+    "id": "marc_material_planning_params",
+    "description": "Materials with highest reorder point/safety stock from MARC (MARC has no on-hand; this is the closest stock-related data)",
+    "question_patterns": [
+      "materials with highest on-hand quantities in plant master MARC",
+      "highest on-hand in MARC",
+      "on-hand quantities in MARC",
+      "materials with highest stock in MARC"
+    ],
+    "keywords": ["marc", "on-hand", "plant", "material", "master", "quantity", "stock"],
+    "neg_keywords": [],
+    "tables": ["MARC", "MAKT"],
+    "sql": "SELECT m.maktx AS material_name, mc.matnr AS material_number, mc.werks AS plant, mc.minbe AS reorder_point, mc.eisbe AS safety_stock FROM MARC mc LEFT JOIN MAKT m ON mc.matnr = m.matnr AND m.spras = 'E' WHERE mc.minbe IS NOT NULL AND mc.minbe != 0 ORDER BY mc.minbe DESC NULLS LAST LIMIT 50",
+    "priority": 0
+  },
+  {
+    "id": "reservations_by_material",
+    "description": "Top 20 materials by reserved quantity (RESB)",
+    "question_patterns": [
+      "material reservations",
+      "reserved quantity by material",
+      "top reserved materials",
+      "what materials are reserved",
+      "reservation list by material",
+      "materials with highest total quantity reserved in RESB",
+      "list materials with highest total quantity reserved in RESB",
+      "highest quantity reserved by material"
+    ],
+    "keywords": [
+      "reservation",
+      "reserved",
+      "material",
+      "quantity",
+      "resb",
+      "bdmng"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "RESB",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       rs.matnr AS material_number,\n       SUM(rs.bdmng) AS reserved_quantity,\n       SUM(rs.enmng) AS issued_quantity\nFROM RESB rs\nLEFT JOIN MAKT m ON rs.matnr = m.matnr AND m.spras = 'E'\nWHERE rs.matnr IS NOT NULL AND rs.matnr != ''\nGROUP BY rs.matnr, m.maktx\nHAVING SUM(rs.bdmng) > 0\nORDER BY reserved_quantity DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "purchase_req_by_material",
+    "description": "Purchase requisitions by material (top 20)",
+    "question_patterns": [
+      "purchase requisitions by material",
+      "purchase requests by material",
+      "PR by material",
+      "requisition count by material"
+    ],
+    "keywords": [
+      "requisition",
+      "request",
+      "material",
+      "eban",
+      "pr",
+      "banfn"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EBAN",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       eb.matnr AS material_number,\n       COUNT(DISTINCT eb.banfn) AS requisition_count,\n       SUM(eb.menge) AS total_quantity\nFROM EBAN eb\nLEFT JOIN MAKT m ON eb.matnr = m.matnr AND m.spras = 'E'\nWHERE eb.matnr IS NOT NULL AND eb.matnr != ''\nGROUP BY eb.matnr, m.maktx\nORDER BY requisition_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "material_docs_by_year",
+    "description": "Material document count by year (MKPF \u2014 header only, no material detail)",
+    "question_patterns": [
+      "material documents by year",
+      "goods movements by year",
+      "MKPF by year",
+      "how many goods movements per year"
+    ],
+    "keywords": [
+      "material",
+      "document",
+      "year",
+      "mkpf",
+      "goods",
+      "movement",
+      "mblnr"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MKPF"
+    ],
+    "sql": "SELECT SUBSTRING(mk.budat, 1, 4) AS year,\n       COUNT(DISTINCT mk.mblnr) AS document_count\nFROM MKPF mk\nWHERE mk.budat IS NOT NULL AND mk.budat != ''\nGROUP BY year\nORDER BY year ASC",
+    "priority": 0
+  },
+  {
+    "id": "orders_by_type",
+    "description": "Internal order count by order type (AUFK)",
+    "question_patterns": [
+      "internal orders by type",
+      "order count by type",
+      "AUFK by order type",
+      "how many orders per type"
+    ],
+    "keywords": [
+      "order",
+      "type",
+      "aufk",
+      "internal",
+      "count",
+      "auart"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "AUFK"
+    ],
+    "sql": "SELECT ak.auart AS order_type,\n       ak.werks AS plant,\n       COUNT(DISTINCT ak.aufnr) AS order_count\nFROM AUFK ak\nWHERE ak.auart IS NOT NULL\nGROUP BY ak.auart, ak.werks\nORDER BY order_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "orders_by_plant",
+    "description": "Internal orders by plant (AUFK)",
+    "question_patterns": [
+      "internal orders by plant",
+      "AUFK by plant",
+      "orders per plant"
+    ],
+    "keywords": [
+      "order",
+      "plant",
+      "aufk",
+      "werks",
+      "internal"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "AUFK"
+    ],
+    "sql": "SELECT ak.werks AS plant,\n       COUNT(DISTINCT ak.aufnr) AS order_count\nFROM AUFK ak\nWHERE ak.werks IS NOT NULL AND ak.werks != ''\nGROUP BY ak.werks\nORDER BY order_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "pricing_conditions_top20",
+    "description": "Top 20 pricing condition types by value (KONV)",
+    "question_patterns": [
+      "pricing conditions",
+      "pricing by condition type",
+      "KONV top conditions"
+    ],
+    "keywords": [
+      "pricing",
+      "condition",
+      "konv",
+      "kschl",
+      "kbetr"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KONV"
+    ],
+    "sql": "SELECT kv.kschl AS condition_type,\n       SUM(kv.kbetr) AS total_condition_value,\n       kv.waers AS currency,\n       COUNT(*) AS condition_count\nFROM KONV kv\nWHERE kv.kbetr IS NOT NULL AND kv.kschl IS NOT NULL\nGROUP BY kv.kschl, kv.waers\nHAVING SUM(kv.kbetr) > 0\nORDER BY total_condition_value DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "total_sales_vs_purchase",
+    "description": "Compare total sales revenue vs total purchase cost",
+    "question_patterns": [
+      "compare sales and purchase",
+      "sales vs purchase comparison",
+      "revenue vs cost overall",
+      "total sales versus total purchase",
+      "overall revenue vs spend"
+    ],
+    "keywords": [
+      "compare",
+      "sales",
+      "purchase",
+      "versus",
+      "vs",
+      "revenue",
+      "cost",
+      "overall"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBRK",
+      "vbrp",
+      "EKPO",
+      "EKKO"
+    ],
+    "sql": "SELECT 'Sales Revenue' AS category,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_amount\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nUNION ALL\nSELECT 'Purchase Cost',\n       SUM(ep.netwr)\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ep.netwr IS NOT NULL",
+    "priority": 0
+  },
+  {
+    "id": "sales_purchase_by_material",
+    "description": "Sales revenue vs purchase cost by material (top 20)",
+    "question_patterns": [
+      "product profitability",
+      "margin by product",
+      "sales vs cost by product",
+      "revenue vs purchase cost by material",
+      "profit margin by material"
+    ],
+    "keywords": [
+      "profitability",
+      "margin",
+      "product",
+      "material",
+      "revenue",
+      "cost",
+      "profit",
+      "sales",
+      "purchase"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "EKPO",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       s.matnr AS material_number,\n       s.total_sales,\n       p.total_purchase_cost\nFROM (\n  SELECT TRIM(v.matnr) AS matnr, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales\n  FROM vbrp v\n  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\n  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\n  GROUP BY TRIM(v.matnr)\n) s\nJOIN (\n  SELECT ep.matnr, SUM(ep.netwr) AS total_purchase_cost\n  FROM EKPO ep\n  WHERE ep.matnr IS NOT NULL AND ep.netwr IS NOT NULL\n  GROUP BY ep.matnr\n) p ON s.matnr = p.matnr\nLEFT JOIN MAKT m ON s.matnr = m.matnr AND m.spras = 'E'\nORDER BY s.total_sales DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_ekpo_purchase_by_material",
+    "description": "Total purchase quantity and cost for each material using EKPO",
+    "question_patterns": [
+      "total purchased quantity and cost by material using EKPO",
+      "EKPO quantity and cost",
+      "what is total purchase quantity and cost for each material",
+      "purchase quantity and cost per material EKPO",
+      "purchase order totals by material",
+      "PO totals by material",
+      "total purchase order value by material"
+    ],
+    "keywords": [
+      "purchase",
+      "quantity",
+      "cost",
+      "material",
+      "ekpo",
+      "total",
+      "totals",
+      "each",
+      "order",
+      "po"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       ep.matnr AS material_number,\n       SUM(CAST(NULLIF(TRIM(ep.menge::text), '') AS NUMERIC)) AS total_quantity,\n       SUM(CAST(NULLIF(TRIM(ep.netwr::text), '') AS NUMERIC)) AS total_purchase_cost,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nWHERE ep.matnr IS NOT NULL AND TRIM(ep.matnr) != ''\nGROUP BY ep.matnr, m.maktx, ek.waers\nHAVING SUM(CAST(NULLIF(TRIM(ep.menge::text), '') AS NUMERIC)) > 0 OR SUM(CAST(NULLIF(TRIM(ep.netwr::text), '') AS NUMERIC)) > 0\nORDER BY total_purchase_cost DESC NULLS LAST\nLIMIT 50",
+    "priority": 8
+  },
+  {
+    "id": "mara_by_material_type",
+    "description": "Material count by material type (MARA)",
+    "question_patterns": [
+      "materials by type",
+      "material type breakdown",
+      "how many materials of each type",
+      "MARA by material type",
+      "raw materials vs finished goods count"
+    ],
+    "keywords": [
+      "material",
+      "type",
+      "mara",
+      "mtart",
+      "count",
+      "raw",
+      "finished",
+      "goods"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARA"
+    ],
+    "sql": "SELECT ma.mtart AS material_type,\n       COUNT(DISTINCT ma.matnr) AS material_count\nFROM MARA ma\nWHERE ma.mtart IS NOT NULL AND ma.mtart != ''\nGROUP BY ma.mtart\nORDER BY material_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "mara_material_list",
+    "description": "List all materials with type and unit of measure (MARA)",
+    "question_patterns": [
+      "material master list",
+      "all materials with details",
+      "material type and UOM",
+      "MARA material list",
+      "material base unit"
+    ],
+    "keywords": [
+      "material",
+      "master",
+      "mara",
+      "type",
+      "uom",
+      "unit",
+      "measure",
+      "mtart",
+      "meins"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARA",
+      "MAKT"
+    ],
+    "sql": "SELECT ma.matnr AS material_number,\n       m.maktx AS material_name,\n       ma.mtart AS material_type,\n       ma.meins AS base_uom,\n       ma.matkl AS material_group,\n       ma.brgew AS gross_weight,\n       ma.gewei AS weight_unit\nFROM MARA ma\nLEFT JOIN MAKT m ON ma.matnr = m.matnr AND m.spras = 'E'\nWHERE ma.matnr IS NOT NULL\nORDER BY m.maktx ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "mara_by_material_group",
+    "description": "Material count by material group (MARA)",
+    "question_patterns": [
+      "materials by material group",
+      "material group breakdown",
+      "how many materials per group"
+    ],
+    "keywords": [
+      "material",
+      "group",
+      "matkl",
+      "mara",
+      "count"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARA"
+    ],
+    "sql": "SELECT ma.matkl AS material_group,\n       COUNT(DISTINCT ma.matnr) AS material_count\nFROM MARA ma\nWHERE ma.matkl IS NOT NULL AND ma.matkl != ''\nGROUP BY ma.matkl\nORDER BY material_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "stock_value_by_material",
+    "description": "Top 20 materials by stock value (MBEW)",
+    "question_patterns": [
+      "stock value by material",
+      "inventory value by material",
+      "material stock worth",
+      "which material has highest stock value",
+      "MBEW top materials"
+    ],
+    "keywords": [
+      "stock",
+      "value",
+      "material",
+      "inventory",
+      "mbew",
+      "worth",
+      "highest"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MBEW",
+      "MAKT"
+    ],
+    "sql": "SELECT mb.matnr AS material_number,\n       m.maktx AS material_name,\n       mb.bwkey AS valuation_area,\n       mb.stprs AS standard_price,\n       mb.verpr AS moving_avg_price,\n       mb.lbkum AS total_stock_qty,\n       mb.salk3 AS total_stock_value,\n       mb.waers AS currency\nFROM MBEW mb\nLEFT JOIN MAKT m ON mb.matnr = m.matnr AND m.spras = 'E'\nWHERE mb.salk3 IS NOT NULL\nORDER BY mb.salk3 DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "stock_value_by_plant",
+    "description": "Total inventory/stock value by plant (MBEW)",
+    "question_patterns": [
+      "stock value by plant",
+      "inventory value by plant",
+      "MBEW by plant",
+      "plant inventory worth"
+    ],
+    "keywords": [
+      "stock",
+      "value",
+      "plant",
+      "inventory",
+      "mbew",
+      "werks",
+      "bwkey"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MBEW"
+    ],
+    "sql": "SELECT mb.bwkey AS valuation_area_plant,\n       SUM(mb.salk3) AS total_stock_value,\n       SUM(mb.lbkum) AS total_stock_qty,\n       mb.waers AS currency\nFROM MBEW mb\nWHERE mb.salk3 IS NOT NULL\nGROUP BY mb.bwkey, mb.waers\nHAVING SUM(mb.salk3) > 0\nORDER BY total_stock_value DESC",
+    "priority": 0
+  },
+  {
+    "id": "stock_by_storage_location",
+    "description": "Stock quantity by storage location (MARD)",
+    "question_patterns": [
+      "stock by storage location",
+      "inventory by location",
+      "MARD stock",
+      "storage location stock",
+      "unrestricted stock by location"
+    ],
+    "keywords": [
+      "stock",
+      "storage",
+      "location",
+      "mard",
+      "lgort",
+      "unrestricted",
+      "inventory",
+      "sloc"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARD",
+      "MAKT"
+    ],
+    "sql": "SELECT md.matnr AS material_number,\n       m.maktx AS material_name,\n       md.werks AS plant,\n       md.lgort AS storage_location,\n       md.labst AS unrestricted_stock,\n       md.einme AS restricted_stock,\n       md.umlme AS stock_in_transfer\nFROM MARD md\nLEFT JOIN MAKT m ON md.matnr = m.matnr AND m.spras = 'E'\nWHERE md.labst > 0\nORDER BY md.labst DESC\nLIMIT 100",
+    "priority": 0
+  },
+  {
+    "id": "stock_by_plant_location",
+    "description": "Total unrestricted stock by plant and storage location (MARD)",
+    "question_patterns": [
+      "total stock by plant and location",
+      "plant storage stock summary",
+      "MARD by plant",
+      "where is stock located",
+      "stock location summary"
+    ],
+    "keywords": [
+      "stock",
+      "plant",
+      "location",
+      "mard",
+      "unrestricted",
+      "summary"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MARD"
+    ],
+    "sql": "SELECT md.werks AS plant,\n       md.lgort AS storage_location,\n       COUNT(DISTINCT md.matnr) AS material_count,\n       SUM(md.labst) AS total_unrestricted_stock\nFROM MARD md\nWHERE md.labst IS NOT NULL\nGROUP BY md.werks, md.lgort\nHAVING SUM(md.labst) > 0\nORDER BY total_unrestricted_stock DESC\nLIMIT 50",
+    "priority": 0
+  },
+  {
+    "id": "goods_movements_by_material",
+    "description": "Top 20 materials by goods movement quantity (MSEG)",
+    "question_patterns": [
+      "goods movements by material",
+      "MSEG by material",
+      "goods receipt by material",
+      "goods issue by material",
+      "material movements"
+    ],
+    "keywords": [
+      "goods",
+      "movement",
+      "material",
+      "mseg",
+      "receipt",
+      "issue",
+      "bwart",
+      "mblnr"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MSEG",
+      "MAKT"
+    ],
+    "sql": "SELECT ms.matnr AS material_number,\n       m.maktx AS material_name,\n       ms.bwart AS movement_type,\n       SUM(ms.menge) AS total_quantity,\n       ms.meins AS unit\nFROM MSEG ms\nLEFT JOIN MAKT m ON ms.matnr = m.matnr AND m.spras = 'E'\nWHERE ms.matnr IS NOT NULL AND ms.matnr != '' AND ms.menge IS NOT NULL\nGROUP BY ms.matnr, m.maktx, ms.bwart, ms.meins\nHAVING SUM(ms.menge) > 0\nORDER BY total_quantity DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "gl_account_list",
+    "description": "List all GL accounts with descriptions (SKA1 + SKAT)",
+    "question_patterns": [
+      "list GL accounts",
+      "all GL accounts",
+      "GL account master",
+      "chart of accounts",
+      "show GL accounts",
+      "GL account descriptions"
+    ],
+    "keywords": [
+      "gl",
+      "account",
+      "chart",
+      "accounts",
+      "ska1",
+      "skat",
+      "description",
+      "list"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "SKA1",
+      "SKAT"
+    ],
+    "sql": "SELECT sa.saknr AS gl_account,\n       st.txt20 AS short_description,\n       st.txt50 AS long_description,\n       sa.ktoks AS account_group\nFROM SKA1 sa\nLEFT JOIN SKAT st ON sa.saknr = st.saknr AND sa.ktopl = st.ktopl AND st.spras = 'E'\nWHERE sa.saknr IS NOT NULL\nORDER BY sa.saknr ASC\nLIMIT 500",
+    "priority": 0
+  },
+  {
+    "id": "gl_account_count_by_group",
+    "description": "GL account count by account group (SKA1)",
+    "question_patterns": [
+      "GL accounts by group",
+      "account group breakdown",
+      "how many GL accounts per group"
+    ],
+    "keywords": [
+      "gl",
+      "account",
+      "group",
+      "count",
+      "ska1",
+      "ktoks"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "SKA1"
+    ],
+    "sql": "SELECT sa.ktoks AS account_group,\n       COUNT(DISTINCT sa.saknr) AS account_count\nFROM SKA1 sa\nWHERE sa.ktoks IS NOT NULL AND sa.ktoks != ''\nGROUP BY sa.ktoks\nORDER BY account_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "company_codes_list",
+    "description": "List all company codes (T001)",
+    "question_patterns": [
+      "list company codes",
+      "all company codes",
+      "company code master",
+      "which company codes exist",
+      "show company codes"
+    ],
+    "keywords": [
+      "company",
+      "code",
+      "t001",
+      "bukrs",
+      "list",
+      "all"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "T001"
+    ],
+    "sql": "SELECT t.bukrs AS company_code,\n       t.butxt AS company_name,\n       t.land1 AS country,\n       t.waers AS currency\nFROM T001 t\nWHERE t.bukrs IS NOT NULL\nORDER BY t.bukrs ASC",
+    "priority": 0
+  },
+  {
+    "id": "plant_list",
+    "description": "List all plants (T001W)",
+    "question_patterns": [
+      "list all plants",
+      "all plants",
+      "plant master",
+      "which plants exist",
+      "show plants",
+      "plant names"
+    ],
+    "keywords": [
+      "plant",
+      "t001w",
+      "werks",
+      "list",
+      "all",
+      "plants",
+      "name"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "T001W"
+    ],
+    "sql": "SELECT t.werks AS plant,\n       t.name1 AS plant_name,\n       t.land1 AS country,\n       t.ort01 AS city,\n       t.bukrs AS company_code\nFROM T001W t\nWHERE t.werks IS NOT NULL\nORDER BY t.werks ASC",
+    "priority": 0
+  },
+  {
+    "id": "exchange_rates",
+    "description": "Current exchange rates (TCURR)",
+    "question_patterns": [
+      "exchange rates",
+      "currency rates",
+      "conversion rates",
+      "USD to EUR rate",
+      "what is exchange rate",
+      "currency conversion table"
+    ],
+    "keywords": [
+      "exchange",
+      "rate",
+      "currency",
+      "tcurr",
+      "conversion",
+      "usd",
+      "eur",
+      "kurs"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "TCURR"
+    ],
+    "sql": "SELECT tc.fcurr AS from_currency,\n       tc.tcurr AS to_currency,\n       tc.ukurs AS exchange_rate,\n       tc.gdatu AS valid_from_date\nFROM TCURR tc\nWHERE tc.kurst = 'M'\nORDER BY tc.gdatu DESC\nLIMIT 100",
+    "priority": 0
+  },
+  {
+    "id": "po_history_by_vendor",
+    "description": "Purchase order goods receipt/invoice history by vendor (EKBE)",
+    "question_patterns": [
+      "PO history by vendor",
+      "goods receipt history",
+      "EKBE by vendor",
+      "purchase order completion",
+      "which POs have been received",
+      "GR IR matching"
+    ],
+    "keywords": [
+      "purchase",
+      "order",
+      "history",
+      "ekbe",
+      "goods",
+      "receipt",
+      "invoice",
+      "gr",
+      "ir",
+      "vendor"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKBE",
+      "EKKO",
+      "LFA1"
+    ],
+    "sql": "SELECT l.name1 AS vendor_name,\n       ek.lifnr AS vendor_number,\n       be.vgabe AS transaction_type,\n       COUNT(DISTINCT be.ebeln) AS po_count,\n       SUM(be.menge) AS total_quantity,\n       SUM(be.wrbtr) AS total_amount,\n       ek.waers AS currency\nFROM EKBE be\nJOIN EKKO ek ON be.ebeln = ek.ebeln\nLEFT JOIN LFA1 l ON ek.lifnr = l.lifnr\nWHERE be.wrbtr IS NOT NULL\nGROUP BY l.name1, ek.lifnr, be.vgabe, ek.waers\nHAVING SUM(be.wrbtr) > 0\nORDER BY total_amount DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "po_open_vs_received",
+    "description": "PO ordered vs received quantity by material (EKBE)",
+    "question_patterns": [
+      "open purchase orders",
+      "PO delivery status",
+      "ordered vs received",
+      "how much of PO is received"
+    ],
+    "keywords": [
+      "purchase",
+      "order",
+      "open",
+      "received",
+      "delivered",
+      "ekbe",
+      "menge",
+      "status"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKBE",
+      "EKPO",
+      "MAKT"
+    ],
+    "sql": "SELECT ep.matnr AS material_number,\n       m.maktx AS material_name,\n       SUM(ep.menge) AS ordered_quantity,\n       SUM(CASE WHEN be.vgabe = '1' THEN be.menge ELSE 0 END) AS received_quantity,\n       ep.meins AS unit\nFROM EKPO ep\nLEFT JOIN EKBE be ON ep.ebeln = be.ebeln AND ep.ebelp = be.ebelp\nLEFT JOIN MAKT m ON ep.matnr = m.matnr AND m.spras = 'E'\nWHERE ep.matnr IS NOT NULL AND ep.matnr != ''\nGROUP BY ep.matnr, m.maktx, ep.meins\nHAVING SUM(ep.menge) > 0\nORDER BY ordered_quantity DESC\nLIMIT 50",
+    "priority": 0
+  },
+  {
+    "id": "customer_by_company_code",
+    "description": "Customer count by company code (KNB1)",
+    "question_patterns": [
+      "customers by company code",
+      "customer assignment to company",
+      "KNB1 company code",
+      "how many customers per company code"
+    ],
+    "keywords": [
+      "customer",
+      "company",
+      "code",
+      "knb1",
+      "bukrs",
+      "count"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KNB1"
+    ],
+    "sql": "SELECT kb.bukrs AS company_code,\n       COUNT(DISTINCT kb.kunnr) AS customer_count\nFROM KNB1 kb\nWHERE kb.bukrs IS NOT NULL\nGROUP BY kb.bukrs\nORDER BY customer_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "bom_by_parent_material",
+    "description": "BOM structure: components for each parent material (MAST + STPO)",
+    "question_patterns": [
+      "BOM by material",
+      "bill of materials for product",
+      "components of each product",
+      "what is in each product BOM",
+      "BOM structure by material",
+      "MAST STPO components"
+    ],
+    "keywords": [
+      "bom",
+      "bill",
+      "material",
+      "components",
+      "mast",
+      "stpo",
+      "structure",
+      "parent"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MAST",
+      "STPO",
+      "MAKT"
+    ],
+    "sql": "SELECT pm.maktx AS parent_material_name,\n       ms.matnr AS parent_material_number,\n       cm.maktx AS component_name,\n       sp.idnrk AS component_number,\n       sp.menge AS component_quantity,\n       sp.meins AS unit\nFROM MAST ms\nJOIN STPO sp ON ms.stlnr = sp.stlnr AND ms.stlal = sp.stlal\nLEFT JOIN MAKT pm ON ms.matnr = pm.matnr AND pm.spras = 'E'\nLEFT JOIN MAKT cm ON sp.idnrk = cm.matnr AND cm.spras = 'E'\nWHERE ms.matnr IS NOT NULL\nORDER BY pm.maktx ASC, sp.posnr ASC\nLIMIT 200",
+    "priority": 3
+  },
+  {
+    "id": "planned_cost_by_cost_center",
+    "description": "Planned cost by cost center (COSP)",
+    "question_patterns": [
+      "planned cost by cost center",
+      "budget by cost center",
+      "COSP cost center plan",
+      "cost center planned vs actual",
+      "budgeted cost per cost center"
+    ],
+    "keywords": [
+      "planned",
+      "cost",
+      "center",
+      "budget",
+      "cosp",
+      "versn",
+      "gjahr"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "COSP",
+      "CSKS"
+    ],
+    "sql": "SELECT cs.objnr AS object_number,\n       cs.gjahr AS fiscal_year,\n       SUM(cs.wtp001 + cs.wtp002 + cs.wtp003 + cs.wtp004 + cs.wtp005 +\n           cs.wtp006 + cs.wtp007 + cs.wtp008 + cs.wtp009 + cs.wtp010 +\n           cs.wtp011 + cs.wtp012) AS total_planned_cost\nFROM COSP cs\nWHERE cs.versn = '0' AND cs.wrttp = '01'\nGROUP BY cs.objnr, cs.gjahr\nHAVING SUM(cs.wtp001 + cs.wtp002 + cs.wtp003 + cs.wtp004 + cs.wtp005 +\n           cs.wtp006 + cs.wtp007 + cs.wtp008 + cs.wtp009 + cs.wtp010 +\n           cs.wtp011 + cs.wtp012) > 0\nORDER BY total_planned_cost DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "cost_component_split",
+    "description": "Cost component split by material (KEPH + KEKO)",
+    "question_patterns": [
+      "cost component breakdown",
+      "material cost split",
+      "KEPH cost elements",
+      "material cost by component",
+      "cost structure by element"
+    ],
+    "keywords": [
+      "cost",
+      "component",
+      "split",
+      "keph",
+      "keko",
+      "breakdown",
+      "element",
+      "structure"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KEPH",
+      "KEKO",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       ke.matnr AS material_number,\n       ke.werks AS plant,\n       kh.keart AS cost_component,\n       SUM(kh.kstpr) AS plan_cost_value,\n       ke.hwaer AS currency\nFROM KEPH kh\nJOIN KEKO ke ON kh.kalnr = ke.kalnr AND kh.kalka = ke.kalka\nLEFT JOIN MAKT m ON ke.matnr = m.matnr AND m.spras = 'E'\nWHERE kh.kstpr IS NOT NULL AND kh.kstpr != 0\nGROUP BY m.maktx, ke.matnr, ke.werks, kh.keart, ke.hwaer\nORDER BY ABS(SUM(kh.kstpr)) DESC\nLIMIT 50",
+    "priority": 0
+  },
+  {
+    "id": "sales_order_status",
+    "description": "Sales order status breakdown (VBUK)",
+    "question_patterns": [
+      "sales order status",
+      "order completion status",
+      "open orders",
+      "completed orders",
+      "VBUK order status",
+      "how many orders are open vs completed"
+    ],
+    "keywords": [
+      "sales",
+      "order",
+      "status",
+      "vbuk",
+      "open",
+      "completed",
+      "gbsta",
+      "uvall"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBUK"
+    ],
+    "sql": "SELECT vk.gbsta AS overall_status,\n       COUNT(DISTINCT vk.vbeln) AS order_count\nFROM VBUK vk\nWHERE vk.vbeln IS NOT NULL\nGROUP BY vk.gbsta\nORDER BY order_count DESC",
+    "priority": 0
+  },
+  {
+    "id": "profit_center_list",
+    "description": "List all profit centers (CEPC)",
+    "question_patterns": [
+      "list profit centers",
+      "all profit centers",
+      "profit center master",
+      "CEPC profit centers",
+      "show profit centers"
+    ],
+    "keywords": [
+      "profit",
+      "center",
+      "cepc",
+      "prctr",
+      "list",
+      "all",
+      "name"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "CEPC"
+    ],
+    "sql": "SELECT cp.prctr AS profit_center,\n       cp.kokrs AS controlling_area,\n       cp.abtei AS department,\n       cp.verak AS person_responsible\nFROM CEPC cp\nWHERE cp.prctr IS NOT NULL AND cp.prctr != ''\nORDER BY cp.kokrs ASC, cp.prctr ASC\nLIMIT 200",
+    "priority": 0
+  },
+  {
+    "id": "sales_by_profit_center",
+    "description": "Sales by profit center (vbrp.prctr)",
+    "question_patterns": [
+      "sales by profit center",
+      "revenue by profit center",
+      "profit center sales"
+    ],
+    "keywords": [
+      "profit",
+      "center",
+      "sales",
+      "revenue",
+      "prctr"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "vbrp",
+      "VBRK"
+    ],
+    "sql": "SELECT v.prctr AS profit_center,\n       SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\nWHERE v.prctr IS NOT NULL AND v.prctr != ''\nGROUP BY v.prctr, vk.waerk\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0\nORDER BY total_sales DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "purchase_by_profit_center",
+    "description": "Purchase amount by profit center (EKPO.prctr)",
+    "question_patterns": [
+      "purchase by profit center",
+      "procurement by profit center",
+      "cost by profit center"
+    ],
+    "keywords": [
+      "profit",
+      "center",
+      "purchase",
+      "procurement",
+      "prctr",
+      "ekpo"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EKPO",
+      "EKKO"
+    ],
+    "sql": "SELECT ep.prctr AS profit_center,\n       SUM(ep.netwr) AS total_purchase_amount,\n       ek.waers AS currency\nFROM EKPO ep\nJOIN EKKO ek ON ep.ebeln = ek.ebeln\nWHERE ep.prctr IS NOT NULL AND ep.prctr != '' AND ep.netwr IS NOT NULL\nGROUP BY ep.prctr, ek.waers\nHAVING SUM(ep.netwr) > 0\nORDER BY total_purchase_amount DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "order_to_billing_flow",
+    "description": "Sales document flow: orders to deliveries to invoices (VBFA)",
+    "question_patterns": [
+      "sales document flow",
+      "order to invoice",
+      "order fulfillment flow",
+      "VBFA document flow",
+      "how many orders are billed"
+    ],
+    "keywords": [
+      "sales",
+      "document",
+      "flow",
+      "vbfa",
+      "billing",
+      "delivery",
+      "order",
+      "fulfillment"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBFA"
+    ],
+    "sql": "SELECT vf.vbtyp_n AS target_doc_type,\n       COUNT(DISTINCT vf.vbelv) AS source_doc_count,\n       COUNT(DISTINCT vf.vbeln) AS target_doc_count,\n       SUM(vf.rfwrt) AS total_value,\n       vf.waers AS currency\nFROM VBFA vf\nWHERE vf.vbtyp_n IS NOT NULL\nGROUP BY vf.vbtyp_n, vf.waers\nORDER BY total_value DESC NULLS LAST\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "work_centers_list",
+    "description": "List work centers (CRHD)",
+    "question_patterns": [
+      "list work centers",
+      "work center master",
+      "production resources",
+      "CRHD work centers",
+      "manufacturing work centers"
+    ],
+    "keywords": [
+      "work",
+      "center",
+      "crhd",
+      "resource",
+      "production",
+      "manufacturing",
+      "objid"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "CRHD"
+    ],
+    "sql": "SELECT cr.objid AS work_center,\n       cr.objty AS object_type,\n       cr.werks AS plant,\n       cr.begda AS valid_from,\n       cr.endda AS valid_to\nFROM CRHD cr\nWHERE cr.objid IS NOT NULL AND cr.objty = 'A'\nORDER BY cr.werks ASC, cr.objid ASC\nLIMIT 200",
+    "priority": 0
+  },
+  {
+    "id": "material_sales_data",
+    "description": "Materials with sales organization data (MVKE)",
+    "question_patterns": [
+      "material sales data",
+      "product sales org assignment",
+      "MVKE materials",
+      "which materials are active for sales"
+    ],
+    "keywords": [
+      "material",
+      "sales",
+      "organization",
+      "mvke",
+      "vkorg",
+      "active"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "MVKE",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       mv.matnr AS material_number,\n       mv.vkorg AS sales_org,\n       mv.vtweg AS distribution_channel,\n       mv.vmsta AS sales_status\nFROM MVKE mv\nLEFT JOIN MAKT m ON mv.matnr = m.matnr AND m.spras = 'E'\nWHERE mv.matnr IS NOT NULL\nORDER BY mv.vkorg ASC, m.maktx ASC\nLIMIT 200",
+    "priority": 0
+  },
+  {
+    "id": "sales_orders_by_customer_top20",
+    "description": "Top 20 customers by number of sales orders (VBAK)",
+    "question_patterns": [
+      "sales orders by customer",
+      "top customers by orders",
+      "VBAK by customer",
+      "who has most sales orders",
+      "order count by customer"
+    ],
+    "keywords": [
+      "sales",
+      "order",
+      "customer",
+      "vbak",
+      "count",
+      "orders",
+      "kunnr",
+      "kunag"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBAK",
+      "KNA1"
+    ],
+    "sql": "SELECT va.kunnr AS customer_number,\n       k.name1 AS customer_name,\n       COUNT(DISTINCT va.vbeln) AS order_count,\n       va.auart AS order_type\nFROM VBAK va\nLEFT JOIN KNA1 k ON va.kunnr = k.kunnr\nWHERE va.kunnr IS NOT NULL\nGROUP BY va.kunnr, k.name1, va.auart\nORDER BY order_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "sales_orders_by_year",
+    "description": "Sales orders by year (VBAK)",
+    "question_patterns": [
+      "sales orders by year",
+      "annual order count",
+      "VBAK by year",
+      "order trend by year"
+    ],
+    "keywords": [
+      "sales",
+      "order",
+      "year",
+      "annual",
+      "vbak",
+      "trend",
+      "count"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "VBAK"
+    ],
+    "sql": "SELECT SUBSTRING(va.audat, 1, 4) AS year,\n       COUNT(DISTINCT va.vbeln) AS order_count\nFROM VBAK va\nWHERE va.audat IS NOT NULL AND va.audat != ''\nGROUP BY year\nORDER BY year ASC",
+    "priority": 0
+  },
+  {
+    "id": "warehouse_transfers_by_material",
+    "description": "Top 20 materials by warehouse transfer quantity (LSEG)",
+    "question_patterns": [
+      "warehouse transfers by material",
+      "LSEG transfers",
+      "warehouse movements by material"
+    ],
+    "keywords": [
+      "warehouse",
+      "transfer",
+      "material",
+      "lseg",
+      "lgnum",
+      "menge"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "LSEG",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       ls.matnr AS material_number,\n       ls.werks AS plant,\n       SUM(ls.menge) AS transfer_quantity\nFROM LSEG ls\nLEFT JOIN MAKT m ON ls.matnr = m.matnr AND m.spras = 'E'\nWHERE ls.matnr IS NOT NULL AND ls.menge IS NOT NULL\nGROUP BY ls.matnr, m.maktx, ls.werks\nHAVING SUM(ls.menge) > 0\nORDER BY transfer_quantity DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "customer_payment_terms",
+    "description": "Customer payment terms distribution (KNVV)",
+    "question_patterns": [
+      "customer payment terms",
+      "payment terms by customer",
+      "KNVV payment",
+      "zterm distribution"
+    ],
+    "keywords": [
+      "payment",
+      "terms",
+      "customer",
+      "knvv",
+      "zterm"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "KNVV",
+      "KNA1"
+    ],
+    "sql": "SELECT kv.zterm AS payment_terms,\n       COUNT(DISTINCT kv.kunnr) AS customer_count\nFROM KNVV kv\nWHERE kv.zterm IS NOT NULL AND kv.zterm != ''\nGROUP BY kv.zterm\nORDER BY customer_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "purchase_req_by_year",
+    "description": "Purchase requisition count by year (EBAN)",
+    "question_patterns": [
+      "purchase requisitions by year",
+      "PR count by year",
+      "EBAN by year",
+      "annual requisitions"
+    ],
+    "keywords": [
+      "requisition",
+      "year",
+      "eban",
+      "annual",
+      "pr",
+      "count",
+      "banfn"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EBAN"
+    ],
+    "sql": "SELECT SUBSTRING(eb.erdat, 1, 4) AS year,\n       COUNT(DISTINCT eb.banfn) AS requisition_count,\n       SUM(eb.menge) AS total_quantity\nFROM EBAN eb\nWHERE eb.erdat IS NOT NULL AND eb.erdat != ''\nGROUP BY year\nORDER BY year ASC",
+    "priority": 0
+  },
+  {
+    "id": "purchase_req_open",
+    "description": "Open/pending purchase requisitions (EBAN statu not ordered)",
+    "question_patterns": [
+      "open purchase requisitions",
+      "pending PRs",
+      "requisitions not yet ordered",
+      "unprocessed purchase requests"
+    ],
+    "keywords": [
+      "open",
+      "pending",
+      "requisition",
+      "pr",
+      "eban",
+      "statu",
+      "unprocessed"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "EBAN",
+      "MAKT"
+    ],
+    "sql": "SELECT m.maktx AS material_name,\n       eb.matnr AS material_number,\n       COUNT(DISTINCT eb.banfn) AS open_req_count,\n       SUM(eb.menge) AS total_quantity\nFROM EBAN eb\nLEFT JOIN MAKT m ON eb.matnr = m.matnr AND m.spras = 'E'\nWHERE eb.statu NOT IN ('N', 'X') OR eb.statu IS NULL\n  AND eb.matnr IS NOT NULL AND eb.matnr != ''\nGROUP BY eb.matnr, m.maktx\nORDER BY open_req_count DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "bseg_by_account",
+    "description": "FI document line items by GL account (BSEG top 20)",
+    "question_patterns": [
+      "FI line items by account",
+      "BSEG by account",
+      "financial postings by GL account",
+      "document items per GL account"
+    ],
+    "keywords": [
+      "fi",
+      "line",
+      "item",
+      "bseg",
+      "account",
+      "saknr",
+      "posting",
+      "financial"
+    ],
+    "neg_keywords": [],
+    "tables": [
+      "BSEG"
+    ],
+    "sql": "SELECT bs.saknr AS gl_account,\n       bs.hkont AS hk_account,\n       SUM(bs.dmbtr) AS total_local_amount,\n       SUM(bs.wrbtr) AS total_transaction_amount,\n       bs.waers AS currency,\n       COUNT(*) AS line_count\nFROM BSEG bs\nWHERE bs.dmbtr IS NOT NULL AND bs.saknr IS NOT NULL\nGROUP BY bs.saknr, bs.hkont, bs.waers\nORDER BY ABS(SUM(bs.dmbtr)) DESC\nLIMIT 20",
+    "priority": 0
+  },
+  {
+    "id": "invoices_with_customer_list",
+    "description": "List invoices with customer/payer name and country (VBRK + KNA1)",
+    "question_patterns": [
+      "show invoices with customer names",
+      "list invoices with payer names",
+      "show all invoices with customer details",
+      "invoices with payer details",
+      "show billing documents with customer names"
+    ],
+    "keywords": [
+      "invoices",
+      "invoice",
+      "payer",
+      "payers",
+      "customer name",
+      "billing document",
+      "show invoices",
+      "list invoices",
+      "invoice list",
+      "billing list",
+      "with customer",
+      "with payer",
+      "customer details"
+    ],
+    "neg_keywords": [
+      "by industry",
+      "by country",
+      "total",
+      "sum",
+      "aggregate",
+      "top",
+      "highest"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1"
+    ],
+    "priority": 3,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       k.name1 AS customer_name,\n       k.land1 AS country,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "invoices_by_industry_list",
+    "description": "List invoices with payer name and industry (VBRK + KNA1 + T016T)",
+    "question_patterns": [
+      "show invoices with payers names by industry",
+      "please show invoices with payers names by industry",
+      "list invoices by industry with customer names",
+      "invoices grouped by industry with payer",
+      "show billing documents by industry",
+      "invoices with industry information"
+    ],
+    "keywords": [
+      "invoices",
+      "invoice",
+      "payer",
+      "payers",
+      "industry",
+      "payer name",
+      "billing",
+      "customer name",
+      "sector",
+      "brsch",
+      "industry key",
+      "show invoices",
+      "list invoices",
+      "invoices with"
+    ],
+    "neg_keywords": [
+      "total sales by industry",
+      "revenue by industry"
+    ],
+    "tables": [
+      "VBRK",
+      "KNA1",
+      "T016T"
+    ],
+    "priority": 5,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       k.name1 AS payer_name,\n       COALESCE(t.brtxt, k.brsch) AS industry,\n       k.land1 AS country,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency\nFROM VBRK vk\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN T016T t ON k.brsch = t.brsch\nWHERE vk.fkdat IS NOT NULL\nORDER BY industry ASC, vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "invoices_with_material_list",
+    "description": "List invoice line items with product/material names (vbrp + VBRK + MAKT)",
+    "question_patterns": [
+      "show invoices with product names",
+      "list invoices with material details",
+      "invoice items with product descriptions",
+      "billing line items with material names"
+    ],
+    "keywords": [
+      "invoices",
+      "invoice",
+      "product",
+      "material",
+      "item",
+      "line item",
+      "billing item",
+      "with product",
+      "with material",
+      "item list"
+    ],
+    "neg_keywords": [
+      "by customer",
+      "by industry",
+      "total",
+      "top"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "MAKT"
+    ],
+    "priority": 3,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       v.posnr AS item_number,\n       COALESCE(m.maktx, v.matnr) AS product_name,\n       CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC) AS quantity,\n       v.vrkme AS unit,\n       CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) AS line_amount,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON v.vbeln = vk.vbeln\nLEFT JOIN MAKT m ON v.matnr = m.matnr AND m.spras = 'E'\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "invoice_full_detail",
+    "description": "Full invoice detail with customer name and products (vbrp + VBRK + KNA1 + MAKT)",
+    "question_patterns": [
+      "show full invoice details",
+      "detailed invoice listing with customer and product",
+      "invoice details with all information",
+      "complete invoice data"
+    ],
+    "keywords": [
+      "invoice detail",
+      "full invoice",
+      "invoice details",
+      "complete invoice",
+      "invoice data",
+      "billing detail",
+      "all invoice"
+    ],
+    "neg_keywords": [
+      "total",
+      "top",
+      "highest",
+      "aggregate"
+    ],
+    "tables": [
+      "vbrp",
+      "VBRK",
+      "KNA1",
+      "MAKT"
+    ],
+    "priority": 3,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       k.name1 AS customer_name,\n       vk.kunag AS customer_number,\n       k.land1 AS country,\n       v.posnr AS item_number,\n       COALESCE(m.maktx, v.matnr) AS product_name,\n       CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC) AS quantity,\n       CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) AS line_amount,\n       vk.waerk AS currency\nFROM vbrp v\nJOIN VBRK vk ON v.vbeln = vk.vbeln\nLEFT JOIN KNA1 k ON vk.kunag = k.kunnr\nLEFT JOIN MAKT m ON v.matnr = m.matnr AND m.spras = 'E'\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "profit_margin_by_product",
+    "description": "Profit margin analysis: revenue vs cost by product (VBRP + VBRK + MAKT + CKIS)",
+    "question_patterns": [
+      "profit margin",
+      "margin analysis",
+      "profit margin analysis",
+      "margin by product",
+      "product margin",
+      "profitability analysis",
+      "revenue vs cost",
+      "gross margin by product",
+      "how are profit margins calculated",
+      "profit_margin_by_product",
+      "profit margin on certain products",
+      "what was the profit margin on certain products",
+      "profit margin on products",
+      "profit margins by product",
+      "profit margin for all products",
+      "show profit margin for all products",
+      "profit margin by product for all products",
+      "all products profit margin",
+      "margin for all products in the database",
+      "profit margin for",
+      "margin for",
+      "profitability for",
+      "show profit margin by product for all products in the database"
+    ],
+    "keywords": [
+      "profit margin",
+      "margin",
+      "profitability",
+      "revenue vs cost",
+      "gross margin",
+      "contribution margin",
+      "cogs",
+      "cost of goods"
+    ],
+    "neg_keywords": [],
+    "tables": ["vbrp", "VBRK", "MAKT", "CKIS"],
+    "priority": 1,
+    "sql": "SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, COALESCE(c.total_cost, 0) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0) AS margin, CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN ROUND(100.0 * (SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0)) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2) ELSE NULL END AS margin_pct FROM vbrp v LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) AS total_cost FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.matnr, m.maktx, c.total_cost ORDER BY margin DESC NULLS LAST LIMIT 500"
+  },
+  {
+    "id": "faglflexa_profit_center_costs_linked_to_customers_products",
+    "description": "Link FAGLFLEXA profit center costs to major customers and products (via VBRP.prctr)",
+    "question_patterns": [
+      "link FAGLFLEXA profit center costs back to major customers and products",
+      "link profit center costs to customers and products",
+      "profit center costs back to customers",
+      "FAGLFLEXA costs by customer and product",
+      "attribute profit center costs to customers and products",
+      "link FAGLFLEXA profit center costs back to major customers and products where possible",
+      "link profit center costs to customers and products where possible",
+      "profit center and customer",
+      "cost by profit center and customer",
+      "costs by customer and product",
+      "profit center costs to customers"
+    ],
+    "keywords": [
+      "link",
+      "FAGLFLEXA",
+      "profit center",
+      "costs",
+      "customers",
+      "products",
+      "back to",
+      "where possible",
+      "major",
+      "attribute",
+      "connect"
+    ],
+    "neg_keywords": [],
+    "tables": ["FAGLFLEXA", "VBRK", "vbrp", "KNA1", "MAKT"],
+    "priority": 1,
+    "sql": "SELECT v.prctr AS profit_center, COALESCE(epc.name1, v.prctr) AS profit_center_name, c.name1 AS customer_name, vk.kunag AS customer_number, COALESCE(m.maktx, v.matnr) AS product_name, v.matnr AS material_number, f.total_cost AS profit_center_total_cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN KNA1 c ON vk.kunag = c.kunnr LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN CEPC epc ON v.prctr = epc.prctr LEFT JOIN (SELECT prctr, SUM(hsl) AS total_cost FROM FAGLFLEXA WHERE prctr IS NOT NULL AND TRIM(prctr) != '' GROUP BY prctr) f ON v.prctr = f.prctr WHERE v.prctr IS NOT NULL AND TRIM(v.prctr) != '' AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.prctr, epc.name1, vk.kunag, c.name1, v.matnr, m.maktx, f.total_cost ORDER BY revenue DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "resb_materials_highest_reserved_quantity",
+    "description": "Materials with highest total quantity reserved in RESB",
+    "question_patterns": [
+      "materials with highest total quantity reserved in RESB",
+      "list materials with highest total quantity reserved in RESB",
+      "highest reserved quantity by material",
+      "total quantity reserved by material",
+      "reserved quantity by material",
+      "materials with highest reserved quantity"
+    ],
+    "keywords": ["resb", "reserved", "quantity", "materials", "highest", "total", "bdmng"],
+    "neg_keywords": [],
+    "tables": ["RESB", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT r.matnr, COALESCE(m.maktx, r.matnr) AS material_name, r.werks AS plant, SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) AS total_reserved_qty, r.meins AS unit FROM RESB r LEFT JOIN MAKT m ON TRIM(r.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE r.matnr IS NOT NULL AND TRIM(r.matnr) != '' GROUP BY r.matnr, m.maktx, r.werks, r.meins HAVING SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) > 0 ORDER BY total_reserved_qty DESC LIMIT 100"
+  },
+  {
+    "id": "faglflexa_cost_by_profit_center_gl_last_24_months",
+    "description": "Cost by profit center and GL account for last 24 months from FAGLFLEXA",
+    "question_patterns": [
+      "cost by profit center and GL account for the last 24 months",
+      "show cost by profit center and GL account for the last 24 months",
+      "cost by profit center and gl account last 24 months",
+      "profit center and GL account cost last 24 months"
+    ],
+    "keywords": ["faglflexa", "profit center", "gl account", "cost", "last 24", "24 months", "racct"],
+    "neg_keywords": [],
+    "tables": ["FAGLFLEXA"],
+    "priority": 2,
+    "sql": "SELECT f.prctr AS profit_center, f.racct AS gl_account, f.ryear AS fiscal_year, f.poper AS posting_period, SUM(f.hsl) AS total_cost, f.rtcur AS currency FROM FAGLFLEXA f WHERE f.prctr IS NOT NULL AND TRIM(f.prctr) != '' AND f.ryear IN (EXTRACT(YEAR FROM CURRENT_DATE)::text, (EXTRACT(YEAR FROM CURRENT_DATE) - 1)::text) GROUP BY f.prctr, f.racct, f.ryear, f.poper, f.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 200"
+  },
+  {
+    "id": "faglflexa_cost_by_profit_center_gl",
+    "description": "Cost by profit center and GL account from FAGLFLEXA (all periods)",
+    "question_patterns": [
+      "cost by profit center and GL account",
+      "show cost by profit center and gl account",
+      "total cost by profit center and gl account",
+      "break down GL balances by profit center and GL account"
+    ],
+    "keywords": ["faglflexa", "profit center", "gl account", "cost", "racct", "hsl"],
+    "neg_keywords": ["last 24", "24 months"],
+    "tables": ["FAGLFLEXA"],
+    "priority": 2,
+    "sql": "SELECT f.prctr AS profit_center, f.racct AS gl_account, f.ryear AS fiscal_year, SUM(f.hsl) AS total_cost, f.rtcur AS currency FROM FAGLFLEXA f WHERE f.prctr IS NOT NULL AND TRIM(f.prctr) != '' GROUP BY f.prctr, f.racct, f.ryear, f.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 200"
+  },
+  {
+    "id": "ekpo_total_purchased_quantity_cost_by_material",
+    "description": "Total purchased quantity and cost by material from EKPO",
+    "question_patterns": [
+      "total purchased quantity and cost for each material using EKPO",
+      "what is the total purchased quantity and cost for each material using EKPO",
+      "purchased quantity and cost by material",
+      "total purchase cost and quantity by material"
+    ],
+    "keywords": ["ekpo", "purchased", "quantity", "cost", "material", "total", "menge", "netwr"],
+    "neg_keywords": [],
+    "tables": ["EKPO", "EKKO", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT e.matnr, COALESCE(m.maktx, e.matnr) AS material_name, SUM(CAST(COALESCE(e.menge, 0) AS NUMERIC)) AS total_quantity, SUM(CAST(COALESCE(e.netwr, 0) AS NUMERIC)) AS total_cost, ek.waers AS currency FROM EKPO e LEFT JOIN EKKO ek ON e.ebeln = ek.ebeln LEFT JOIN MAKT m ON TRIM(e.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE e.matnr IS NOT NULL AND TRIM(e.matnr) != '' GROUP BY e.matnr, m.maktx, ek.waers ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "ekpo_total_by_material_plant",
+    "description": "Total purchase cost and quantity by material and plant from EKPO",
+    "question_patterns": [
+      "show total purchase cost and quantity by material and plant from EKPO",
+      "total purchase cost and quantity by material and plant",
+      "purchase by matnr werks"
+    ],
+    "keywords": ["ekpo", "purchase", "cost", "quantity", "material", "plant", "werks", "matnr"],
+    "neg_keywords": [],
+    "tables": ["EKPO", "EKKO", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT e.matnr, e.werks AS plant, COALESCE(m.maktx, e.matnr) AS material_name, SUM(CAST(COALESCE(e.menge, 0) AS NUMERIC)) AS total_quantity, SUM(CAST(COALESCE(e.netwr, 0) AS NUMERIC)) AS total_cost, ek.waers AS currency FROM EKPO e LEFT JOIN EKKO ek ON e.ebeln = ek.ebeln LEFT JOIN MAKT m ON TRIM(e.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE e.matnr IS NOT NULL AND TRIM(e.matnr) != '' GROUP BY e.matnr, e.werks, m.maktx, ek.waers ORDER BY total_cost DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "marc_materials_plant_master",
+    "description": "Materials with plant-level data from MARC (plant master)",
+    "question_patterns": [
+      "materials with highest on-hand quantities in plant master MARC",
+      "show materials with highest on-hand quantities in plant master MARC",
+      "materials in plant master MARC",
+      "on-hand quantities in MARC",
+      "plant master MARC materials"
+    ],
+    "keywords": ["marc", "plant master", "materials", "on-hand", "plant", "werks", "matnr"],
+    "neg_keywords": [],
+    "tables": ["MARC", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT m.matnr, m.werks AS plant, COALESCE(mk.maktx, m.matnr) AS material_name, COALESCE(CAST(NULLIF(TRIM(m.minbe), '') AS NUMERIC), 0) + COALESCE(CAST(NULLIF(TRIM(m.eisbe), '') AS NUMERIC), 0) AS planning_qty FROM MARC m LEFT JOIN MAKT mk ON TRIM(m.matnr) = TRIM(mk.matnr) AND (mk.spras = 'E' OR mk.spras IS NULL) WHERE m.matnr IS NOT NULL AND TRIM(m.matnr) != '' GROUP BY m.matnr, m.werks, m.minbe, m.eisbe, mk.maktx ORDER BY planning_qty DESC NULLS LAST LIMIT 100"
+  },
+  {
+    "id": "recent_invoices_list",
+    "description": "List of recent invoices (billing documents) from VBRK",
+    "question_patterns": [
+      "show recent invoices",
+      "list all invoices",
+      "show all billing documents",
+      "recent billing documents",
+      "latest invoices"
+    ],
+    "keywords": [
+      "recent invoices",
+      "all invoices",
+      "latest invoices",
+      "billing documents",
+      "list invoices",
+      "show invoices",
+      "invoice list",
+      "invoices"
+    ],
+    "neg_keywords": [
+      "customer name",
+      "product",
+      "material",
+      "industry",
+      "payer"
+    ],
+    "tables": [
+      "VBRK"
+    ],
+    "priority": 2,
+    "sql": "SELECT vk.vbeln AS invoice_number,\n       vk.fkdat AS billing_date,\n       vk.kunag AS customer_number,\n       CAST(NULLIF(TRIM(vk.netwr), '') AS NUMERIC) AS invoice_amount,\n       vk.waerk AS currency,\n       vk.vkorg AS sales_org,\n       vk.fkart AS invoice_type\nFROM VBRK vk\nWHERE vk.fkdat IS NOT NULL\nORDER BY vk.fkdat DESC\nLIMIT 200"
+  },
+  {
+    "id": "complaints_by_customer",
+    "description": "Complaints/claims count by customer (client) from billing items with complaint reason",
+    "question_patterns": [
+      "how much complaints are from the client",
+      "how many complaints from clients",
+      "complaints by customer",
+      "complaints by client",
+      "show complaints from clients",
+      "list complaints by customer",
+      "complaint count by customer",
+      "which customers have the most complaints",
+      "top customers by complaints",
+      "complaint reasons by customer"
+    ],
+    "keywords": [
+      "complaint",
+      "complaints",
+      "client",
+      "customer",
+      "claim",
+      "compreas",
+      "reason"
+    ],
+    "neg_keywords": [],
+    "tables": ["VBRK", "vbrp", "KNA1"],
+    "priority": 2,
+    "sql": "SELECT vk.kunag AS customer_number, COALESCE(k.name1, '') AS customer_name, COUNT(*) AS complaint_count, STRING_AGG(DISTINCT TRIM(v.compreas), ', ') AS complaint_reasons FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN kna1 k ON TRIM(vk.kunag) = TRIM(k.kunnr) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY vk.kunag, k.name1 ORDER BY complaint_count DESC LIMIT 100"
+  },
+  {
+    "id": "complaints_by_reason",
+    "description": "Complaint count by complaint reason (compreas)",
+    "question_patterns": [
+      "complaints by reason",
+      "complaint reasons breakdown",
+      "what are the complaint reasons",
+      "breakdown by complaint reason",
+      "complaint count by reason",
+      "which complaint reasons are most common"
+    ],
+    "keywords": ["complaint", "reason", "compreas", "breakdown", "by reason"],
+    "neg_keywords": ["customer", "client"],
+    "tables": ["vbrp", "VBRK"],
+    "priority": 2,
+    "sql": "SELECT TRIM(v.compreas) AS complaint_reason, COUNT(*) AS complaint_count, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_value FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) WHERE v.compreas IS NOT NULL AND TRIM(COALESCE(v.compreas, '')) != '' GROUP BY TRIM(v.compreas) ORDER BY complaint_count DESC LIMIT 50"
+  },
+  {
+    "id": "open_reservations_by_material",
+    "description": "Open (unfulfilled) reservation quantity by material (bdmng - enmng)",
+    "question_patterns": [
+      "open reservations by material",
+      "unfulfilled reservations by material",
+      "pending reservations by material",
+      "reserved but not issued by material"
+    ],
+    "keywords": ["open", "reservation", "unfulfilled", "pending", "resb", "bdmng", "enmng"],
+    "neg_keywords": [],
+    "tables": ["RESB", "MAKT"],
+    "priority": 2,
+    "sql": "SELECT r.matnr, COALESCE(m.maktx, r.matnr) AS material_name, r.werks AS plant, SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) - SUM(CAST(COALESCE(r.enmng, 0) AS NUMERIC)) AS open_reserved_qty, r.meins AS unit FROM RESB r LEFT JOIN MAKT m ON TRIM(r.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL) WHERE r.matnr IS NOT NULL AND TRIM(r.matnr) != '' GROUP BY r.matnr, m.maktx, r.werks, r.meins HAVING SUM(CAST(COALESCE(r.bdmng, 0) AS NUMERIC)) - SUM(CAST(COALESCE(r.enmng, 0) AS NUMERIC)) > 0 ORDER BY open_reserved_qty DESC LIMIT 50"
+  }
+]

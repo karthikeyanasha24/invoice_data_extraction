@@ -1,0 +1,360 @@
+{
+  "_comment": "Comprehensive question catalog for SAP SQL agent training. Use for: few-shot examples, sql_catalog question_patterns, and LLM prompt enrichment.",
+  "_usage": [
+    "1. Add question_patterns to sql_catalog.json for exact matches",
+    "2. Use as few-shot examples in run_sap_sql_agent (get_sql_examples_for_question)",
+    "3. Include in _pick_tables_adaptive prompt for table selection",
+    "4. Validate coverage: ensure each category has working SQL"
+  ],
+  "categories": {
+    "1_purchasing_ekpo": {
+      "description": "Purchase orders, quantities, costs by material/plant/vendor (EKPO, EKKO)",
+      "questions": [
+        "What is the total purchased quantity and cost for each material using EKPO?",
+        "List all products that contain the word jacket with total purchased quantity and cost using EKPO and MAKT",
+        "Do you know the cost of the Harley leather jacket across all plants and years?",
+        "Show total purchase cost and quantity by material and plant (matnr, werks) from EKPO",
+        "Top 10 products by total purchase cost and quantity using EKPO",
+        "For each material, show average unit purchase price (netpr) from EKPO",
+        "List materials where total purchased quantity is high but total cost is relatively low",
+        "Show total spend by vendor and material from EKPO and RBKP/RSEG",
+        "Top 10 vendors by invoice amount in the last 12 months",
+        "Average purchase price per material and vendor from EKPO.netpr",
+        "Vendors supplying Harley jacket materials and their total spend",
+        "Top 20 vendors by number of purchase orders",
+        "Total spend by purchasing organization (EKKO.ekorg)",
+        "Top vendors by spend within each material group (matkl)",
+        "Spend per vendor and plant (werks)",
+        "Purchase order totals by material",
+        "List all jacket products with their purchase cost"
+      ]
+    },
+    "2_sales_revenue_customers": {
+      "description": "Billing, revenue, customers (VBRK, VBRP, KNA1)",
+      "questions": [
+        "Top 20 customers by total revenue across all years using VBRK and VBRP",
+        "Show total revenue by customer and year from VBRK and VBRP",
+        "Revenue by customer industry using KNA1 and T016T",
+        "List the top 10 industries by total revenue",
+        "Show revenue by country and customer using VBRK.kunag and KNA1.land1",
+        "What are the top 20 materials by billed revenue from VBRP?",
+        "List top customers who buy Harley products",
+        "Show total revenue by customer group (KNVV.kdgrp)",
+        "Revenue by sales organization and distribution channel (VBRK.vkorg, VBRK.vtweg)",
+        "Average selling price per material from billing (VBRP.netwr / VBRP.fkimg)",
+        "Show revenue by material and customer over the last 12 months",
+        "Which customers have declining revenue over the last three fiscal years?",
+        "List customers with no sales in the last 12 months but historical revenue",
+        "Show the mix of revenue by country and industry",
+        "Revenue by material hierarchy (MVKE.prodh) and region",
+        "Which customers buy the most jacket products by revenue and quantity?",
+        "Top 20 billed documents by value",
+        "Average invoice value per customer",
+        "Show revenue split by Incoterms (VBRK.inco1, inco2)",
+        "What is the total sales?",
+        "Sales by year",
+        "Revenue by country",
+        "How much complaints are from the client",
+        "Complaints by customer",
+        "Show complaints from clients",
+        "Which customers have the most complaints",
+        "List complaints by customer",
+        "Complaints by reason",
+        "What are the complaint reasons",
+        "Breakdown by complaint reason"
+      ]
+    },
+    "3_pricing_conditions_konv": {
+      "description": "Pricing, discounts, conditions (KONV, VBRK)",
+      "questions": [
+        "Sales price conditions (KONV) by material and customer group",
+        "For each material, list base price (PR00) and main discounts from KONV with customer group",
+        "Show top 20 materials with the highest standard price (PR00) in KONV",
+        "List average discount percentages (K007) by customer group",
+        "Show all pricing conditions for Harley jacket materials",
+        "List all condition types used in sales (KONV.kschl) and their total value",
+        "Show rebate conditions (RA01) by customer and material group",
+        "Compare base prices vs actual net prices per invoice using KONV and VBRP",
+        "Show the distribution of discounts by material hierarchy and region",
+        "List all customers receiving above-average discounts on jackets",
+        "Average sales price per unit per material, combining KONV conditions and VBRP quantities",
+        "List price conditions for purchasing (KONV.kappl = M) by vendor and material",
+        "Identify materials where discounts are eroding more than 20% of the list price",
+        "Show pricing documents (knumv) with the largest total condition value",
+        "Show discounts by industry and material group",
+        "Which customer groups receive the largest average cash discounts?",
+        "Show price and discount conditions for Harley jacket materials",
+        "How much discount is given on average for jacket sales?"
+      ]
+    },
+    "4_profit_center_gl_faglflexa": {
+      "description": "Profit center, GL, FAGLFLEXA",
+      "questions": [
+        "Total cost by profit center from FAGLFLEXA",
+        "For FAGLFLEXA, show total balance and postings by profit center and fiscal year",
+        "List top 20 profit centers by total cost (hsl) across all years",
+        "Break down GL balances by profit center and GL account (racct)",
+        "Show monthly cost trends by profit center over the last three years",
+        "Compare actual costs vs planned costs by profit center using COEP and COSP",
+        "Show cost by profit center and segment (FAGLFLEXA.segment)",
+        "Total costs attributable to Harley jacket products in FAGLFLEXA",
+        "List profit centers with the highest positive balances vs negative balances",
+        "Show GL postings by cost center and profit center (FAGLFLEXA.rcntr, prctr)",
+        "Total cost by company code and profit center",
+        "Which GL accounts drive most of the cost in each profit center?",
+        "Trend of costs for a given profit center across posting periods (poper)",
+        "Show top 10 profit centers for material-related costs only",
+        "Show cost by profit center and functional area (rfarea)",
+        "Total costs for each profit center in the last fiscal year only",
+        "List profit centers with unusually high costs in a single posting period",
+        "Show average cost per transaction by profit center",
+        "Break down cost by partner profit center (pprctr) vs primary profit center",
+        "Link FAGLFLEXA profit center costs back to major customers and products where possible",
+        "Cost by profit center and GL account",
+        "Compare costs between two selected profit centers",
+        "Show monthly cost trend for a specific profit center",
+        "Show cost by profit center and GL account for the last 24 months",
+        "Show total cost in FAGLFLEXA for periods where Harley jacket sales were highest"
+      ]
+    },
+    "5_customers_ar_bsad_bseg": {
+      "description": "Customers, AR, credit (KNA1, BSAD, BSEG, KNVV, KNVP)",
+      "questions": [
+        "List all customers with their names, country, and industry (KNA1, T016T)",
+        "Top 20 customers by open AR balance from BSAD and BSEG",
+        "Average payment terms (zterm) by customer group (KNVV.kdgrp)",
+        "Show AR aging buckets by customer using BSAD clearing dates",
+        "Customers with the highest overdue balances",
+        "Revenue and AR exposure by customer industry",
+        "List customers with frequent credit notes or returns",
+        "Show AR amounts by GL account (BSEG.hkont) and customer",
+        "Total cash discounts given to each customer over the past year",
+        "Customers with no recent AR activity but open balances",
+        "Show total write-offs by customer and year",
+        "Top regions by AR exposure",
+        "Which customers belong to multiple sales areas (KNVV)?",
+        "Show customer partner relationships from KNVP (payer, bill-to, ship-to)",
+        "List customers with the most ship-to locations",
+        "Customers with high revenue but low or no overdue items",
+        "Compare AR balances vs revenue by customer to assess risk",
+        "List customers flagged for blocking or credit issues",
+        "Show total AR balances by profit center"
+      ]
+    },
+    "6_vendors_ap_rbkp_rseg": {
+      "description": "Vendors, AP, invoices (LFA1, LFB1, LFM1, EKPO, RBKP, RSEG)",
+      "questions": [
+        "Total spend by vendor and material from EKPO and RBKP/RSEG",
+        "Top 10 vendors by invoice amount in the last 12 months (RBKP.rmwwr)",
+        "Total spend by vendor, company code, and year",
+        "Show vendor balances and payment terms using LFB1 and RBKP",
+        "Total spend by vendor industry (LFA1.brsch + T016T)",
+        "Vendors with consistently increasing prices over time",
+        "Compare purchase price vs invoice price by vendor and material",
+        "Show PO and invoice mismatches by vendor",
+        "List vendors with the highest volume of returns or credit notes",
+        "Average lead time by vendor using EKPO and delivery dates",
+        "Vendors with overdue payables or blocked status",
+        "Show AP aging by vendor using RBKP and GL postings",
+        "Total spend on jacket materials by vendor",
+        "Vendor performance by on-time delivery metrics using LIKP/LIPS",
+        "Vendor invoice totals by vendor and year",
+        "Top vendors by invoice value",
+        "Total vendor invoice value for jacket materials",
+        "Which vendors account for 80% of total spend (Pareto)?"
+      ]
+    },
+    "7_margin_profitability": {
+      "description": "Margin, profitability (VBRP, EKPO, RSEG, KONV)",
+      "questions": [
+        "Average margin by product using sales (VBRP) and purchase costs (EKPO/RSEG)",
+        "Lowest-margin products by revenue, quantity, and margin percentage",
+        "Top 20 products by absolute profit (revenue minus cost)",
+        "Margin by customer – combine billed revenue and associated purchase costs",
+        "Margin by industry and country",
+        "Compare margin of jacket products vs non-jacket products",
+        "Show margin by profit center and material",
+        "Margin trend over time for Harley leather jacket",
+        "List negative-margin products and their drivers",
+        "Margin by vendor for resold purchased items",
+        "Average margin by material group (matkl)",
+        "Compare margin before and after discounts for top customers",
+        "Margin by sales organization and distribution channel",
+        "Which customers frequently buy low-margin products?",
+        "Products with improving margins year over year",
+        "Products with deteriorating margins year over year",
+        "Margin by project or internal order (AUFK, COEP)",
+        "Do you know the cost of the jacket?",
+        "List all jacket products with their sales revenue and margin",
+        "Which products are high revenue but low margin?",
+        "Which products lose money (negative margin)?"
+      ]
+    },
+    "8_logistics_deliveries": {
+      "description": "Deliveries, logistics (LIKP, LIPS, VBAP, VBEP, RESB)",
+      "questions": [
+        "Top customers by delivered quantity from LIKP/LIPS",
+        "Deliveries by customer with total quantity and sales value",
+        "On-time delivery rate by customer based on LIKP dates",
+        "Total delivered quantity by material and plant",
+        "Open quantity vs delivered quantity per sales order using VBAP and LIPS",
+        "Delivery performance by shipping point (LIKP.vstel)",
+        "Backorder quantities by material (VBEP)",
+        "Reservations vs actual consumption for key materials (RESB vs MKPF)",
+        "Show top 20 delivery documents by value",
+        "Deliveries of Harley jackets by country and customer",
+        "Average delivery lead time from order date to delivery date",
+        "List deliveries that were partially delivered or under-delivered",
+        "Show schedule adherence by material (VBEP scheduled vs actual)",
+        "Total delivered quantities by industry and region",
+        "Show the largest single delivery events by quantity or value"
+      ]
+    },
+    "9_inventory_reservations": {
+      "description": "Stock, reservations, movements (MKPF, RESB, MARC)",
+      "questions": [
+        "Show total stock movements by material from MKPF and RESB",
+        "List materials with the highest total quantity reserved in RESB",
+        "Materials with highest total quantity reserved in RESB",
+        "List materials with highest total quantity reserved in RESB",
+        "Highest quantity reserved by material",
+        "Show total quantity issued from inventory by material based on MKPF movements",
+        "Which materials have the largest discrepancy between reserved quantity in RESB and delivered quantity in LIPS?",
+        "List materials with no movements in the last 12 months using MKPF posting dates",
+        "Show materials with the highest on-hand quantities in plant master MARC",
+        "List slow-moving materials based on low movement quantities in MKPF over the last three years",
+        "Show total stock value by material and plant using MARC and valuation fields",
+        "What materials are reserved",
+        "Reserved quantity by material",
+        "Top reserved materials",
+        "Open reservations by material",
+        "Unfulfilled reservations by material",
+        "Pending reservations by material"
+      ]
+    },
+    "10_costing_bom": {
+      "description": "Costing, BOM, standard cost (KEKO, CKIS, CKMLCR, STKO, STPO)",
+      "questions": [
+        "What was the profit margin on certain products?",
+        "What is the profit margin on products?",
+        "Profit margin by product",
+        "Costs of manufacturing",
+        "Manufacturing cost by material",
+        "Cost of manufacturing",
+        "What are the costs of manufacturing?",
+        "What are the standard costs for finished goods materials in KEKO and CKMLCR?",
+        "List all costed materials in CKMLCR with their standard price (stprs) and stock value (salk3)",
+        "Show materials with large variances between planned and actual costs in CKMLPP",
+        "For each material, list all plants (MARC) and the key planning and MRP parameters",
+        "Which materials are flagged as configurable or batch-managed in MARC and MARM?",
+        "Show standard cost breakdown for a given finished product using KEKO and CKIS",
+        "List components and their quantities for Harley jacket BOM from STKO/STPO",
+        "Total material cost vs activity cost for selected materials",
+        "Compare planned vs actual costs from KEKO/CKMLCR and COEP",
+        "List products with the highest component count in their BOM (STPO)",
+        "Show BOM explosions for top 10 costliest products",
+        "Identify components contributing most to finished goods cost",
+        "Show cost per unit per plant (KEKO, MARC)"
+      ]
+    },
+    "11_controlling_objects": {
+      "description": "Internal orders, cost centers (AUFK, COEP, COSP, CSKS, CEPC)",
+      "questions": [
+        "List all internal orders from AUFK with their descriptions and profit centers",
+        "Total cost by internal order and cost element from COEP",
+        "Compare planned (COSP) vs actual (COEP) costs by internal order",
+        "Show total cost by cost center from COEP and CSKS",
+        "Top 20 cost centers by total actual cost",
+        "Costs by internal order for jacket-related projects",
+        "Show costs by functional area and cost center",
+        "Which cost centers belong to each profit center (CSKS.prctr)?",
+        "Show profit center master data from CEPC and link to GL costs",
+        "Compare costs between two selected cost centers over a given period"
+      ]
+    },
+    "12_general_cross_functional": {
+      "description": "Cross-functional analytics",
+      "questions": [
+        "End-to-end profitability by customer: revenue from VBRK/VBRP, costs from EKPO/RSEG and FAGLFLEXA",
+        "End-to-end profitability by material across sales, purchasing, and GL",
+        "Revenue and cost by country and profit center",
+        "Top 20 Harley products by combined revenue and margin",
+        "Year-on-year growth in revenue and margin by industry",
+        "Vendor and customer overlap (business partners that are both)",
+        "Compare overall spend vs revenue by vendor-supplied materials",
+        "Segment customers into high-revenue / high-margin vs low-margin segments",
+        "Show total costs capitalized into inventory vs expensed",
+        "Tax impact by country and region based on billing (VBRK, VBRP)",
+        "Currency exposure – revenue and costs by billing currency",
+        "Products with volatile pricing (frequent KONV changes)",
+        "Identify unprofitable customer-product combinations",
+        "Compare purchase prices from different vendors for the same material",
+        "Show contribution margin by sales channel (vtweg)",
+        "Show share of revenue and margin coming from jacket products vs all products",
+        "Show key KPIs: total revenue, total cost, margin, and top 10 customers for the current year",
+        "List any materials that appear in sales (VBRP) but not in purchasing (EKPO)",
+        "List any materials that appear in purchasing but have never been sold"
+      ]
+    },
+    "14_invoice_listing": {
+      "description": "Invoice lists, billing documents (VBRK, VBRP, KNA1, MAKT)",
+      "questions": [
+        "Show recent invoices",
+        "List all invoices",
+        "Show all billing documents",
+        "Recent billing documents",
+        "Latest invoices",
+        "Show invoices with customer names",
+        "List invoices with payer names",
+        "Show invoices with product names",
+        "Invoices with payer names by industry",
+        "List invoices by industry with customer names",
+        "Show full invoice details",
+        "Invoice details with customer and product"
+      ]
+    },
+    "13_casual_user_phrasing": {
+      "description": "Informal, conversational questions",
+      "questions": [
+        "Do you know the cost of the jacket?",
+        "Do you know the cost of the Harley leather jacket across all periods?",
+        "Show the total cost history for the Harley leather jacket",
+        "List all jacket products with their sales revenue and margin",
+        "Show total revenue for Harley leather jacket by customer",
+        "Which customers buy the Harley leather jacket the most by quantity and value?",
+        "Average unit selling price for the Harley leather jacket",
+        "Compare margin on Harley leather jacket vs other Harley products",
+        "Show all invoices that contain the Harley leather jacket",
+        "Average margin on low products (lowest 20% by margin)",
+        "Is the margin on Harley leather jacket improving or declining over time?",
+        "Compare average margin on jackets vs boots vs other apparel",
+        "Show products where margin improved after recent price changes",
+        "Show average margin by vendor for purchased-and-resold products",
+        "Which customer segments are buying mostly low-margin products?"
+      ]
+    }
+  },
+  "few_shot_examples": [
+    {
+      "user_query": "Total cost by profit center from FAGLFLEXA",
+      "sql": "SELECT fg.prctr AS profit_center, COALESCE(c.name1, fg.prctr) AS profit_center_name, SUM(fg.hsl) AS total_cost, fg.rtcur AS currency FROM FAGLFLEXA fg LEFT JOIN CEPC c ON fg.prctr = c.prctr WHERE fg.prctr IS NOT NULL AND TRIM(fg.prctr) != '' GROUP BY fg.prctr, c.name1, fg.rtcur ORDER BY total_cost DESC NULLS LAST LIMIT 100",
+      "tables": ["FAGLFLEXA", "CEPC"]
+    },
+    {
+      "user_query": "Link FAGLFLEXA profit center costs back to major customers and products where possible",
+      "sql": "SELECT v.prctr AS profit_center, COALESCE(epc.name1, v.prctr) AS profit_center_name, c.name1 AS customer_name, vk.kunag AS customer_number, COALESCE(m.maktx, v.matnr) AS product_name, v.matnr AS material_number, f.total_cost AS profit_center_total_cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN KNA1 c ON vk.kunag = c.kunnr LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN CEPC epc ON v.prctr = epc.prctr LEFT JOIN (SELECT prctr, SUM(hsl) AS total_cost FROM FAGLFLEXA WHERE prctr IS NOT NULL AND TRIM(prctr) != '' GROUP BY prctr) f ON v.prctr = f.prctr WHERE v.prctr IS NOT NULL AND TRIM(v.prctr) != '' AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.prctr, epc.name1, vk.kunag, c.name1, v.matnr, m.maktx, f.total_cost ORDER BY revenue DESC NULLS LAST LIMIT 100",
+      "tables": ["FAGLFLEXA", "VBRK", "vbrp", "KNA1", "MAKT", "CEPC"],
+      "fallback_note": "If 0 rows: return profit center costs only (FAGLFLEXA GROUP BY prctr)"
+    },
+    {
+      "user_query": "Top 10 products by total purchase cost and quantity using EKPO",
+      "sql": "SELECT e.matnr, SUM(e.netwr) AS total_cost, SUM(e.menge) AS total_quantity, e.meins FROM EKPO e WHERE e.netwr IS NOT NULL AND e.menge IS NOT NULL GROUP BY e.matnr, e.meins ORDER BY total_cost DESC NULLS LAST LIMIT 10",
+      "tables": ["EKPO"]
+    },
+    {
+      "user_query": "Top 20 customers by total revenue",
+      "sql": "SELECT vk.kunag AS customer_number, COALESCE(k.name1, vk.kunag) AS customer_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_revenue, vk.waerk AS currency FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN KNA1 k ON vk.kunag = k.kunnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY vk.kunag, k.name1, vk.waerk ORDER BY total_revenue DESC NULLS LAST LIMIT 20",
+      "tables": ["VBRK", "vbrp", "KNA1"]
+    }
+  ]
+}

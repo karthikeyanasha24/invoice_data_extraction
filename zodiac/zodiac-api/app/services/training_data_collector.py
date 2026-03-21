@@ -114,9 +114,21 @@ def log_query_execution(
                 "created_at": _now_utc(),
             },
         )
+        try:
+            record_id = result.scalar()
+        except Exception:
+            record_id = None
+        if record_id is None:
+            try:
+                record_id = getattr(result, "lastrowid", None)
+            except Exception:
+                record_id = None
         db.commit()
-        
-        record_id = result.scalar()
+        if record_id is None:
+            try:
+                record_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+            except Exception:
+                record_id = None
         logger.info(f"Logged training data: record_id={record_id}, user_id={user_id}")
         return record_id
     
@@ -174,6 +186,52 @@ def submit_feedback(
         logger.error(f"Failed to submit feedback: {e}")
         db.rollback()
         return False
+
+
+def log_query_feedback_attempt(
+    db: Session,
+    user_id: int,
+    user_query: str,
+    sql_query: Optional[str],
+    feedback_status: str,
+    attempt_source: str,
+    time_scope: Optional[str] = None,
+    feedback_reason: Optional[str] = None,
+    validation: Optional[Dict[str, Any]] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[int]:
+    """
+    Persist yes/no SQL feedback attempts in the shared training table.
+
+    This keeps a lightweight history of rejected suggestions, manual replacements,
+    and final approved SQL without requiring a dedicated feedback table.
+    """
+    metadata: Dict[str, Any] = {
+        "feedback_status": feedback_status,
+        "attempt_source": attempt_source,
+        "time_scope": time_scope,
+        "feedback_reason": feedback_reason,
+    }
+    if validation:
+        metadata["validation"] = validation
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
+    summary_parts = [feedback_status.replace("_", " ").title()]
+    if attempt_source:
+        summary_parts.append(f"via {attempt_source}")
+    if feedback_reason:
+        summary_parts.append(f"({feedback_reason})")
+
+    return log_query_execution(
+        db=db,
+        user_id=user_id,
+        user_query=user_query,
+        sql_query=sql_query,
+        result_summary=" ".join(summary_parts),
+        action_type=f"query_{feedback_status}",
+        metadata=metadata,
+    )
 
 
 def export_training_dataset(
@@ -248,6 +306,49 @@ When given a question, generate SQL and explain the results concisely."""
     
     except Exception as e:
         logger.error(f"Failed to export training dataset: {e}")
+        return []
+
+
+def get_few_shot_examples(
+    db: Session,
+    limit: int = 3,
+    user_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch recent successful query→SQL examples for few-shot prompting.
+    Prefers high feedback_score, then recent. Used to train the model by example.
+
+    Returns:
+        List of {"user_query": str, "sql_query": str} for injection into prompts.
+    """
+    try:
+        ensure_training_data_table(db)
+        where = "WHERE sql_query IS NOT NULL AND LENGTH(sql_query) > 20"
+        params: Dict[str, Any] = {"limit": limit}
+        if user_id is not None:
+            where += " AND user_id = :user_id"
+            params["user_id"] = user_id
+
+        rows = db.execute(
+            text(
+                f"""
+                SELECT user_query, sql_query
+                FROM ai_training_data
+                {where}
+                ORDER BY COALESCE(feedback_score, 0) DESC, created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).fetchall()
+
+        return [
+            {"user_query": row[0] or "", "sql_query": row[1] or ""}
+            for row in rows
+            if row[0] and row[1]
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to fetch few-shot examples: {e}")
         return []
 
 

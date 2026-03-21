@@ -137,27 +137,70 @@ def _find_matching_key(target_key: str, available_keys: List[str]) -> Optional[s
     return None
 
 
+def _format_sap_date(value: str) -> str:
+    """
+    Convert SAP-format date strings (YYYYMMDD) to readable ISO dates (YYYY-MM-DD).
+    Also converts SAP period strings like YYYYPP (e.g. 202403 → "2024-03").
+    Returns original string if not an SAP date.
+    """
+    s = str(value).strip()
+    # SAP full date: exactly 8 digits, e.g. "19960308"
+    if re.fullmatch(r"\d{8}", s):
+        yyyy, mm, dd = s[:4], s[4:6], s[6:]
+        # Basic sanity check (month 01-12, day 01-31)
+        if "01" <= mm <= "12" and "01" <= dd <= "31":
+            return f"{yyyy}-{mm}-{dd}"
+    # SAP period: 6 digits where last 2 are 01-16 (fiscal periods 1-16), e.g. "202403"
+    if re.fullmatch(r"\d{6}", s):
+        yyyy, pp = s[:4], s[4:]
+        if "01" <= pp <= "16":
+            return f"{yyyy}-P{pp}"
+    return s
+
+
 def _format_chart_data(rows: List[Dict[str, Any]], max_items: int = 50) -> List[Dict[str, Any]]:
     """Format and limit data for chart rendering."""
     if not rows:
         return []
-    
+
     # Limit number of data points for readability
     limited_rows = rows[:max_items]
-    
-    # Clean up data: convert None to 0, format numbers
+
+    # Detect which columns look like SAP date columns by name
+    if limited_rows:
+        date_col_patterns = {
+            "fkdat", "budat", "bldat", "bedat", "kadat", "kdatu", "augdt",
+            "erdat", "laeda", "billing_date", "posting_date", "date",
+            "period", "poper", "gjahr",
+        }
+        sample = limited_rows[0]
+        date_cols = {
+            k for k in sample.keys()
+            if k.lower() in date_col_patterns
+            or k.lower().endswith("_date")
+            or k.lower().endswith("date")
+        }
+    else:
+        date_cols = set()
+
+    # Clean up data: convert None to 0, format numbers, convert SAP dates
     formatted = []
     for row in limited_rows:
         clean_row = {}
         for key, value in row.items():
             if value is None:
                 clean_row[key] = 0
+            elif key in date_cols and isinstance(value, str):
+                clean_row[key] = _format_sap_date(value)
+            elif isinstance(value, str) and re.fullmatch(r"\d{8}", value.strip()):
+                # Even columns not named "date" but containing 8-digit SAP dates — convert them
+                clean_row[key] = _format_sap_date(value.strip())
             elif isinstance(value, (int, float)):
                 clean_row[key] = round(float(value), 2)
             else:
                 clean_row[key] = str(value)
         formatted.append(clean_row)
-    
+
     return formatted
 
 
@@ -266,6 +309,13 @@ Rules:
 - For line/area charts: x_key = time/sequence column, y_keys = numeric columns
 - Max 3 charts per query
 - Only recommend charts that make sense for the data
+- Chart title MUST reflect the user question specifically:
+  * If the query is "total sales by year", title = "Total Sales by Year" (NOT "Total Sales by Billing Date")
+  * If the query is "top customers by revenue", title = "Top Customers by Revenue"
+  * If the query is "cost by profit center", title = "Cost by Profit Center"
+  * If the data has a date column grouped by year (fkdat→year), use "by Year" not "by Date"
+  * If the date column has full YYYYMMDD values and there are many rows, prefer "by Year" in the title
+  * Never use generic titles like "Total Sales" alone — always say "by <dimension>"
 """
         
         response = client.chat.completions.create(

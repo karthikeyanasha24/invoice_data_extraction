@@ -1,0 +1,470 @@
+{
+  "_comment": "Universal SAP semantic dictionary: entities, joins, metrics, templates. Used for intent→table→column→SQL resolution.",
+  "intent_keywords": {
+    "sales": ["sales", "revenue", "product", "customer", "highest sales", "top products", "top customers"],
+    "billing": ["invoice", "invoices", "billing", "invoice value", "invoice by customer"],
+    "purchasing": ["vendor", "supplier", "purchase", "PO", "vendor spend", "vendor invoice"],
+    "logistics": ["delivery", "deliveries", "delivered", "route", "stock movement"],
+    "finance": ["cost", "profit center", "cost center", "GL", "posting", "expense"],
+    "pricing": ["discount", "price", "condition", "margin"],
+    "inventory": ["stock", "inventory", "warehouse", "reservation"],
+    "margin": ["margin", "revenue vs cost", "compare sales vs", "compare revenue"]
+  },
+  "metric_phrases": {
+    "sales value": "sales_value",
+    "sales": "sales_value",
+    "sales trend": "sales_value",
+    "revenue": "sales_value",
+    "highest sales": "sales_value",
+    "invoice value": "invoice_value",
+    "invoice amount": "invoice_value",
+    "billing value": "invoice_value",
+    "order value": "order_value",
+    "order amount": "order_value",
+    "delivery value": "delivery_value",
+    "delivery quantity": "delivery_quantity",
+    "delivered quantity": "delivery_quantity",
+    "invoice quantity": "invoice_quantity",
+    "billed quantity": "billing_quantity",
+    "order quantity": "order_quantity",
+    "purchase value": "purchase_value",
+    "purchase cost": "purchase_value",
+    "purchase amount": "purchase_value",
+    "purchased quantity": "purchase_quantity",
+    "purchase quantity": "purchase_quantity",
+    "purchase order total": "purchase_value",
+    "purchase order totals": "purchase_value",
+    "po total": "purchase_value",
+    "po totals": "purchase_value",
+    "vendor spend": "purchase_value",
+    "procurement spend": "purchase_value",
+    "vendor invoice": "vendor_invoice",
+    "vendor invoice total": "vendor_invoice",
+    "vendor invoice totals": "vendor_invoice",
+    "top vendors by invoice": "vendor_invoice",
+    "invoice value by vendor": "vendor_invoice",
+    "gl amount": "gl_amount",
+    "cost by profit center": "cost_by_profit_center",
+    "total cost by profit center": "cost_by_profit_center",
+    "highest total cost": "cost_by_profit_center",
+    "which profit centers": "cost_by_profit_center",
+    "profit centers by cost": "cost_by_profit_center",
+    "cost": "gl_amount",
+    "stock": "warehouse_stock",
+    "inventory": "warehouse_stock",
+    "profit margin": "profit_margin",
+    "margin analysis": "profit_margin",
+    "profitability": "profit_margin",
+    "profit margin for all products": "profit_margin",
+    "margin for all products": "profit_margin",
+    "reserved quantity": "reserved_quantity",
+    "reservation": "reserved_quantity",
+    "stock value": "stock_value",
+    "inventory value": "stock_value",
+    "standard cost": "cost_estimate_value",
+    "AR balance": "ar_balance",
+    "open AR": "ar_balance",
+    "receivables": "ar_balance",
+    "pricing condition": "pricing_condition",
+    "base price": "pricing_condition",
+    "discount": "pricing_condition",
+    "average unit price": "average_unit_price",
+    "netpr": "average_unit_price"
+  },
+  "dimension_aliases": {
+    "product": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "products": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "material": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "materials": { "table": "VBRP", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "material_ekpo": { "table": "EKPO", "column": "matnr", "dimension_column": "matnr", "name_table": "MAKT", "name_column": "maktx", "entity": "material" },
+    "customer": { "table": "VBRK", "column": "kunag", "dimension_column": "kunag", "name_table": "KNA1", "name_column": "name1", "entity": "customer", "name_join_key": "kunnr" },
+    "customers": { "table": "VBRK", "column": "kunag", "dimension_column": "kunag", "name_table": "KNA1", "name_column": "name1", "entity": "customer", "name_join_key": "kunnr" },
+    "vendor": { "table": "LFA1", "column": "lifnr", "dimension_column": "lifnr", "name_column": "name1", "entity": "vendor" },
+    "vendors": { "table": "LFA1", "column": "lifnr", "dimension_column": "lifnr", "name_column": "name1", "entity": "vendor" },
+    "country": { "table": "KNA1", "column": "land1", "dimension_column": "land1", "entity": "customer" },
+    "countries": { "table": "KNA1", "column": "land1", "dimension_column": "land1", "entity": "customer" },
+    "industry": { "table": "KNA1", "column": "brsch", "dimension_column": "brsch", "name_table": "T016T", "name_column": "brtxt", "entity": "customer", "name_join_key": "brsch" },
+    "profit center": { "table": "FAGLFLEXA", "column": "prctr", "dimension_column": "prctr", "name_table": "CEPC", "name_column": "name1", "entity": "finance" },
+    "profit_center": { "table": "FAGLFLEXA", "column": "prctr", "dimension_column": "prctr", "name_table": "CEPC", "name_column": "name1", "entity": "finance" },
+    "plant": { "table": "VBRP", "column": "werks", "dimension_column": "werks", "entity": "sales" },
+    "plants": { "table": "VBRP", "column": "werks", "dimension_column": "werks", "entity": "sales" },
+    "customer group": { "table": "KNVV", "column": "kdgrp", "dimension_column": "kdgrp", "entity": "customer" },
+    "sales org": { "table": "VBRK", "column": "vkorg", "dimension_column": "vkorg", "entity": "sales" },
+    "distribution channel": { "table": "VBRK", "column": "vtweg", "dimension_column": "vtweg", "entity": "sales" },
+    "material group": { "table": "MARA", "column": "matkl", "dimension_column": "matkl", "entity": "material" },
+    "year": { "table": "VBRK", "column": "gjahr", "dimension_column": "gjahr", "entity": "sales" },
+    "years": { "table": "VBRK", "column": "gjahr", "dimension_column": "gjahr", "entity": "sales" }
+  },
+  "entities": {
+    "vendor": {
+      "tables": ["LFA1", "LFB1", "LFM1"],
+      "primary_table": "LFA1",
+      "primary_key": "lifnr",
+      "name_column": "name1",
+      "country_column": "land1",
+      "dimension_columns": ["lifnr", "land1", "brsch", "bukrs", "ekorg", "ekgrp", "zterm"]
+    },
+    "customer": {
+      "tables": ["KNA1", "KNVV", "KNVP"],
+      "primary_table": "KNA1",
+      "primary_key": "kunnr",
+      "name_column": "name1",
+      "country_column": "land1",
+      "dimension_columns": ["kunnr", "land1", "brsch", "vkorg", "vtweg", "spart", "vkbur", "vkgrp"]
+    },
+    "material": {
+      "tables": ["MARA", "MARC", "MAKT", "MARM"],
+      "primary_table": "MARA",
+      "primary_key": "matnr",
+      "description": "maktx",
+      "description_table": "MAKT",
+      "dimension_columns": ["matnr", "werks", "mtart", "matkl", "lgort", "dispo"]
+    },
+    "delivery": {
+      "tables": ["LIKP", "LIPS"],
+      "primary_table": "LIPS",
+      "primary_key": "vbeln",
+      "item_key": "posnr",
+      "date": "lfdat",
+      "date_table": "LIKP",
+      "value": "netwr",
+      "quantity": "lfimg",
+      "dimension_columns": ["vbeln", "matnr", "werks", "kunnr", "route", "prctr"]
+    },
+    "warehouse": {
+      "tables": ["LSEG"],
+      "primary_table": "LSEG",
+      "material": "matnr",
+      "quantity": "menge",
+      "location": "lgort",
+      "plant": "werks",
+      "dimension_columns": ["matnr", "lgort", "werks", "lgnum", "lbeln"]
+    },
+    "finance": {
+      "tables": ["FAGLFLEXA"],
+      "primary_table": "FAGLFLEXA",
+      "value": "hsl",
+      "account": "racct",
+      "profit_center": "prctr",
+      "cost_center": "rcntr",
+      "company": "rbukrs",
+      "period": "poper",
+      "dimension_columns": ["racct", "prctr", "rcntr", "rbukrs", "segment", "poper", "gjahr"]
+    },
+    "purchasing": {
+      "tables": ["EKKO", "EKPO"],
+      "primary_table": "EKPO",
+      "header_table": "EKKO",
+      "primary_key": "ebeln",
+      "item_key": "ebelp",
+      "value": "netwr",
+      "quantity": "menge",
+      "vendor_key": "lifnr",
+      "dimension_columns": ["ebeln", "matnr", "werks", "lifnr", "bukrs"]
+    },
+    "sales": {
+      "tables": ["VBAK", "VBAP", "VBEP", "VBFA", "VBRK", "VBRP"],
+      "primary_table": "VBRP",
+      "header_table": "VBRK",
+      "primary_key": "vbeln",
+      "item_key": "posnr",
+      "value": "netwr",
+      "quantity": "fkimg",
+      "customer_key": "kunag",
+      "customer_key_table": "VBRK",
+      "dimension_columns": ["vbeln", "matnr", "werks", "prctr", "vkorg", "vtweg", "spart"]
+    },
+    "sales_order": {
+      "tables": ["VBAK", "VBAP", "VBEP"],
+      "primary_table": "VBAP",
+      "header_table": "VBAK",
+      "primary_key": "vbeln",
+      "item_key": "posnr",
+      "value": "netwr",
+      "quantity": "kwmeng",
+      "customer_key": "kunnr",
+      "dimension_columns": ["vbeln", "matnr", "werks", "prctr", "vkorg", "vtweg", "spart"]
+    },
+    "controlling": {
+      "tables": ["COEP", "COSP", "CSKS", "AUFK", "CEPC"],
+      "primary_table": "COEP",
+      "value": "wkgbtr",
+      "dimension_columns": ["objnr", "kstar", "bukrs", "werks", "gjahr", "perio"]
+    }
+  },
+  "joins": [
+    { "left_table": "LFA1", "right_table": "LFB1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "LFA1", "right_table": "LFM1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "LIKP", "right_table": "LIPS", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "LIPS", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "LIPS", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARC", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARC", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "MARM", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "KNA1", "right_table": "KNVV", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "KNA1", "right_table": "KNVP", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "EKKO", "right_table": "EKPO", "left_key": "ebeln", "right_key": "ebeln" },
+    { "left_table": "EKPO", "right_table": "LFA1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "EKPO", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBAK", "right_table": "VBAP", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBAP", "right_table": "VBEP", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBAP", "right_table": "VBEP", "left_key": "posnr", "right_key": "posnr" },
+    { "left_table": "VBAP", "right_table": "VBFA", "left_key": "vbeln", "right_key": "vbelv" },
+    { "left_table": "VBFA", "right_table": "VBRK", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBRK", "right_table": "VBRP", "left_key": "vbeln", "right_key": "vbeln" },
+    { "left_table": "VBAP", "right_table": "VBRP", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRK", "right_table": "KNA1", "left_key": "kunag", "right_key": "kunnr" },
+    { "left_table": "VBAP", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "VBRP", "right_table": "FAGLFLEXA", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "FAGLFLEXA", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "KNA1", "right_table": "T016T", "left_key": "brsch", "right_key": "brsch" },
+    { "left_table": "RBKP", "right_table": "LFA1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "VBRP", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "KEKO", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "CKIS", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "KEKO", "right_table": "CKIS", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "LIKP", "right_table": "KNA1", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "RESB", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "CKMLCR", "right_table": "CKMLHD", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "CKMLHD", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRK", "right_table": "KNVV", "left_key": "kunag", "right_key": "kunnr" },
+    { "left_table": "MARA", "right_table": "MBEW", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "VBRP", "right_table": "MBEW", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "AFKO", "right_table": "AUFK", "left_key": "aufnr", "right_key": "aufnr" },
+    { "left_table": "AFKO", "right_table": "AFPO", "left_key": "aufnr", "right_key": "aufnr" },
+    { "left_table": "AFPO", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "AFPO", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "AFPO", "right_table": "CKMLHD", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "AFPO", "right_table": "CKMLCR", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "AFPO", "right_table": "CKMLPR", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "AUSP", "right_table": "CABN", "left_key": "atinn", "right_key": "atinn" },
+    { "left_table": "CABN", "right_table": "KLAH", "left_key": "clint", "right_key": "clint" },
+    { "left_table": "CE1BGIS", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1IDEA", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1INT1", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1PR22", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1R300", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1S_AL", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1S_CP", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE1S_GO", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE2BGIS", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE2IDEA", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE2S_AL", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CE2S_CP", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CS2S_GO", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "CKMLPR", "right_table": "CKMLCR", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "CKMLPR", "right_table": "CKMLHD", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "CKMLPR", "right_table": "MBEW", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "COSS", "right_table": "AUFK", "left_key": "objnr", "right_key": "objnr" },
+    { "left_table": "COSS", "right_table": "COEP", "left_key": "objnr", "right_key": "objnr" },
+    { "left_table": "CSKT", "right_table": "CSKS", "left_key": "kostl", "right_key": "kostl" },
+    { "left_table": "DFKKOP", "right_table": "CEPC", "left_key": "prctr", "right_key": "prctr" },
+    { "left_table": "EINA", "right_table": "EINE", "left_key": "infnr", "right_key": "infnr" },
+    { "left_table": "EINA", "right_table": "LFA1", "left_key": "lifnr", "right_key": "lifnr" },
+    { "left_table": "EINA", "right_table": "MAKT", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "EINA", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "KNBK", "right_table": "KNA1", "left_key": "kunnr", "right_key": "kunnr" },
+    { "left_table": "MARA", "right_table": "MARD", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "MBEWH", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "MCHB", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "MLAN", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARA", "right_table": "MSLB", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MARD", "right_table": "MARC", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MBEW", "right_table": "CKMLHD", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "MBEW", "right_table": "CKMLCR", "left_key": "kalnr", "right_key": "kalnr" },
+    { "left_table": "MBEWH", "right_table": "MARA", "left_key": "matnr", "right_key": "matnr" },
+    { "left_table": "MSLB", "right_table": "LFA1", "left_key": "lifnr", "right_key": "lifnr" }
+  ],
+  "metrics": {
+    "delivery_quantity": {
+      "table": "LIPS",
+      "column": "lfimg",
+      "aggregation": "SUM",
+      "aliases": ["delivered quantity", "delivery quantity", "quantity delivered", "delivered qty"]
+    },
+    "delivery_value": {
+      "table": "LIPS",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["delivery value", "delivery amount", "delivered value", "total delivery value"]
+    },
+    "warehouse_stock": {
+      "table": "LSEG",
+      "column": "menge",
+      "aggregation": "SUM",
+      "aliases": ["warehouse quantity", "warehouse stock", "stock quantity", "inventory quantity"]
+    },
+    "purchase_value": {
+      "table": "EKPO",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["purchase value", "purchase amount", "PO value", "purchase order value", "procurement value"]
+    },
+    "purchase_quantity": {
+      "table": "EKPO",
+      "column": "menge",
+      "aggregation": "SUM",
+      "aliases": ["purchase quantity", "ordered quantity", "PO quantity"]
+    },
+    "sales_value": {
+      "table": "VBRP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["sales value", "revenue", "billing value", "invoice value", "sales amount", "revenue by material", "revenue by plant", "revenue by profit center", "invoice value by material", "invoice value by customer"]
+    },
+    "invoice_value": {
+      "table": "VBRP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["invoice value", "invoice amount", "billing value", "revenue", "invoice value by customer"]
+    },
+    "billing_quantity": {
+      "table": "VBRP",
+      "column": "fkimg",
+      "aggregation": "SUM",
+      "aliases": ["billed quantity", "invoiced quantity", "invoice quantity"]
+    },
+    "invoice_quantity": {
+      "table": "VBRP",
+      "column": "fkimg",
+      "aggregation": "SUM",
+      "aliases": ["invoice quantity", "invoiced quantity", "billed quantity"]
+    },
+    "order_value": {
+      "table": "VBAP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["order value", "sales order value", "order amount", "order total", "orders by customer", "order value by material", "order value by plant"]
+    },
+    "order_quantity": {
+      "table": "VBAP",
+      "column": "kwmeng",
+      "aggregation": "SUM",
+      "aliases": ["order quantity", "ordered quantity", "sales order quantity", "order quantity by plant", "order quantity by material"]
+    },
+    "schedule_quantity": {
+      "table": "VBEP",
+      "column": "wmeng",
+      "aggregation": "SUM",
+      "aliases": ["schedule quantity", "delivery schedule quantity", "delivery schedule by date", "delivery schedule"]
+    },
+    "gl_amount": {
+      "table": "FAGLFLEXA",
+      "column": "hsl",
+      "aggregation": "SUM",
+      "aliases": ["GL amount", "GL balance", "ledger amount", "posting amount", "revenue", "expense"]
+    },
+    "cost_by_profit_center": {
+      "table": "FAGLFLEXA",
+      "column": "hsl",
+      "aggregation": "SUM",
+      "aliases": ["cost by profit center", "postings by profit center", "total cost by profit center", "expense by profit center"]
+    },
+    "purchase_order_total": {
+      "table": "EKPO",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["purchase order totals", "PO totals", "PO value", "vendor spend by material"]
+    },
+    "purchase_cost": {
+      "table": "EKPO",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["purchase cost", "PO cost", "procurement cost", "menge * netpr"]
+    },
+    "vendor_invoice": {
+      "table": "RBKP",
+      "column": "rmwwr",
+      "aggregation": "SUM",
+      "aliases": ["vendor invoice", "vendor invoice totals", "invoice value by vendor", "top vendors by invoice"]
+    },
+    "actual_cost": {
+      "table": "COEP",
+      "column": "wkgbtr",
+      "aggregation": "SUM",
+      "aliases": ["actual cost", "cost posting", "controlling cost"]
+    },
+    "cost_estimate_value": {
+      "table": "CKIS",
+      "column": "wertn",
+      "aggregation": "SUM",
+      "aliases": ["cost estimate", "product cost", "cost component"]
+    },
+    "revenue": {
+      "table": "VBRP",
+      "column": "netwr",
+      "aggregation": "SUM",
+      "aliases": ["revenue", "sales revenue", "billing revenue", "sales value"]
+    },
+    "cost": {
+      "table": "CKIS",
+      "column": "wertn",
+      "aggregation": "SUM",
+      "join_path": ["VBRP.matnr", "MARA.matnr", "KEKO.matnr", "KEKO.kalnr", "CKIS.kalnr"],
+      "aliases": ["product cost", "cost of goods", "manufacturing cost", "standard cost"]
+    },
+    "profit_margin": {
+      "formula": "(revenue - cost) / revenue",
+      "components": {
+        "revenue": { "metric": "revenue", "table": "VBRP", "column": "netwr" },
+        "cost": { "metric": "cost", "table": "CKIS", "column": "wertn", "join_via": ["MARA", "KEKO"] }
+      },
+      "aliases": ["profit margin", "margin", "margin analysis", "profitability", "revenue minus cost", "gross margin"]
+    },
+    "reserved_quantity": {
+      "table": "RESB",
+      "column": "bdmng",
+      "aggregation": "SUM",
+      "aliases": ["reserved quantity", "reservation quantity", "total reserved", "reserved qty"]
+    },
+    "stock_value": {
+      "table": "CKMLCR",
+      "column": "salk3",
+      "aggregation": "SUM",
+      "aliases": ["stock value", "inventory value", "total stock value"]
+    },
+    "ar_balance": {
+      "table": "BSAD",
+      "column": "dmbtr",
+      "aggregation": "SUM",
+      "aliases": ["AR balance", "open AR", "receivables", "customer balance"]
+    }
+  },
+  "dimensions": {
+    "vendor": { "entity": "vendor", "table": "LFA1", "column": "lifnr", "name_column": "name1" },
+    "customer": { "entity": "customer", "table": "KNA1", "column": "kunnr", "name_column": "name1" },
+    "material": { "entity": "material", "table": "LIPS", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "material_warehouse": { "entity": "warehouse", "table": "LSEG", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "material_billing": { "entity": "sales", "table": "VBRP", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "material_order": { "entity": "sales_order", "table": "VBAP", "column": "matnr", "name_table": "MAKT", "name_column": "maktx" },
+    "plant_order": { "entity": "sales_order", "table": "VBAP", "column": "werks" },
+    "plant_billing": { "entity": "sales", "table": "VBRP", "column": "werks" },
+    "profit_center_billing": { "entity": "sales", "table": "VBRP", "column": "prctr", "name_table": "CEPC", "name_column": "name1" },
+    "customer_billing": { "entity": "customer", "table": "VBRK", "column": "kunag", "name_table": "KNA1", "name_column": "name1", "name_join_key": "kunnr", "metric_join_key": "vbeln" },
+    "country": { "entity": "vendor", "table": "LFA1", "column": "land1" },
+    "customer_country": { "entity": "customer", "table": "KNA1", "column": "land1" },
+    "plant": { "entity": "material", "table": "LIPS", "column": "werks" },
+    "storage_location": { "entity": "warehouse", "table": "LSEG", "column": "lgort" },
+    "profit_center": { "entity": "finance", "table": "FAGLFLEXA", "column": "prctr", "name_table": "CEPC", "name_column": "name1" },
+    "cost_center": { "entity": "finance", "table": "FAGLFLEXA", "column": "rcntr" },
+    "gl_account": { "entity": "finance", "table": "FAGLFLEXA", "column": "racct" },
+    "company_code": { "entity": "finance", "table": "FAGLFLEXA", "column": "rbukrs" }
+  },
+  "templates": {
+    "count_by_dimension": "SELECT {dimension}, COUNT(*) AS cnt FROM {table} GROUP BY {dimension} ORDER BY cnt DESC LIMIT 100",
+    "sum_by_dimension": "SELECT {dimension}, SUM({metric}) AS total FROM {table} GROUP BY {dimension} ORDER BY total DESC LIMIT 100",
+    "sum_by_dimension_with_name": "SELECT a.{dimension}, b.{name_column} AS name, SUM(a.{metric}) AS total FROM {table} a LEFT JOIN {name_table} b ON a.{join_key} = b.{join_key} GROUP BY a.{dimension}, b.{name_column} ORDER BY total DESC LIMIT 100",
+    "total_metric": "SELECT SUM({metric}) AS total FROM {table} LIMIT 1",
+    "top_n": "SELECT {dimension}, SUM({metric}) AS value FROM {table} GROUP BY {dimension} ORDER BY value DESC LIMIT {n}",
+    "comparison_two_metrics": "SELECT {dimension}, SUM({metric1}) AS {alias1}, SUM({metric2}) AS {alias2} FROM {table1} t1 JOIN {table2} t2 ON t1.{join_key} = t2.{join_key} GROUP BY {dimension} ORDER BY {alias1} DESC LIMIT 100",
+    "list_entities": "SELECT {key}, {name_column} FROM {table} ORDER BY {name_column} LIMIT 100"
+  },
+  "fallback_rules": {
+    "if_metric_unknown": "use COUNT(*) AS cnt",
+    "if_aggregation_missing": "SUM numeric columns from primary table",
+    "if_table_unknown": "search entities by keywords then use primary_table",
+    "default_limit": 100
+  }
+}

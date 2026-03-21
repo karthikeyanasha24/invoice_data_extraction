@@ -70,11 +70,9 @@ app.add_middleware(
     max_age=3600,
 )
 
-# Explicit OPTIONS handler for CORS preflight requests
-@app.options("/{full_path:path}")
-async def options_handler(full_path: str):
-    """Handle CORS preflight OPTIONS requests"""
-    return {"status": "ok"}
+# NOTE: Do NOT add @app.options("/{full_path:path}") - it matches any path and causes
+# 405 Method Not Allowed for GET/POST requests (e.g. /api/v1/dashboard/v2/inbound).
+# CORSMiddleware above already handles OPTIONS preflight automatically.
 
 # Health check endpoints
 @app.get("/")

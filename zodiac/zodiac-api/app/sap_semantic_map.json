@@ -1,0 +1,110 @@
+{
+  "_comment": "Query intent → table chains for reliable SQL generation. Use for routing natural-language questions to the right tables and joins.",
+  "concepts": {
+    "vendor": {
+      "tables": ["LFA1", "LFB1", "LFM1"],
+      "chain": "LFA1 → LFB1 → LFM1",
+      "join_path": "LFA1.lifnr = LFB1.lifnr, LFA1.lifnr = LFM1.lifnr",
+      "keywords": ["vendor", "vendors", "supplier", "suppliers", "payment terms", "purchasing organization", "purchasing group"]
+    },
+    "customer": {
+      "tables": ["KNA1", "KNVV", "KNVP"],
+      "chain": "KNA1 → KNVV → KNVP",
+      "join_path": "KNA1.kunnr = KNVV.kunnr, KNA1.kunnr = KNVP.kunnr",
+      "keywords": ["customer", "customers", "sold-to", "bill-to", "ship-to", "payer", "sales organization", "sales office"]
+    },
+    "material": {
+      "tables": ["MARA", "MARC", "MAKT", "MARM"],
+      "chain": "MARA → MARC → MAKT → MARM",
+      "join_path": "MARA.matnr = MARC.matnr = MAKT.matnr = MARM.matnr",
+      "keywords": ["material", "materials", "product", "products", "description", "plant data", "UoM", "unit of measure", "safety stock", "MRP"]
+    },
+    "delivery": {
+      "tables": ["LIKP", "LIPS"],
+      "chain": "LIKP → LIPS",
+      "join_path": "LIKP.vbeln = LIPS.vbeln",
+      "keywords": ["delivery", "deliveries", "delivered quantity", "delivery value", "outbound"]
+    },
+    "warehouse": {
+      "tables": ["LSEG", "MARC", "MARA"],
+      "chain": "LSEG → MARC → MARA",
+      "join_path": "LSEG.matnr = MARC.matnr, LSEG.werks = MARC.werks; MARC.matnr = MARA.matnr",
+      "keywords": ["warehouse", "storage location", "stock", "inventory", "lgort", "lgnum"]
+    },
+    "finance": {
+      "tables": ["FAGLFLEXA", "CEPC", "CSKS"],
+      "chain": "FAGLFLEXA → CEPC | CSKS",
+      "join_path": "FAGLFLEXA.prctr = CEPC.prctr, FAGLFLEXA.rcntr = CSKS.kostl",
+      "keywords": ["GL", "general ledger", "profit center", "cost center", "revenue", "expense", "balance", "posting"]
+    },
+    "costing": {
+      "tables": ["KEKO", "KEPH", "MARA"],
+      "chain": "KEKO → KEPH",
+      "join_path": "KEKO.kalnr = KEPH.kalnr, KEKO.matnr = MARA.matnr",
+      "keywords": ["cost estimate", "costing", "cost component", "product cost", "material cost"]
+    },
+    "purchasing": {
+      "tables": ["EKKO", "EKPO", "LFA1", "MARA"],
+      "chain": "EKKO → EKPO",
+      "join_path": "EKKO.ebeln = EKPO.ebeln, EKKO.lifnr = LFA1.lifnr, EKPO.matnr = MARA.matnr",
+      "keywords": ["purchase order", "PO", "procurement", "purchase value", "ordered quantity"]
+    },
+    "sales": {
+      "tables": ["VBAK", "VBAP", "VBEP", "VBFA", "VBRK", "VBRP", "KNA1", "MAKT"],
+      "chain": "VBAK → VBAP → VBEP; VBAP → VBFA → VBRK → VBRP; VBRK.kunag = KNA1.kunnr",
+      "join_path": "VBAK.vbeln=VBAP.vbeln; VBAP.vbeln,posnr=VBEP.vbeln,posnr; VBAP.vbeln=VBFA.vbelv; VBFA.vbeln=VBRK.vbeln (vbtyp_n=M); VBRK.vbeln=VBRP.vbeln; VBRK.kunag=KNA1.kunnr; VBRP.matnr=MAKT.matnr",
+      "keywords": ["sales order", "billing", "invoice", "revenue", "net value", "order value", "order quantity", "invoice value", "invoice quantity", "delivery schedule", "document flow"]
+    },
+    "controlling": {
+      "tables": ["COEP", "COSP", "CSKS", "AUFK", "CEPC"],
+      "chain": "COEP | COSP → CSKS | AUFK | CEPC",
+      "join_path": "COEP.objnr / COSP.objnr to CSKS.objnr (cost center) or AUFK.objnr (internal order); CEPC.prctr for profit center",
+      "keywords": ["actual cost", "cost posting", "internal order", "cost center cost", "controlling"]
+    }
+  },
+  "table_chains": [
+    ["LFA1", "LFB1", "LFM1"],
+    ["KNA1", "KNVV", "KNVP"],
+    ["MARA", "MARC", "MAKT", "MARM"],
+    ["LIKP", "LIPS"],
+    ["LSEG"],
+    ["FAGLFLEXA"],
+    ["KEKO", "KEPH"],
+    ["EKKO", "EKPO"],
+    ["VBAK", "VBAP", "VBEP"],
+    ["VBAP", "VBFA", "VBRK", "VBRP"],
+    ["COEP", "COSP"]
+  ],
+  "primary_tables_by_question_type": {
+    "vendor list": "LFA1",
+    "vendors by country": "LFA1",
+    "vendors by payment term": "LFB1",
+    "vendors by purchasing org": "LFM1",
+    "deliveries by customer": "LIKP",
+    "delivered quantity by material": "LIPS",
+    "delivery value": "LIPS",
+    "delivery quantity by material": "LIPS",
+    "deliveries by route": "LIKP",
+    "warehouse quantity by material": "LSEG",
+    "materials by plant": "MARC",
+    "material descriptions": "MAKT",
+    "safety stock": "MARC",
+    "GL balance": "FAGLFLEXA",
+    "profit center P&L": "FAGLFLEXA",
+    "cost estimate": "KEKO",
+    "purchase order value": "EKPO",
+    "order value by material": "VBAP",
+    "order quantity by plant": "VBAP",
+    "orders by customer": "VBAK",
+    "invoice value by customer": "VBRK",
+    "revenue by material": "VBRP",
+    "revenue by profit center": "VBRP",
+    "revenue by plant": "VBRP",
+    "revenue by customer": "VBRK",
+    "revenue by country": "VBRK",
+    "revenue by industry": "KNA1",
+    "delivery schedule by date": "VBEP",
+    "invoice for sales order": "VBFA",
+    "full order lifecycle": "VBFA"
+  }
+}

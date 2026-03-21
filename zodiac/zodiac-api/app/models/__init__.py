@@ -12,6 +12,7 @@ from .invoice_v2_validated import InvoiceV2Validated
 from .invoice_v2_correction_cache import InvoiceV2CorrectionCache
 from .user_customer import UserCustomer
 from .customer_receiver_rfc import CustomerReceiverRfc
+from .ai_query_memory import AiQueryMemory
 
 __all__ = [
     "ZodiacUser", 
@@ -28,4 +29,5 @@ __all__ = [
     "InvoiceV2CorrectionCache",
     "UserCustomer",
     "CustomerReceiverRfc",
+    "AiQueryMemory",
 ]
