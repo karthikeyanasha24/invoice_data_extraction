@@ -1655,6 +1655,10 @@ export const dashboardApi = {
         const response = await api.get(url);
         return response.data;
     },
+    getSAPHistorical: async () => {
+        const response = await api.get('/api/v1/dashboard/v2/sap-historical');
+        return response.data;
+    },
     getV2CustomerComparison: async (days: number = 90, currency?: string | null) => {
         let url = `/api/v1/dashboard/v2/customer-comparison?days=${days}`;
         if (currency && currency !== '') {

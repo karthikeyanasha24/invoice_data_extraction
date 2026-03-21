@@ -7,7 +7,7 @@ import {
   GitBranch, RefreshCw, Mic, MicOff,
   Activity, BarChart3, Clock, Zap, AlertTriangle, CheckCircle2,
   ArrowUpRight, ArrowDownRight, Minus, CalendarRange, Eye,
-  FlaskConical, TrendingDown,
+  FlaskConical, TrendingDown, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
 import MultiModelComparison from './ai/MultiModelComparison';
@@ -66,7 +66,7 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   meta?: AiAnalysisMeta;
-  section?: 'realtime' | 'historical';
+  section?: 'realtime' | 'historical' | 'both';
   ts?: number;
 };
 
@@ -85,6 +85,46 @@ type BusinessData = {
   revenue_by_customer?: { customer_id: string; customer_name: string; invoice_count: number; total_revenue: number }[];
   revenue_by_country?: { country: string; country_name?: string; invoice_count: number; total_revenue: number }[];
   trend?: { current_period_revenue: number; previous_period_revenue: number; revenue_change_pct: number };
+};
+
+type SAPHistoricalData = {
+  period: { start_date: string; end_date: string };
+  revenue_trend: {
+    year: number;
+    quarter?: string;
+    total_revenue: number;
+    invoice_count: number;
+  }[];
+  revenue_by_customer: {
+    customer_id: string;
+    customer_name: string;
+    country: string;
+    total_revenue: number;
+    invoice_count: number;
+  }[];
+  revenue_by_product: {
+    product_id: string;
+    product_name: string;
+    total_revenue: number;
+    quantity: number;
+  }[];
+  revenue_by_country: {
+    country: string;
+    total_revenue: number;
+    invoice_count: number;
+  }[];
+  revenue_by_industry: {
+    industry: string;
+    total_revenue: number;
+    invoice_count: number;
+  }[];
+  summary: {
+    total_revenue: number;
+    total_invoices: number;
+    unique_customers: number;
+    unique_products: number;
+    date_range: { min: string; max: string };
+  };
 };
 
 /* ─── Tiny helpers ────────────────────────────────────────────── */
@@ -187,7 +227,7 @@ function ChatPanel({
   setUseMultiModel,
   fullWidth = false,
 }: {
-  section: 'realtime' | 'historical';
+  section: 'realtime' | 'historical' | 'both';
   messages: Message[];
   loading: boolean;
   prompts: { label: string; query: string }[];
@@ -453,20 +493,181 @@ function ChatPanel({
   );
 }
 
+/* ─── Collapsible Dashboard ─────────────────────────────────── */
+
+function CollapsibleDashboard({
+  outboundData,
+  inboundData,
+  dataLoading,
+  days,
+  onRefresh,
+}: {
+  outboundData: OutboundData | null;
+  inboundData: InboundData | null;
+  dataLoading: boolean;
+  days: number;
+  onRefresh: () => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  const f = outboundData?.funnel;
+  const successRate = f && f.documents_received > 0
+    ? Math.round((f.converted_success / f.documents_received) * 100) : null;
+  const failRate = f && f.documents_received > 0
+    ? Math.round(((f.validated_failed + f.converted_failed) / f.documents_received) * 100) : null;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+      <div className="w-full px-4 py-3 flex items-center justify-between bg-slate-50 border-b border-slate-200">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity flex-1"
+        >
+          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
+            <Activity className="h-3.5 w-3.5 text-white" />
+          </div>
+          <h3 className="text-sm font-semibold text-slate-900">Dashboard Overview</h3>
+          <span className="text-xs font-mono text-slate-400">Last {days} days</span>
+          {isExpanded ? (
+            <ChevronUp className="h-4 w-4 text-slate-400 ml-auto" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-slate-400 ml-auto" />
+          )}
+        </button>
+        <button
+          onClick={onRefresh}
+          disabled={dataLoading}
+          className="w-8 h-8 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 transition-colors disabled:opacity-50 ml-2"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${dataLoading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {isExpanded && (
+        <div className="px-4 pb-4 space-y-4 border-t border-slate-100">
+          {/* KPI row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-4">
+            {dataLoading ? (
+              Array(4).fill(0).map((_, i) => (
+                <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 animate-pulse h-16" />
+              ))
+            ) : (
+              <>
+                <StatCard accent label="Docs received" value={f?.documents_received ?? 0} />
+                <StatCard label="Validated OK" value={f?.validated_success ?? 0}
+                  sub={f?.validated_failed ? <span className="text-red-500 font-mono font-semibold">{f.validated_failed} failed</span> : <CheckCircle2 className="h-3 w-3 text-emerald-500" />} />
+                <StatCard label="Converted OK" value={f?.converted_success ?? 0}
+                  sub={f?.converted_pending ? <span className="text-amber-500 font-mono font-semibold">{f.converted_pending} pending</span> : undefined} />
+                <StatCard label="Success rate" value={successRate !== null ? `${successRate}%` : '—'}
+                  sub={failRate !== null && failRate > 0 ? <span className="text-red-500 font-mono font-semibold">{failRate}% fail</span> : undefined} />
+              </>
+            )}
+          </div>
+
+          {/* Data panels row: Inbound + Outbound side by side */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Inbound SAT */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex flex-col">
+              <div className="px-3 pt-2.5 pb-2 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <ArrowUpFromLine className="h-3.5 w-3.5 text-slate-500" />
+                  <h4 className="text-xs font-semibold text-slate-900">Inbound (SAT)</h4>
+                </div>
+                <LivePulse />
+              </div>
+              <div className="p-3 space-y-2 overflow-y-auto max-h-60">
+                {dataLoading ? (
+                  <>{Array(3).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
+                ) : inboundData?.summary ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-1.5 text-center">
+                      {[
+                        { v: inboundData.summary.total_documents, l: 'Total' },
+                        { v: inboundData.summary.merges_sent_to_sap, l: 'In SAP' },
+                        { v: inboundData.summary.merges_pending, l: 'Pending' },
+                      ].map(({ v, l }) => (
+                        <div key={l} className="rounded-lg bg-white py-2">
+                          <div className="font-mono font-bold text-sm text-slate-900 leading-none">{fmt(v)}</div>
+                          <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wide mt-0.5">{l}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {inboundData.top_suppliers?.slice(0, 5).map((s, i) => (
+                      <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-200 last:border-0">
+                        <span className="text-xs text-slate-700 truncate flex-1 mr-3">{s.supplier_name || s.supplier_rfc}</span>
+                        <span className="font-mono text-xs font-semibold text-slate-900 flex-shrink-0">{fmt(s.count)}</span>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-400 py-4 text-center">No inbound data</p>
+                )}
+              </div>
+            </div>
+
+            {/* Outbound funnel */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex flex-col">
+              <div className="px-3 pt-2.5 pb-2 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <ArrowDownToLine className="h-3.5 w-3.5 text-slate-500" />
+                  <h4 className="text-xs font-semibold text-slate-900">Outbound Funnel</h4>
+                </div>
+                <GitBranch className="h-3.5 w-3.5 text-slate-400" />
+              </div>
+              <div className="p-3 space-y-2 overflow-y-auto max-h-60">
+                {dataLoading ? (
+                  <>{Array(5).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
+                ) : f ? (
+                  <>
+                    <div className="space-y-1.5">
+                      <FunnelStep step={1} label="Received" count={f.documents_received} total={f.documents_received} />
+                      <FunnelStep step={2} label="Validated ✓" count={f.validated_success} total={f.documents_received} />
+                      <FunnelStep step={3} label="Validation ✗" count={f.validated_failed} total={f.documents_received} warn />
+                      <FunnelStep step={4} label="Converted ✓" count={f.converted_success} total={f.documents_received} />
+                      <FunnelStep step={5} label="Converted ✗" count={f.converted_failed} total={f.documents_received} warn />
+                      <FunnelStep step={6} label="Pending" count={f.converted_pending} total={f.documents_received} />
+                    </div>
+                    {outboundData?.top_customers?.length ? (
+                      <div className="pt-2 border-t border-slate-200">
+                        <div className="text-[9px] font-mono uppercase tracking-widest text-slate-400 mb-1.5">Top customers</div>
+                        {outboundData.top_customers.slice(0, 4).map((c, i) => (
+                          <div key={i} className="flex items-center justify-between py-1 border-b border-slate-200 last:border-0">
+                            <span className="text-xs text-slate-700 truncate flex-1 mr-2">{c.customer_name || c.customer_id}</span>
+                            <span className="font-mono text-[10px] text-slate-400 mr-2 flex-shrink-0">{c.currency}</span>
+                            <span className="font-mono text-xs font-semibold text-slate-900 flex-shrink-0">{c.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-400 py-4 text-center">No outbound data</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
 
 export default function DashboardAIAnalysis() {
-  const [activeSection, setActiveSection] = useState<'realtime' | 'historical'>('realtime');
+  const [viewMode, setViewMode] = useState<'realtime' | 'historical' | 'both'>('realtime');
   const [days, setDays] = useState(DEFAULT_DAYS);
   const [historicalDays, setHistoricalDays] = useState(90);
 
   const [realtimeMessages, setRealtimeMessages] = useState<Message[]>([]);
   const [historicalMessages, setHistoricalMessages] = useState<Message[]>([]);
+  const [bothMessages, setBothMessages] = useState<Message[]>([]);
 
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [historicalLoading, setHistoricalLoading] = useState(false);
+  const [bothLoading, setBothLoading] = useState(false);
 
   const [useContext, setUseContext] = useState(true);
   const [useMultiModel, setUseMultiModel] = useState(false);
@@ -474,18 +675,14 @@ export default function DashboardAIAnalysis() {
   const [outboundData, setOutboundData] = useState<OutboundData | null>(null);
   const [inboundData, setInboundData] = useState<InboundData | null>(null);
   const [businessData, setBusinessData] = useState<BusinessData | null>(null);
+  const [sapHistoricalData, setSAPHistoricalData] = useState<SAPHistoricalData | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
-  
-  // Time scope modal state
-  const [showTimeScopeModal, setShowTimeScopeModal] = useState(false);
-  const [pendingQuery, setPendingQuery] = useState<{ section: 'realtime' | 'historical'; text: string } | null>(null);
-  const [timeScope, setTimeScope] = useState<'current' | 'historical' | 'both'>('current');
 
   /* ── Data fetch ─────────────────────────────────────────── */
 
-  const fetchData = async (d: number) => {
+  const fetchRealtimeData = async (d: number) => {
     setDataLoading(true);
     try {
       const [outbound, inbound, business] = await Promise.all([
@@ -500,27 +697,84 @@ export default function DashboardAIAnalysis() {
     finally { setDataLoading(false); }
   };
 
-  useEffect(() => { fetchData(days); }, [days]);
+  const fetchHistoricalData = async () => {
+    setDataLoading(true);
+    try {
+      const sapData = await dashboardApi.getSAPHistorical();
+      setSAPHistoricalData(sapData || null);
+    } catch { /* silently fail */ }
+    finally { setDataLoading(false); }
+  };
+
+  const fetchBothData = async (d: number) => {
+    setDataLoading(true);
+    try {
+      const [outbound, inbound, business, sapData] = await Promise.all([
+        dashboardApi.getV2Outbound(d),
+        dashboardApi.getV2Inbound(d),
+        dashboardApi.getV2Business(d),
+        dashboardApi.getSAPHistorical(),
+      ]);
+      setOutboundData(outbound || null);
+      setInboundData(inbound || null);
+      setBusinessData(business || null);
+      setSAPHistoricalData(sapData || null);
+    } catch { /* silently fail */ }
+    finally { setDataLoading(false); }
+  };
+
+  useEffect(() => {
+    if (viewMode === 'realtime') {
+      fetchRealtimeData(days);
+    } else if (viewMode === 'historical') {
+      fetchHistoricalData();
+    } else {
+      fetchBothData(days);
+    }
+  }, [viewMode, days]);
+
+  /* ── Context key filter based on mode ───────────────────── */
+
+  const getContextKeys = (mode: 'realtime' | 'historical' | 'both', section: 'realtime' | 'historical' | 'both'): string[] => {
+    if (!useContext) return [];
+    
+    if (mode === 'realtime' || (mode === 'both' && section === 'realtime')) {
+      return ['stats', 'failed_summary', 'top_customers', 'inbound_summary', 'process_flow'];
+    }
+    if (mode === 'historical' || (mode === 'both' && section === 'historical')) {
+      return ['business_summary'];
+    }
+    // For 'both' section (unified chat), return all keys
+    return AI_CONTEXT_KEYS;
+  };
 
   /* ── Send helpers ───────────────────────────────────────── */
 
-  const sendMessage = async (section: 'realtime' | 'historical', text: string, selectedTimeScope?: 'current' | 'historical' | 'both') => {
+  const sendMessage = async (section: 'realtime' | 'historical' | 'both', text: string) => {
     const isRT = section === 'realtime';
-    const setLoading = isRT ? setRealtimeLoading : setHistoricalLoading;
-    const setMsgs = isRT ? setRealtimeMessages : setHistoricalMessages;
-    const currentMsgs = isRT ? realtimeMessages : historicalMessages;
-    const d = isRT ? days : historicalDays;
+    const isBoth = section === 'both';
+    const setLoading = isBoth ? setBothLoading : (isRT ? setRealtimeLoading : setHistoricalLoading);
+    const setMsgs = isBoth ? setBothMessages : (isRT ? setRealtimeMessages : setHistoricalMessages);
+    const currentMsgs = isBoth ? bothMessages : (isRT ? realtimeMessages : historicalMessages);
+    const d = isBoth ? days : (isRT ? days : historicalDays);
 
     setError(null);
     setMsgs((prev) => [...prev, { role: 'user', content: text, section, ts: Date.now() }]);
     setLoading(true);
 
-    const contextKeys = useContext ? AI_CONTEXT_KEYS : [];
-    const scopeToUse = selectedTimeScope || timeScope;
+    // Auto-determine time scope from view mode
+    const scopeMap: Record<typeof viewMode, 'current' | 'historical' | 'both'> = {
+      realtime: 'current',
+      historical: 'historical',
+      both: 'both'
+    };
+    const timeScope = scopeMap[viewMode];
+    
+    const contextKeys = getContextKeys(viewMode, section);
 
     try {
       if (useMultiModel) {
-        const res = await dashboardApi.postAIAnalysisMultiModel(text, contextKeys, d, scopeToUse);
+        const res = await dashboardApi.postAIAnalysisMultiModel(text, contextKeys, d, timeScope);
         setMsgs((prev) => [...prev, {
           role: 'assistant', content: res.synthesized_answer,
           meta: { 
@@ -534,7 +788,7 @@ export default function DashboardAIAnalysis() {
         }]);
       } else {
         const history = currentMsgs.map((m) => ({ role: m.role, content: m.content }));
-        const res = await dashboardApi.postAIAnalysisChat(text, history, contextKeys, d, scopeToUse);
+        const res = await dashboardApi.postAIAnalysisChat(text, history, contextKeys, d, timeScope);
 
         console.log('📊 AI Analysis Response:', res);
 
@@ -571,118 +825,12 @@ export default function DashboardAIAnalysis() {
     }
   };
 
-  /* ── Derived stats ───────────────────────────────────────── */
-
-  const f = outboundData?.funnel;
-  const successRate = f && f.documents_received > 0
-    ? Math.round((f.converted_success / f.documents_received) * 100) : null;
-  const failRate = f && f.documents_received > 0
-    ? Math.round(((f.validated_failed + f.converted_failed) / f.documents_received) * 100) : null;
-
   /* ══════════════════════════════════════════════════════════
      RENDER
   ════════════════════════════════════════════════════════════ */
 
   return (
     <div className="w-full -m-4 sm:-m-6 min-h-screen bg-gray-50 font-sans flex flex-col">
-      {/* Time Scope Selection Modal */}
-      {showTimeScopeModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTimeScopeModal(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
-                <CalendarRange className="h-5 w-5 text-white" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Select Data Scope</h3>
-                <p className="text-xs text-slate-500">Choose which period to analyze</p>
-              </div>
-            </div>
-
-            <div className="space-y-3 mb-6">
-              {/* Current Period Option */}
-              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
-                <input
-                  type="radio"
-                  name="timeScope"
-                  value="current"
-                  checked={timeScope === 'current'}
-                  onChange={(e) => setTimeScope(e.target.value as any)}
-                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Clock className="h-4 w-4 text-blue-600" />
-                    <span className="font-semibold text-slate-900">Current Period</span>
-                  </div>
-                  <p className="text-xs text-slate-600">Analyze recent data (default: last 30 days)</p>
-                </div>
-              </label>
-
-              {/* Historical Period Option */}
-              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
-                <input
-                  type="radio"
-                  name="timeScope"
-                  value="historical"
-                  checked={timeScope === 'historical'}
-                  onChange={(e) => setTimeScope(e.target.value as any)}
-                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <BarChart3 className="h-4 w-4 text-indigo-600" />
-                    <span className="font-semibold text-slate-900">Historical Data</span>
-                  </div>
-                  <p className="text-xs text-slate-600">Long-term trends and patterns (1994-2010)</p>
-                </div>
-              </label>
-
-              {/* Both Option */}
-              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
-                <input
-                  type="radio"
-                  name="timeScope"
-                  value="both"
-                  checked={timeScope === 'both'}
-                  onChange={(e) => setTimeScope(e.target.value as any)}
-                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <GitBranch className="h-4 w-4 text-purple-600" />
-                    <span className="font-semibold text-slate-900">Both Periods</span>
-                  </div>
-                  <p className="text-xs text-slate-600">Compare historical and current data</p>
-                </div>
-              </label>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowTimeScopeModal(false)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (pendingQuery) {
-                    sendMessage(pendingQuery.section, pendingQuery.text, timeScope);
-                    setShowTimeScopeModal(false);
-                    setPendingQuery(null);
-                  }
-                }}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 text-white font-semibold hover:shadow-lg transition-all flex items-center justify-center gap-2"
-              >
-                <Sparkles className="h-4 w-4" />
-                Analyze
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
         body { font-family: 'DM Sans', sans-serif; }
@@ -708,43 +856,83 @@ export default function DashboardAIAnalysis() {
               </div>
               <span className="font-mono text-sm font-bold text-slate-900 hidden sm:inline">Intelligence</span>
             </div>
-            <div className="flex items-center gap-0.5 bg-slate-200 rounded-full p-0.5">
+            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
               {[
-                { key: 'realtime', label: 'Real-time', icon: Activity },
-                { key: 'historical', label: 'Historical', icon: BarChart3 },
-              ].map(({ key, label, icon: Icon }) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setActiveSection(key as 'realtime' | 'historical')}
-                  className={`tab-pill flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${activeSection === key ? 'active' : 'text-slate-600'}`}
+                { value: 'realtime', label: 'Realtime', icon: Activity },
+                { value: 'historical', label: 'Historical', icon: BarChart3 },
+                { value: 'both', label: 'Both', icon: GitBranch },
+              ].map(({ value, label, icon: Icon }) => (
+                <label
+                  key={value}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+                    viewMode === value
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-md'
+                      : 'text-slate-600 hover:bg-slate-200'
+                  }`}
                 >
+                  <input
+                    type="radio"
+                    name="viewMode"
+                    value={value}
+                    checked={viewMode === value}
+                    onChange={(e) => setViewMode(e.target.value as typeof viewMode)}
+                    className="sr-only"
+                  />
                   <Icon className="h-3 w-3" />
-                  {label}
-                </button>
+                  <span className="hidden sm:inline">{label}</span>
+                </label>
               ))}
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 text-xs text-slate-500">
-              <Clock className="h-3 w-3" />
-              <select
-                value={activeSection === 'realtime' ? days : historicalDays}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  activeSection === 'realtime' ? setDays(v) : setHistoricalDays(v);
-                }}
-                className="bg-transparent font-mono text-xs text-slate-700 focus:outline-none cursor-pointer"
-              >
-                {activeSection === 'realtime'
-                  ? [7, 30, 90].map((d) => <option key={d} value={d}>{d}d</option>)
-                  : [90, 180, 365].map((d) => <option key={d} value={d}>{d}d</option>)}
-              </select>
-            </div>
+            {viewMode === 'both' ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 text-xs text-slate-500">
+                  <Activity className="h-3 w-3 text-blue-600" />
+                  <select
+                    value={days}
+                    onChange={(e) => setDays(Number(e.target.value))}
+                    className="bg-transparent font-mono text-xs text-slate-700 focus:outline-none cursor-pointer"
+                  >
+                    {[7, 30, 90].map((d) => <option key={d} value={d}>{d}d</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1 text-xs text-slate-500">
+                  <BarChart3 className="h-3 w-3 text-indigo-600" />
+                  <select
+                    value={historicalDays}
+                    onChange={(e) => setHistoricalDays(Number(e.target.value))}
+                    className="bg-transparent font-mono text-xs text-slate-700 focus:outline-none cursor-pointer"
+                  >
+                    {[90, 180, 365].map((d) => <option key={d} value={d}>{d}d</option>)}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 text-xs text-slate-500">
+                <Clock className="h-3 w-3" />
+                <select
+                  value={viewMode === 'realtime' ? days : historicalDays}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    viewMode === 'realtime' ? setDays(v) : setHistoricalDays(v);
+                  }}
+                  className="bg-transparent font-mono text-xs text-slate-700 focus:outline-none cursor-pointer"
+                >
+                  {viewMode === 'realtime'
+                    ? [7, 30, 90].map((d) => <option key={d} value={d}>{d}d</option>)
+                    : [90, 180, 365].map((d) => <option key={d} value={d}>{d}d</option>)}
+                </select>
+              </div>
+            )}
             <button
               type="button"
-              onClick={() => fetchData(days)}
+              onClick={() => {
+                if (viewMode === 'realtime') fetchRealtimeData(days);
+                else if (viewMode === 'historical') fetchHistoricalData();
+                else fetchBothData(days);
+              }}
               disabled={dataLoading}
               className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 hover:border-slate-400 transition-all disabled:opacity-50"
             >
@@ -758,130 +946,34 @@ export default function DashboardAIAnalysis() {
       <main className="flex-1 w-full px-4 md:px-6 lg:px-8 py-4 overflow-y-auto">
 
         {/* ═══════════════════════════
-            REAL-TIME SECTION
+            REALTIME MODE
         ═══════════════════════════ */}
-        {activeSection === 'realtime' && (
+        {viewMode === 'realtime' && (
           <div className="fade-in flex flex-col gap-4">
-
-            {/* Section title + KPIs */}
-            <div className="flex-shrink-0 space-y-3">
-              <div className="flex items-center gap-3">
-                <LivePulse />
-                <h1 className="text-sm font-semibold text-slate-900">Real-time Monitor</h1>
-                <span className="text-xs font-mono text-slate-400">Last {days} days</span>
-              </div>
-
-              {/* KPI row */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-                {dataLoading ? (
-                  Array(4).fill(0).map((_, i) => (
-                    <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 animate-pulse h-16" />
-                  ))
-                ) : (
-                  <>
-                    <StatCard accent label="Docs received" value={f?.documents_received ?? 0} />
-                    <StatCard label="Validated OK" value={f?.validated_success ?? 0}
-                      sub={f?.validated_failed ? <span className="text-red-500 font-mono font-semibold">{f.validated_failed} failed</span> : <CheckCircle2 className="h-3 w-3 text-emerald-500" />} />
-                    <StatCard label="Converted OK" value={f?.converted_success ?? 0}
-                      sub={f?.converted_pending ? <span className="text-amber-500 font-mono font-semibold">{f.converted_pending} pending</span> : undefined} />
-                    <StatCard label="Success rate" value={successRate !== null ? `${successRate}%` : '—'}
-                      sub={failRate !== null && failRate > 0 ? <span className="text-red-500 font-mono font-semibold">{failRate}% fail</span> : undefined} />
-                  </>
-                )}
-              </div>
+            {/* Visual indicator */}
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border-l-4 border-blue-500 rounded-r-lg">
+              <Activity className="h-4 w-4 text-blue-600" />
+              <span className="text-xs font-semibold text-blue-900">Realtime Data</span>
+              <span className="text-xs text-blue-600">Current Operations</span>
+              <LivePulse />
             </div>
 
-            {/* Data panels row: Inbound + Outbound side by side */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Collapsible Dashboard */}
+            <CollapsibleDashboard
+              outboundData={outboundData}
+              inboundData={inboundData}
+              dataLoading={dataLoading}
+              days={days}
+              onRefresh={() => fetchRealtimeData(days)}
+            />
 
-              {/* Inbound SAT */}
-              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col">
-                <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
-                  <div className="flex items-center gap-2">
-                    <ArrowUpFromLine className="h-3.5 w-3.5 text-slate-500" />
-                    <h2 className="text-xs font-semibold text-slate-900">Inbound (SAT)</h2>
-                  </div>
-                  <LivePulse />
-                </div>
-                <div className="p-3 space-y-3 overflow-y-auto max-h-72 md:max-h-80">
-                  {dataLoading ? (
-                    <>{Array(3).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
-                  ) : inboundData?.summary ? (
-                    <>
-                      <div className="grid grid-cols-3 gap-1.5 text-center">
-                        {[
-                          { v: inboundData.summary.total_documents, l: 'Total' },
-                          { v: inboundData.summary.merges_sent_to_sap, l: 'In SAP' },
-                          { v: inboundData.summary.merges_pending, l: 'Pending' },
-                        ].map(({ v, l }) => (
-                          <div key={l} className="rounded-lg bg-slate-50 py-2">
-                            <div className="font-mono font-bold text-base text-slate-900 leading-none">{fmt(v)}</div>
-                            <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wide mt-0.5">{l}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {inboundData.top_suppliers?.slice(0, 8).map((s, i) => (
-                        <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
-                          <span className="text-xs text-slate-700 truncate flex-1 mr-3">{s.supplier_name || s.supplier_rfc}</span>
-                          <span className="font-mono text-xs font-semibold text-slate-900 flex-shrink-0">{fmt(s.count)}</span>
-                        </div>
-                      ))}
-                    </>
-                  ) : (
-                    <p className="text-xs text-slate-400 py-4 text-center">No inbound data</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Outbound funnel */}
-              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col">
-                <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
-                  <div className="flex items-center gap-2">
-                    <ArrowDownToLine className="h-3.5 w-3.5 text-slate-500" />
-                    <h2 className="text-xs font-semibold text-slate-900">Outbound Funnel</h2>
-                  </div>
-                  <GitBranch className="h-3.5 w-3.5 text-slate-400" />
-                </div>
-                <div className="p-3 space-y-2.5 overflow-y-auto max-h-72 md:max-h-80">
-                  {dataLoading ? (
-                    <>{Array(5).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
-                  ) : f ? (
-                    <>
-                      <div className="space-y-2">
-                        <FunnelStep step={1} label="Received" count={f.documents_received} total={f.documents_received} />
-                        <FunnelStep step={2} label="Validated ✓" count={f.validated_success} total={f.documents_received} />
-                        <FunnelStep step={3} label="Validation ✗" count={f.validated_failed} total={f.documents_received} warn />
-                        <FunnelStep step={4} label="Converted ✓" count={f.converted_success} total={f.documents_received} />
-                        <FunnelStep step={5} label="Converted ✗" count={f.converted_failed} total={f.documents_received} warn />
-                        <FunnelStep step={6} label="Pending" count={f.converted_pending} total={f.documents_received} />
-                      </div>
-                      {outboundData?.top_customers?.length ? (
-                        <div className="pt-2 border-t border-slate-100">
-                          <div className="text-[9px] font-mono uppercase tracking-widest text-slate-400 mb-1.5">Top customers</div>
-                          {outboundData.top_customers.slice(0, 5).map((c, i) => (
-                            <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
-                              <span className="text-xs text-slate-700 truncate flex-1 mr-2">{c.customer_name || c.customer_id}</span>
-                              <span className="font-mono text-[10px] text-slate-400 mr-2 flex-shrink-0">{c.currency}</span>
-                              <span className="font-mono text-xs font-semibold text-slate-900 flex-shrink-0">{c.count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <p className="text-xs text-slate-400 py-4 text-center">No outbound data</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* AI Chat — full width below data panels */}
+            {/* AI Chat — full width below dashboard */}
             <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col" style={{ minHeight: '420px' }}>
               <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
                 <Sparkles className="h-3.5 w-3.5 text-blue-600" />
                 <h2 className="text-xs font-semibold text-slate-900">AI Analysis</h2>
                 <LivePulse />
-                <span className="ml-auto text-[10px] font-mono text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">Real-time</span>
+                <span className="ml-auto text-[10px] font-mono text-slate-400 bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">Realtime</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <ChatPanel
@@ -889,10 +981,7 @@ export default function DashboardAIAnalysis() {
                   messages={realtimeMessages}
                   loading={realtimeLoading}
                   prompts={REALTIME_PROMPTS}
-                  onSend={(t) => {
-                    setPendingQuery({ section: 'realtime', text: t });
-                    setShowTimeScopeModal(true);
-                  }}
+                  onSend={(t) => sendMessage('realtime', t)}
                   placeholder="Ask about live invoices, SAT docs, failures…"
                   useContext={useContext}
                   setUseContext={setUseContext}
@@ -912,44 +1001,48 @@ export default function DashboardAIAnalysis() {
         )}
 
         {/* ═══════════════════════════
-            HISTORICAL SECTION
+            HISTORICAL MODE
         ═══════════════════════════ */}
-        {activeSection === 'historical' && (
+        {viewMode === 'historical' && (
           <div className="fade-in h-full flex flex-col gap-4">
+            {/* Visual indicator */}
+            <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border-l-4 border-indigo-500 rounded-r-lg">
+              <BarChart3 className="h-4 w-4 text-indigo-600" />
+              <span className="text-xs font-semibold text-indigo-900">Historical Data</span>
+              <span className="text-xs text-indigo-600">1994-2010 Migrated Data</span>
+            </div>
 
-            {/* Title + Revenue cards */}
+            {/* Title + Summary cards */}
             <div className="flex-shrink-0 space-y-3">
               <div className="flex items-center gap-3">
-                <CalendarRange className="h-4 w-4 text-slate-600" />
                 <h1 className="text-sm font-semibold text-slate-900">Historical Analysis &amp; Forecasting</h1>
-                <span className="text-xs font-mono text-slate-400">Last {historicalDays} days</span>
+                <span className="text-xs font-mono text-slate-400">SAP Data (1994-2010)</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
                 {dataLoading ? (
-                  Array(3).fill(0).map((_, i) => (
+                  Array(4).fill(0).map((_, i) => (
                     <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 animate-pulse h-16" />
                   ))
-                ) : (
+                ) : sapHistoricalData ? (
                   <>
-                    <StatCard accent label="Current period revenue"
-                      value={businessData?.trend?.current_period_revenue ?? 0}
-                      sub={businessData?.trend && <TrendBadge pct={businessData.trend.revenue_change_pct} />}
+                    <StatCard accent label="Total Revenue (1994-2010)"
+                      value={sapHistoricalData.summary?.total_revenue ?? 0}
                     />
-                    <StatCard label="Previous period"
-                      value={businessData?.trend?.previous_period_revenue ?? 0}
+                    <StatCard label="Total Invoices"
+                      value={sapHistoricalData.summary?.total_invoices ?? 0}
                     />
-                    <StatCard label="Revenue change"
-                      value={businessData?.trend ? `${businessData.trend.revenue_change_pct >= 0 ? '+' : ''}${businessData.trend.revenue_change_pct}%` : '—'}
-                      sub={
-                        businessData?.trend
-                          ? businessData.trend.revenue_change_pct >= 0
-                            ? <span className="text-emerald-600 font-mono">↑ Positive trend</span>
-                            : <span className="text-red-500 font-mono">↓ Declining</span>
-                          : undefined
-                      }
+                    <StatCard label="Unique Customers"
+                      value={sapHistoricalData.summary?.unique_customers ?? 0}
+                    />
+                    <StatCard label="Unique Products"
+                      value={sapHistoricalData.summary?.unique_products ?? 0}
                     />
                   </>
+                ) : (
+                  <div className="col-span-4 rounded-xl border border-slate-200 bg-white p-4 text-center text-sm text-slate-500">
+                    No SAP historical data available
+                  </div>
                 )}
               </div>
             </div>
@@ -957,19 +1050,19 @@ export default function DashboardAIAnalysis() {
             {/* 3-col layout: revenue by customer | revenue by country | AI chat (2x) */}
             <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_1fr_2fr] gap-3 overflow-hidden">
 
-              {/* Revenue by customer */}
+              {/* Revenue by customer (SAP) */}
               <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0">
                 <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
                   <TrendingUp className="h-3.5 w-3.5 text-slate-500" />
-                  <h2 className="text-xs font-semibold text-slate-900">By Customer</h2>
+                  <h2 className="text-xs font-semibold text-slate-900">By Customer (SAP)</h2>
                 </div>
                 <div className="p-3 flex-1 overflow-y-auto">
                   {dataLoading ? (
                     <>{Array(6).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
-                  ) : businessData?.revenue_by_customer?.length ? (
+                  ) : sapHistoricalData?.revenue_by_customer?.length ? (
                     <div className="space-y-2">
-                      {businessData.revenue_by_customer.slice(0, 10).map((c, i) => {
-                        const max = businessData.revenue_by_customer![0].total_revenue;
+                      {sapHistoricalData.revenue_by_customer.slice(0, 10).map((c, i) => {
+                        const max = sapHistoricalData.revenue_by_customer![0].total_revenue;
                         const pct = max > 0 ? Math.round((c.total_revenue / max) * 100) : 0;
                         return (
                           <div key={i}>
@@ -978,7 +1071,7 @@ export default function DashboardAIAnalysis() {
                               <span className="font-mono text-xs font-semibold text-slate-900 flex-shrink-0">{fmt(c.total_revenue)}</span>
                             </div>
                             <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full bg-gradient-to-r from-blue-600 to-indigo-700 rounded-full transition-all duration-700"
+                              <div className="h-full bg-gradient-to-r from-indigo-600 to-purple-700 rounded-full transition-all duration-700"
                                 style={{ width: `${pct}%` }} />
                             </div>
                           </div>
@@ -986,36 +1079,36 @@ export default function DashboardAIAnalysis() {
                       })}
                     </div>
                   ) : (
-                    <p className="text-xs text-slate-400 py-6 text-center">No revenue data</p>
+                    <p className="text-xs text-slate-400 py-6 text-center">No SAP customer data</p>
                   )}
                 </div>
               </div>
 
-              {/* Revenue by country */}
+              {/* Revenue by country (SAP) */}
               <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0">
                 <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
                   <Eye className="h-3.5 w-3.5 text-slate-500" />
-                  <h2 className="text-xs font-semibold text-slate-900">By Country</h2>
+                  <h2 className="text-xs font-semibold text-slate-900">By Country (SAP)</h2>
                 </div>
                 <div className="p-3 flex-1 overflow-y-auto">
                   {dataLoading ? (
                     <>{Array(5).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
-                  ) : businessData?.revenue_by_country?.length ? (
+                  ) : sapHistoricalData?.revenue_by_country?.length ? (
                     <div className="space-y-2">
-                      {businessData.revenue_by_country.slice(0, 10).map((c, i) => {
-                        const max = businessData.revenue_by_country![0].total_revenue;
+                      {sapHistoricalData.revenue_by_country.slice(0, 10).map((c, i) => {
+                        const max = sapHistoricalData.revenue_by_country![0].total_revenue;
                         const pct = max > 0 ? Math.round((c.total_revenue / max) * 100) : 0;
                         return (
                           <div key={i}>
                             <div className="flex items-center justify-between mb-0.5">
-                              <span className="text-xs text-slate-700 truncate flex-1 mr-2">{c.country_name || c.country}</span>
+                              <span className="text-xs text-slate-700 truncate flex-1 mr-2">{c.country}</span>
                               <div className="flex items-center gap-2 flex-shrink-0">
                                 <span className="font-mono text-[10px] text-slate-400">{c.invoice_count}</span>
                                 <span className="font-mono text-xs font-semibold text-slate-900">{fmt(c.total_revenue)}</span>
                               </div>
                             </div>
                             <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-700"
+                              <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full transition-all duration-700"
                                 style={{ width: `${pct}%` }} />
                             </div>
                           </div>
@@ -1023,7 +1116,7 @@ export default function DashboardAIAnalysis() {
                       })}
                     </div>
                   ) : (
-                    <p className="text-xs text-slate-400 py-6 text-center">No country data</p>
+                    <p className="text-xs text-slate-400 py-6 text-center">No SAP country data</p>
                   )}
                 </div>
               </div>
@@ -1049,7 +1142,7 @@ export default function DashboardAIAnalysis() {
                       type="button"
                       onClick={() => sendMessage('historical', query)}
                       disabled={historicalLoading}
-                      className="rounded-xl border border-slate-200 bg-slate-50 hover:bg-gradient-to-br hover:from-blue-600 hover:to-indigo-700 hover:border-blue-600 hover:text-white text-slate-700 px-2 py-2 text-left transition-all group disabled:opacity-50 hover:shadow-md flex items-center gap-1.5"
+                      className="rounded-xl border border-slate-200 bg-slate-50 hover:bg-gradient-to-br hover:from-indigo-600 hover:to-purple-700 hover:border-indigo-600 hover:text-white text-slate-700 px-2 py-2 text-left transition-all group disabled:opacity-50 hover:shadow-md flex items-center gap-1.5"
                     >
                       <Icon className="h-3 w-3 flex-shrink-0 group-hover:text-white transition-colors" />
                       <span className="text-[11px] font-medium leading-tight">{label}</span>
@@ -1063,10 +1156,7 @@ export default function DashboardAIAnalysis() {
                     messages={historicalMessages}
                     loading={historicalLoading}
                     prompts={HISTORICAL_PROMPTS}
-                    onSend={(t) => {
-                      setPendingQuery({ section: 'historical', text: t });
-                      setShowTimeScopeModal(true);
-                    }}
+                    onSend={(t) => sendMessage('historical', t)}
                     placeholder="Ask about trends, forecasts, period comparisons…"
                     useContext={useContext}
                     setUseContext={setUseContext}
@@ -1079,6 +1169,197 @@ export default function DashboardAIAnalysis() {
 
             {error && (
               <div className="flex-shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══════════════════════════
+            BOTH MODE - UNIFIED VIEW
+        ═══════════════════════════ */}
+        {viewMode === 'both' && (
+          <div className="fade-in space-y-4">
+            {/* Header */}
+            <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border-l-4 border-purple-500 rounded-r-lg">
+              <Activity className="h-4 w-4 text-purple-600" />
+              <h2 className="text-sm font-semibold text-purple-900">Unified Analysis</h2>
+              <span className="text-xs text-purple-600">Realtime + Historical</span>
+              <LivePulse />
+            </div>
+
+            {/* Data panels grid - side by side on large screens */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+              {/* Left: Realtime Dashboard */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border-l-4 border-blue-500 rounded-r-lg">
+                  <Activity className="h-3.5 w-3.5 text-blue-600" />
+                  <span className="text-xs font-semibold text-blue-900">Realtime Data</span>
+                  <span className="text-[10px] text-blue-600 ml-auto">Current Operations</span>
+                </div>
+
+                <CollapsibleDashboard
+                  outboundData={outboundData}
+                  inboundData={inboundData}
+                  dataLoading={dataLoading}
+                  days={days}
+                  onRefresh={() => fetchRealtimeData(days)}
+                />
+              </div>
+
+              {/* Right: Historical Dashboard */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 border-l-4 border-indigo-500 rounded-r-lg">
+                  <BarChart3 className="h-3.5 w-3.5 text-indigo-600" />
+                  <span className="text-xs font-semibold text-indigo-900">Historical Data</span>
+                  <span className="text-[10px] text-indigo-600 ml-auto">1994-2010</span>
+                </div>
+
+                {/* SAP summary cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {dataLoading ? (
+                    Array(3).fill(0).map((_, i) => (
+                      <div key={i} className="rounded-xl border border-slate-200 bg-white p-4 animate-pulse h-16" />
+                    ))
+                  ) : sapHistoricalData ? (
+                    <>
+                      <StatCard accent label="Total Revenue (SAP)"
+                        value={sapHistoricalData.summary?.total_revenue ?? 0}
+                      />
+                      <StatCard label="Total Invoices"
+                        value={sapHistoricalData.summary?.total_invoices ?? 0}
+                      />
+                      <StatCard label="Unique Customers"
+                        value={sapHistoricalData.summary?.unique_customers ?? 0}
+                      />
+                    </>
+                  ) : (
+                    <div className="col-span-3 rounded-xl border border-slate-200 bg-white p-4 text-center text-xs text-slate-500">
+                      No SAP data
+                    </div>
+                  )}
+                </div>
+
+                {/* SAP: Revenue by customer & country */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Revenue by customer (SAP) */}
+                  <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0">
+                    <div className="px-3 pt-2.5 pb-2 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+                      <TrendingUp className="h-3 w-3 text-slate-500" />
+                      <h4 className="text-xs font-semibold text-slate-900">By Customer (SAP)</h4>
+                    </div>
+                    <div className="p-2.5 flex-1 overflow-y-auto max-h-48">
+                      {dataLoading ? (
+                        <>{Array(4).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
+                      ) : sapHistoricalData?.revenue_by_customer?.length ? (
+                        <div className="space-y-1.5">
+                          {sapHistoricalData.revenue_by_customer.slice(0, 6).map((c, i) => {
+                            const max = sapHistoricalData.revenue_by_customer![0].total_revenue;
+                            const pct = max > 0 ? Math.round((c.total_revenue / max) * 100) : 0;
+                            return (
+                              <div key={i}>
+                                <div className="flex items-center justify-between mb-0.5">
+                                  <span className="text-[10px] text-slate-700 truncate flex-1 mr-2">{c.customer_name || c.customer_id}</span>
+                                  <span className="font-mono text-[10px] font-semibold text-slate-900 flex-shrink-0">{fmt(c.total_revenue)}</span>
+                                </div>
+                                <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full transition-all duration-500"
+                                    style={{ width: `${pct}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400 py-4 text-center">No SAP data</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Revenue by country (SAP) */}
+                  <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-0">
+                    <div className="px-3 pt-2.5 pb-2 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+                      <Eye className="h-3 w-3 text-slate-500" />
+                      <h4 className="text-xs font-semibold text-slate-900">By Country (SAP)</h4>
+                    </div>
+                    <div className="p-2.5 flex-1 overflow-y-auto max-h-48">
+                      {dataLoading ? (
+                        <>{Array(4).fill(0).map((_, i) => <SkeletonRow key={i} />)}</>
+                      ) : sapHistoricalData?.revenue_by_country?.length ? (
+                        <div className="space-y-1.5">
+                          {sapHistoricalData.revenue_by_country.slice(0, 6).map((c, i) => {
+                            const max = sapHistoricalData.revenue_by_country![0].total_revenue;
+                            const pct = max > 0 ? Math.round((c.total_revenue / max) * 100) : 0;
+                            return (
+                              <div key={i}>
+                                <div className="flex items-center justify-between mb-0.5">
+                                  <span className="text-[10px] text-slate-700 truncate flex-1 mr-2">{c.country}</span>
+                                  <span className="font-mono text-[10px] font-semibold text-slate-900 flex-shrink-0">{fmt(c.total_revenue)}</span>
+                                </div>
+                                <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-gradient-to-r from-indigo-400 to-purple-500 rounded-full transition-all duration-500"
+                                    style={{ width: `${pct}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400 py-4 text-center">No SAP data</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Unified AI Chat - Full width */}
+            <div className="rounded-2xl border border-purple-200 bg-white overflow-hidden flex flex-col shadow-lg" style={{ minHeight: '480px' }}>
+              <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0 bg-gradient-to-r from-blue-50 to-indigo-50">
+                <Sparkles className="h-4 w-4 text-purple-600" />
+                <h3 className="text-sm font-semibold text-slate-900">Unified AI Analysis</h3>
+                <span className="ml-auto text-[10px] font-mono text-purple-700 bg-purple-100 rounded-full px-2.5 py-0.5">Realtime + Historical</span>
+              </div>
+
+              {/* Quick action tiles for both contexts */}
+              <div className="px-3 pt-3 pb-0 grid grid-cols-2 md:grid-cols-4 gap-2 flex-shrink-0">
+                {[
+                  { label: 'Compare All', query: 'Compare realtime operations with historical trends - what insights can we gain?', icon: BarChart3, color: 'purple' },
+                  { label: 'Forecast', query: 'Based on historical data and current operations, forecast next period performance', icon: TrendingUp, color: 'blue' },
+                  { label: 'Full Overview', query: 'Give me a comprehensive overview of both realtime and historical data', icon: Eye, color: 'indigo' },
+                  { label: 'Anomalies', query: 'Identify any anomalies or unusual patterns across both realtime and historical data', icon: AlertTriangle, color: 'amber' },
+                ].map(({ label, query, icon: Icon, color }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => sendMessage('both', query)}
+                    disabled={bothLoading}
+                    className={`rounded-xl border border-${color}-200 bg-${color}-50 hover:bg-gradient-to-br hover:from-${color}-600 hover:to-purple-700 hover:border-${color}-600 hover:text-white text-slate-700 px-2 py-2 text-left transition-all group disabled:opacity-50 hover:shadow-md flex items-center gap-1.5`}
+                  >
+                    <Icon className="h-3 w-3 flex-shrink-0 group-hover:text-white transition-colors" />
+                    <span className="text-[11px] font-medium leading-tight">{label}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-hidden flex flex-col mt-1">
+                <ChatPanel
+                  section="both"
+                  messages={bothMessages}
+                  loading={bothLoading}
+                  prompts={[...REALTIME_PROMPTS, ...HISTORICAL_PROMPTS]}
+                  onSend={(t) => sendMessage('both', t)}
+                  placeholder="Ask about both realtime and historical data…"
+                  useContext={useContext}
+                  setUseContext={setUseContext}
+                  useMultiModel={useMultiModel}
+                  setUseMultiModel={setUseMultiModel}
+                />
+              </div>
+            </div>
+
+            {error && (
+              <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
                 {error}
               </div>
             )}

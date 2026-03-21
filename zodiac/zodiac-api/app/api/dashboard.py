@@ -1692,6 +1692,269 @@ Respond with a single JSON object with this structure (no markdown, only valid J
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+@router.get("/v2/sap-historical")
+async def get_dashboard_sap_historical(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Dashboard analytics from SAP migrated data (1994-2010).
+    Queries VBRP (billing items), VBRK (billing header), KNA1 (customer master), 
+    T016T (industry text) tables for historical analysis.
+    
+    Returns revenue trends, top customers, top products, country/industry breakdowns
+    from the migrated SAP dataset (1994-2010 period).
+    """
+    try:
+        logger.info(f"📊 Fetching SAP historical dashboard for user {current_user.id}")
+        
+        # Date range for SAP historical data (1994-2010)
+        start_date = '1994-01-01'
+        end_date = '2010-12-31'
+        
+        # Check if SAP tables exist
+        inspector = inspect(db.bind)
+        available_tables = [t.lower() for t in inspector.get_table_names()]
+        has_vbrp = 'vbrp' in available_tables
+        has_vbrk = 'vbrk' in available_tables
+        has_kna1 = 'kna1' in available_tables
+        
+        if not (has_vbrp and has_vbrk):
+            logger.warning("SAP tables (VBRP, VBRK) not found in database")
+            return {
+                "period": {"start_date": start_date, "end_date": end_date},
+                "summary": {
+                    "total_revenue": 0,
+                    "total_invoices": 0,
+                    "unique_customers": 0,
+                    "unique_products": 0,
+                    "date_range": {"min": start_date, "max": end_date}
+                },
+                "revenue_trend": [],
+                "revenue_by_customer": [],
+                "revenue_by_product": [],
+                "revenue_by_country": [],
+                "revenue_by_industry": [],
+                "message": "SAP historical data tables not available"
+            }
+        
+        # === SUMMARY STATISTICS ===
+        summary_query = text("""
+            SELECT 
+                COUNT(DISTINCT vbrk.vbeln) as total_invoices,
+                COALESCE(SUM(vbrp.netwr), 0) as total_revenue,
+                COUNT(DISTINCT vbrk.kunag) as unique_customers,
+                COUNT(DISTINCT vbrp.matnr) as unique_products,
+                MIN(vbrk.fkdat) as min_date,
+                MAX(vbrk.fkdat) as max_date
+            FROM vbrp
+            JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+            WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+        """)
+        summary_result = db.execute(summary_query, {"start_date": start_date, "end_date": end_date}).fetchone()
+        
+        summary = {
+            "total_revenue": float(summary_result[1] if summary_result[1] else 0),
+            "total_invoices": int(summary_result[0] if summary_result[0] else 0),
+            "unique_customers": int(summary_result[2] if summary_result[2] else 0),
+            "unique_products": int(summary_result[3] if summary_result[3] else 0),
+            "date_range": {
+                "min": str(summary_result[4]) if summary_result[4] else start_date,
+                "max": str(summary_result[5]) if summary_result[5] else end_date
+            }
+        }
+        
+        # === REVENUE TREND (by year) ===
+        trend_query = text("""
+            SELECT 
+                EXTRACT(YEAR FROM vbrk.fkdat)::INTEGER as year,
+                COUNT(DISTINCT vbrk.vbeln) as invoice_count,
+                COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+            FROM vbrp
+            JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+            WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+            GROUP BY EXTRACT(YEAR FROM vbrk.fkdat)
+            ORDER BY year ASC
+        """)
+        trend_results = db.execute(trend_query, {"start_date": start_date, "end_date": end_date}).fetchall()
+        
+        revenue_trend = [
+            {
+                "year": int(row[0]),
+                "invoice_count": int(row[1]),
+                "total_revenue": float(row[2])
+            }
+            for row in trend_results
+        ]
+        
+        # === REVENUE BY CUSTOMER ===
+        if has_kna1:
+            customer_query = text("""
+                SELECT 
+                    vbrk.kunag as customer_id,
+                    COALESCE(kna1.name1, vbrk.kunag) as customer_name,
+                    COALESCE(kna1.land1, 'Unknown') as country,
+                    COUNT(DISTINCT vbrk.vbeln) as invoice_count,
+                    COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+                FROM vbrp
+                JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+                LEFT JOIN kna1 ON vbrk.kunag = kna1.kunnr
+                WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+                GROUP BY vbrk.kunag, kna1.name1, kna1.land1
+                ORDER BY total_revenue DESC
+                LIMIT 50
+            """)
+        else:
+            customer_query = text("""
+                SELECT 
+                    vbrk.kunag as customer_id,
+                    vbrk.kunag as customer_name,
+                    'Unknown' as country,
+                    COUNT(DISTINCT vbrk.vbeln) as invoice_count,
+                    COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+                FROM vbrp
+                JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+                WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+                GROUP BY vbrk.kunag
+                ORDER BY total_revenue DESC
+                LIMIT 50
+            """)
+        
+        customer_results = db.execute(customer_query, {"start_date": start_date, "end_date": end_date}).fetchall()
+        
+        revenue_by_customer = [
+            {
+                "customer_id": str(row[0]) if row[0] else "Unknown",
+                "customer_name": str(row[1]) if row[1] else "Unknown",
+                "country": str(row[2]) if row[2] else "Unknown",
+                "invoice_count": int(row[3]),
+                "total_revenue": float(row[4])
+            }
+            for row in customer_results
+        ]
+        
+        # === REVENUE BY PRODUCT ===
+        # Check if MAKT (material descriptions) table exists
+        has_makt = 'makt' in available_tables
+        
+        if has_makt:
+            product_query = text("""
+                SELECT 
+                    vbrp.matnr as product_id,
+                    COALESCE(makt.maktx, vbrp.matnr) as product_name,
+                    COALESCE(SUM(vbrp.fkimg), 0) as quantity,
+                    COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+                FROM vbrp
+                JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+                LEFT JOIN makt ON vbrp.matnr = makt.matnr AND makt.spras = 'E'
+                WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+                GROUP BY vbrp.matnr, makt.maktx
+                ORDER BY total_revenue DESC
+                LIMIT 50
+            """)
+        else:
+            product_query = text("""
+                SELECT 
+                    vbrp.matnr as product_id,
+                    vbrp.matnr as product_name,
+                    COALESCE(SUM(vbrp.fkimg), 0) as quantity,
+                    COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+                FROM vbrp
+                JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+                WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+                GROUP BY vbrp.matnr
+                ORDER BY total_revenue DESC
+                LIMIT 50
+            """)
+        
+        product_results = db.execute(product_query, {"start_date": start_date, "end_date": end_date}).fetchall()
+        
+        revenue_by_product = [
+            {
+                "product_id": str(row[0]) if row[0] else "Unknown",
+                "product_name": str(row[1]) if row[1] else "Unknown",
+                "quantity": float(row[2]),
+                "total_revenue": float(row[3])
+            }
+            for row in product_results
+        ]
+        
+        # === REVENUE BY COUNTRY ===
+        if has_kna1:
+            country_query = text("""
+                SELECT 
+                    COALESCE(kna1.land1, 'Unknown') as country,
+                    COUNT(DISTINCT vbrk.vbeln) as invoice_count,
+                    COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+                FROM vbrp
+                JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+                LEFT JOIN kna1 ON vbrk.kunag = kna1.kunnr
+                WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+                GROUP BY kna1.land1
+                ORDER BY total_revenue DESC
+                LIMIT 20
+            """)
+            country_results = db.execute(country_query, {"start_date": start_date, "end_date": end_date}).fetchall()
+            
+            revenue_by_country = [
+                {
+                    "country": str(row[0]) if row[0] else "Unknown",
+                    "invoice_count": int(row[1]),
+                    "total_revenue": float(row[2])
+                }
+                for row in country_results
+            ]
+        else:
+            revenue_by_country = []
+        
+        # === REVENUE BY INDUSTRY ===
+        has_t016t = 't016t' in available_tables
+        
+        if has_kna1 and has_t016t:
+            industry_query = text("""
+                SELECT 
+                    COALESCE(t016t.brtxt, 'General') as industry,
+                    COUNT(DISTINCT vbrk.vbeln) as invoice_count,
+                    COALESCE(SUM(vbrp.netwr), 0) as total_revenue
+                FROM vbrp
+                JOIN vbrk ON vbrp.vbeln = vbrk.vbeln
+                LEFT JOIN kna1 ON vbrk.kunag = kna1.kunnr
+                LEFT JOIN t016t ON kna1.brsch = t016t.brsch AND t016t.spras = 'E'
+                WHERE vbrk.fkdat BETWEEN :start_date AND :end_date
+                GROUP BY t016t.brtxt
+                ORDER BY total_revenue DESC
+                LIMIT 20
+            """)
+            industry_results = db.execute(industry_query, {"start_date": start_date, "end_date": end_date}).fetchall()
+            
+            revenue_by_industry = [
+                {
+                    "industry": str(row[0]) if row[0] else "General",
+                    "invoice_count": int(row[1]),
+                    "total_revenue": float(row[2])
+                }
+                for row in industry_results
+            ]
+        else:
+            revenue_by_industry = []
+        
+        logger.info(f"✅ SAP historical dashboard fetched: {summary['total_invoices']} invoices, ${summary['total_revenue']:,.2f} revenue")
+        
+        return {
+            "period": {"start_date": start_date, "end_date": end_date},
+            "summary": summary,
+            "revenue_trend": revenue_trend,
+            "revenue_by_customer": revenue_by_customer,
+            "revenue_by_product": revenue_by_product,
+            "revenue_by_country": revenue_by_country,
+            "revenue_by_industry": revenue_by_industry,
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Dashboard SAP historical: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 @router.get("/v2/customer-comparison")
 async def get_dashboard_v2_customer_comparison(
     days: int = Query(default=90, ge=1, le=365),
