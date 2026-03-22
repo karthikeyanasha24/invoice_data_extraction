@@ -2938,6 +2938,7 @@ def _non_blocking_validation_payload(validation) -> Dict[str, Any]:
     return payload
 
 
+
 def _validation_warning_requires_refinement(warnings: List[str]) -> bool:
     return any("Question mentions a year" in warning for warning in (warnings or []))
 
@@ -3254,6 +3255,78 @@ Generate a single PostgreSQL SELECT query. Rules:
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
             sql_db.close()
+
+
+@router.get("/ai-analysis/schema")
+async def get_ai_analysis_schema(
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the full table→columns schema available for SQL queries.
+    Used by the frontend schema browser when users write SQL manually.
+    Merges db_table_mapping.json (typed columns) with live DB introspection
+    for any tables not in the mapping file.
+    """
+    from ..services.schema_context_builder import load_schema
+    import sqlalchemy
+
+    # 1) Load typed columns from mapping file (48 SAP tables with full metadata)
+    try:
+        mapping = load_schema()
+    except Exception:
+        mapping = {}
+
+    schema_out: dict = {}
+    for table_name, info in mapping.items():
+        cols = list(info.get("columns", {}).keys())
+        schema_out[table_name] = {
+            "columns": cols,
+            "description": info.get("description", ""),
+            "source": "mapping",
+        }
+
+    # 2) Supplement with live DB introspection for all remaining tables
+    try:
+        sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+        try:
+            # Get all table names from the DB
+            result = sql_db.execute(sqlalchemy.text(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                ORDER BY table_name
+                """
+            )).fetchall()
+            live_tables = [row[0] for row in result]
+
+            for tbl in live_tables:
+                if tbl in schema_out:
+                    continue  # already covered by mapping
+                try:
+                    col_result = sql_db.execute(sqlalchemy.text(
+                        """
+                        SELECT column_name, data_type
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = :tbl
+                        ORDER BY ordinal_position
+                        """
+                    ), {"tbl": tbl}).fetchall()
+                    schema_out[tbl] = {
+                        "columns": [r[0] for r in col_result],
+                        "description": "",
+                        "source": "live",
+                    }
+                except Exception:
+                    pass
+        finally:
+            if USE_SAP_DB_FOR_AI and sql_db is not db:
+                sql_db.close()
+    except Exception as e:
+        logger.warning("Live DB schema introspection failed: %s", e)
+
+    return {"schema": schema_out, "table_count": len(schema_out)}
 
 
 @router.post("/ai-analysis/approve-query")
@@ -5332,4 +5405,5 @@ async def backfill_invoice_v2_bi(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Backfill failed: {str(e)}"
         )
+
 
