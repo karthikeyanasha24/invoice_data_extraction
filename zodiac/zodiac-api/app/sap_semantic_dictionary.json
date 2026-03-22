@@ -92,8 +92,8 @@
     "sales org": { "table": "VBRK", "column": "vkorg", "dimension_column": "vkorg", "entity": "sales" },
     "distribution channel": { "table": "VBRK", "column": "vtweg", "dimension_column": "vtweg", "entity": "sales" },
     "material group": { "table": "MARA", "column": "matkl", "dimension_column": "matkl", "entity": "material" },
-    "year": { "table": "VBRK", "column": "gjahr", "dimension_column": "gjahr", "entity": "sales" },
-    "years": { "table": "VBRK", "column": "gjahr", "dimension_column": "gjahr", "entity": "sales" }
+    "year": { "table": "VBRK", "column": "fkdat", "dimension_column": "fkdat", "entity": "sales" },
+    "years": { "table": "VBRK", "column": "fkdat", "dimension_column": "fkdat", "entity": "sales" }
   },
   "entities": {
     "vendor": {
