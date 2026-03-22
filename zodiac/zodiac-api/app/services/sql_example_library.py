@@ -499,6 +499,23 @@ ORDER BY NULLIF(TRIM(v."netwr"::text), '')::numeric ASC NULLS LAST
 LIMIT 100
 '''.strip(),
     },
+    {
+        "user_query": "Lowest years by sales",
+        "sql_query": '''
+SELECT
+    SUBSTRING(TRIM(r."fkdat"), 1, 4) AS year,
+    SUM(NULLIF(TRIM(v."netwr"::text), '')::numeric) AS sales,
+    COUNT(*) AS records,
+    COUNT(DISTINCT r."vbeln") AS invoice_count
+FROM vbrp v
+JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"), 10, '0') = LPAD(TRIM(r."vbeln"), 10, '0')
+WHERE LENGTH(TRIM(COALESCE(r."fkdat", ''))) >= 4
+GROUP BY SUBSTRING(TRIM(r."fkdat"), 1, 4)
+HAVING SUM(NULLIF(TRIM(v."netwr"::text), '')::numeric) IS NOT NULL
+ORDER BY sales ASC NULLS LAST
+LIMIT 20
+'''.strip(),
+    },
 ]
 
 
@@ -570,6 +587,8 @@ def get_sql_examples_for_question(
         (["costs of manufacturing", "manufacturing cost", "cost of manufacturing", "ckis", "production cost"], 30),
         # Negative / lowest billing lines for a year (credit memos = negative NETWR)
         (["negative", "lowest", "sales", "year", "credit", "line", "billing"], 31),
+        # Calendar years with lowest total sales (FKDAT)
+        (["lowest years", "years", "sales", "weakest", "smallest sales by year"], 32),
     ]
 
     for kw, idx in keywords_map:
