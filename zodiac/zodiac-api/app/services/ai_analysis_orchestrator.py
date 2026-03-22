@@ -121,6 +121,52 @@ def _sanitize_gjahr_sql(sql: str) -> str:
     return sql
 
 
+def _sanitize_netwr_sql(sql: str) -> str:
+    """
+    Post-generation sanitizer: replace bare SUM(x.netwr) / SUM(netwr) with the safe
+    TEXT-cast pattern NULLIF(TRIM(x."netwr"::text),'')::NUMERIC.
+    vbrp.netwr is stored as TEXT in this database; bare SUM() will fail.
+    Only rewrites patterns that are NOT already using ::NUMERIC or ::numeric cast.
+    """
+    if not sql:
+        return sql
+    import re as _re
+
+    # Already-safe patterns: leave them alone (contain ::numeric or nullif)
+    def _already_cast(expr: str) -> bool:
+        low = expr.lower()
+        return "::numeric" in low or "nullif" in low or "::float" in low
+
+    # Pattern 1: SUM(alias."netwr") or SUM(alias.netwr)
+    def _replace_alias_netwr(m: "_re.Match") -> str:
+        full = m.group(0)
+        if _already_cast(full):
+            return full
+        alias = m.group(1)
+        return f'SUM(NULLIF(TRIM({alias}."netwr"::text),\'\')::NUMERIC)'
+
+    sql = _re.sub(
+        r'SUM\s*\(\s*(\b[a-z][a-z0-9_]*)\s*\.\s*"?netwr"?\s*\)',
+        _replace_alias_netwr,
+        sql, flags=_re.IGNORECASE
+    )
+
+    # Pattern 2: bare SUM(netwr) with no alias
+    def _replace_bare_netwr(m: "_re.Match") -> str:
+        full = m.group(0)
+        if _already_cast(full):
+            return full
+        return "SUM(NULLIF(TRIM(netwr::text),'')::NUMERIC)"
+
+    sql = _re.sub(
+        r'SUM\s*\(\s*"?netwr"?\s*\)',
+        _replace_bare_netwr,
+        sql, flags=_re.IGNORECASE
+    )
+
+    return sql
+
+
 def _should_force_new_action(user_query: str) -> bool:
     """
     Detect queries that definitely need new SQL execution.
@@ -744,18 +790,27 @@ If result is empty, say so and suggest a refined question.
             logger.debug("Purchase order fallback failed: %s", po_err)
     timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
 
-    # ── Post-generation SQL sanitizer: replace gjahr with fkdat year expression ──
-    # VBRK.gjahr stores '0000' in this DB; any SQL using gjahr for year returns wrong results.
-    if result and getattr(result, "sql", None) and "gjahr" in (result.sql or "").lower():
-        _clean_sql = _sanitize_gjahr_sql(result.sql)
-        if _clean_sql != result.sql:
-            logger.info("_sanitize_gjahr_sql: rewrote gjahr → fkdat expression, re-executing SQL")
+    # ── Post-generation SQL sanitizers ──────────────────────────────────────────
+    # Run both sanitizers on every result to fix known data-quality issues:
+    #   1. gjahr='0000' for all rows → rewrite to FKDAT-based year expression
+    #   2. SUM(netwr) bare → rewrite to safe NULLIF TEXT cast
+    if result and getattr(result, "sql", None):
+        _orig_sql = result.sql
+        _clean_sql = _sanitize_gjahr_sql(_orig_sql)
+        _clean_sql = _sanitize_netwr_sql(_clean_sql)
+        if _clean_sql != _orig_sql:
+            _changes = []
+            if "gjahr" in _orig_sql.lower() and "gjahr" not in _clean_sql.lower():
+                _changes.append("gjahr→fkdat")
+            if _clean_sql != _sanitize_gjahr_sql(_orig_sql):
+                _changes.append("netwr cast")
+            logger.info("SQL sanitizers applied (%s), re-executing", ", ".join(_changes) or "changes")
             try:
                 from .sap_sql_agent import _run_sql, SqlAgentResult
                 _clean_rows = _run_sql(sql_db, _clean_sql)
                 result = SqlAgentResult(sql=_clean_sql, rows=_clean_rows)
             except Exception as _sg_err:
-                logger.warning("gjahr sanitizer re-execution failed: %s", _sg_err)
+                logger.warning("SQL sanitizer re-execution failed: %s", _sg_err)
 
     # FAGLFLEXA link fallback: when user asks to link profit center costs to customers/products
     # and the main query fails or returns 0 rows, return profit center costs only with a note
