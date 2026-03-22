@@ -1664,8 +1664,8 @@ Task:
 - For purchase orders: use EKKO, EKPO, LFA1 (vendor), MARA, MAKT.
 - **"Show me last sales" / "best sales" / "recent sales" / "last best sales" / "top sales"**: always select VBRK, VBRP, and KNA1 (billing documents and customer). Do not return empty selected_tables.
 - **Sales/revenue by country or "X customers only"** (e.g. "Sales by Korean customers only", "revenue from India", "German customers"): use VBRK, VBRP, and KNA1 (customer country = KNA1.LAND1; or use VBRK.LAND1). Always include these tables so the query can filter by country code (e.g. KR, IN, DE).
-- **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). Group by year from VBRK.FKDAT or VBRK.GJAHR. Do not require a specific table name in the question.
-- **Year-specific billing questions**: if the question names a year like 2000 or 2001, the SQL MUST include a matching VBRK.FKDAT or GJAHR filter for that exact year. Do not reuse a different year's literal date range.
+- **Sales by year / revenue by year / total sales per year**: use VBRK and VBRP (billing header and item). CRITICAL: VBRK.GJAHR stores '0000' in this database and is UNRELIABLE — NEVER use GJAHR for year grouping or year filtering. ALWAYS use SUBSTRING(TRIM(VBRK.fkdat),1,4) as the year dimension.
+- **Year-specific billing questions**: if the question names a year like 2000 or 2001, the SQL MUST include WHERE SUBSTRING(TRIM(r."fkdat"),1,4) = '2000' (replace 2000 with the actual year). NEVER filter on GJAHR for year — it stores '0000' and will return wrong results.
 - **Cost by profit center, cost by GL account, cost by profit center and GL account, cost by profit center and GL account for last N months**: use FAGLFLEXA only (columns: prctr=profit center, racct or cost_elem=GL account, hsl=amount in local currency, ryear, poper, budat for date). Do NOT use EKPO, RBKP, RSEG, or KEKO for profit center or GL account breakdowns.
 - **Any profit center cost/balance question** (total balance by profit center and fiscal year, top N profit centers by cost, monthly cost trend, segment, rcntr, company code, last fiscal year, unusually high costs, average cost per transaction, partner profit center pprctr, functional area rfarea): use FAGLFLEXA; add VBRK/VBRP/KNA1/MAKT only when the question explicitly asks to link costs to customers or products.
 - **Link FAGLFLEXA profit center costs back to customers/products / profit center and customer / cost by profit center and customer**: use FAGLFLEXA with VBRK, VBRP, KNA1, MAKT when the question asks to link or attribute costs to customers or products. Select FAGLFLEXA (prctr, hsl, racct, ryear, poper), VBRK/VBRP (revenue/customer), KNA1 (customer name), MAKT (material name). Join where document or segment allows; if no direct join in schema, still return FAGLFLEXA by profit center and optionally by cost element so the user gets cost breakdown.
@@ -1815,9 +1815,9 @@ Column mappings (table -> column -> description):
 
 **Customer:** Use KNA1.KUNNR (customer number) and KNA1.NAME1 (customer name). Join VBRK.KUNAG = KNA1.KUNNR.
 **Revenue:** Use VBRK, VBRP; join VBRK.VBELN = VBRP.VBELN. VBRP has NETWR, MATNR. Revenue only for billing types A,B,C,D,E,I,L,W (FKTYP).
-**"Show me last sales" / "best sales" / "recent sales" / "last best sales including year":** You MUST return a valid spec. Use tables VBRK and VBRP (and KNA1 if customer name is needed). Columns: VBRK.VBELN (billing_doc), VBRK.FKDAT (billing_date), VBRK.GJAHR (year – include when user asks for "including year"), VBRK.KUNAG or KNA1.NAME1 (customer), VBRP.NETWR (amount, agg null for row-level or SUM for totals). Joins: VBRP to VBRK on VBELN; VBRK to KNA1 on KUNAG=KUNNR. order_by: VBRP.NETWR DESC or VBRK.FKDAT DESC. limit 100. Never return empty columns or tables.
+**"Show me last sales" / "best sales" / "recent sales" / "last best sales including year":** You MUST return a valid spec. Use tables VBRK and VBRP (and KNA1 if customer name is needed). Columns: VBRK.VBELN (billing_doc), VBRK.FKDAT (billing_date), VBRK.FKDAT (year – when user asks "including year", use SUBSTRING(TRIM(fkdat),1,4) as year in SQL), VBRK.KUNAG or KNA1.NAME1 (customer), VBRP.NETWR (amount, agg null for row-level or SUM for totals). Joins: VBRP to VBRK on VBELN; VBRK to KNA1 on KUNAG=KUNNR. order_by: VBRP.NETWR DESC or VBRK.FKDAT DESC. limit 100. Never return empty columns or tables. NEVER use GJAHR as year column.
 **Country filter (Korean/Indian/German customers, revenue from India, etc.):** Add filter LAND1 = '<ISO code>': Korean→KR, Indian/India→IN, German/Germany→DE, US→US, UK→GB. Use KNA1.LAND1 when KNA1 is in the query (customer country), or VBRK.LAND1 when only VBRK is used. The system will inject this from the question if you omit it.
-**Sales by year / revenue by year:** Use VBRK.GJAHR (fiscal year) as the year dimension. Add column VBRK.GJAHR with description "year"; add group_by VBRK.GJAHR; select SUM(VBRP.NETWR) as total_sales. If GJAHR is not in the mappings, use SUBSTRING(VBRK.FKDAT::text, 1, 4) as year and group by it.
+**Sales by year / revenue by year:** CRITICAL — VBRK.GJAHR stores '0000' in this database and is UNRELIABLE. NEVER use GJAHR. ALWAYS use SUBSTRING(TRIM(VBRK.fkdat),1,4) as the year dimension. Add column VBRK.FKDAT with description "year"; in the generated SQL use SUBSTRING(TRIM(fkdat),1,4) AS year; add group_by that expression; select SUM(VBRP.NETWR) as total_sales.
 **Cost by profit center and GL account (or "cost by profit center", "cost by GL account"):** Use table FAGLFLEXA only. Select prctr (profit center), racct or cost_elem (GL account), SUM(hsl) as total_cost or total_amount. Add group_by prctr and racct (or cost_elem). For "last 24 months" filter on ryear and poper (or budat) to restrict to recent periods; use current year and prior year with poper 01-12.
 **Best products by value and industry:** Use VBRK, VBRP, KNA1 (BRSCH), MAKT (MAKT.MATNR = VBRP.MATNR). Select MATNR, MAKTX, BRSCH, NETWR. Order by NETWR DESC.
 **Highest sales by customer:** Use only VBRK, VBRP, KNA1; select KUNNR, NAME1, NETWR; do NOT add VBAK, VBFA, LIKP, LIPS. Order by NETWR DESC.
@@ -1838,7 +1838,7 @@ Column mappings (table -> column -> description):
 **Deliveries (LIKP, LIPS):** Join LIKP to LIPS on VBELN; join to VBRP/VBFA for value. Select delivery doc, customer, material, quantity, value. Order by quantity or value DESC.
 **Controlling (AUFK, COEP, COSP, CSKS):** Use COEP for actual cost by cost object; COSP for planned; join AUFK for order description; CSKS for cost center. Select OBJNR or order, cost element, SUM(amount).
 **Top N (top 20 customers, top 10 materials, top 20 vendors):** Select the dimension (customer, material, vendor), SUM of amount/revenue; group by that dimension; order by the sum DESC; limit N (e.g. 20 or 10). Use VBRK/VBRP/KNA1 for customers, VBRP/MAKT for materials, EKPO/EKKO/LFA1 for vendors.
-**Revenue by customer and year:** Group by KNA1.KUNNR (or NAME1), VBRK.GJAHR (or year from FKDAT); select SUM(VBRP.NETWR). Include customer name and year.
+**Revenue by customer and year:** Group by KNA1.KUNNR (or NAME1), SUBSTRING(TRIM(VBRK.fkdat),1,4) as year; select SUM(VBRP.NETWR). Include customer name and year. NEVER use GJAHR — it is unreliable in this database.
 **Revenue by industry:** Join KNA1.BRSCH = T016T.BRSCH; select T016T text (brtxt) as industry, SUM(VBRP.NETWR); group by industry.
 **Revenue by country:** Use KNA1.LAND1 or VBRK.LAND1; group by country; SUM(VBRP.NETWR).
 **Revenue by customer group (KNVV):** Join VBRK.KUNAG = KNVV.KUNNR (and KNA1); group by KNVV.KDGRP; SUM(VBRP.NETWR).
@@ -2049,15 +2049,16 @@ def _build_minimal_last_sales_spec(
         columns.append({"table": makt, "name": col_name(makt, "maktx"), "description": "product", "agg": None})
         columns.append({"table": vbrp, "name": col_name(vbrp, "netwr"), "description": "amount", "agg": "SUM"})
         group_by.append({"table": makt, "column": col_name(makt, "maktx")})
-        if include_year and vbrk and has_col(vbrk, "gjahr"):
-            columns.append({"table": vbrk, "name": col_name(vbrk, "gjahr"), "description": "year", "agg": None})
-            group_by.append({"table": vbrk, "column": col_name(vbrk, "gjahr")})
-        # "last" = best sales in latest year: filter to recent years
-        if "last" in q_lower and vbrk and has_col(vbrk, "gjahr"):
+        # NEVER use gjahr — it stores '0000' in this DB. Use fkdat for year.
+        if include_year and vbrk and has_col(vbrk, "fkdat"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "fkdat"), "description": "year_from_fkdat", "agg": None})
+            group_by.append({"table": vbrk, "column": col_name(vbrk, "fkdat")})
+        # "last" = best sales in latest year: filter by fkdat year expression
+        if "last" in q_lower and vbrk and has_col(vbrk, "fkdat"):
             from datetime import datetime
             current_year = datetime.now().year
-            latest_year = str(current_year - 1)  # last year + current
-            filters.append({"lhs": f"{vbrk}.gjahr", "operator": ">=", "rhs": f"'{latest_year}'"})
+            latest_year = str(current_year - 1)
+            filters.append({"lhs": f"SUBSTRING(TRIM({vbrk}.fkdat),1,4)", "operator": ">=", "rhs": f"'{latest_year}'"})
     else:
         # Row-level: billing doc, date, amount
         if vbrp and has_col(vbrp, "netwr"):
@@ -2066,8 +2067,9 @@ def _build_minimal_last_sales_spec(
             columns.append({"table": vbrk, "name": col_name(vbrk, "vbeln"), "description": "billing_doc", "agg": None})
         if vbrk and has_col(vbrk, "fkdat"):
             columns.append({"table": vbrk, "name": col_name(vbrk, "fkdat"), "description": "billing_date", "agg": None})
-        if include_year and vbrk and has_col(vbrk, "gjahr"):
-            columns.append({"table": vbrk, "name": col_name(vbrk, "gjahr"), "description": "year", "agg": None})
+        # NEVER use gjahr for year — use fkdat substring instead
+        if include_year and vbrk and has_col(vbrk, "fkdat"):
+            columns.append({"table": vbrk, "name": col_name(vbrk, "fkdat"), "description": "year_from_fkdat", "agg": None})
         if vbrk and has_col(vbrk, "waerk"):
             columns.append({"table": vbrk, "name": col_name(vbrk, "waerk"), "description": "currency", "agg": None})
         if kna1 and has_col(kna1, "name1"):
@@ -2082,6 +2084,19 @@ def _build_minimal_last_sales_spec(
     order_by = []
     if order_col and has_col(order_table, order_col):
         order_by.append({"table": order_table, "column": col_name(order_table, order_col), "direction": "DESC"})
+
+    spec: Dict[str, Any] = {
+        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
+        "columns": columns,
+        "joins": joins,
+        "filters": filters if by_product else [],
+        "order_by": order_by,
+        "group_by": group_by,
+        "limit": 100,
+    }
+    return spec
+
+
 def _build_minimal_ekpo_spec(
     question: str,
     selected_tables: List[str],
@@ -4422,15 +4437,3 @@ def answer_with_sap_sql_agent(question: str, db: Session) -> str:
         return ""
 
     return summary
-
-
-    spec: Dict[str, Any] = {
-        "tables": [{"name": t, "description": t} for t in tables_in_mapping],
-        "columns": columns,
-        "joins": joins,
-        "filters": filters if by_product else [],
-        "order_by": order_by,
-        "group_by": group_by,
-        "limit": 100,
-    }
-    return spec
