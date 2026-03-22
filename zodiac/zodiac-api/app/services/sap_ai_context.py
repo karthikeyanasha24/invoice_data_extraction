@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from .sql_generation_sanitizers import escape_postgres_casts_for_sqlalchemy
+
 logger = logging.getLogger("zodiac-api.sap_ai_context")
 
 # Optional: schema prefix for SAP (e.g. empty, or "SAPHANADB." for HANA)
@@ -29,7 +31,8 @@ def _run_safe(conn, sql: str, params: dict | None = None):
     if not sql or not sql.strip():
         return []
     try:
-        result = conn.execute(text(sql), params or {})
+        safe = escape_postgres_casts_for_sqlalchemy(sql)
+        result = conn.execute(text(safe), params or {})
         rows = result.fetchall()
         keys = result.keys()
         return [dict(zip(keys, row)) for row in rows]
