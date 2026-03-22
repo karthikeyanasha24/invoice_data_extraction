@@ -1773,6 +1773,19 @@ export const dashboardApi = {
         }
     },
 
+    getAIAnalysisSchema: async (): Promise<{
+        schema: Record<string, { columns: string[]; description: string; source: string }>;
+        table_count: number;
+    }> => {
+        try {
+            const response = await api.get('/api/v1/dashboard/ai-analysis/schema');
+            return response.data;
+        } catch (error: any) {
+            console.error('Schema fetch failed:', error);
+            return { schema: {}, table_count: 0 };
+        }
+    },
+
     postAIAnalysisSuggestSql: async (
         question: string,
         timeScope: 'current' | 'historical' | 'both' = 'both'
