@@ -146,6 +146,10 @@ def generate_sql(
 ║     ✗ WRONG (0 rows always): HAVING SUM(netwr) < 0              ║
 ║       — no year has a negative TOTAL in this database           ║
 ║     For "lowest sales": ORDER BY netwr ASC (no HAVING needed)   ║
+║                                                                  ║
+║  5. "Negative OR lowest for year YYYY" → LINE ITEMS in that year║
+║     (ORDER BY netwr ASC). Do NOT return GROUP BY calendar year   ║
+║     totals across all years — that answers a different question.║
 ╚══════════════════════════════════════════════════════════════════╝
 
 {semantic_block}{entity_filter_block}User question:
