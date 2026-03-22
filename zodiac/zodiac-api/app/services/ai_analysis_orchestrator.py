@@ -637,19 +637,56 @@ If result is empty, say so and suggest a refined question.
     sql_start = time.time()
 
     result = None
-    # Andy's training loop: check ai_query_memory first for user-approved queries
+    # Negative / lowest billing LINE ITEMS for a year — MUST run before ai_query_memory.
+    # Stored queries often wrongly aggregate SUM by calendar year across all years; users
+    # then keep getting that SQL reused forever.
     try:
-        from .ai_query_memory_service import find_similar_stored_query
-        stored_sql = find_similar_stored_query(db, user_query, user_id)
-        if stored_sql:
-            from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
-            quoted_sql = _quote_catalog_sql_tables(stored_sql)
-            stored_rows = _run_sql(sql_db, quoted_sql)
-            if stored_rows:
-                result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
-                logger.info("ai_query_memory: reused stored SQL for %r (%d rows)", user_query[:60], len(stored_rows))
-    except Exception as mem_err:
-        logger.debug("ai_query_memory lookup failed: %s", mem_err)
+        from .deterministic_sql_resolver import (
+            is_lowest_years_by_sales_query,
+            is_negative_or_lowest_billing_year_query,
+            resolve_deterministic_sql,
+        )
+        from .schema_loader import get_schema_dict
+        from .sql_validator import validate_sql as schema_validate_sql
+        from .sap_sql_agent import SqlAgentResult, _quote_catalog_sql_tables, _run_sql
+
+        if is_negative_or_lowest_billing_year_query(user_query) or is_lowest_years_by_sales_query(user_query):
+            _schema = get_schema_dict(sql_db)
+            if _schema:
+                _avail = list(_schema.keys())
+                _case = {t.upper(): t for t in _avail}
+                _det = resolve_deterministic_sql(
+                    user_query,
+                    available_tables=_avail,
+                    schema_table_case=_case,
+                )
+                if _det:
+                    _ok, _verr = schema_validate_sql(_det, _schema)
+                    if _ok:
+                        _qsql = _quote_catalog_sql_tables(_det)
+                        _drows = _run_sql(sql_db, _qsql)
+                        result = SqlAgentResult(sql=_qsql, rows=_drows)
+                        logger.info(
+                            "orchestrator: deterministic negative/lowest billing SQL (before memory), %d rows",
+                            len(_drows or []),
+                        )
+    except Exception as _det_pre:
+        logger.debug("orchestrator pre-memory deterministic: %s", _det_pre)
+
+    # Andy's training loop: check ai_query_memory first for user-approved queries
+    if result is None:
+        try:
+            from .ai_query_memory_service import find_similar_stored_query
+            stored_sql = find_similar_stored_query(db, user_query, user_id)
+            if stored_sql:
+                from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+                quoted_sql = _quote_catalog_sql_tables(stored_sql)
+                stored_rows = _run_sql(sql_db, quoted_sql)
+                if stored_rows:
+                    result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
+                    logger.info("ai_query_memory: reused stored SQL for %r (%d rows)", user_query[:60], len(stored_rows))
+        except Exception as mem_err:
+            logger.debug("ai_query_memory lookup failed: %s", mem_err)
 
     # Always go through the SAP SQL agent using live schema instead of predefined patterns.
     knowledge = mem.knowledge()
