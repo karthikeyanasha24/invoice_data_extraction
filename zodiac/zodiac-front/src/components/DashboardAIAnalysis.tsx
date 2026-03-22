@@ -8,6 +8,7 @@ import {
   Activity, BarChart3, Clock, Zap, AlertTriangle, CheckCircle2,
   ArrowUpRight, ArrowDownRight, Minus, CalendarRange, Eye,
   FlaskConical, TrendingDown, DollarSign, XCircle, FileCode,
+  MessageCircle, Database, Table2, ChevronRight, Bot, User as UserIcon,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
 import MultiModelComparison from './ai/MultiModelComparison';
@@ -37,6 +38,41 @@ const HISTORICAL_PROMPTS = [
   { label: 'Flow deviation', query: 'How does my current document flow deviate from the standard process?' },
   { label: 'Period forecast', query: 'Based on historical patterns, forecast next period revenue and invoice volume' },
   { label: 'Anomaly detection', query: 'Identify any anomalies or unusual patterns in the historical data' },
+];
+
+/* ─── SAP Tables catalogue ────────────────────────────────── */
+const SAP_TABLES: { name: string; desc: string; category: string }[] = [
+  { name: 'VBRK', desc: 'Billing Document Header', category: 'Sales' },
+  { name: 'vbrp', desc: 'Billing Document Items', category: 'Sales' },
+  { name: 'VBAK', desc: 'Sales Order Header', category: 'Sales' },
+  { name: 'VBAP', desc: 'Sales Order Items', category: 'Sales' },
+  { name: 'VBFA', desc: 'Document Flow', category: 'Sales' },
+  { name: 'KNA1', desc: 'Customer Master', category: 'Customer' },
+  { name: 'KNVV', desc: 'Customer Sales Data', category: 'Customer' },
+  { name: 'KNVP', desc: 'Customer Partner Functions', category: 'Customer' },
+  { name: 'LFA1', desc: 'Vendor Master', category: 'Vendor' },
+  { name: 'LFB1', desc: 'Vendor Company Data', category: 'Vendor' },
+  { name: 'MAKT', desc: 'Material Descriptions', category: 'Material' },
+  { name: 'MARC', desc: 'Material Plant Data', category: 'Material' },
+  { name: 'EKKO', desc: 'Purchasing Order Header', category: 'Purchasing' },
+  { name: 'EKPO', desc: 'Purchasing Order Items', category: 'Purchasing' },
+  { name: 'FAGLFLEXA', desc: 'General Ledger', category: 'Finance' },
+  { name: 'BSEG', desc: 'Accounting Document Segment', category: 'Finance' },
+  { name: 'COEP', desc: 'CO Document Line Items', category: 'Controlling' },
+  { name: 'AUFK', desc: 'Order Master Data', category: 'Controlling' },
+  { name: 'CKIS', desc: 'Cost Estimate Items', category: 'Controlling' },
+  { name: 'CEPC', desc: 'Profit Center Master', category: 'Controlling' },
+  { name: 'LIKP', desc: 'Delivery Header', category: 'Logistics' },
+  { name: 'LIPS', desc: 'Delivery Items', category: 'Logistics' },
+];
+
+const CHAT_STARTER_PROMPTS = [
+  { label: 'Explain VBRK & vbrp', query: 'Explain the relationship between VBRK and vbrp tables and what data they contain' },
+  { label: 'Key joins', query: 'What are the most important table joins in this SAP schema for sales analysis?' },
+  { label: 'Revenue fields', query: 'Which fields and tables should I use to calculate total revenue or net sales?' },
+  { label: 'Year 2000 data', query: 'How should I filter data for the year 2000? The gjahr field seems unreliable.' },
+  { label: 'Customer lookup', query: 'How do I look up a customer name for a billing document?' },
+  { label: 'Profit margin query', query: 'Walk me through how to build a profit margin query using CKIS and vbrp' },
 ];
 
 /* ─── Types ───────────────────────────────────────────────────── */
@@ -913,13 +949,217 @@ function ChatPanel({
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
 
+/* ─── ChatGPT Free-Chat Panel ─────────────────────────────── */
+
+type ChatMessage = { role: 'user' | 'assistant'; content: string; ts: number };
+
+function ChatGPTPanel({
+  messages,
+  loading,
+  onSend,
+}: {
+  messages: ChatMessage[];
+  loading: boolean;
+  onSend: (text: string) => void;
+}) {
+  const [input, setInput] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const submit = (text?: string) => {
+    const msg = (text ?? input).trim();
+    if (!msg || loading) return;
+    if (!text) setInput('');
+    onSend(msg);
+  };
+
+  const categories = Array.from(new Set(SAP_TABLES.map((t) => t.category)));
+  const filteredTables = selectedCategory
+    ? SAP_TABLES.filter((t) => t.category === selectedCategory)
+    : SAP_TABLES;
+
+  return (
+    <div className="flex gap-3 h-full min-h-0">
+      {/* Left: Table browser */}
+      <div className="hidden md:flex flex-col w-52 flex-shrink-0 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+        <div className="px-3 pt-3 pb-2 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+          <Database className="h-3.5 w-3.5 text-blue-600" />
+          <span className="text-xs font-semibold text-slate-900">SAP Tables</span>
+        </div>
+
+        {/* Category filter */}
+        <div className="px-2 pt-2 flex flex-wrap gap-1 flex-shrink-0">
+          <button
+            onClick={() => setSelectedCategory(null)}
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${!selectedCategory ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`}
+          >
+            All
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${selectedCategory === cat ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        {/* Table list */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+          {filteredTables.map((tbl) => (
+            <button
+              key={tbl.name}
+              onClick={() => submit(`Tell me about the ${tbl.name} table — what data it contains, key columns, and how it's typically used in queries.`)}
+              disabled={loading}
+              className="w-full text-left rounded-lg px-2 py-1.5 hover:bg-blue-50 hover:border-blue-200 border border-transparent transition-all group disabled:opacity-50"
+            >
+              <div className="flex items-center gap-1.5">
+                <Table2 className="h-3 w-3 text-slate-400 flex-shrink-0 group-hover:text-blue-500 transition-colors" />
+                <span className="text-[11px] font-mono font-semibold text-slate-800 group-hover:text-blue-700">{tbl.name}</span>
+              </div>
+              <p className="text-[10px] text-slate-500 ml-4.5 leading-tight mt-0.5">{tbl.desc}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Right: Chat area */}
+      <div className="flex-1 min-w-0 flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden">
+        {/* Header */}
+        <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
+            <Bot className="h-3.5 w-3.5 text-white" />
+          </div>
+          <div>
+            <h2 className="text-xs font-semibold text-slate-900">Chat with ChatGPT</h2>
+            <p className="text-[10px] text-slate-500">Ask anything about tables, data, schema, or business logic</p>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {messages.length === 0 && (
+            <div className="space-y-4">
+              <div className="text-center py-4">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mx-auto mb-3 shadow-lg">
+                  <MessageCircle className="h-6 w-6 text-white" />
+                </div>
+                <h3 className="text-sm font-semibold text-slate-900 mb-1">Chat with your data</h3>
+                <p className="text-xs text-slate-500 max-w-xs mx-auto">
+                  Ask about table structures, query logic, business rules, or explore the SAP schema — not just SQL generation.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {CHAT_STARTER_PROMPTS.map((p) => (
+                  <button
+                    key={p.label}
+                    onClick={() => submit(p.query)}
+                    disabled={loading}
+                    className="text-left rounded-xl border border-slate-200 bg-slate-50 hover:bg-gradient-to-br hover:from-blue-600 hover:to-indigo-700 hover:border-blue-600 hover:text-white text-slate-700 px-3 py-2.5 transition-all group disabled:opacity-50 hover:shadow-md"
+                  >
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <ChevronRight className="h-3 w-3 text-blue-500 group-hover:text-white flex-shrink-0" />
+                      <span className="text-xs font-semibold">{p.label}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 group-hover:text-blue-100 leading-tight ml-4">{p.query}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((m, i) => (
+            <div key={i} className={`flex gap-2.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              {m.role === 'assistant' && (
+                <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm">
+                  <Bot className="h-3.5 w-3.5 text-white" />
+                </div>
+              )}
+              <div className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+                m.role === 'user'
+                  ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-br-sm'
+                  : 'bg-slate-50 border border-slate-200 text-slate-800 rounded-bl-sm'
+              }`}>
+                {m.role === 'assistant' ? (
+                  <div className="prose prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:text-slate-50 prose-code:text-blue-700 prose-code:bg-blue-50 prose-code:px-1 prose-code:rounded text-xs">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <span className="text-xs">{m.content}</span>
+                )}
+              </div>
+              {m.role === 'user' && (
+                <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm">
+                  <UserIcon className="h-3.5 w-3.5 text-white" />
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <Bot className="h-3.5 w-3.5 text-white" />
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
+                <div className="flex gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                  ))}
+                </div>
+                <span className="text-xs text-slate-500 ml-1">Thinking…</span>
+              </div>
+            </div>
+          )}
+
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Input */}
+        <div className="px-3 py-3 border-t border-slate-100 flex gap-2 flex-shrink-0">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
+            placeholder="Ask about tables, schema, data, or business logic…"
+            className="flex-1 min-w-0 rounded-xl border border-slate-200 text-sm py-2 px-3 text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:opacity-60 transition-shadow"
+            disabled={loading}
+          />
+          <button
+            type="button"
+            onClick={() => submit()}
+            disabled={loading || !input.trim()}
+            className="flex-shrink-0 h-9 px-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:from-emerald-600 hover:to-teal-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 text-sm font-medium shadow-sm"
+          >
+            {loading
+              ? <div className="h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              : <Send className="h-3.5 w-3.5" />}
+            <span className="hidden sm:inline text-xs">Send</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+══════════════════════════════════════════════════════════════ */
+
 export default function DashboardAIAnalysis() {
-  const [activeSection, setActiveSection] = useState<'realtime' | 'historical'>('realtime');
+  const [activeSection, setActiveSection] = useState<'realtime' | 'historical' | 'chat'>('realtime');
   const [days, setDays] = useState(DEFAULT_DAYS);
   const [historicalDays, setHistoricalDays] = useState(90);
 
   const [realtimeMessages, setRealtimeMessages] = useState<Message[]>([]);
   const [historicalMessages, setHistoricalMessages] = useState<Message[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatHistoryRef = useRef<{ role: string; content: string }[]>([]);
 
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [historicalLoading, setHistoricalLoading] = useState(false);
@@ -1110,6 +1350,35 @@ export default function DashboardAIAnalysis() {
     await dashboardApi.postAIAnalysisRejectQuery(question, rejectedSql, timeScope, attemptSource);
   };
 
+  /* ── Free chat with ChatGPT ──────────────────────────────── */
+  const sendChatMessage = async (text: string) => {
+    const userMsg: ChatMessage = { role: 'user', content: text, ts: Date.now() };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatLoading(true);
+
+    // Append to conversation history for context
+    const history = [...chatHistoryRef.current, { role: 'user', content: text }];
+
+    try {
+      const res = await dashboardApi.postAIAnalysisChat(
+        text,
+        chatHistoryRef.current,
+        AI_CONTEXT_KEYS,
+        30,
+        'both',
+      );
+      const reply = res?.reply ?? res?.message ?? 'No response received.';
+      const assistantMsg: ChatMessage = { role: 'assistant', content: reply, ts: Date.now() };
+      setChatMessages((prev) => [...prev, assistantMsg]);
+      chatHistoryRef.current = [...history, { role: 'assistant', content: reply }];
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Chat error. Please try again.';
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${msg}`, ts: Date.now() }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   /* ── Derived stats ───────────────────────────────────────── */
 
   const f = outboundData?.funnel;
@@ -1251,11 +1520,12 @@ export default function DashboardAIAnalysis() {
               {[
                 { key: 'realtime', label: 'Real-time', icon: Activity },
                 { key: 'historical', label: 'Historical', icon: BarChart3 },
+                { key: 'chat', label: 'Chat', icon: MessageCircle },
               ].map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setActiveSection(key as 'realtime' | 'historical')}
+                  onClick={() => setActiveSection(key as 'realtime' | 'historical' | 'chat')}
                   className={`tab-pill flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${activeSection === key ? 'active' : 'text-slate-600'}`}
                 >
                   <Icon className="h-3 w-3" />
@@ -1630,6 +1900,36 @@ export default function DashboardAIAnalysis() {
                 {error}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ═══════════════════════════
+            CHAT SECTION
+        ═══════════════════════════ */}
+        {activeSection === 'chat' && (
+          <div className="fade-in flex flex-col gap-4 h-full" style={{ minHeight: 'calc(100vh - 120px)' }}>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm">
+                <MessageCircle className="h-3.5 w-3.5 text-white" />
+              </div>
+              <h1 className="text-sm font-semibold text-slate-900">Chat with ChatGPT</h1>
+              <span className="text-xs font-mono text-slate-400">Explore tables, schema &amp; business logic</span>
+              {chatMessages.length > 0 && (
+                <button
+                  onClick={() => { setChatMessages([]); chatHistoryRef.current = []; }}
+                  className="ml-auto text-[10px] text-slate-500 hover:text-red-500 border border-slate-200 hover:border-red-200 rounded-lg px-2 py-1 transition-colors flex items-center gap-1"
+                >
+                  <XCircle className="h-3 w-3" /> Clear chat
+                </button>
+              )}
+            </div>
+            <div className="flex-1 min-h-0">
+              <ChatGPTPanel
+                messages={chatMessages}
+                loading={chatLoading}
+                onSend={sendChatMessage}
+              />
+            </div>
           </div>
         )}
       </main>
