@@ -2891,6 +2891,32 @@ def _build_ai_analysis_context(context_keys: list, current_user: ZodiacUser, db:
     return "\n".join(parts) if parts else ""
 
 
+def _extract_first_select_statement(sql: str) -> str:
+    """
+    When the user pastes multi-statement SQL (several queries separated by ';'
+    or SQL comment blocks like '-- ----'), extract only the first complete SELECT
+    statement so execution and storage work correctly.
+    Also removes SQLAlchemy-style bind parameters (%(x)s, :x) that would crash
+    at execution time.
+    """
+    if not sql or not sql.strip():
+        return sql or ""
+    # Remove inline SQLAlchemy bind parameters: %(year)s → replaced with empty-string
+    # guard so the SQL doesn't crash; users can refine after seeing the result.
+    import re as _re
+    sql = _re.sub(r'%\([^)]+\)s', "''", sql)
+    sql = _re.sub(r'(?<!\w):([a-zA-Z_][a-zA-Z0-9_]*)\b', "''", sql)
+    # Split on statement terminator ';' — keep only the first non-empty SELECT
+    statements = [s.strip() for s in sql.split(";")]
+    for stmt in statements:
+        # Strip leading SQL comment blocks (-- ---- style dividers)
+        clean = _re.sub(r"(^|\n)\s*--[^\n]*", "", stmt).strip()
+        if clean.upper().startswith("SELECT"):
+            return clean
+    # Fallback: return original (single-statement case)
+    return sql.strip()
+
+
 def _validation_to_payload(validation) -> Dict[str, Any]:
     if not validation:
         return {}
@@ -3262,6 +3288,9 @@ def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approva
     from ..services.training_data_collector import log_query_feedback_attempt
     from ..config.config import USE_SAP_DB_FOR_AI
 
+    # ── Pre-process: strip multi-statement SQL to first valid SELECT ──────────
+    proposed_sql = _extract_first_select_statement(proposed_sql)
+
     sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
     try:  # outer try — finally block ensures sql_db.close() always runs
         # ── Step 1: Execute SQL with precision checks ──────────────────────────
@@ -3298,10 +3327,11 @@ Key rules for SAP data:
 - Do NOT invent or prepend schemas like public. Use the actual SAP table names already present in the SQL.
 - Preserve SAP table casing exactly. In this database, examples include lowercase vbrp and quoted uppercase "VBRK".
 - If the SQL already joins the right tables, prefer the minimal fix instead of rewriting the whole query.
+- YEAR FILTERING: VBRK.gjahr stores '0000' and is UNRELIABLE. Filter by fkdat instead: SUBSTRING(TRIM(fkdat), 1, 4) = '2000' for year 2000. NEVER use gjahr for year filters.
+- NEVER use SQLAlchemy bind parameters (%(year)s, %(x)s, :year, :x) — inline all literal values.
 - CKIS.wertn and CKIS.gpreis are TEXT columns. Use SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) NOT COALESCE(wertn, 0).
-- Safe CKIS subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c
-- vbrp.netwr is also TEXT in some installs; cast with NULLIF(TRIM(netwr::text), '')::NUMERIC if needed.
-- Return ONLY the fixed SQL, no explanation."""
+- vbrp.netwr is also TEXT; cast with NULLIF(TRIM(netwr::text), '')::NUMERIC if needed.
+- Return ONLY a single SELECT statement, no multiple statements, no comments, no markdown."""
                     _client = OpenAI(api_key=_ai_key)
                     _resp = _client.chat.completions.create(
                         model="gpt-4o",
