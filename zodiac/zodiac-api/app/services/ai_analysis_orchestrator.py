@@ -1027,9 +1027,11 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
 - Use only SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
 - No DELETE, UPDATE, DROP, INSERT
 - Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.{_chatgpt_entity_hint}
-- CKIS TEXT COLUMNS (CRITICAL): The CKIS.wertn and CKIS.gpreis columns are stored as TEXT, not numeric. NEVER use COALESCE(wertn, 0) — it fails with type mismatch. ALWAYS cast with: SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC). Safe subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c.
-- For profit margin: revenue from vbrp.netwr (cast via NULLIF(TRIM(netwr::text),'')::NUMERIC), cost from CKIS subquery above. Join vbrp→MAKT for product name, vbrp→CKIS on matnr.
-- Return ONLY the SQL, no explanation. No markdown code blocks."""
+- YEAR FILTERING (CRITICAL): VBRK.gjahr stores '0000' in this DB — NEVER use it for year queries. ALWAYS filter by fkdat: SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000' for year 2000, or fkdat BETWEEN '20000101' AND '20001231'. Never use gjahr.
+- VBRP.netwr is TEXT — cast with NULLIF(TRIM(v."netwr"::text), '')::NUMERIC.
+- CKIS TEXT COLUMNS: CKIS.wertn and CKIS.gpreis are TEXT. Use SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC). Safe subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c.
+- NEVER use SQLAlchemy bind parameters (%(year)s, :year) — always inline literal values.
+- Return ONLY a single SELECT statement. No multiple statements, no comments, no markdown."""
                     resp = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[{"role": "user", "content": prompt}],
