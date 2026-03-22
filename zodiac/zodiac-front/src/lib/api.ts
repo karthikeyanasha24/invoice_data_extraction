@@ -1788,12 +1788,14 @@ export const dashboardApi = {
 
     postAIAnalysisSuggestSql: async (
         question: string,
-        timeScope: 'current' | 'historical' | 'both' = 'both'
+        timeScope: 'current' | 'historical' | 'both' = 'both',
+        instructions?: string
     ) => {
         try {
             const response = await api.post('/api/v1/dashboard/ai-analysis/suggest-sql', {
                 question,
                 time_scope: timeScope,
+                instructions: instructions ?? '',
             });
             return response.data;
         } catch (error: any) {
