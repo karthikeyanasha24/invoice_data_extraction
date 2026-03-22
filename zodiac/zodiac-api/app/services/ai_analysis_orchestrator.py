@@ -17,6 +17,7 @@ from .training_data_collector import log_query_execution, get_few_shot_examples
 from .sql_example_library import get_sql_examples_for_question
 from .query_cache import find_similar_cached_query, cache_query_result
 from .multi_llm_client import get_multi_llm_client, get_best_available_model, smart_chat_completion
+from .sql_generation_sanitizers import sanitize_generated_sap_sql
 
 logger = logging.getLogger(__name__)
 
@@ -94,77 +95,6 @@ def _safe_json_extract(text: str) -> Dict[str, Any]:
             return json.loads(m.group(0))
         except Exception:
             return {}
-
-
-def _sanitize_gjahr_sql(sql: str) -> str:
-    """
-    Post-generation sanitizer: replace VBRK.gjahr references with SUBSTRING(TRIM(fkdat),1,4).
-    VBRK.gjahr stores '0000' in this database and is unreliable for year filtering or grouping.
-    This runs on every SQL string returned by all three agent paths before execution.
-    """
-    if not sql or "gjahr" not in sql.lower():
-        return sql
-    import re as _re
-    # Replace alias."gjahr" → SUBSTRING(TRIM(alias."fkdat"),1,4)
-    # e.g. r."gjahr"  v."gjahr"  vk."gjahr"
-    sql = _re.sub(
-        r'(\b[a-z][a-z0-9_]*)\."gjahr"',
-        lambda m: f'SUBSTRING(TRIM({m.group(1)}."fkdat"),1,4)',
-        sql, flags=_re.IGNORECASE
-    )
-    # Replace bare gjahr (unquoted) → SUBSTRING(TRIM(fkdat),1,4)
-    sql = _re.sub(
-        r'\bgjahr\b',
-        "SUBSTRING(TRIM(fkdat),1,4)",
-        sql, flags=_re.IGNORECASE
-    )
-    return sql
-
-
-def _sanitize_netwr_sql(sql: str) -> str:
-    """
-    Post-generation sanitizer: replace bare SUM(x.netwr) / SUM(netwr) with the safe
-    TEXT-cast pattern NULLIF(TRIM(x."netwr"::text),'')::NUMERIC.
-    vbrp.netwr is stored as TEXT in this database; bare SUM() will fail.
-    Only rewrites patterns that are NOT already using ::NUMERIC or ::numeric cast.
-    """
-    if not sql:
-        return sql
-    import re as _re
-
-    # Already-safe patterns: leave them alone (contain ::numeric or nullif)
-    def _already_cast(expr: str) -> bool:
-        low = expr.lower()
-        return "::numeric" in low or "nullif" in low or "::float" in low
-
-    # Pattern 1: SUM(alias."netwr") or SUM(alias.netwr)
-    def _replace_alias_netwr(m: "_re.Match") -> str:
-        full = m.group(0)
-        if _already_cast(full):
-            return full
-        alias = m.group(1)
-        return f'SUM(NULLIF(TRIM({alias}."netwr"::text),\'\')::NUMERIC)'
-
-    sql = _re.sub(
-        r'SUM\s*\(\s*(\b[a-z][a-z0-9_]*)\s*\.\s*"?netwr"?\s*\)',
-        _replace_alias_netwr,
-        sql, flags=_re.IGNORECASE
-    )
-
-    # Pattern 2: bare SUM(netwr) with no alias
-    def _replace_bare_netwr(m: "_re.Match") -> str:
-        full = m.group(0)
-        if _already_cast(full):
-            return full
-        return "SUM(NULLIF(TRIM(netwr::text),'')::NUMERIC)"
-
-    sql = _re.sub(
-        r'SUM\s*\(\s*"?netwr"?\s*\)',
-        _replace_bare_netwr,
-        sql, flags=_re.IGNORECASE
-    )
-
-    return sql
 
 
 def _should_force_new_action(user_query: str) -> bool:
@@ -796,15 +726,9 @@ If result is empty, say so and suggest a refined question.
     #   2. SUM(netwr) bare → rewrite to safe NULLIF TEXT cast
     if result and getattr(result, "sql", None):
         _orig_sql = result.sql
-        _clean_sql = _sanitize_gjahr_sql(_orig_sql)
-        _clean_sql = _sanitize_netwr_sql(_clean_sql)
+        _clean_sql = sanitize_generated_sap_sql(_orig_sql)
         if _clean_sql != _orig_sql:
-            _changes = []
-            if "gjahr" in _orig_sql.lower() and "gjahr" not in _clean_sql.lower():
-                _changes.append("gjahr→fkdat")
-            if _clean_sql != _sanitize_gjahr_sql(_orig_sql):
-                _changes.append("netwr cast")
-            logger.info("SQL sanitizers applied (%s), re-executing", ", ".join(_changes) or "changes")
+            logger.info("SQL sanitizers applied (gjahr→fkdat and/or netwr), re-executing")
             try:
                 from .sap_sql_agent import _run_sql, SqlAgentResult
                 _clean_rows = _run_sql(sql_db, _clean_sql)
