@@ -3238,11 +3238,23 @@ Follow these instructions exactly when writing the query.
         prompt = f"""You are an SAP PostgreSQL expert. The user asked: "{question}"
 {instructions_block}
 CRITICAL DATA RULES (confirmed facts about this database — ignore at your peril):
-- VBRK.gjahr contains '0000' for ALL rows. NEVER filter on gjahr. ALWAYS use FKDAT:
+- VBRK.gjahr contains '0000' for ALL rows. NEVER filter or group by gjahr. ALWAYS use FKDAT:
     WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
 - vbrp.netwr is TEXT. ALWAYS cast: SUM(NULLIF(TRIM(v."netwr"::text), '')::NUMERIC)
 - JOIN vbrp to VBRK with LPAD: ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0')
 - Uppercase SAP tables need double quotes: "VBRK" "KNA1" "MAKT" (vbrp is lowercase)
+- NEGATIVE SALES = individual billing LINE ITEMS with netwr < 0, NOT year totals.
+    WRONG (always 0 rows): HAVING SUM(netwr) < 0
+    RIGHT: WHERE NULLIF(TRIM(v."netwr"::text), '')::NUMERIC < 0
+    Example for "negative sales in year 2000":
+        SELECT v."vbeln", v."matnr", r."fkdat",
+               NULLIF(TRIM(v."netwr"::text), '')::NUMERIC AS netwr
+        FROM vbrp v
+        JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0')
+        WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
+          AND NULLIF(TRIM(v."netwr"::text), '')::NUMERIC < 0
+        ORDER BY NULLIF(TRIM(v."netwr"::text), '')::NUMERIC ASC
+- LOWEST SALES: Use ORDER BY netwr ASC (no HAVING filter). Show individual line items.
 
 Database schema (PostgreSQL):
 {schema_text[:6000]}
@@ -3277,7 +3289,6 @@ Generate a single PostgreSQL SELECT query. Rules:
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:
             sql_db.close()
-
 
 @router.get("/ai-analysis/schema")
 async def get_ai_analysis_schema(
@@ -3374,6 +3385,7 @@ async def post_ai_analysis_approve_query(
             detail=f"Approve failed: {str(e)}",
         )
 
+
 def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approval_source: str, current_user, db):
     from ..services.ai_query_memory_service import store_approved_query
     from ..services.ai_analysis_orchestrator import orchestrator_payload
@@ -3425,6 +3437,7 @@ Key rules for SAP data:
 - NEVER use SQLAlchemy bind parameters (%(year)s, %(x)s, :year, :x) — inline all literal values.
 - CKIS.wertn and CKIS.gpreis are TEXT columns. Use SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) NOT COALESCE(wertn, 0).
 - vbrp.netwr is also TEXT; cast with NULLIF(TRIM(netwr::text), '')::NUMERIC if needed.
+- NEGATIVE SALES: Use WHERE NULLIF(TRIM(v."netwr"::text),'')::NUMERIC < 0 on individual rows. NEVER use HAVING SUM(netwr) < 0 (no year has a negative total — it returns 0 rows).
 - Return ONLY a single SELECT statement, no multiple statements, no comments, no markdown."""
                     _client = OpenAI(api_key=_ai_key)
                     _resp = _client.chat.completions.create(
