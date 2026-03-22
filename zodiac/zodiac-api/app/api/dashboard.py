@@ -2952,6 +2952,9 @@ def _format_validation_detail(prefix: str, errors: List[str], warnings: List[str
 def _validate_sql_candidate(sql_db: Session, question: str, sql: str):
     from ..services.ai_query_memory_service import validate_sql_for_safe_execution
     from ..services.sap_sql_precision_validator import validate_sql_precision_for_db
+    from ..services.sql_generation_sanitizers import sanitize_generated_sap_sql
+
+    sql = sanitize_generated_sap_sql(sql)
 
     is_valid, err = validate_sql_for_safe_execution(sql)
     if not is_valid:
