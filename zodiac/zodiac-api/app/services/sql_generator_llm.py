@@ -221,3 +221,4 @@ def _extract_sql(text: str) -> Optional[str]:
     if "SELECT" in first.upper():
         return first + ";"
     return text if ("SELECT" in text.upper()) else None
+
