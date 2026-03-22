@@ -114,6 +114,47 @@ def resolve_deterministic_sql(
             return _quote(schema_table_case[t.upper()])
         return _quote(t)
 
+    # 0b) Negative and/or lowest sales = billing LINE ITEMS (VBRP), not year-level totals.
+    # Year totals are never negative; credit memos appear as negative NETWR on lines.
+    # Phrases: "negative sales", "lowest sales", "negative or lowest for year 2000"
+    _sales_ctx = any(w in q for w in ("sales", "revenue", "billing", "invoice", "amount", "netwr"))
+    _neg_or_low = any(
+        w in q
+        for w in (
+            "negative",
+            "lowest",
+            "smallest",
+            "minimum",
+            "credit memo",
+            "credit memos",
+        )
+    )
+    if _sales_ctx and _neg_or_low:
+        ym = re.search(r"\b((?:19|20)\d{2})\b", q)
+        if ym and ok("VBRP") and ok("VBRK"):
+            y = ym.group(1)
+            v = "v"
+            rr = "r"
+            net_cast = f"NULLIF(TRIM({v}.\"netwr\"::text), '')::numeric"
+            vk = tbl("VBRK")
+            has_neg = bool(re.search(r"\bnegative\b", q))
+            has_low = bool(re.search(r"\b(lowest|smallest|minimum)\b", q))
+            # If user asks ONLY negative (no "lowest"/etc.), filter to credit lines.
+            # If both "negative" and "lowest" (or "negative or lowest"), order all lines in year
+            # by amount ASC → negatives appear first, then smallest positives.
+            only_negative_lines = has_neg and not has_low
+            where_neg = f" AND ({net_cast}) < 0" if only_negative_lines else ""
+            sql = (
+                f'SELECT {v}."vbeln" AS billing_doc, {v}."posnr" AS line_pos, '
+                f'{rr}."fkdat" AS billing_date, {rr}."kunag" AS sold_to_party, '
+                f'{net_cast} AS netwr_line_amount, {rr}."waerk" AS currency '
+                f'FROM vbrp {v} '
+                f'JOIN {vk} {rr} ON LPAD(TRIM({v}."vbeln"), 10, \'0\') = LPAD(TRIM({rr}."vbeln"), 10, \'0\') '
+                f'WHERE SUBSTRING(TRIM({rr}."fkdat"), 1, 4) = \'{y}\'{where_neg} '
+                f'ORDER BY {net_cast} ASC NULLS LAST LIMIT 100'
+            )
+            return sql.strip()
+
     # 0a) Total cost by profit center (FAGLFLEXA) - highest cost, current fiscal year
     pc_cost_phrases = (
         "profit center", "profit centres", "cost by profit center", "total cost by profit center",
