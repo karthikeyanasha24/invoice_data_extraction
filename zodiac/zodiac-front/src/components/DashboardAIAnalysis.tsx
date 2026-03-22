@@ -2277,3 +2277,4 @@ export default function DashboardAIAnalysis() {
     </div>
   );
 }
+
