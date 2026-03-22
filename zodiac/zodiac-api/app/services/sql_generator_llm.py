@@ -119,6 +119,32 @@ def generate_sql(
     # Restrict schema to selected tables only (subset of full schema)
     prompt = f"""You are a PostgreSQL SAP expert. Write a single SQL query to answer the user's question.
 
+╔══════════════════════════════════════════════════════════════════╗
+║  MANDATORY DATA RULES — THESE ARE CONFIRMED DATABASE FACTS      ║
+║  Ignoring these rules will produce WRONG or EMPTY results.      ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  1. GJAHR IS BROKEN — ALL 53,170 rows have gjahr = '0000'.      ║
+║     NEVER filter on gjahr. It will always return 0 rows or      ║
+║     return every row as year 0000.                              ║
+║     ✗ Wrong:   WHERE r."gjahr" = '2000'                         ║
+║     ✓ Correct: WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000' ║
+║                                                                  ║
+║  2. NETWR IS TEXT — stored as character varying, not numeric.   ║
+║     NEVER use SUM(v.netwr) directly — it will fail.             ║
+║     ✗ Wrong:   SUM(v."netwr")                                   ║
+║     ✓ Correct: SUM(NULLIF(TRIM(v."netwr"::text), '')::NUMERIC)  ║
+║                                                                  ║
+║  3. JOIN WITH LPAD to avoid leading-zero mismatches:            ║
+║     ON LPAD(TRIM(v."vbeln"), 10, '0') =                         ║
+║        LPAD(TRIM(r."vbeln"), 10, '0')                           ║
+║                                                                  ║
+║  4. NEGATIVE SALES exist as individual lines (credit memos).    ║
+║     To find them: WHERE NULLIF(TRIM(v."netwr"::text),'')        ║
+║                         ::NUMERIC < 0                           ║
+║     To find lowest year totals: ORDER BY total_sales ASC        ║
+╚══════════════════════════════════════════════════════════════════╝
+
 {semantic_block}{entity_filter_block}User question:
 {question}
 
@@ -136,8 +162,8 @@ Rules:
 - ENTITY FILTER (CRITICAL): If the question names a specific customer (e.g. "for customer Siemens"), add WHERE KNA1.name1 ILIKE '%Siemens%' and JOIN KNA1 if needed. If it names a vendor (e.g. "vendor named Bosch"), add WHERE LFA1.name1 ILIKE '%Bosch%'. If it names a product (e.g. "Harley", "jacket"), add WHERE MAKT.maktx ILIKE '%Harley%'. NEVER return a broad unfiltered result when a specific entity is requested.
 - For "cost by profit center" or "postings by profit center": use FAGLFLEXA, group by prctr, SUM(hsl) as total_cost.
 - For "jacket" or product name filter: use MAKT.MAKTX ILIKE '%jacket%' and MAKT.SPRAS = 'E' when MAKT is in tables.
-- For sales/revenue: use VBRK (header), VBRP (items); join on VBELN; NETWR is net amount (stored as TEXT — cast via NULLIF(TRIM(netwr::text),'')::NUMERIC); FKDAT is billing date (stored as TEXT, format YYYYMMDD e.g. '20001215'). For customer join: VBRK.kunag = KNA1.kunnr.
-- YEAR FILTERING (CRITICAL): VBRK.gjahr (fiscal year) stores '0000' in this database and is UNRELIABLE. ALWAYS use FKDAT for year/date filtering: SUBSTRING(TRIM(fkdat), 1, 4) = '2000' for calendar year 2000. For date ranges use FKDAT BETWEEN '20000101' AND '20001231'. NEVER filter on gjahr for year queries.
+- For sales/revenue: use VBRK (header), VBRP (items); join on VBELN with LPAD; NETWR must be cast (see box above); FKDAT is billing date (TEXT, format YYYYMMDD). For customer join: VBRK.kunag = KNA1.kunnr.
+- YEAR FILTERING: ALWAYS use FKDAT (see mandatory box above). NEVER use gjahr.
 - NEVER use SQLAlchemy bind parameters like %(year)s or :year in generated SQL — always inline literal values.
 - For purchases / purchase order: use EKPO (columns: matnr, menge, netpr). Total quantity = SUM(menge), total cost = SUM(menge * netpr). Always include EKPO for "purchase order totals", "PO totals", "vendor spend by material".
 - For "purchase order totals by material": SELECT EKPO.matnr (or p.matnr) AS material, MAKT.maktx AS material_name, SUM(EKPO.menge) AS total_quantity, SUM(EKPO.menge * EKPO.netpr) AS total_purchase_cost FROM EKPO LEFT JOIN MAKT ON EKPO.matnr = MAKT.matnr AND (MAKT.spras = 'E' OR MAKT.spras IS NULL) GROUP BY EKPO.matnr, MAKT.maktx ORDER BY total_purchase_cost DESC LIMIT 100. Use actual table/column casing from schema (e.g. lowercase if schema shows lowercase).
