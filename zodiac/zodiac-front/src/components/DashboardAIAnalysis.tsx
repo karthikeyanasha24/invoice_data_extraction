@@ -42,28 +42,136 @@ const HISTORICAL_PROMPTS = [
 
 /* ─── SAP Tables catalogue ────────────────────────────────── */
 const SAP_TABLES: { name: string; desc: string; category: string }[] = [
-  { name: 'VBRK', desc: 'Billing Document Header', category: 'Sales' },
-  { name: 'vbrp', desc: 'Billing Document Items', category: 'Sales' },
-  { name: 'VBAK', desc: 'Sales Order Header', category: 'Sales' },
-  { name: 'VBAP', desc: 'Sales Order Items', category: 'Sales' },
-  { name: 'VBFA', desc: 'Document Flow', category: 'Sales' },
-  { name: 'KNA1', desc: 'Customer Master', category: 'Customer' },
-  { name: 'KNVV', desc: 'Customer Sales Data', category: 'Customer' },
-  { name: 'KNVP', desc: 'Customer Partner Functions', category: 'Customer' },
-  { name: 'LFA1', desc: 'Vendor Master', category: 'Vendor' },
-  { name: 'LFB1', desc: 'Vendor Company Data', category: 'Vendor' },
-  { name: 'MAKT', desc: 'Material Descriptions', category: 'Material' },
-  { name: 'MARC', desc: 'Material Plant Data', category: 'Material' },
-  { name: 'EKKO', desc: 'Purchasing Order Header', category: 'Purchasing' },
-  { name: 'EKPO', desc: 'Purchasing Order Items', category: 'Purchasing' },
-  { name: 'FAGLFLEXA', desc: 'General Ledger', category: 'Finance' },
-  { name: 'BSEG', desc: 'Accounting Document Segment', category: 'Finance' },
-  { name: 'COEP', desc: 'CO Document Line Items', category: 'Controlling' },
-  { name: 'AUFK', desc: 'Order Master Data', category: 'Controlling' },
-  { name: 'CKIS', desc: 'Cost Estimate Items', category: 'Controlling' },
-  { name: 'CEPC', desc: 'Profit Center Master', category: 'Controlling' },
-  { name: 'LIKP', desc: 'Delivery Header', category: 'Logistics' },
-  { name: 'LIPS', desc: 'Delivery Items', category: 'Logistics' },
+  // ── Sales & Billing ──────────────────────────────────────────
+  { name: 'VBRK',                      desc: 'Billing Document Header',              category: 'Sales' },
+  { name: 'vbrp',                      desc: 'Billing Document Items',               category: 'Sales' },
+  { name: 'VBAK',                      desc: 'Sales Order Header',                   category: 'Sales' },
+  { name: 'VBAP',                      desc: 'Sales Order Items',                    category: 'Sales' },
+  { name: 'VBEP',                      desc: 'Sales Order Schedule Lines',           category: 'Sales' },
+  { name: 'VBFA',                      desc: 'Document Flow (Sales)',                category: 'Sales' },
+  { name: 'KONV',                      desc: 'Pricing Conditions',                   category: 'Sales' },
+  { name: 'MVKE',                      desc: 'Material Sales Data',                  category: 'Sales' },
+  // ── Delivery & Logistics ─────────────────────────────────────
+  { name: 'LIKP',                      desc: 'Delivery Header',                      category: 'Logistics' },
+  { name: 'LIPS',                      desc: 'Delivery Items',                       category: 'Logistics' },
+  { name: 'LSEG',                      desc: 'Delivery Segment',                     category: 'Logistics' },
+  // ── Customer ─────────────────────────────────────────────────
+  { name: 'KNA1',                      desc: 'Customer Master General',              category: 'Customer' },
+  { name: 'KNVV',                      desc: 'Customer Sales Data',                  category: 'Customer' },
+  { name: 'KNVP',                      desc: 'Customer Partner Functions',           category: 'Customer' },
+  { name: 'KNBK',                      desc: 'Customer Bank Data',                   category: 'Customer' },
+  // ── Vendor ───────────────────────────────────────────────────
+  { name: 'LFA1',                      desc: 'Vendor Master General',                category: 'Vendor' },
+  { name: 'LFB1',                      desc: 'Vendor Company Data',                  category: 'Vendor' },
+  { name: 'LFM1',                      desc: 'Vendor Purchasing Data',               category: 'Vendor' },
+  // ── Purchasing ───────────────────────────────────────────────
+  { name: 'EKKO',                      desc: 'Purchase Order Header',                category: 'Purchasing' },
+  { name: 'EKPO',                      desc: 'Purchase Order Items',                 category: 'Purchasing' },
+  { name: 'EBAN',                      desc: 'Purchase Requisition',                 category: 'Purchasing' },
+  { name: 'EINA',                      desc: 'Purchasing Info Record General',       category: 'Purchasing' },
+  { name: 'EINE',                      desc: 'Purchasing Info Record Org Data',      category: 'Purchasing' },
+  { name: 'RBKP',                      desc: 'Invoice Receipt Header (MM-IV)',       category: 'Purchasing' },
+  { name: 'RSEG',                      desc: 'Invoice Receipt Line Items',           category: 'Purchasing' },
+  { name: 'RESB',                      desc: 'Reservation / Dependent Requirements', category: 'Purchasing' },
+  // ── Material ─────────────────────────────────────────────────
+  { name: 'MAKT',                      desc: 'Material Descriptions',                category: 'Material' },
+  { name: 'MARA',                      desc: 'Material Master General',              category: 'Material' },
+  { name: 'MARC',                      desc: 'Material Plant Data',                  category: 'Material' },
+  { name: 'MARD',                      desc: 'Storage Location Stock',               category: 'Material' },
+  { name: 'MARM',                      desc: 'Material Units of Measure',            category: 'Material' },
+  { name: 'MBEW',                      desc: 'Material Valuation',                   category: 'Material' },
+  { name: 'MBEWH',                     desc: 'Material Valuation History',           category: 'Material' },
+  { name: 'MCHB',                      desc: 'Batch Stocks',                         category: 'Material' },
+  { name: 'MEAN',                      desc: 'International Article Numbers (EAN)',  category: 'Material' },
+  { name: 'MKPF',                      desc: 'Material Document Header',             category: 'Material' },
+  { name: 'MLAN',                      desc: 'Tax Classification for Material',      category: 'Material' },
+  { name: 'MSLB',                      desc: 'Special Stocks at Vendor',             category: 'Material' },
+  { name: 'STKO',                      desc: 'BOM Header',                           category: 'Material' },
+  { name: 'STPO',                      desc: 'BOM Items',                            category: 'Material' },
+  { name: 'CABN',                      desc: 'Characteristic Definition',            category: 'Material' },
+  { name: 'AUSP',                      desc: 'Characteristic Values',                category: 'Material' },
+  { name: 'KLAH',                      desc: 'Class Header',                         category: 'Material' },
+  // ── Finance (FI) ────────────────────────────────────────────
+  { name: 'BKPF',                      desc: 'Accounting Document Header',           category: 'Finance' },
+  { name: 'BSEG',                      desc: 'Accounting Document Segment',          category: 'Finance' },
+  { name: 'BSAD',                      desc: 'Customer Open Item (cleared)',         category: 'Finance' },
+  { name: 'FAGLFLEXA',                 desc: 'General Ledger Actual Line Items',     category: 'Finance' },
+  { name: 'DFKKOP',                    desc: 'FI-CA Document Item',                  category: 'Finance' },
+  { name: 'T016T',                     desc: 'Credit Control Area Texts',            category: 'Finance' },
+  // ── Controlling (CO) ─────────────────────────────────────────
+  { name: 'COEP',                      desc: 'CO Document Line Items (actual)',      category: 'Controlling' },
+  { name: 'COSP',                      desc: 'Cost Totals – External Postings',      category: 'Controlling' },
+  { name: 'COSS',                      desc: 'Cost Totals – Internal Postings',      category: 'Controlling' },
+  { name: 'CEPC',                      desc: 'Profit Center Master Data',            category: 'Controlling' },
+  { name: 'CSKS',                      desc: 'Cost Center Master Data',              category: 'Controlling' },
+  { name: 'CSKT',                      desc: 'Cost Center Texts',                    category: 'Controlling' },
+  { name: 'CRHD',                      desc: 'Work Center / Resource Header',        category: 'Controlling' },
+  { name: 'AUFK',                      desc: 'Order Master Data',                    category: 'Controlling' },
+  { name: 'AFKO',                      desc: 'Production Order Header',              category: 'Controlling' },
+  { name: 'AFPO',                      desc: 'Production Order Item',                category: 'Controlling' },
+  // ── Costing (CO-PC) ──────────────────────────────────────────
+  { name: 'CKIS',                      desc: 'Cost Estimate Items',                  category: 'Costing' },
+  { name: 'CKHS',                      desc: 'Costing Run Header',                   category: 'Costing' },
+  { name: 'CKIT',                      desc: 'Costing Item Detail',                  category: 'Costing' },
+  { name: 'KEKO',                      desc: 'Product Costing Header',               category: 'Costing' },
+  { name: 'KEPH',                      desc: 'Cost Components for Cost Estimate',    category: 'Costing' },
+  { name: 'CKMLCR',                    desc: 'Material Ledger: Currency & Qty',      category: 'Costing' },
+  { name: 'CKMLHD',                    desc: 'Material Ledger: Header',              category: 'Costing' },
+  { name: 'CKMLPP',                    desc: 'Material Ledger: Period Data',         category: 'Costing' },
+  { name: 'CKMLPR',                    desc: 'Material Ledger: Prices',              category: 'Costing' },
+  { name: 'TCKH1',                     desc: 'Cost Element Hierarchy',               category: 'Costing' },
+  { name: 'TCKH2',                     desc: 'Cost Element Hierarchy Nodes',         category: 'Costing' },
+  // ── CO-PA (Profitability Analysis) ───────────────────────────
+  { name: 'CE1BGIS',                   desc: 'CO-PA Actuals – BGIS',                 category: 'CO-PA' },
+  { name: 'CE1IDEA',                   desc: 'CO-PA Actuals – IDEA',                 category: 'CO-PA' },
+  { name: 'CE1INT1',                   desc: 'CO-PA Actuals – INT1',                 category: 'CO-PA' },
+  { name: 'CE1PR22',                   desc: 'CO-PA Actuals – PR22',                 category: 'CO-PA' },
+  { name: 'CE1R300',                   desc: 'CO-PA Actuals – R300',                 category: 'CO-PA' },
+  { name: 'CE1S_AL',                   desc: 'CO-PA Actuals – S_AL',                 category: 'CO-PA' },
+  { name: 'CE1S_CP',                   desc: 'CO-PA Actuals – S_CP',                 category: 'CO-PA' },
+  { name: 'CE1S_GO',                   desc: 'CO-PA Actuals – S_GO',                 category: 'CO-PA' },
+  { name: 'CE2BGIS',                   desc: 'CO-PA Plan – BGIS',                    category: 'CO-PA' },
+  { name: 'CE2IDEA',                   desc: 'CO-PA Plan – IDEA',                    category: 'CO-PA' },
+  { name: 'CE2S_AL',                   desc: 'CO-PA Plan – S_AL',                    category: 'CO-PA' },
+  { name: 'CE2S_CP',                   desc: 'CO-PA Plan – S_CP',                    category: 'CO-PA' },
+  { name: 'CS2S_GO',                   desc: 'CO-PA Segment – S_GO',                 category: 'CO-PA' },
+  // ── Zodiac App ───────────────────────────────────────────────
+  { name: 'ai_analysis_memory',        desc: 'AI Analysis Conversation Memory',      category: 'Zodiac' },
+  { name: 'ai_query_embeddings',       desc: 'AI Query Vector Embeddings',           category: 'Zodiac' },
+  { name: 'ai_query_memory',           desc: 'User-Approved Q→SQL Pairs',            category: 'Zodiac' },
+  { name: 'ai_training_data',          desc: 'AI Training Examples',                 category: 'Zodiac' },
+  { name: 'converted_invoices',        desc: 'Successfully Converted Invoices',      category: 'Zodiac' },
+  { name: 'correction_cache',          desc: 'AI Correction Rule Cache',             category: 'Zodiac' },
+  { name: 'customers',                 desc: 'Zodiac Customer Accounts',             category: 'Zodiac' },
+  { name: 'invoice_business_data',     desc: 'Invoice Business Metadata',            category: 'Zodiac' },
+  { name: 'invoice_v2_business_data',  desc: 'Invoice V2 Business Data',             category: 'Zodiac' },
+  { name: 'invoice_v2_correction_cache', desc: 'Invoice V2 Correction Cache',        category: 'Zodiac' },
+  { name: 'invoice_v2_documents',      desc: 'Invoice V2 Documents',                 category: 'Zodiac' },
+  { name: 'invoice_v2_validated',      desc: 'Invoice V2 Validated Records',         category: 'Zodiac' },
+  { name: 'v2_correction_cache',       desc: 'V2 Correction Cache',                  category: 'Zodiac' },
+  { name: 'v2_invoice_documents',      desc: 'V2 Invoice Documents',                 category: 'Zodiac' },
+  { name: 'v2_validated_invoices',     desc: 'V2 Validated Invoices',                category: 'Zodiac' },
+  { name: 'zodiac_customers',          desc: 'Zodiac Customer Records',              category: 'Zodiac' },
+  { name: 'zodiac_invoice_failed_edi', desc: 'Failed EDI Invoices',                  category: 'Zodiac' },
+  { name: 'zodiac_invoice_success_edi', desc: 'Successful EDI Invoices',             category: 'Zodiac' },
+  { name: 'zodiac_users',              desc: 'Zodiac User Accounts',                 category: 'Zodiac' },
+  // ── SAT / Certificates ───────────────────────────────────────
+  { name: 'sat_canonical_merged',      desc: 'SAT Canonical Merged Documents',       category: 'SAT' },
+  { name: 'sat_company_mappings',      desc: 'SAT Company Mappings',                 category: 'SAT' },
+  { name: 'sat_documents',             desc: 'SAT Documents',                        category: 'SAT' },
+  { name: 'sat_duplicate_checks',      desc: 'SAT Duplicate Detection Log',          category: 'SAT' },
+  { name: 'sat_processing_logs',       desc: 'SAT Processing Logs',                  category: 'SAT' },
+  { name: 'sat_sap_account_mapping',   desc: 'SAT ↔ SAP Account Mapping',           category: 'SAT' },
+  { name: 'sat_simple_merged',         desc: 'SAT Simple Merged Records',            category: 'SAT' },
+  { name: 'sat_supplier_account_mapping', desc: 'SAT Supplier Account Mapping',      category: 'SAT' },
+  { name: 'certificate_renewal_requests', desc: 'Certificate Renewal Requests',      category: 'SAT' },
+  { name: 'certificate_revocation_list', desc: 'Certificate Revocation List',        category: 'SAT' },
+  { name: 'customer_certificates',     desc: 'Customer Digital Certificates',        category: 'SAT' },
+  { name: 'customer_delivery_settings', desc: 'Customer Delivery Settings',          category: 'SAT' },
+  { name: 'customer_receiver_rfc',     desc: 'Customer Receiver RFC Mappings',       category: 'SAT' },
+  { name: 'customer_tokens',           desc: 'Customer Auth Tokens',                 category: 'SAT' },
+  { name: 'supplier_tokens',           desc: 'Supplier Auth Tokens',                 category: 'SAT' },
+  { name: 'user_customers',            desc: 'User ↔ Customer Relationships',        category: 'SAT' },
 ];
 
 const CHAT_STARTER_PROMPTS = [
@@ -252,6 +360,154 @@ function FunnelStep({ step, label, count, total, warn = false }: {
   );
 }
 
+/* ─── Schema Browser (for manual SQL entry) ──────────────────── */
+
+type SchemaTable = { columns: string[]; description: string; source: string };
+type SchemaData = Record<string, SchemaTable>;
+
+function SchemaDrawer({
+  schema,
+  loading,
+  textareaRef,
+  onInsert,
+}: {
+  schema: SchemaData;
+  loading: boolean;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  onInsert: (text: string) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [expandedTable, setExpandedTable] = useState<string | null>(null);
+  const [colSearch, setColSearch] = useState('');
+
+  const filteredTables = Object.keys(schema)
+    .filter((t) => t.toLowerCase().includes(search.toLowerCase()))
+    .sort();
+
+  const insertAtCursor = (text: string) => {
+    const ta = textareaRef.current;
+    if (ta) {
+      const start = ta.selectionStart ?? 0;
+      const end = ta.selectionEnd ?? 0;
+      const before = ta.value.substring(0, start);
+      const after = ta.value.substring(end);
+      const newVal = before + text + after;
+      onInsert(newVal);
+      // Restore cursor after insert
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(start + text.length, start + text.length);
+      });
+    } else {
+      onInsert(text);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
+        <div className="h-3.5 w-3.5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
+        Loading schema…
+      </div>
+    );
+  }
+
+  const expandedCols = expandedTable
+    ? (schema[expandedTable]?.columns ?? []).filter((c) =>
+        c.toLowerCase().includes(colSearch.toLowerCase())
+      )
+    : [];
+
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white mt-2">
+      <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2">
+        <Database className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
+        <span className="text-[11px] font-semibold text-slate-700">Schema Browser</span>
+        <span className="text-[10px] text-slate-400 ml-auto">{filteredTables.length} tables — click to insert</span>
+      </div>
+
+      <div className="flex" style={{ maxHeight: '220px' }}>
+        {/* Table list */}
+        <div className="w-44 flex-shrink-0 border-r border-slate-200 flex flex-col">
+          <div className="p-1.5 border-b border-slate-100">
+            <input
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setExpandedTable(null); }}
+              placeholder="Search tables…"
+              className="w-full text-[10px] px-2 py-1 rounded border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 font-mono"
+            />
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filteredTables.map((tbl) => (
+              <div
+                key={tbl}
+                className={`group flex items-center justify-between px-2 py-1 cursor-pointer hover:bg-blue-50 transition-colors ${expandedTable === tbl ? 'bg-blue-50 border-l-2 border-blue-500' : ''}`}
+              >
+                <button
+                  className="flex-1 text-left text-[10px] font-mono text-slate-800 group-hover:text-blue-700 truncate"
+                  onClick={() => {
+                    setExpandedTable(expandedTable === tbl ? null : tbl);
+                    setColSearch('');
+                  }}
+                  title={schema[tbl]?.description || tbl}
+                >
+                  {tbl}
+                </button>
+                <button
+                  onClick={() => insertAtCursor(`"${tbl}"`)}
+                  title="Insert table name"
+                  className="opacity-0 group-hover:opacity-100 text-[9px] text-blue-500 hover:text-blue-700 font-bold px-1 flex-shrink-0"
+                >
+                  +
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Column list */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {expandedTable ? (
+            <>
+              <div className="px-2 py-1.5 border-b border-slate-100 flex items-center gap-1.5">
+                <span className="text-[10px] font-mono font-bold text-blue-700 truncate">{expandedTable}</span>
+                <span className="text-[10px] text-slate-400">({schema[expandedTable]?.columns.length} cols)</span>
+              </div>
+              <div className="p-1.5 border-b border-slate-100">
+                <input
+                  value={colSearch}
+                  onChange={(e) => setColSearch(e.target.value)}
+                  placeholder="Search columns…"
+                  className="w-full text-[10px] px-2 py-1 rounded border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 font-mono"
+                />
+              </div>
+              <div className="overflow-y-auto flex-1 p-1">
+                {expandedCols.map((col) => (
+                  <button
+                    key={col}
+                    onClick={() => insertAtCursor(col)}
+                    title={`Insert column: ${col}`}
+                    className="w-full text-left text-[10px] font-mono px-2 py-0.5 rounded hover:bg-blue-50 hover:text-blue-700 text-slate-700 transition-colors"
+                  >
+                    {col}
+                  </button>
+                ))}
+                {expandedCols.length === 0 && (
+                  <p className="text-[10px] text-slate-400 px-2 py-2">No columns match</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-[10px] text-slate-400 p-4 text-center">
+              ← Select a table to browse columns.<br />Click any table or column to insert it.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Chat Panel ─────────────────────────────────────────────── */
 
 function ChatPanel({
@@ -294,6 +550,29 @@ function ChatPanel({
   const [manualSql, setManualSql] = useState('');
   const [suggestLoading, setSuggestLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const manualSqlRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Schema browser state
+  const [showSchema, setShowSchema] = useState(false);
+  const [schemaData, setSchemaData] = useState<SchemaData>({});
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaFetched, setSchemaFetched] = useState(false);
+
+  const openSchema = async () => {
+    setShowSchema((v) => !v);
+    if (!schemaFetched && !schemaLoading) {
+      setSchemaLoading(true);
+      try {
+        const res = await dashboardApi.getAIAnalysisSchema();
+        setSchemaData(res.schema ?? {});
+        setSchemaFetched(true);
+      } catch {
+        // silently fail, schema will be empty
+      } finally {
+        setSchemaLoading(false);
+      }
+    }
+  };
   const {
     isListening, transcript, isSupported: isVoiceSupported,
     error: voiceError, startListening, stopListening, resetTranscript,
@@ -511,12 +790,31 @@ function ChatPanel({
                                 )}
                               </div>
                             )}
-                            <div className="pt-2 border-t border-slate-200">
-                              <label className="text-xs font-medium text-slate-700 block mb-1">Enter SQL manually:</label>
+                            <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                              <div className="flex items-center justify-between">
+                                <label className="text-xs font-medium text-slate-700">Enter SQL manually:</label>
+                                <button
+                                  type="button"
+                                  onClick={openSchema}
+                                  className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-all ${showSchema ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-blue-600 hover:bg-blue-50'}`}
+                                >
+                                  <Database className="h-3 w-3" />
+                                  {showSchema ? 'Hide Schema' : 'Browse Schema'}
+                                </button>
+                              </div>
+                              {showSchema && (
+                                <SchemaDrawer
+                                  schema={schemaData}
+                                  loading={schemaLoading}
+                                  textareaRef={manualSqlRef}
+                                  onInsert={(val) => setManualSql(val)}
+                                />
+                              )}
                               <textarea
+                                ref={manualSqlRef}
                                 value={manualSql}
                                 onChange={(e) => setManualSql(e.target.value)}
-                                placeholder="SELECT ... FROM ..."
+                                placeholder="SELECT v.vbeln, v.netwr FROM vbrp v JOIN &quot;VBRK&quot; r ON v.vbeln = r.vbeln LIMIT 50"
                                 className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
                                 rows={4}
                               />
@@ -530,6 +828,7 @@ function ChatPanel({
                                       if (stored) {
                                         setManualSql('');
                                         setRejectingIndex(null);
+                                        setShowSchema(false);
                                       }
                                     }
                                   }}
@@ -608,12 +907,31 @@ function ChatPanel({
                             )}
                           </div>
                         )}
-                        <div className="pt-2 border-t border-slate-200">
-                          <label className="text-xs font-medium text-slate-700 block mb-1">Or enter SQL manually:</label>
+                        <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-medium text-slate-700">Or enter SQL manually:</label>
+                            <button
+                              type="button"
+                              onClick={openSchema}
+                              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-all ${showSchema ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-blue-600 hover:bg-blue-50'}`}
+                            >
+                              <Database className="h-3 w-3" />
+                              {showSchema ? 'Hide Schema' : 'Browse Schema'}
+                            </button>
+                          </div>
+                          {showSchema && (
+                            <SchemaDrawer
+                              schema={schemaData}
+                              loading={schemaLoading}
+                              textareaRef={manualSqlRef}
+                              onInsert={(val) => setManualSql(val)}
+                            />
+                          )}
                           <textarea
+                            ref={manualSqlRef}
                             value={manualSql}
                             onChange={(e) => setManualSql(e.target.value)}
-                            placeholder="SELECT ... FROM ..."
+                            placeholder="SELECT v.vbeln, v.netwr FROM vbrp v JOIN &quot;VBRK&quot; r ON v.vbeln = r.vbeln LIMIT 50"
                             className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
                             rows={4}
                           />
@@ -627,6 +945,7 @@ function ChatPanel({
                                   if (stored) {
                                     setManualSql('');
                                     setRejectingIndex(null);
+                                    setShowSchema(false);
                                   }
                                 }
                               }}
@@ -708,12 +1027,31 @@ function ChatPanel({
                               </button>
                             </div>
                           )}
-                          <div className="pt-2 border-t border-amber-200">
-                            <label className="text-xs font-medium text-amber-800 block mb-1">Or enter SQL manually:</label>
+                          <div className="pt-2 border-t border-amber-200 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-medium text-amber-800">Or enter SQL manually:</label>
+                              <button
+                                type="button"
+                                onClick={openSchema}
+                                className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-all ${showSchema ? 'bg-blue-600 text-white border-blue-600' : 'border-amber-300 text-blue-600 hover:bg-blue-50'}`}
+                              >
+                                <Database className="h-3 w-3" />
+                                {showSchema ? 'Hide Schema' : 'Browse Schema'}
+                              </button>
+                            </div>
+                            {showSchema && (
+                              <SchemaDrawer
+                                schema={schemaData}
+                                loading={schemaLoading}
+                                textareaRef={manualSqlRef}
+                                onInsert={(val) => setManualSql(val)}
+                              />
+                            )}
                             <textarea
+                              ref={manualSqlRef}
                               value={manualSql}
                               onChange={(e) => setManualSql(e.target.value)}
-                              placeholder="SELECT ... FROM ..."
+                              placeholder="SELECT v.vbeln, v.netwr FROM vbrp v JOIN &quot;VBRK&quot; r ON v.vbeln = r.vbeln LIMIT 50"
                               className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-amber-300 rounded p-2 min-h-[80px] resize-y"
                               rows={4}
                             />
@@ -726,6 +1064,7 @@ function ChatPanel({
                                   if (stored) {
                                     setManualSql('');
                                     setRejectingIndex(null);
+                                    setShowSchema(false);
                                   }
                                 }
                               }}
