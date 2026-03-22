@@ -481,6 +481,24 @@ SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRI
 SELECT m.maktx AS material_name, ci.matnr AS material_number, SUM(ci.wertn) AS total_cost_value, ci.hwaer AS currency FROM CKIS ci LEFT JOIN MAKT m ON ci.matnr = m.matnr AND m.spras = 'E' WHERE ci.matnr IS NOT NULL AND ci.wertn IS NOT NULL GROUP BY ci.matnr, m.maktx, ci.hwaer HAVING SUM(ci.wertn) > 0 ORDER BY total_cost_value DESC LIMIT 20
 '''.strip(),
     },
+    # ── Negative / lowest sales LINE ITEMS for a year (not year totals) ─────
+    {
+        "user_query": "Show sales by negative or lowest for year 2000",
+        "sql_query": '''
+SELECT
+    v."vbeln" AS billing_doc,
+    v."posnr" AS line_pos,
+    r."fkdat" AS billing_date,
+    r."kunag" AS sold_to_party,
+    NULLIF(TRIM(v."netwr"::text), '')::numeric AS netwr_line_amount,
+    r."waerk" AS currency
+FROM vbrp v
+JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"), 10, '0') = LPAD(TRIM(r."vbeln"), 10, '0')
+WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
+ORDER BY NULLIF(TRIM(v."netwr"::text), '')::numeric ASC NULLS LAST
+LIMIT 100
+'''.strip(),
+    },
 ]
 
 
@@ -550,6 +568,8 @@ def get_sql_examples_for_question(
         (["profit margin", "margin", "profitability", "revenue vs cost", "certain products", "margin by product"], 29),
         # Costs of manufacturing
         (["costs of manufacturing", "manufacturing cost", "cost of manufacturing", "ckis", "production cost"], 30),
+        # Negative / lowest billing lines for a year (credit memos = negative NETWR)
+        (["negative", "lowest", "sales", "year", "credit", "line", "billing"], 31),
     ]
 
     for kw, idx in keywords_map:
