@@ -96,6 +96,31 @@ def _safe_json_extract(text: str) -> Dict[str, Any]:
             return {}
 
 
+def _sanitize_gjahr_sql(sql: str) -> str:
+    """
+    Post-generation sanitizer: replace VBRK.gjahr references with SUBSTRING(TRIM(fkdat),1,4).
+    VBRK.gjahr stores '0000' in this database and is unreliable for year filtering or grouping.
+    This runs on every SQL string returned by all three agent paths before execution.
+    """
+    if not sql or "gjahr" not in sql.lower():
+        return sql
+    import re as _re
+    # Replace alias."gjahr" → SUBSTRING(TRIM(alias."fkdat"),1,4)
+    # e.g. r."gjahr"  v."gjahr"  vk."gjahr"
+    sql = _re.sub(
+        r'(\b[a-z][a-z0-9_]*)\."gjahr"',
+        lambda m: f'SUBSTRING(TRIM({m.group(1)}."fkdat"),1,4)',
+        sql, flags=_re.IGNORECASE
+    )
+    # Replace bare gjahr (unquoted) → SUBSTRING(TRIM(fkdat),1,4)
+    sql = _re.sub(
+        r'\bgjahr\b',
+        "SUBSTRING(TRIM(fkdat),1,4)",
+        sql, flags=_re.IGNORECASE
+    )
+    return sql
+
+
 def _should_force_new_action(user_query: str) -> bool:
     """
     Detect queries that definitely need new SQL execution.
@@ -718,7 +743,20 @@ If result is empty, say so and suggest a refined question.
         except Exception as po_err:
             logger.debug("Purchase order fallback failed: %s", po_err)
     timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-    
+
+    # ── Post-generation SQL sanitizer: replace gjahr with fkdat year expression ──
+    # VBRK.gjahr stores '0000' in this DB; any SQL using gjahr for year returns wrong results.
+    if result and getattr(result, "sql", None) and "gjahr" in (result.sql or "").lower():
+        _clean_sql = _sanitize_gjahr_sql(result.sql)
+        if _clean_sql != result.sql:
+            logger.info("_sanitize_gjahr_sql: rewrote gjahr → fkdat expression, re-executing SQL")
+            try:
+                from .sap_sql_agent import _run_sql, SqlAgentResult
+                _clean_rows = _run_sql(sql_db, _clean_sql)
+                result = SqlAgentResult(sql=_clean_sql, rows=_clean_rows)
+            except Exception as _sg_err:
+                logger.warning("gjahr sanitizer re-execution failed: %s", _sg_err)
+
     # FAGLFLEXA link fallback: when user asks to link profit center costs to customers/products
     # and the main query fails or returns 0 rows, return profit center costs only with a note
     if (result is None or not getattr(result, "rows", None)) or (result and not result.rows):
