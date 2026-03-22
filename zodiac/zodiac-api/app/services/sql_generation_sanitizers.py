@@ -24,6 +24,36 @@ def escape_postgres_casts_for_sqlalchemy(sql: str) -> str:
     return sql.replace("::", r"\:\:")
 
 
+def substitute_literal_sqlalchemy_bind_placeholders(sql: str) -> str:
+    """
+    When SQL is executed via text(sql) *without* bindparams(), placeholders like
+    LIMIT :limit are interpreted as named binds — missing values become empty → LIMIT ''.
+
+    Replace common copy-paste patterns from Python scripts with numeric literals.
+    """
+    if not sql:
+        return sql
+    # LIMIT / OFFSET (case-insensitive)
+    sql = re.sub(r"(?i)\bLIMIT\s*:limit\b", "LIMIT 100", sql)
+    sql = re.sub(r"(?i)\bLIMIT\s*:lim\b", "LIMIT 100", sql)
+    sql = re.sub(r"(?i)\bLIMIT\s*:sample_limit\b", "LIMIT 50", sql)
+    sql = re.sub(r"(?i)\bOFFSET\s*:offset\b", "OFFSET 0", sql)
+    return sql
+
+
+def prepare_sql_for_sqlalchemy_text_execution(sql: str) -> str:
+    """
+    Full prep before db.execute(text(...)) with NO second argument:
+    1) Escape :: casts
+    2) Replace :limit-style placeholders that would otherwise corrupt LIMIT
+    """
+    if not sql:
+        return sql
+    s = escape_postgres_casts_for_sqlalchemy(sql)
+    s = substitute_literal_sqlalchemy_bind_placeholders(s)
+    return s
+
+
 def sanitize_gjahr_sql(sql: str) -> str:
     """
     Replace gjahr references with FKDAT-based calendar year expression.
