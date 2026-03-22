@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .sql_generation_sanitizers import escape_postgres_casts_for_sqlalchemy
+from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution
 
 logger = logging.getLogger("zodiac-api.sap_ai_context")
 
@@ -31,7 +31,7 @@ def _run_safe(conn, sql: str, params: dict | None = None):
     if not sql or not sql.strip():
         return []
     try:
-        safe = escape_postgres_casts_for_sqlalchemy(sql)
+        safe = prepare_sql_for_sqlalchemy_text_execution(sql)
         result = conn.execute(text(safe), params or {})
         rows = result.fetchall()
         keys = result.keys()
