@@ -2938,7 +2938,6 @@ def _non_blocking_validation_payload(validation) -> Dict[str, Any]:
     return payload
 
 
-
 def _validation_warning_requires_refinement(warnings: List[str]) -> bool:
     return any("Question mentions a year" in warning for warning in (warnings or []))
 
@@ -3167,12 +3166,17 @@ async def post_ai_analysis_reject_query(
 async def post_ai_analysis_suggest_sql(
     question: str = Body(..., embed=True),
     time_scope: str = Body(default="both", embed=True),
+    instructions: str = Body(default="", embed=True),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Suggest SQL for the question. Uses ai_query_memory first (user-approved), then
     sql_catalog, then ChatGPT. Returns proposed_sql only (no execution).
+    Optional `instructions`: free-text guidance from the user to ChatGPT about how
+    to write the SQL (e.g. "use FKDAT for year 2000, group by customer, show negatives first").
+    When instructions are provided, memory/catalog lookups are skipped so ChatGPT always
+    generates fresh SQL following the user's directions.
     """
     from ..services.schema_loader import get_schema_text
     from ..services.ai_query_memory_service import (
@@ -3187,47 +3191,65 @@ async def post_ai_analysis_suggest_sql(
 
     sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
     try:
-        # 1) Try ai_query_memory first — user-approved SQL for this question (don't mark_used when just suggesting)
-        stored_sql = find_similar_stored_query(db, question, current_user.id, mark_used=False)
-        if stored_sql:
-            quoted = _quote_catalog_sql_tables(stored_sql)
-            validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, quoted)
-            if validation and not blocking_detail:
-                return {
-                    "proposed_sql": validation.normalized_sql,
-                    "validation": _validation_to_payload(validation),
-                    "suggestion_source": "approved_memory",
-                    "time_scope": time_scope,
-                }
+        has_instructions = bool((instructions or "").strip())
 
-        # 2) Try catalog — has correct SQL for "highest spend by vendor", etc.
-        catalog_sql = _lookup_sql_catalog(question)
-        if catalog_sql:
-            quoted = _quote_catalog_sql_tables(catalog_sql)
-            validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, quoted)
-            if validation and not blocking_detail:
-                return {
-                    "proposed_sql": validation.normalized_sql,
-                    "validation": _validation_to_payload(validation),
-                    "suggestion_source": "sql_catalog",
-                    "time_scope": time_scope,
-                }
+        # 1) Try ai_query_memory first — only if user hasn't provided custom instructions
+        if not has_instructions:
+            stored_sql = find_similar_stored_query(db, question, current_user.id, mark_used=False)
+            if stored_sql:
+                quoted = _quote_catalog_sql_tables(stored_sql)
+                validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, quoted)
+                if validation and not blocking_detail:
+                    return {
+                        "proposed_sql": validation.normalized_sql,
+                        "validation": _validation_to_payload(validation),
+                        "suggestion_source": "approved_memory",
+                        "time_scope": time_scope,
+                    }
 
+            # 2) Try catalog — only if no custom instructions
+            catalog_sql = _lookup_sql_catalog(question)
+            if catalog_sql:
+                quoted = _quote_catalog_sql_tables(catalog_sql)
+                validation, blocking_detail = _validate_sql_candidate(sql_db or db, question, quoted)
+                if validation and not blocking_detail:
+                    return {
+                        "proposed_sql": validation.normalized_sql,
+                        "validation": _validation_to_payload(validation),
+                        "suggestion_source": "sql_catalog",
+                        "time_scope": time_scope,
+                    }
+
+        # 3) ChatGPT generation — always runs when instructions provided, fallback otherwise
         schema_text = get_schema_text(sql_db, include_semantic_map=True)
         from openai import OpenAI
         client = OpenAI(api_key=ai_openai_key)
-        prompt = f"""You are an SAP SQL expert. The user asked: "{question}"
 
-Database schema (PostgreSQL, table names may need double quotes for uppercase):
+        # Build user instructions block
+        instructions_block = ""
+        if has_instructions:
+            instructions_block = f"""
+User instructions for how to write this SQL:
+{instructions.strip()}
+
+Follow these instructions exactly when writing the query.
+"""
+
+        prompt = f"""You are an SAP PostgreSQL expert. The user asked: "{question}"
+{instructions_block}
+CRITICAL DATA RULES (confirmed facts about this database — ignore at your peril):
+- VBRK.gjahr contains '0000' for ALL rows. NEVER filter on gjahr. ALWAYS use FKDAT:
+    WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
+- vbrp.netwr is TEXT. ALWAYS cast: SUM(NULLIF(TRIM(v."netwr"::text), '')::NUMERIC)
+- JOIN vbrp to VBRK with LPAD: ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0')
+- Uppercase SAP tables need double quotes: "VBRK" "KNA1" "MAKT" (vbrp is lowercase)
+
+Database schema (PostgreSQL):
 {schema_text[:6000]}
 
 Generate a single PostgreSQL SELECT query. Rules:
-- Use only SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
-- No DELETE, UPDATE, DROP, INSERT
-- Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.
-- For quantities use numeric columns (e.g. FKIMG, MENGE), NOT currency columns
-- For values use NETWR, HSL, or similar amount columns
-- Return ONLY the SQL, no explanation. No markdown code blocks."""
+- SELECT only (no DELETE, UPDATE, DROP, INSERT)
+- Return ONLY the SQL, no explanation, no markdown code blocks."""
         resp = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
@@ -3351,7 +3373,6 @@ async def post_ai_analysis_approve_query(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Approve failed: {str(e)}",
         )
-
 
 def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approval_source: str, current_user, db):
     from ..services.ai_query_memory_service import store_approved_query
@@ -5405,5 +5426,4 @@ async def backfill_invoice_v2_bi(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Backfill failed: {str(e)}"
         )
-
 
