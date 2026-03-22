@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .schema_context_builder import build_schema_context
-from .sql_generation_sanitizers import escape_postgres_casts_for_sqlalchemy
+from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution
 
 
 client = OpenAI()
@@ -98,7 +98,7 @@ def run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
     if any(k in lowered for k in forbidden):
         raise ValueError("Refusing to execute potentially dangerous SQL")
 
-    safe_sql = escape_postgres_casts_for_sqlalchemy(sql)
+    safe_sql = prepare_sql_for_sqlalchemy_text_execution(sql)
     result = db.execute(text(safe_sql)).mappings().all()
     return [dict(row) for row in result]
 
