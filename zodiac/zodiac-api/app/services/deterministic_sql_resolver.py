@@ -88,6 +88,52 @@ def _get_join(left: str, right: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def is_negative_or_lowest_billing_year_query(question: str) -> bool:
+    """
+    True when the user asks for negative and/or lowest sales for a specific calendar year.
+    Used to run deterministic line-item SQL BEFORE ai_query_memory (stale stored queries
+    often aggregate by year across all periods instead).
+    """
+    if not question or not question.strip():
+        return False
+    q = (question or "").strip().lower()
+    _sales_ctx = any(w in q for w in ("sales", "revenue", "billing", "invoice", "amount", "netwr"))
+    _neg_or_low = any(
+        w in q
+        for w in (
+            "negative",
+            "lowest",
+            "smallest",
+            "minimum",
+            "credit memo",
+            "credit memos",
+        )
+    )
+    if not (_sales_ctx and _neg_or_low):
+        return False
+    return bool(re.search(r"\b((?:19|20)\d{2})\b", q))
+
+
+def is_lowest_years_by_sales_query(question: str) -> bool:
+    """
+    True for questions asking which calendar years had the smallest total billing (FKDAT-based).
+    Used to run deterministic SQL before ai_query_memory / product-aggregate LLM confusion.
+    """
+    if not question or not question.strip():
+        return False
+    q = (question or "").strip().lower()
+    phrases = (
+        "lowest years by sales",
+        "lowest year by sales",
+        "years with lowest sales",
+        "smallest sales by year",
+        "which years had the lowest sales",
+        "year with lowest sales",
+        "weakest years by sales",
+    )
+    return any(p in q for p in phrases)
+
+
 def resolve_deterministic_sql(
     question: str,
     available_tables: Optional[List[str]] = None,
@@ -117,19 +163,7 @@ def resolve_deterministic_sql(
     # 0b) Negative and/or lowest sales = billing LINE ITEMS (VBRP), not year-level totals.
     # Year totals are never negative; credit memos appear as negative NETWR on lines.
     # Phrases: "negative sales", "lowest sales", "negative or lowest for year 2000"
-    _sales_ctx = any(w in q for w in ("sales", "revenue", "billing", "invoice", "amount", "netwr"))
-    _neg_or_low = any(
-        w in q
-        for w in (
-            "negative",
-            "lowest",
-            "smallest",
-            "minimum",
-            "credit memo",
-            "credit memos",
-        )
-    )
-    if _sales_ctx and _neg_or_low:
+    if is_negative_or_lowest_billing_year_query(question):
         ym = re.search(r"\b((?:19|20)\d{2})\b", q)
         if ym and ok("VBRP") and ok("VBRK"):
             y = ym.group(1)
@@ -154,6 +188,34 @@ def resolve_deterministic_sql(
                 f'ORDER BY {net_cast} ASC NULLS LAST LIMIT 100'
             )
             return sql.strip()
+
+    # 0c) Calendar years with lowest total sales (FKDAT) — same idea as diagnose_sales_year SQL_LOWEST_YEARS_BY_FKDAT
+    _lowest_years_phrases = (
+        "lowest years by sales",
+        "lowest year by sales",
+        "years with lowest sales",
+        "smallest sales by year",
+        "which years had the lowest sales",
+        "year with lowest sales",
+        "weakest years by sales",
+    )
+    if any(p in q for p in _lowest_years_phrases) and ok("VBRP") and ok("VBRK"):
+        vk = tbl("VBRK")
+        net = 'NULLIF(TRIM(v."netwr"::text), \'\')::numeric'
+        sql = (
+            f"SELECT SUBSTRING(TRIM(r.\"fkdat\"), 1, 4) AS year, "
+            f"SUM(({net})) AS sales, "
+            f"COUNT(*) AS records, "
+            f'COUNT(DISTINCT r."vbeln") AS invoice_count '
+            f"FROM vbrp v "
+            f"JOIN {vk} r ON LPAD(TRIM(v.\"vbeln\"), 10, '0') = LPAD(TRIM(r.\"vbeln\"), 10, '0') "
+            f'WHERE LENGTH(TRIM(COALESCE(r."fkdat", \'\'))) >= 4 '
+            f"GROUP BY SUBSTRING(TRIM(r.\"fkdat\"), 1, 4) "
+            f"HAVING SUM(({net})) IS NOT NULL "
+            f"ORDER BY sales ASC NULLS LAST "
+            f"LIMIT 20"
+        )
+        return sql.strip()
 
     # 0a) Total cost by profit center (FAGLFLEXA) - highest cost, current fiscal year
     pc_cost_phrases = (
