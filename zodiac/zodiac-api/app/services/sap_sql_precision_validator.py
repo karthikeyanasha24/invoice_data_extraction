@@ -352,6 +352,10 @@ def execute_sql_with_precision_checks(
     question: Optional[str] = None,
 ) -> SapSqlExecutionResult:
     from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql
+    from .sql_generation_sanitizers import sanitize_generated_sap_sql
+
+    # Same rewrites as the main orchestrator (memory / manual approve bypassed the agent)
+    sql = sanitize_generated_sap_sql(sql)
 
     validation = validate_sql_precision_for_db(db, sql, question=question)
     if not validation.is_valid:
