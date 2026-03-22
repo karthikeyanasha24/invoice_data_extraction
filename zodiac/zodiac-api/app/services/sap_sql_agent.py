@@ -1706,8 +1706,8 @@ Task:
 - **Cost of jacket-related postings by profit center (or any "cost/postings/balance by profit center" with a product word)**: Always use FAGLFLEXA for the cost/postings; add MAKT (and optionally VBRP) when the question mentions a product (jacket, Harley, material). If the schema does not link FAGLFLEXA to materials, still return FAGLFLEXA cost grouped by profit center (prctr). Never return empty tables for this intent.
 - **Purchase order totals by material**: use EKKO, EKPO, MAKT; group by MATNR; SUM(NETWR) or SUM(MENGE) as totals; add MAKT for material name.
 - **Compare sales data with invoice data**: use VBRK, VBRP (billing/sales) and RBKP, RSEG (vendor invoices) or same billing as "invoice"; KNA1 if by customer. Return comparison (e.g. by document, by amount, or side-by-side).
-- **Compare 2023 vs 2024 sales (or two years)**: use VBRK, VBRP; filter GJAHR or year from FKDAT in (2023, 2024); group by year; SUM(NETWR) per year for comparison.
-- **Revenue last 30 days / Sales for 2024**: use VBRK, VBRP; add date filter FKDAT >= current_date - 30 or FKDAT in 2024.
+- **Compare 2023 vs 2024 sales (or two years)**: use VBRK, VBRP; filter using FKDAT: WHERE SUBSTRING(TRIM(r."fkdat"),1,4) IN ('2023','2024'); group by SUBSTRING(TRIM(r."fkdat"),1,4) as year; SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC) per year. NEVER use GJAHR — it is '0000' for all rows.
+- **Revenue last 30 days / Sales for a specific year**: use VBRK, VBRP; filter on FKDAT: recent = FKDAT >= TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYYMMDD'); for a year use SUBSTRING(TRIM(fkdat),1,4) = '2024'. Cast NETWR: SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC).
 - **Materials in sales but not in purchasing (or vice versa)**: use VBRP and EKPO (and MARA, MAKT) to compare material lists; LEFT JOIN and WHERE NULL for "not in" logic.
 - When in doubt, prefer including tables that might be relevant (e.g. VBRK+VBRP+KNA1 for anything about sales/customers/revenue) so the next step can refine the query. Prefer a reasonable answer over returning no tables.
 - Only return JSON in this format:
@@ -1834,7 +1834,7 @@ Column mappings (table -> column -> description):
 **AR / receivables (BSAD, BSEG):** Use BSAD (cleared), BSEG (line items); join to BKPF on BELNR/BUKRS/GJAHR; join KNA1 on KUNNR. Select customer, amount, clearing date; group by customer for totals.
 **Vendors (LFA1, RBKP, RSEG):** Use LFA1 (LIFNR, NAME1), EKPO/EKKO for PO spend; RBKP (invoice header), RSEG (invoice item) for invoice amounts. Join on LIFNR, document keys. Sum by vendor, material, or year.
 **Margin:** Select VBRP.NETWR (revenue), EKPO.NETWR or RSEG amount (cost); join VBRP.MATNR = EKPO.MATNR where possible. Compute margin = revenue - cost; group by material or customer.
-**Improving margins / margin year over year:** Use VBRK, VBRP (revenue by material, year via GJAHR or FKDAT), EKPO or RSEG (cost). Group by material (MATNR) and year; compute margin = SUM(revenue) - SUM(cost) per year. For "improving" or "year over year" return material, year, revenue, cost, margin so the user can see trend; or filter to materials where margin in latest year > prior year. Add MAKT for material name (MAKT.MATNR = VBRP.MATNR).
+**Improving margins / margin year over year:** Use VBRK, VBRP (revenue by material), EKPO or RSEG (cost). For year dimension ALWAYS use SUBSTRING(TRIM(VBRK.fkdat),1,4) — NEVER use GJAHR (it is '0000' for all rows). Group by material (MATNR) and year; revenue = SUM(NULLIF(TRIM(VBRP.netwr::text),'')::NUMERIC); compute margin = revenue - cost per year. For "improving" or "year over year" return material, year, revenue, cost, margin; or filter to materials where margin in latest year > prior year. Add MAKT for material name.
 **Deliveries (LIKP, LIPS):** Join LIKP to LIPS on VBELN; join to VBRP/VBFA for value. Select delivery doc, customer, material, quantity, value. Order by quantity or value DESC.
 **Controlling (AUFK, COEP, COSP, CSKS):** Use COEP for actual cost by cost object; COSP for planned; join AUFK for order description; CSKS for cost center. Select OBJNR or order, cost element, SUM(amount).
 **Top N (top 20 customers, top 10 materials, top 20 vendors):** Select the dimension (customer, material, vendor), SUM of amount/revenue; group by that dimension; order by the sum DESC; limit N (e.g. 20 or 10). Use VBRK/VBRP/KNA1 for customers, VBRP/MAKT for materials, EKPO/EKKO/LFA1 for vendors.
@@ -1863,9 +1863,10 @@ Column mappings (table -> column -> description):
 **Cost of jacket-related postings by profit center:** Use FAGLFLEXA: group by prctr (profit center); SUM(hsl) as total_cost. If MAKT or VBRP is in tables and schema allows linking material to FAGLFLEXA (e.g. via cost element or segment), add filter or join for jacket materials; otherwise return cost by profit center only. Use description "profit_center" and "total_cost".
 **Purchase order totals by material:** EKPO: group by MATNR; select MATNR, SUM(MENGE) as total_quantity, SUM(NETWR) or SUM(MENGE*NETPR) as total_value; join MAKT for MAKTX; order by total_value or total_quantity DESC; limit 100.
 **Compare sales data with invoice data:** Select billing side (VBRK/VBRP: document, customer, SUM(NETWR)) and invoice side (RBKP/RSEG: document, vendor, amount). If same scope, join or union; otherwise return two logical sets (e.g. total sales from VBRP vs total invoice amount from RSEG by period/customer). Use KNA1 for customer name when comparing by customer.
-**Compare 2023 vs 2024 sales (or two specific years):** Filter VBRK.GJAHR in (2023, 2024) or EXTRACT(YEAR FROM VBRK.FKDAT) in (2023, 2024). Group by year; select year, SUM(VBRP.NETWR) as total_sales. Optionally include customer or product for breakdown.
-**Revenue last 30 days:** Filter VBRK.FKDAT >= CURRENT_DATE - INTERVAL '30 days'. Select billing doc, customer, date, amount from VBRK, VBRP, KNA1. Order by FKDAT DESC.
-**Sales for 2024:** Filter VBRK.GJAHR = 2024 or EXTRACT(YEAR FROM VBRK.FKDAT) = 2024. Select as needed; SUM(NETWR) for total.
+**Compare two years (e.g. 2023 vs 2024):** NEVER use GJAHR — it is '0000' for all rows. Filter: WHERE SUBSTRING(TRIM(r."fkdat"),1,4) IN ('2023','2024'). Group by SUBSTRING(TRIM(r."fkdat"),1,4) as year; SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC) as total_sales. Optionally include customer or product for breakdown.
+**Revenue last 30 days:** Filter VBRK.FKDAT using text comparison: WHERE TRIM(r."fkdat") >= TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYYMMDD'). Cast NETWR: SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC). Select billing doc, customer, date, amount from VBRK, VBRP, KNA1. Order by FKDAT DESC.
+**Sales for a specific year (e.g. 2024, 2000):** NEVER filter on GJAHR. Always use: WHERE SUBSTRING(TRIM(r."fkdat"),1,4) = '2000' (replace year). Cast NETWR: SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC) as total_sales. Join VBRP with LPAD: ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0').
+**Negative sales / lowest sales / credit memos:** "Negative sales" means individual billing LINE ITEMS where netwr < 0 (credit memos). NEVER use HAVING SUM(netwr) < 0 — no year has a negative TOTAL in this database, so HAVING returns 0 rows always. CORRECT approach: use WHERE on individual rows. Example for "negative sales in year 2000": SELECT v."vbeln", v."matnr", r."fkdat", NULLIF(TRIM(v."netwr"::text),'')::NUMERIC AS netwr FROM vbrp v JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"),10,'0')=LPAD(TRIM(r."vbeln"),10,'0') WHERE SUBSTRING(TRIM(r."fkdat"),1,4)='2000' AND NULLIF(TRIM(v."netwr"::text),'')::NUMERIC < 0 ORDER BY NULLIF(TRIM(v."netwr"::text),'')::NUMERIC ASC. For "lowest sales": same but remove the negative filter and just ORDER BY netwr ASC LIMIT 100.
 **Vague or short questions:** If the user asks something generic (e.g. "show me sales", "revenue", "what did we sell"), produce a reasonable default: e.g. billing docs with customer, date, amount; order by amount or date DESC; limit 100. Never return empty columns.
 **All columns and filters must use only column names from the mappings above.**
 
@@ -2095,6 +2096,7 @@ def _build_minimal_last_sales_spec(
         "limit": 100,
     }
     return spec
+
 
 def _build_minimal_ekpo_spec(
     question: str,
@@ -3856,7 +3858,14 @@ def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
         return []
     # Intentionally NOT catching exceptions here.  Callers (run_sap_sql_agent) have a
     # try/except that captures the real error message and passes it to refine_query_on_error.
-    result = db.execute(text(sql))
+    #
+    # Escape PostgreSQL :: cast syntax before passing to SQLAlchemy text().
+    # SQLAlchemy treats :word as a named bind parameter; in ::text the second :text
+    # gets consumed as a parameter name, corrupting the cast (e.g. ::text → :'').
+    # Replacing :: with \:\: tells SQLAlchemy to treat both colons as literals,
+    # which it un-escapes back to :: when building the final query for psycopg2.
+    safe_sql = sql.replace('::', r'\:\:')
+    result = db.execute(text(safe_sql))
     rows = result.fetchall()
     keys = result.keys()
     out: List[Dict[str, Any]] = []
