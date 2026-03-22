@@ -535,7 +535,7 @@ function ChatPanel({
   onApproveQuery?: (question: string, proposedSql: string, approvalSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<boolean>;
   onRejectQuery?: (question: string, rejectedSql: string, attemptSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<void>;
   onStoreQuery?: (question: string, sql: string) => Promise<void>;
-  onSuggestSql?: (question: string) => Promise<SuggestedSqlResult>;
+  onSuggestSql?: (question: string, instructions?: string) => Promise<SuggestedSqlResult>;
   placeholder: string;
   useContext: boolean;
   setUseContext: (v: boolean) => void;
@@ -551,6 +551,79 @@ function ChatPanel({
   const [suggestLoading, setSuggestLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const manualSqlRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // ChatGPT instruction state — shared across all "Ask ChatGPT" buttons in this panel
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [chatgptInstructions, setChatgptInstructions] = useState('');
+
+  // Reusable block: instructions input + Ask ChatGPT button
+  const renderAskChatGPT = (getQuestion: () => string | undefined) => {
+    if (!onSuggestSql) return null;
+    return (
+      <div className="space-y-1.5">
+        {/* Toggle instructions */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={async () => {
+              const q = getQuestion();
+              if (!q) return;
+              setSuggestLoading(true);
+              try {
+                const sql = await onSuggestSql(q, chatgptInstructions.trim() || undefined);
+                setSuggestedSql(sql);
+              } catch (err) {
+                console.error('Suggest failed:', err);
+              } finally {
+                setSuggestLoading(false);
+              }
+            }}
+            disabled={suggestLoading || loading}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
+          >
+            <Sparkles className="h-3 w-3" />
+            {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowInstructions((v) => !v)}
+            className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border transition-all ${
+              showInstructions
+                ? 'bg-purple-600 text-white border-purple-600'
+                : 'border-slate-300 text-purple-600 hover:bg-purple-50'
+            }`}
+            title="Tell ChatGPT exactly how to write the SQL"
+          >
+            <MessageCircle className="h-3 w-3" />
+            {showInstructions ? 'Hide instructions' : 'Tell ChatGPT how…'}
+          </button>
+          {chatgptInstructions.trim() && !showInstructions && (
+            <span className="text-[10px] text-purple-600 italic truncate max-w-[180px]" title={chatgptInstructions}>
+              ✎ {chatgptInstructions.trim().slice(0, 40)}{chatgptInstructions.trim().length > 40 ? '…' : ''}
+            </span>
+          )}
+        </div>
+        {showInstructions && (
+          <div className="rounded-xl border border-purple-200 bg-purple-50 p-2.5 space-y-1.5">
+            <p className="text-[10px] text-purple-700 font-medium flex items-center gap-1">
+              <MessageCircle className="h-3 w-3" />
+              Tell ChatGPT how to write the SQL:
+            </p>
+            <textarea
+              value={chatgptInstructions}
+              onChange={(e) => setChatgptInstructions(e.target.value)}
+              placeholder={`e.g. "use FKDAT for year 2000, group by customer name, show negative sales first, include invoice count"`}
+              rows={3}
+              className="w-full text-[11px] font-mono text-slate-900 bg-white border border-purple-200 rounded-lg p-2 resize-none focus:outline-none focus:ring-2 focus:ring-purple-400 placeholder:text-slate-400"
+            />
+            <p className="text-[10px] text-purple-500">
+              These instructions are sent to ChatGPT alongside your question. Leave blank to let ChatGPT decide.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Schema browser state
   const [showSchema, setShowSchema] = useState(false);
@@ -739,31 +812,7 @@ function ChatPanel({
                           <p className="text-xs font-medium text-slate-700">
                             {rejectingIndex === i ? 'Rejected — enter your own SQL or ask for a new suggestion:' : 'Or get a new suggestion / enter SQL manually:'}
                           </p>
-                            <div className="flex flex-wrap gap-2">
-                              {onSuggestSql && (
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                    if (!prevUser) return;
-                                    setSuggestLoading(true);
-                                    try {
-                                      const sql = await onSuggestSql(prevUser.content);
-                                      setSuggestedSql(sql);
-                                    } catch (err) {
-                                      console.error('Suggest failed:', err);
-                                    } finally {
-                                      setSuggestLoading(false);
-                                    }
-                                  }}
-                                  disabled={suggestLoading || loading}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
-                                >
-                                  <Sparkles className="h-3 w-3" />
-                                  {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
-                                </button>
-                              )}
-                            </div>
+                            {renderAskChatGPT(() => messages.slice(0, i).reverse().find(x => x.role === 'user')?.content)}
                             {suggestedSql && (
                               <div className="space-y-2">
                                 <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
@@ -855,32 +904,7 @@ function ChatPanel({
                     <div className="max-w-[92%] mt-2">
                       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
                         <p className="text-xs font-medium text-slate-700">AI couldn&apos;t find data. Train it:</p>
-                        <div className="flex flex-wrap gap-2">
-                          {onSuggestSql && (
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const prevUser = messages[i - 1];
-                                if (!prevUser?.content) return;
-                                setRejectingIndex(i);
-                                setSuggestLoading(true);
-                                try {
-                                  const sql = await onSuggestSql(prevUser.content);
-                                  setSuggestedSql(sql);
-                                } catch (err) {
-                                  console.error('Suggest failed:', err);
-                                } finally {
-                                  setSuggestLoading(false);
-                                }
-                              }}
-                              disabled={suggestLoading || loading}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
-                            >
-                              <Sparkles className="h-3 w-3" />
-                              {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
-                            </button>
-                          )}
-                        </div>
+                        {renderAskChatGPT(() => { setRejectingIndex(i); return messages[i - 1]?.content; })}
                         {rejectingIndex === i && suggestedSql && (
                           <div className="space-y-2 pt-2 border-t border-slate-200">
                             <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
@@ -980,29 +1004,7 @@ function ChatPanel({
                               Cancel
                             </button>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                if (!prevUser || !onSuggestSql) return;
-                                setSuggestLoading(true);
-                                try {
-                                  const sql = await onSuggestSql(prevUser.content);
-                                  setSuggestedSql(sql);
-                                } catch (err) {
-                                  console.error('Suggest failed:', err);
-                                } finally {
-                                  setSuggestLoading(false);
-                                }
-                              }}
-                              disabled={suggestLoading || loading}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
-                            >
-                              <Sparkles className="h-3 w-3" />
-                              {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
-                            </button>
-                          </div>
+                          {renderAskChatGPT(() => messages.slice(0, i).reverse().find(x => x.role === 'user')?.content)}
                           {suggestedSql && (
                             <div className="space-y-2">
                               <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
@@ -1671,8 +1673,8 @@ export default function DashboardAIAnalysis() {
     }
   };
 
-  const handleSuggestSql = async (section: 'realtime' | 'historical', question: string): Promise<SuggestedSqlResult> => {
-    const res = await dashboardApi.postAIAnalysisSuggestSql(question, timeScope);
+  const handleSuggestSql = async (section: 'realtime' | 'historical', question: string, instructions?: string): Promise<SuggestedSqlResult> => {
+    const res = await dashboardApi.postAIAnalysisSuggestSql(question, timeScope, instructions);
     return {
       sql: res?.proposed_sql ?? '',
       source: res?.suggestion_source,
@@ -2044,7 +2046,7 @@ export default function DashboardAIAnalysis() {
                   onApproveQuery={(q, s, source) => handleApproveQuery('realtime', q, s, source)}
                   onRejectQuery={(q, s, source) => handleRejectQuery('realtime', q, s, source)}
                   onStoreQuery={(q, s) => handleStoreQuery('realtime', q, s)}
-                  onSuggestSql={(q) => handleSuggestSql('realtime', q)}
+                  onSuggestSql={(q, instructions) => handleSuggestSql('realtime', q, instructions)}
                   placeholder="Ask about live invoices, SAT docs, failures…"
                   useContext={useContext}
                   setUseContext={setUseContext}
@@ -2223,7 +2225,7 @@ export default function DashboardAIAnalysis() {
                     onApproveQuery={(q, s, source) => handleApproveQuery('historical', q, s, source)}
                     onRejectQuery={(q, s, source) => handleRejectQuery('historical', q, s, source)}
                     onStoreQuery={(q, s) => handleStoreQuery('historical', q, s)}
-                    onSuggestSql={(q) => handleSuggestSql('historical', q)}
+                    onSuggestSql={(q, instructions) => handleSuggestSql('historical', q, instructions)}
                     placeholder="Ask about trends, forecasts, period comparisons…"
                     useContext={useContext}
                     setUseContext={setUseContext}
