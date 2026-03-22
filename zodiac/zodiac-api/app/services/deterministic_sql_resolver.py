@@ -216,14 +216,31 @@ def resolve_deterministic_sql(
                 return sql
 
     # 0b) Sales trend by year (dimension = year)
-    if ("sales" in q or "revenue" in q) and ("year" in q or "trend" in q) and ok("VBRP") and ok("VBRK"):
+    # CRITICAL: VBRK.gjahr stores '0000' in this DB — NEVER use it.
+    # Use SUBSTRING(TRIM(fkdat),1,4) for year dimension instead.
+    # Skip when query asks for "lowest", "negative", "highest", "top", "by customer", "by product" —
+    # those need dimension breakdown (handled by schema-driven LLM, not year-aggregate template).
+    _dim_keywords = ("lowest", "negative", "highest", "top ", "bottom", "best", "worst",
+                     "by customer", "by product", "by material", "by vendor", "by country")
+    if (("sales" in q or "revenue" in q) and ("year" in q or "trend" in q)
+            and ok("VBRP") and ok("VBRK")
+            and not any(kw in q for kw in _dim_keywords)):
+        # If question asks for a specific year (e.g. "for year 2000"), add a WHERE filter
+        import re as _yr_re
+        year_match = _yr_re.search(r'\b(19\d{2}|20[0-2]\d)\b', q)
+        where_clause = ""
+        if year_match:
+            yr = year_match.group(1)
+            where_clause = f"WHERE SUBSTRING(TRIM(r.{_quote('fkdat')}),1,4) = '{yr}' "
         sql = (
-            f"SELECT r.{_quote('gjahr')} AS year, "
-            f"SUM(v.{_quote('netwr')}) AS sales "
+            f"SELECT SUBSTRING(TRIM(r.{_quote('fkdat')}),1,4) AS year, "
+            f"SUM(NULLIF(TRIM(v.{_quote('netwr')}::text),'')::numeric) AS sales, "
+            f"COUNT(*) AS records "
             f"FROM {tbl('VBRP')} v "
-            f"JOIN {tbl('VBRK')} r ON v.{_quote('vbeln')} = r.{_quote('vbeln')} "
-            f"GROUP BY r.{_quote('gjahr')} "
-            f"ORDER BY r.{_quote('gjahr')} ASC LIMIT 100"
+            f"JOIN {tbl('VBRK')} r ON LPAD(TRIM(v.{_quote('vbeln')}),10,'0') = LPAD(TRIM(r.{_quote('vbeln')}),10,'0') "
+            f"{where_clause}"
+            f"GROUP BY SUBSTRING(TRIM(r.{_quote('fkdat')}),1,4) "
+            f"ORDER BY year ASC LIMIT 100"
         )
         return sql
 
