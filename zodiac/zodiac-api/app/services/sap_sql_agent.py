@@ -3859,10 +3859,9 @@ def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
     # Intentionally NOT catching exceptions here.  Callers (run_sap_sql_agent) have a
     # try/except that captures the real error message and passes it to refine_query_on_error.
     #
- 
-    from .sql_generation_sanitizers import escape_postgres_casts_for_sqlalchemy
+    from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution
 
-    safe_sql = escape_postgres_casts_for_sqlalchemy(sql)
+    safe_sql = prepare_sql_for_sqlalchemy_text_execution(sql)
     result = db.execute(text(safe_sql))
     rows = result.fetchall()
     keys = result.keys()
