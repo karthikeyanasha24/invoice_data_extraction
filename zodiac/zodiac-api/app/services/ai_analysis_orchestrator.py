@@ -1098,9 +1098,10 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
 - No DELETE, UPDATE, DROP, INSERT
 - Quote uppercase table names: "VBRP", "VBRK", "MAKT", etc.{_chatgpt_entity_hint}
 - YEAR FILTERING (CRITICAL): VBRK.gjahr stores '0000' in this DB — NEVER use it for year queries. ALWAYS filter by fkdat: SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000' for year 2000, or fkdat BETWEEN '20000101' AND '20001231'. Never use gjahr.
-- VBRP.netwr is TEXT — cast with NULLIF(TRIM(v."netwr"::text), '')::NUMERIC.
-- CKIS TEXT COLUMNS (CRITICAL): The CKIS.wertn and CKIS.gpreis columns are stored as TEXT, not numeric. NEVER use COALESCE(wertn, 0) — it fails with type mismatch. ALWAYS cast with: SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC). Safe subquery: (SELECT matnr, SUM(NULLIF(TRIM(wertn::text), '')::NUMERIC) AS total_cost FROM "CKIS" GROUP BY matnr) c.
-- For profit margin: revenue from vbrp.netwr (cast via NULLIF(TRIM(netwr::text),'')::NUMERIC), cost from CKIS subquery above. Join vbrp→MAKT for product name, vbrp→CKIS on matnr.
+- VBRP.netwr is TEXT — cast with CAST(NULLIF(TRIM(CAST(v."netwr" AS text)), '') AS numeric).
+- Do not use PostgreSQL ::type shorthand; SQL may be executed through SQLAlchemy text(). Use CAST(... AS ...) instead.
+- CKIS TEXT COLUMNS (CRITICAL): The CKIS.wertn and CKIS.gpreis columns are stored as TEXT, not numeric. NEVER use COALESCE(wertn, 0) — it fails with type mismatch. ALWAYS cast with: SUM(CAST(NULLIF(TRIM(CAST(wertn AS text)), '') AS numeric)). Safe subquery: (SELECT matnr, SUM(CAST(NULLIF(TRIM(CAST(wertn AS text)), '') AS numeric)) AS total_cost FROM "CKIS" GROUP BY matnr) c.
+- For profit margin: revenue from vbrp.netwr (cast via CAST(NULLIF(TRIM(CAST(netwr AS text)), '') AS numeric)), cost from CKIS subquery above. Join vbrp→MAKT for product name, vbrp→CKIS on matnr.
 - NEVER use SQLAlchemy bind parameters (%(year)s, :year) — always inline literal values.
 - Return ONLY a single SELECT statement. No multiple statements, no comments, no markdown."""
                     resp = client.chat.completions.create(
@@ -1259,7 +1260,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                             )
                         if constraints.wants_sum and not constraints.wants_count:
                             mandatory_parts.append(
-                                "- METRIC: totals/revenue => SUM(NULLIF(TRIM(v.\"netwr\"::text), '' )::NUMERIC)"
+                                "- METRIC: totals/revenue => SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS text)), '') AS numeric))"
                             )
 
                         augmented_q = (
