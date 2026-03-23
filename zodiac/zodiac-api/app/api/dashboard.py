@@ -3678,13 +3678,27 @@ Key rules for SAP data:
             mem.last_rows_json = json.dumps(rows[:80], default=str)
             save_memory(db, mem)
             result = SqlAgentResult(sql=quoted_sql, rows=rows)
-            preview = rows[:30]
+            from ..services.ai_analysis_orchestrator import (
+                _compute_global_numeric_stats,
+                _select_representative_rows_for_llm,
+                _enforce_negative_lowest_summary_consistency,
+            )
+            global_stats = _compute_global_numeric_stats(rows, question=question)
+            preview_rows_for_llm = _select_representative_rows_for_llm(rows, global_stats, max_rows=20)
+            preview = preview_rows_for_llm
             metrics_out = None
             analytics_insights_out = None
             if compute_metrics and generate_analytics_insights:
                 try:
                     metrics_out = compute_metrics(rows)
-                    analytics_insights_out = generate_analytics_insights(question, rows, metrics=metrics_out, sql=quoted_sql)
+                    analytics_insights_out = generate_analytics_insights(
+                        question,
+                        rows,
+                        metrics=metrics_out,
+                        sql=quoted_sql,
+                        global_stats=global_stats,
+                        representative_rows=preview_rows_for_llm,
+                    )
                 except Exception:
                     pass
             charts_data = None
@@ -3701,8 +3715,17 @@ Key rules for SAP data:
 SQL executed:
 {quoted_sql[:1500]}
 
-Result preview (first 20 rows):
+Representative rows (context only; not complete):
 {json.dumps(preview[:20], default=str, indent=2)}
+
+GLOBAL_NUMERIC_STATS (source of truth for numeric claims):
+{json.dumps(global_stats, default=str, indent=2)}
+
+STRICT RULES:
+- GLOBAL_NUMERIC_STATS MUST be consistent with the narrative.
+- If the question is about negative/lowest line amounts:
+  * If count_negative = 0, you MUST state that there are no net line amounts < 0.
+  * You MUST NOT claim "all amounts are 0" unless min_netwr == max_netwr == 0 and count_positive == 0 and count_negative == 0.
 
 Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbers. Use bullet points if listing items."""
             if rows:
@@ -3713,6 +3736,11 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
                     max_tokens=700,
                 )
                 reply = (resp.choices[0].message.content or "").strip()
+                # Deterministic guardrail to prevent "all zeros" contradictions.
+                try:
+                    reply = _enforce_negative_lowest_summary_consistency(reply or "", question, global_stats)
+                except Exception:
+                    pass
             else:
                 reply = "The SQL executed successfully but returned **0 rows** for the requested filters."
             period_info, date_range = ("All Periods (1994-2026)", {"min_date": "1994-01-01", "max_date": "2026-12-31"}) if time_scope == "both" else ("Last 30 days", {})

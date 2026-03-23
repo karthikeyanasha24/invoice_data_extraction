@@ -37,6 +37,8 @@ def generate_analytics_insights(
     sql: str = "",
     model: str = "gpt-4o-mini",
     max_preview_rows: int = 15,
+    global_stats: Optional[Dict[str, Any]] = None,
+    representative_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Use LLM to produce:
@@ -52,9 +54,10 @@ def generate_analytics_insights(
     client = _get_client()
     if not client:
         return None
-    preview = rows[:max_preview_rows]
+    preview = representative_rows if representative_rows else rows[:max_preview_rows]
     columns = list(preview[0].keys()) if preview else []
     preview_str = json.dumps(preview, default=str, indent=0)[:3000]
+    global_stats_str = json.dumps(global_stats, default=str, indent=2) if global_stats else ""
     metrics_str = ""
     if metrics:
         parts = []
@@ -77,6 +80,14 @@ Sample rows (first {len(preview)}):
 
 Computed metrics:
 {metrics_str or ' (none)'}
+
+GLOBAL_NUMERIC_STATS (source of truth for numeric claims):
+{global_stats_str or '(not provided)'}
+
+STRICT RULES:
+- If GLOBAL_NUMERIC_STATS is provided, the executive_summary MUST agree with it.
+- Forbidden: stating "all amounts are 0" (or similar) when GLOBAL_NUMERIC_STATS.count_positive + count_negative > 0.
+- If GLOBAL_NUMERIC_STATS.count_negative == 0, say explicitly that there are no net line amounts < 0 in this SQL result set for the filters used.
 
 Write a JSON object with exactly these keys (no other text):
 - executive_summary: 1-2 sentences summarizing the main finding.

@@ -1,13 +1,21 @@
 import json
 import logging
+import math
 import re
 import time
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+try:
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+except ModuleNotFoundError:  # pragma: no cover
+    # Allow importing this module in lightweight test environments where
+    # SQLAlchemy isn't installed (the negative/lowest guardrail helpers are pure python).
+    text = None  # type: ignore
+    Session = object  # type: ignore
 
 from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
@@ -263,6 +271,345 @@ def _rows_preview(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str,
         clean = {str(k): _serialize_value(v) for k, v in (r or {}).items()}
         out.append(clean)
     return out
+
+
+def _parse_float_maybe(v: Any) -> Optional[float]:
+    """
+    Best-effort numeric parsing for stats extraction from SQL result rows.
+    Handles float/int/Decimal and numeric strings (possibly with currency prefixes).
+    """
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        return float(v)
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip()
+        # Extract the first numeric token (e.g. "DEM 15.03" -> 15.03)
+        m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", s)
+        if not m:
+            return None
+        try:
+            return float(m.group(0))
+        except Exception:
+            return None
+    return None
+
+
+def _infer_measure_and_currency_keys(rows: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Infer the "money" measure column and a currency column used for formatting.
+    Prefer netwr_line_amount for negative/lowest line-item questions.
+    """
+    if not rows:
+        return None, None
+    keys = list((rows[0] or {}).keys())
+
+    preferred_measure = None
+    for k in keys:
+        if str(k).lower() == "netwr_line_amount":
+            preferred_measure = k
+            break
+
+    if preferred_measure is None:
+        # Prefer any column containing "netwr" that parses as numeric.
+        for k in keys:
+            kl = str(k).lower()
+            if "netwr" in kl:
+                parsed_any = any(_parse_float_maybe((r or {}).get(k)) is not None for r in rows[:50])
+                if parsed_any:
+                    preferred_measure = k
+                    break
+
+    if preferred_measure is None:
+        # Fallback: first column that looks numeric by name.
+        for k in keys:
+            kl = str(k).lower()
+            if any(p in kl for p in ["amount", "value", "revenue", "sales", "price", "netwr"]):
+                parsed_any = any(_parse_float_maybe((r or {}).get(k)) is not None for r in rows[:50])
+                if parsed_any:
+                    preferred_measure = k
+                    break
+
+    currency_key = None
+    for k in keys:
+        kl = str(k).lower()
+        if kl in {"currency", "waerk", "waers", "rtcur", "hwaer"}:
+            currency_key = k
+            break
+
+    return preferred_measure, currency_key
+
+
+def _compute_global_numeric_stats(rows: List[Dict[str, Any]], question: str = "") -> Dict[str, Any]:
+    """
+    Compute small global stats from the FULL result set for narrative consistency.
+    """
+    measure_key, currency_key = _infer_measure_and_currency_keys(rows)
+    if not measure_key:
+        return {
+            "measure_key": None,
+            "currency_key": currency_key,
+            "row_count_total": len(rows),
+            "row_count_with_measure": 0,
+        }
+
+    values: List[Tuple[float, Dict[str, Any]]] = []
+    for r in rows:
+        if not r:
+            continue
+        v = _parse_float_maybe((r or {}).get(measure_key))
+        if v is None:
+            continue
+        values.append((v, r))
+
+    numeric_vals = [v for v, _ in values]
+    row_count_with_measure = len(numeric_vals)
+    if not numeric_vals:
+        return {
+            "measure_key": measure_key,
+            "currency_key": currency_key,
+            "row_count_total": len(rows),
+            "row_count_with_measure": 0,
+        }
+
+    tol = 1e-9
+    count_negative = sum(1 for v in numeric_vals if v < -tol)
+    count_zero = sum(1 for v in numeric_vals if abs(v) <= tol)
+    count_positive = sum(1 for v in numeric_vals if v > tol)
+    min_netwr = min(numeric_vals)
+    max_netwr = max(numeric_vals)
+
+    def _get_currency(row: Dict[str, Any]) -> Optional[str]:
+        if not currency_key:
+            return None
+        c = row.get(currency_key)
+        if c is None:
+            return None
+        s = str(c).strip()
+        return s if s else None
+
+    currencies_present = sorted({(_get_currency(r) or "UNKNOWN") for _, r in values})
+    if "UNKNOWN" in currencies_present and len(currencies_present) > 1:
+        currencies_present = [c for c in currencies_present if c != "UNKNOWN"]
+
+    values_sorted_small = sorted(values, key=lambda t: (t[0], str(t[1].get("vbeln", ""))))
+    values_sorted_large = sorted(values, key=lambda t: (-t[0], str(t[1].get("vbeln", ""))))
+    values_sorted_positive = [t for t in values_sorted_small if t[0] > tol]
+
+    def _pick_example_row_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        for k in ["vbeln", "billing_doc", "posnr", "line_pos", "fkdat", "billing_date", "sold_to_party", "currency"]:
+            if k in row:
+                out[k] = _serialize_value(row.get(k))
+        if currency_key and currency_key in row:
+            out["currency"] = _serialize_value(row.get(currency_key))
+        out[measure_key] = _serialize_value(row.get(measure_key))
+        return out
+
+    top_5_smallest = [
+        {**_pick_example_row_fields(r), "value": round(v, 6)} for v, r in values_sorted_small[:5]
+    ]
+    top_5_largest = [
+        {**_pick_example_row_fields(r), "value": round(v, 6)} for v, r in values_sorted_large[:5]
+    ]
+
+    min_positive_netwr = None
+    min_positive_example = None
+    if values_sorted_positive:
+        min_positive_netwr = float(values_sorted_positive[0][0])
+        v0, r0 = values_sorted_positive[0]
+        min_positive_example = {**_pick_example_row_fields(r0), "value": round(v0, 6)}
+
+    return {
+        "measure_key": measure_key,
+        "currency_key": currency_key,
+        "row_count_total": len(rows),
+        "row_count_with_measure": row_count_with_measure,
+        "min_netwr": round(min_netwr, 6),
+        "max_netwr": round(max_netwr, 6),
+        "min_positive_netwr": (round(min_positive_netwr, 6) if min_positive_netwr is not None else None),
+        "count_negative": int(count_negative),
+        "count_zero": int(count_zero),
+        "count_positive": int(count_positive),
+        "currencies_present": currencies_present,
+        "top_5_smallest": top_5_smallest,
+        "top_5_largest": top_5_largest,
+        "min_positive_example": min_positive_example,
+    }
+
+
+def _select_representative_rows_for_llm(
+    rows: List[Dict[str, Any]],
+    stats: Dict[str, Any],
+    max_rows: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    Select representative rows (extremes + a few additional rows) for LLM context.
+    """
+    measure_key = stats.get("measure_key")
+    if not measure_key:
+        return _rows_preview(rows, limit=max_rows)
+
+    tol = 1e-9
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+    for r in rows:
+        if not r:
+            continue
+        v = _parse_float_maybe((r or {}).get(measure_key))
+        if v is None:
+            continue
+        scored.append((v, r))
+
+    if not scored:
+        return _rows_preview(rows, limit=max_rows)
+
+    scored_small = sorted(scored, key=lambda t: t[0])[:5]
+    scored_large = sorted(scored, key=lambda t: -t[0])[:5]
+
+    non_zero = [t for t in scored if abs(t[0]) > tol]
+    scored_mid = non_zero[: max_rows - len(scored_small) - len(scored_large)]
+
+    picked: List[Dict[str, Any]] = []
+    seen = set()
+    for _, r in scored_small + scored_large + scored_mid:
+        k = (str(r.get("vbeln", "")), str(r.get("posnr", r.get("line_pos", ""))), str(r.get("fkdat", r.get("billing_date", ""))))
+        if k in seen:
+            continue
+        seen.add(k)
+        picked.append(r)
+        if len(picked) >= max_rows:
+            break
+
+    return _rows_preview(picked, limit=max_rows)
+
+
+def _is_negative_or_lowest_line_query(user_query: str) -> bool:
+    q = (user_query or "").lower()
+    return bool(
+        ("negative" in q or "credit memo" in q)
+        or ("lowest" in q or "smallest" in q or "minimum" in q)
+    ) and ("line" in q or "billing" in q or "netwr" in q)
+
+
+def _format_currency_value(value: float, currency_code: Optional[str]) -> str:
+    code = (currency_code or "").upper().strip() if currency_code else ""
+    symbol_map = {"USD": "$", "KRW": "₩", "EUR": "€", "GBP": "£"}
+    if code in symbol_map:
+        return f"{symbol_map[code]}{value:.2f}"
+    if code:
+        return f"{code} {value:.2f}"
+    return f"{value:.2f}"
+
+
+def _enforce_negative_lowest_summary_consistency(
+    reply: str,
+    user_query: str,
+    stats: Dict[str, Any],
+) -> str:
+    """
+    Deterministic guardrail against narrative contradictions like "all amounts are 0"
+    when stats show non-zero values.
+    """
+    if not _is_negative_or_lowest_line_query(user_query):
+        return reply
+
+    count_negative = int(stats.get("count_negative") or 0)
+    count_zero = int(stats.get("count_zero") or 0)
+    count_positive = int(stats.get("count_positive") or 0)
+    min_netwr = float(stats.get("min_netwr") or 0.0)
+    max_netwr = float(stats.get("max_netwr") or 0.0)
+    min_positive_netwr = stats.get("min_positive_netwr")
+
+    # If there are any non-zero lines (negative or positive), we allow correction
+    # even when max_netwr is 0 (e.g. negatives exist but the largest value is 0).
+    has_non_zero = (count_negative + count_positive) > 0
+    if not has_non_zero:
+        return reply
+
+    contradiction_patterns = [
+        r"all\s+.*amounts?\s+are\s+0(\.0+)?",
+        r"all\s+.*line\s+amounts?\s+are\s+0(\.0+)?",
+        r"everything\s+is\s+0(\.0+)?",
+        r"all\s+identified.*0(\.0+)?",
+        r"all\s+billing\s+line\s+amounts?\s+listed\s+are\s+0(\.0+)?",
+        r"all\s+.*0\.0",
+    ]
+
+    if not any(re.search(pat, reply, flags=re.IGNORECASE) for pat in contradiction_patterns):
+        return reply
+
+    top_small = stats.get("top_5_smallest") or []
+    top_large = stats.get("top_5_largest") or []
+
+    def _ex_currency(ex: Dict[str, Any]) -> Optional[str]:
+        if not ex:
+            return None
+        c = ex.get("currency")
+        return str(c).strip() if c else None
+
+    min_currency = _ex_currency(top_small[0]) if top_small else None
+    max_currency = _ex_currency(top_large[0]) if top_large else None
+    min_fmt = _format_currency_value(min_netwr, min_currency)
+    max_fmt = _format_currency_value(max_netwr, max_currency)
+
+    header_year = None
+    m = re.search(r"\b((?:19|20)\d{2})\b", user_query or "")
+    if m:
+        header_year = m.group(1)
+
+    negative_sentence = (
+        "No negative line amounts (< 0) appear in this result set."
+        if count_negative == 0
+        else f"{count_negative} line(s) have net line amount < 0."
+    )
+    zero_sentence = f"{count_zero} line(s) have net line amount = 0."
+    positive_sentence = f"{count_positive} line(s) have net line amount > 0."
+
+    smallest_positive_fmt: Optional[str] = None
+    if count_negative == 0 and min_positive_netwr is not None:
+        min_pos_ex = stats.get("min_positive_example") or {}
+        min_pos_currency = min_pos_ex.get("currency")
+        smallest_positive_fmt = _format_currency_value(
+            float(min_positive_netwr), str(min_pos_currency) if min_pos_currency else None
+        )
+
+    # Show a few example lines from the smallest values.
+    examples: List[str] = []
+    for ex in top_small[:3]:
+        v = ex.get("value", min_netwr)
+        cur = _ex_currency(ex) or min_currency
+        doc = ex.get("billing_doc") or ex.get("vbeln")
+        pos = ex.get("line_pos") or ex.get("posnr")
+        dt = ex.get("billing_date") or ex.get("fkdat")
+        loc_parts = [p for p in [doc, pos, dt] if p not in (None, "")]
+        loc = f" ({', '.join(str(p) for p in loc_parts)})" if loc_parts else ""
+        examples.append(f"- { _format_currency_value(float(v), cur) }{loc}")
+
+    deterministic = (
+        "**Executive Summary**\n"
+        + (f"For year {header_year}, the SQL result contains non-zero net line amounts.\n" if header_year else "The SQL result contains non-zero net line amounts.\n")
+        + f"- Min net line amount: {min_fmt}\n"
+        + f"- Max net line amount: {max_fmt}\n"
+        + f"- {negative_sentence}\n"
+        + f"- {zero_sentence}\n"
+        + f"- {positive_sentence}\n"
+        + (f"- Smallest positive net line amount: {smallest_positive_fmt}\n" if smallest_positive_fmt else "")
+        + "\n"
+        + "**Detailed Points**\n"
+        + "Smallest values in the result set:\n"
+        + "\n".join(examples) if examples else "**Detailed Points**\n- (No example rows available)"
+        + "\n\n"
+        + "**Short Recommendation**\n"
+        + "> Re-check FKDAT year filters and document/type predicates if your expectation was different."
+    )
+
+    return deterministic
 
 
 def _split_compare_query(client: OpenAI, user_query: str) -> List[str]:
@@ -1316,7 +1663,9 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     # Summarize rows with LLM.
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
-    preview = _rows_preview(result.rows, limit=20)
+    global_stats = _compute_global_numeric_stats(result.rows, question=user_query)
+    preview_rows_for_llm = _select_representative_rows_for_llm(result.rows, global_stats, max_rows=20)
+    preview = _rows_preview(preview_rows_for_llm, limit=20)
 
     # Analytics layer: KPIs + executive insights (lightweight, after SQL execution)
     metrics_out = None
@@ -1324,8 +1673,14 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     try:
         from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
         metrics_out = compute_metrics(result.rows)
+        # Provide global numeric stats so the LLM cannot claim "all zeros" based only on the first page.
         analytics_insights_out = generate_analytics_insights(
-            user_query, result.rows, metrics=metrics_out, sql=result.sql
+            user_query,
+            result.rows,
+            metrics=metrics_out,
+            sql=result.sql,
+            global_stats=global_stats,
+            representative_rows=preview_rows_for_llm,
         )
     except Exception as analytics_err:
         logger.debug("Analytics layer skipped: %s", analytics_err)
@@ -1483,14 +1838,22 @@ SQL executed:
 {result.sql}
 ```
 
-Result preview as JSON (this is the ONLY source of truth for numbers):
+Representative rows as JSON (context only; not guaranteed to include all min/max values):
 {json.dumps(preview, default=str)}
 
 STRICT RULES (do NOT break these):
-- All numeric values, rankings, and comparisons MUST come directly from the rows above.
+- GLOBAL_NUMERIC_STATS is the ONLY source of truth for numeric claims (min/max/counts/negatives/zeros/positives).
+- All numeric values, rankings, and comparisons MUST come from GLOBAL_NUMERIC_STATS above (not from the representative rows alone).
 - Do NOT reuse or copy text from any previous answer or dashboard.
-- Do NOT invent totals, averages, or percentages that cannot be computed from these rows.
+- Do NOT invent totals, averages, or percentages that cannot be computed from GLOBAL_NUMERIC_STATS (and visible representative rows only for examples).
 - If a value is not visible in the rows, say that you cannot see it instead of guessing.
+- If the question is about negative/lowest billing LINE amounts:
+  * If `count_negative = 0`, you MUST state that there are no net line amounts < 0 in this SQL result set.
+  * You MUST still describe the lowest values using `min_netwr` (which may be 0 or positive).
+  * You MUST NOT claim "all values are 0" unless `min_netwr == max_netwr == 0` and `count_positive == 0` and `count_negative == 0`.
+
+GLOBAL_NUMERIC_STATS (mandatory):
+{json.dumps(global_stats, default=str)}
 
 Write a clear MARKDOWN answer:
 1. **Executive summary** (2–4 sentences; if there are date columns, mention the overall period covered).
@@ -1645,6 +2008,12 @@ Write a clear MARKDOWN answer:
 
     if reply_extra:
         reply = (reply or "") + "".join(reply_extra)
+
+    # Deterministic guardrail: negative/lowest narratives must agree with global stats.
+    try:
+        reply = _enforce_negative_lowest_summary_consistency(reply or "", user_query, global_stats)
+    except Exception as guard_err:
+        logger.debug("negative/lowest consistency guard failed: %s", guard_err)
 
     mem.last_user_query = user_query
     mem.last_sql = result.sql

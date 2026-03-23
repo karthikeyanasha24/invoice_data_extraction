@@ -35,6 +35,36 @@ class ChartSpec:
     period_info: Optional[str] = None  # Period context (e.g., "Q1 2024", "2023-2024")
 
 
+def _pretty_key_name(key: Optional[str]) -> str:
+    if not key:
+        return "Value"
+    return str(key).replace("_", " ").strip().title()
+
+
+def _normalize_chart_title(chart: ChartSpec) -> str:
+    """
+    Post-process LLM chart titles so they always match the actual x/y keys used by the chart data.
+    This prevents misleading titles like "by month" when the x-axis is daily billing dates.
+    """
+    x = _pretty_key_name(chart.x_key)
+
+    if chart.chart_type == "pie":
+        val = _pretty_key_name(chart.value_key)
+        return f"{val} Distribution"
+
+    y0 = None
+    if chart.y_keys and len(chart.y_keys) > 0:
+        y0 = chart.y_keys[0]
+    elif chart.value_key:
+        y0 = chart.value_key
+
+    if y0 and x:
+        y = _pretty_key_name(y0)
+        return f"{y} by {x}"
+
+    return chart.title or "Visualization"
+
+
 def _get_client() -> OpenAI:
     """Get OpenAI client."""
     return OpenAI(api_key=OPENAI_API_KEY)
@@ -377,6 +407,9 @@ Rules:
                 period_info=rec.get("period_info"),
             )
             
+            # Normalize title to match actual x/y keys used by the generated chart data.
+            chart_spec.title = _normalize_chart_title(chart_spec)
+            
             charts.append(chart_spec)
             logger.info(f"✅ Created chart spec: {chart_spec.title} (type={chart_type}, data_points={len(chart_data)})")
         
@@ -558,7 +591,53 @@ def generate_chart_data(
             # Update config with actual keys
             config["x_key"] = actual_x_key
             config["y_keys"] = actual_y_keys
-            
+
+            # Ensure y-axis values are numeric even if the backend sent
+            # currency-prefixed strings like "DEM 15.03".
+            def _try_float_from_any(v: Any) -> Any:
+                if isinstance(v, (int, float)):
+                    return float(v)
+                if isinstance(v, str):
+                    m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", v)
+                    if m:
+                        try:
+                            return float(m.group(0))
+                        except Exception:
+                            return v
+                return v
+
+            for row in formatted_data:
+                for yk in actual_y_keys:
+                    if yk in row:
+                        row[yk] = _try_float_from_any(row.get(yk))
+
+            # Line/area charts should be ordered chronologically when the x-axis
+            # looks like a date/period. Otherwise the UI "trend" can be misleading.
+            if chart_type in {"line", "area"}:
+                def _parse_sort_key(x: Any):
+                    if x is None:
+                        return (0, 0, 0)
+                    s = str(x).strip()
+                    # YYYY-MM-DD
+                    m1 = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s)
+                    if m1:
+                        return (1, int(m1.group(1)), int(m1.group(2)) * 100 + int(m1.group(3)))
+                    # YYYY-Pxx (SAP period)
+                    m2 = re.fullmatch(r"(\d{4})-P(\d{1,2})", s)
+                    if m2:
+                        return (2, int(m2.group(1)), int(m2.group(2)))
+                    # Plain year (e.g. 1999)
+                    m3 = re.fullmatch(r"(\d{4})", s)
+                    if m3:
+                        return (3, int(m3.group(1)), 0)
+                    return (99, 0, 0)
+
+                # Only sort if a meaningful fraction of points look date/period-like.
+                x_samples = [row.get(actual_x_key) for row in formatted_data[:min(30, len(formatted_data))]]
+                date_like = sum(1 for xv in x_samples if isinstance(xv, str) and re.match(r"^\d{4}-", xv)) >= 5
+                if date_like:
+                    formatted_data = sorted(formatted_data, key=lambda r: _parse_sort_key(r.get(actual_x_key)))
+
             return formatted_data
         
         elif chart_type == "pie":
