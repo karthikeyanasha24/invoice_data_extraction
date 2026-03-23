@@ -32,6 +32,7 @@ class OrchestratorResult:
     compare: Optional[Dict[str, Any]] = None
     memory_updated: bool = False
     charts: Optional[List[Dict[str, Any]]] = None
+    charts_blocked_reason: Optional[str] = None
     performance: Optional[Dict[str, Any]] = None
     time_scope: Optional[str] = None
     date_range: Optional[Dict[str, str]] = None
@@ -633,6 +634,8 @@ If result is empty, say so and suggest a refined question.
     timings["pattern_matching_ms"] = 0
     timings["used_pattern"] = False
 
+    charts_blocked_reason: Optional[str] = None
+
     sql_db = sap_db or db
     sql_start = time.time()
 
@@ -641,6 +644,7 @@ If result is empty, say so and suggest a refined question.
     # Stored queries often wrongly aggregate SUM by calendar year across all years; users
     # then keep getting that SQL reused forever.
     try:
+        from .ai_analysis_constraint_validator import should_try_deterministic_sql_for_quality
         from .deterministic_sql_resolver import (
             is_lowest_years_by_sales_query,
             is_negative_or_lowest_billing_year_query,
@@ -650,7 +654,11 @@ If result is empty, say so and suggest a refined question.
         from .sql_validator import validate_sql as schema_validate_sql
         from .sap_sql_agent import SqlAgentResult, _quote_catalog_sql_tables, _run_sql
 
-        if is_negative_or_lowest_billing_year_query(user_query) or is_lowest_years_by_sales_query(user_query):
+        if (
+            is_negative_or_lowest_billing_year_query(user_query)
+            or is_lowest_years_by_sales_query(user_query)
+            or should_try_deterministic_sql_for_quality(user_query)
+        ):
             _schema = get_schema_dict(sql_db)
             if _schema:
                 _avail = list(_schema.keys())
@@ -676,15 +684,23 @@ If result is empty, say so and suggest a refined question.
     # Andy's training loop: check ai_query_memory first for user-approved queries
     if result is None:
         try:
+            from .ai_analysis_constraint_validator import should_skip_sql_memory_reuse
             from .ai_query_memory_service import find_similar_stored_query
-            stored_sql = find_similar_stored_query(db, user_query, user_id)
-            if stored_sql:
-                from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
-                quoted_sql = _quote_catalog_sql_tables(stored_sql)
-                stored_rows = _run_sql(sql_db, quoted_sql)
-                if stored_rows:
-                    result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
-                    logger.info("ai_query_memory: reused stored SQL for %r (%d rows)", user_query[:60], len(stored_rows))
+            if should_skip_sql_memory_reuse(user_query):
+                logger.info("ai_query_memory: skipping reuse due to explicit filters in question")
+            else:
+                stored_sql = find_similar_stored_query(db, user_query, user_id)
+                if stored_sql:
+                    from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+                    quoted_sql = _quote_catalog_sql_tables(stored_sql)
+                    stored_rows = _run_sql(sql_db, quoted_sql)
+                    if stored_rows:
+                        result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
+                        logger.info(
+                            "ai_query_memory: reused stored SQL for %r (%d rows)",
+                            user_query[:60],
+                            len(stored_rows),
+                        )
         except Exception as mem_err:
             logger.debug("ai_query_memory lookup failed: %s", mem_err)
 
@@ -1159,6 +1175,120 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
             )
         # result now has rows (from the simplified retry) — fall through to summarization below.
 
+    # Constraint compliance (pre-chart): verify that explicit user filters
+    # (year/billing category/type/count/currency) are actually enforced by SQL.
+    # If not, we suppress charts to avoid misleading chart titles.
+    try:
+        from .ai_analysis_constraint_validator import (
+            extract_user_constraints,
+            validate_sql_against_user_constraints,
+            build_charts_blocked_reason,
+            should_try_deterministic_sql_for_quality,
+        )
+        constraints = extract_user_constraints(user_query)
+        has_explicit_constraints = (
+            bool(constraints.years)
+            or bool(constraints.billing_category or constraints.billing_type)
+            or bool(constraints.currency_code)
+            or constraints.wants_count
+            or constraints.wants_sum
+        )
+        if has_explicit_constraints:
+            ok, failures = validate_sql_against_user_constraints(result.sql, user_query)
+            if not ok:
+                charts_blocked_reason = build_charts_blocked_reason(failures)
+
+                # One targeted deterministic retry (preferred over another LLM run).
+                try:
+                    if should_try_deterministic_sql_for_quality(user_query):
+                        from .schema_loader import get_schema_dict
+                        from .sql_validator import validate_sql as schema_validate_sql
+                        from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+                        from .deterministic_sql_resolver import resolve_deterministic_sql
+
+                        _schema = get_schema_dict(sql_db)
+                        if _schema:
+                            _avail = list(_schema.keys())
+                            _case = {t.upper(): t for t in _avail}
+                            _det = resolve_deterministic_sql(
+                                user_query,
+                                available_tables=_avail,
+                                schema_table_case=_case,
+                            )
+                            if _det:
+                                _ok_det, _verr = schema_validate_sql(_det, _schema)
+                                if _ok_det:
+                                    _qsql = _quote_catalog_sql_tables(_det)
+                                    _drows = _run_sql(sql_db, _qsql)
+                                    if _drows:
+                                        ok2, failures2 = validate_sql_against_user_constraints(_qsql, user_query)
+                                        if ok2:
+                                            result = SqlAgentResult(sql=_qsql, rows=_drows)
+                                            charts_blocked_reason = None
+                                        else:
+                                            charts_blocked_reason = build_charts_blocked_reason(failures2)
+                except Exception:
+                    pass
+
+                # If deterministic couldn't satisfy the constraints, fall back to an
+                # explicit LLM retry with mandatory FKDAT/FKTYP/FKART/WAERK filters.
+                if charts_blocked_reason:
+                    try:
+                        from .sap_sql_agent import run_sap_sql_agent
+
+                        mandatory_parts: List[str] = []
+                        for yy in sorted(constraints.years):
+                            mandatory_parts.append(
+                                f"- YEAR (FKDAT): SUBSTRING(TRIM(r.\"fkdat\"),1,4) = '{yy}'"
+                            )
+                        if constraints.billing_category:
+                            mandatory_parts.append(
+                                f"- BILLING CATEGORY (FKTYP): r.\"fktyp\" = '{constraints.billing_category}'"
+                            )
+                        if constraints.billing_type:
+                            mandatory_parts.append(
+                                f"- BILLING TYPE (FKART): r.\"fkart\" = '{constraints.billing_type}'"
+                            )
+                        if constraints.currency_code:
+                            mandatory_parts.append(
+                                f"- CURRENCY (WAERK): r.\"waerk\" = '{constraints.currency_code}'"
+                            )
+                        if constraints.wants_count:
+                            mandatory_parts.append(
+                                "- METRIC: invoice count => COUNT(DISTINCT r.\"vbeln\")"
+                            )
+                        if constraints.wants_sum and not constraints.wants_count:
+                            mandatory_parts.append(
+                                "- METRIC: totals/revenue => SUM(NULLIF(TRIM(v.\"netwr\"::text), '' )::NUMERIC)"
+                            )
+
+                        augmented_q = (
+                            user_query
+                            + "\n\n[MANDATORY SQL CONSTRAINTS (do not ignore):]\n"
+                            + "\n".join(mandatory_parts)
+                            + "\n"
+                        )
+
+                        retry = run_sap_sql_agent(
+                            augmented_q,
+                            sql_db,
+                            knowledge_context=knowledge_context,
+                            time_scope=time_scope,
+                            few_shot_examples=_few_shot,
+                            max_retries=1,
+                        )
+                        if retry and getattr(retry, "rows", None):
+                            ok3, failures3 = validate_sql_against_user_constraints(retry.sql, user_query)
+                            if ok3:
+                                result = retry
+                                charts_blocked_reason = None
+                            else:
+                                charts_blocked_reason = build_charts_blocked_reason(failures3)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
     # Invoice-bot result shaping: dedupe, aggregate by customer, filter by product name, apply display labels
     try:
         from .invoice_bot_helpers import (
@@ -1415,39 +1545,48 @@ Write a clear MARKDOWN answer:
 
     # Generate charts for visualization
     charts_data = None
-    try:
-        chart_start = time.time()
-        logger.info(f"📊 Attempting chart generation for query with {len(result.rows)} rows")
-        chart_specs = analyze_visualization_needs(result.rows, user_query, "new", result.sql)
-        timings["chart_generation_ms"] = int((time.time() - chart_start) * 1000)
-        
-        if chart_specs:
-            charts_data = chart_specs_to_json(chart_specs)
-            logger.info(f"✅ Generated {len(charts_data)} chart(s) for user query")
-            logger.info(f"Chart types: {[c.get('chart_type') for c in charts_data]}")
-            
-            # Debug: Log chart structure to help diagnose issues
-            for idx, chart in enumerate(charts_data):
-                chart_type = chart.get('chart_type')
-                sample_data = chart.get('data', [])[:2] if chart.get('data') else []
-                logger.info(f"📊 Chart {idx+1}: type={chart_type}, name_key={chart.get('name_key')}, value_key={chart.get('value_key')}, x_key={chart.get('x_key')}, y_keys={chart.get('y_keys')}")
-                if sample_data:
-                    logger.info(f"   Sample data keys: {list(sample_data[0].keys()) if sample_data else 'none'}")
-        else:
-            logger.info("⚠️ No charts generated - analyze_visualization_needs returned empty list")
-        # Analytics layer fallback: one auto bar chart if no chart specs
-        if (not charts_data or len(charts_data) == 0):
-            try:
-                from ..analytics import generate_chart_from_rows
-                auto_chart = generate_chart_from_rows(result.rows, title="Result", return_base64=True)
-                if auto_chart:
-                    charts_data = [auto_chart]
-                    logger.info("Analytics layer: added auto bar chart")
-            except Exception as ac_err:
-                logger.debug("Auto chart fallback skipped: %s", ac_err)
-    except Exception as chart_err:
-        logger.error(f"❌ Chart generation failed: {chart_err}", exc_info=True)
+    if charts_blocked_reason:
+        logger.info("⛔ Skipping chart generation: %s", charts_blocked_reason)
+        charts_data = []
         timings["chart_generation_ms"] = 0
+    else:
+        try:
+            chart_start = time.time()
+            logger.info(f"📊 Attempting chart generation for query with {len(result.rows)} rows")
+            chart_specs = analyze_visualization_needs(result.rows, user_query, "new", result.sql)
+            timings["chart_generation_ms"] = int((time.time() - chart_start) * 1000)
+            
+            if chart_specs:
+                charts_data = chart_specs_to_json(chart_specs)
+                logger.info(f"✅ Generated {len(charts_data)} chart(s) for user query")
+                logger.info(f"Chart types: {[c.get('chart_type') for c in charts_data]}")
+                
+                # Debug: Log chart structure to help diagnose issues
+                for idx, chart in enumerate(charts_data):
+                    chart_type = chart.get('chart_type')
+                    sample_data = chart.get('data', [])[:2] if chart.get('data') else []
+                    logger.info(
+                        f"📊 Chart {idx+1}: type={chart_type}, "
+                        f"name_key={chart.get('name_key')}, value_key={chart.get('value_key')}, "
+                        f"x_key={chart.get('x_key')}, y_keys={chart.get('y_keys')}"
+                    )
+                    if sample_data:
+                        logger.info(f"   Sample data keys: {list(sample_data[0].keys()) if sample_data else 'none'}")
+            else:
+                logger.info("⚠️ No charts generated - analyze_visualization_needs returned empty list")
+            # Analytics layer fallback: one auto bar chart if no chart specs
+            if (not charts_data or len(charts_data) == 0):
+                try:
+                    from ..analytics import generate_chart_from_rows
+                    auto_chart = generate_chart_from_rows(result.rows, title="Result", return_base64=True)
+                    if auto_chart:
+                        charts_data = [auto_chart]
+                        logger.info("Analytics layer: added auto bar chart")
+                except Exception as ac_err:
+                    logger.debug("Auto chart fallback skipped: %s", ac_err)
+        except Exception as chart_err:
+            logger.error(f"❌ Chart generation failed: {chart_err}", exc_info=True)
+            timings["chart_generation_ms"] = 0
 
     # Invoice-bot: dynamic analysis plan, insights from all providers, COGS explanation, single-material cost summary
     analysis_plan_out = None
@@ -1562,6 +1701,7 @@ Write a clear MARKDOWN answer:
         rows_preview=preview,
         memory_updated=True,
         charts=charts_data,
+        charts_blocked_reason=charts_blocked_reason,
         performance=timings,
         time_scope=time_scope,
         date_range=date_range,

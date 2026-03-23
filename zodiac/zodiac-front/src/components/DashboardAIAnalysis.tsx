@@ -193,6 +193,7 @@ type AiAnalysisMeta = {
   action?: string; reason?: string; sql?: string;
   rows_preview?: Record<string, unknown>[];
   compare?: unknown; charts?: any[]; multiModel?: any;
+  charts_blocked_reason?: string;
   time_scope?: string;
   date_range?: { min_date: string; max_date: string };
   period_info?: string;
@@ -1152,6 +1153,11 @@ function ChatPanel({
                         </details>
                       )}
                       <ValidationNotes validation={m.meta.validation} />
+                      {m.meta.charts_blocked_reason && (
+                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
+                          Charts suppressed: {m.meta.charts_blocked_reason}
+                        </div>
+                      )}
                       {m.meta.performance && (
                         <div className="text-slate-500">
                           ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
@@ -1590,6 +1596,7 @@ export default function DashboardAIAnalysis() {
           rows_preview: res?.rows_preview,
           compare: res?.compare,
           charts: res?.charts,
+          charts_blocked_reason: res?.charts_blocked_reason,
           time_scope: res?.time_scope,
           date_range: res?.date_range,
           period_info: res?.period_info,
@@ -1638,6 +1645,7 @@ export default function DashboardAIAnalysis() {
         suggestion_source: res?.suggestion_source,
         rows_preview: res?.rows_preview,
         charts: res?.charts,
+        charts_blocked_reason: res?.charts_blocked_reason,
         time_scope: res?.time_scope,
         date_range: res?.date_range,
         period_info: res?.period_info,

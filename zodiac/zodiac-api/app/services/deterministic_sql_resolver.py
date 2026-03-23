@@ -40,6 +40,77 @@ def _quote(t: str) -> str:
     return t
 
 
+def _extract_single_year(question: str) -> Optional[str]:
+    if not question:
+        return None
+    m = re.search(r"\b((?:19|20)\d{2})\b", (question or ""), flags=re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _extract_billing_category_value(question: str) -> Optional[str]:
+    q = question or ""
+    m = re.search(
+        r"(?:billing\s*category|fktyp)\s*[:=\-]?\s*[\"']?([A-Za-z0-9]{1,10})[\"']?",
+        q,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    if re.search(r"\bbilling\b", q, flags=re.IGNORECASE) and re.search(r"\bcategory\b", q, flags=re.IGNORECASE):
+        m2 = re.search(r"\bcategory\s*[\"']?([A-Za-z0-9]{1,10})[\"']?", q, flags=re.IGNORECASE)
+        if m2:
+            return m2.group(1).strip()
+    return None
+
+
+def _extract_billing_type_value(question: str) -> Optional[str]:
+    q = question or ""
+    m = re.search(
+        r"(?:billing\s*type|fkart)\s*[:=\-]?\s*[\"']?([A-Za-z0-9]{1,10})[\"']?",
+        q,
+        flags=re.IGNORECASE,
+    )
+    return m.group(1).strip() if m else None
+
+
+def _extract_currency_code(question: str) -> Optional[str]:
+    q = (question or "").upper()
+    # Best-effort: look for common ISO-4217 codes mentioned explicitly.
+    for code in ("USD", "EUR", "GBP", "KRW", "INR", "JPY", "AUD", "CAD", "CHF", "CNY"):
+        if re.search(rf"\b{re.escape(code)}\b", q):
+            return code
+    # Symbols only (best-effort).
+    if "€" in question:
+        return "EUR"
+    if "£" in question:
+        return "GBP"
+    if "$" in question and "USD" in q:
+        return "USD"
+    return None
+
+
+def _wants_invoice_count(question: str) -> bool:
+    q = (question or "").lower()
+    return bool(
+        re.search(r"\b(count|how many|number of invoices|number of)\b", q)
+        or "invoice count" in q
+        or "how many invoices" in q
+    )
+
+
+def _wants_sales_total(question: str) -> bool:
+    q = (question or "").lower()
+    return bool(
+        "total" in q
+        or "sum" in q
+        or "revenue" in q
+        or "sales" in q
+        or "invoice value" in q
+        or "invoice amount" in q
+        or "amount" in q
+    )
+
+
 def _resolve_metric(question: str) -> Optional[Tuple[str, str, str, str]]:
     """Return (metric_key, table, column, agg) or None."""
     q = (question or "").strip().lower()
@@ -160,6 +231,92 @@ def resolve_deterministic_sql(
             return _quote(schema_table_case[t.upper()])
         return _quote(t)
 
+    # ── Reliability-critical: year + billing category/type ───────────────
+    # These queries are easy to express deterministically and should never be
+    # answered by a generic "by industry" / unrelated aggregate.
+    # Year must come from VBRK.fkdat (gjahr is unreliable).
+    y = _extract_single_year(question)
+    billing_cat = _extract_billing_category_value(question)
+    billing_type = _extract_billing_type_value(question)
+    currency_code = _extract_currency_code(question)
+    wants_count = _wants_invoice_count(question)
+    wants_total = _wants_sales_total(question)
+
+    if y and (billing_cat or billing_type) and (wants_count or wants_total):
+        # Avoid intercepting specialized "negative/lowest/highest/top/bottom" queries.
+        # Those are intended to use line-level deterministic SQL (VBRP items), not
+        # year-level totals.
+        _line_intent = bool(
+            re.search(
+                r"\b(negative|credit memo|lowest|highest|top|bottom|best|worst)\b",
+                q,
+                flags=re.IGNORECASE,
+            )
+        )
+        if _line_intent:
+            # Fall through to the dedicated negative/lowest handler (and/or LLM paths).
+            return None
+
+        if not ok("VBRP") or not ok("VBRK"):
+            return None
+
+        vk = tbl("VBRK")
+        rr = "r"
+        v = "v"
+
+        netwr_sum = "SUM(NULLIF(TRIM(v.\"netwr\"::text), '')::NUMERIC)"
+        year_filter = f"SUBSTRING(TRIM({rr}.\"fkdat\"),1,4) = '{y}'"
+        where_parts = [year_filter]
+
+        if billing_cat:
+            where_parts.append(f"{rr}.\"fktyp\" = '{billing_cat}'")
+        if billing_type:
+            where_parts.append(f"{rr}.\"fkart\" = '{billing_type}'")
+        if currency_code:
+            where_parts.append(f"{rr}.\"waerk\" = '{currency_code}'")
+
+        where_sql = " WHERE " + " AND ".join(where_parts)
+
+        if wants_count and wants_total:
+            sql = (
+                f"SELECT {netwr_sum} AS total_sales, "
+                f"COUNT(DISTINCT {rr}.\"vbeln\") AS invoice_count, "
+                f"{rr}.\"waerk\" AS currency "
+                f"FROM vbrp {v} "
+                f"JOIN {vk} {rr} "
+                f"ON LPAD(TRIM({v}.\"vbeln\"),10,'0') = LPAD(TRIM({rr}.\"vbeln\"),10,'0') "
+                f"{where_sql} "
+                f"GROUP BY {rr}.\"waerk\" "
+                f"ORDER BY total_sales DESC NULLS LAST LIMIT 100"
+            )
+            return sql.strip()
+
+        if wants_count:
+            sql = (
+                f"SELECT COUNT(DISTINCT {rr}.\"vbeln\") AS invoice_count, "
+                f"{rr}.\"waerk\" AS currency "
+                f"FROM vbrp {v} "
+                f"JOIN {vk} {rr} "
+                f"ON LPAD(TRIM({v}.\"vbeln\"),10,'0') = LPAD(TRIM({rr}.\"vbeln\"),10,'0') "
+                f"{where_sql} "
+                f"GROUP BY {rr}.\"waerk\" "
+                f"ORDER BY invoice_count DESC NULLS LAST LIMIT 100"
+            )
+            return sql.strip()
+
+        # totals/sum only
+        sql = (
+            f"SELECT {netwr_sum} AS total_sales, "
+            f"{rr}.\"waerk\" AS currency "
+            f"FROM vbrp {v} "
+            f"JOIN {vk} {rr} "
+            f"ON LPAD(TRIM({v}.\"vbeln\"),10,'0') = LPAD(TRIM({rr}.\"vbeln\"),10,'0') "
+            f"{where_sql} "
+            f"GROUP BY {rr}.\"waerk\" "
+            f"ORDER BY total_sales DESC NULLS LAST LIMIT 100"
+        )
+        return sql.strip()
+
     # 0b) Negative and/or lowest sales = billing LINE ITEMS (VBRP), not year-level totals.
     # Year totals are never negative; credit memos appear as negative NETWR on lines.
     # Phrases: "negative sales", "lowest sales", "negative or lowest for year 2000"
@@ -178,13 +335,20 @@ def resolve_deterministic_sql(
             # by amount ASC → negatives appear first, then smallest positives.
             only_negative_lines = has_neg and not has_low
             where_neg = f" AND ({net_cast}) < 0" if only_negative_lines else ""
+            where_extra = ""
+            if billing_cat:
+                where_extra += f" AND {rr}.\"fktyp\" = '{billing_cat}'"
+            if billing_type:
+                where_extra += f" AND {rr}.\"fkart\" = '{billing_type}'"
+            if currency_code:
+                where_extra += f" AND {rr}.\"waerk\" = '{currency_code}'"
             sql = (
                 f'SELECT {v}."vbeln" AS billing_doc, {v}."posnr" AS line_pos, '
                 f'{rr}."fkdat" AS billing_date, {rr}."kunag" AS sold_to_party, '
                 f'{net_cast} AS netwr_line_amount, {rr}."waerk" AS currency '
                 f'FROM vbrp {v} '
                 f'JOIN {vk} {rr} ON LPAD(TRIM({v}."vbeln"), 10, \'0\') = LPAD(TRIM({rr}."vbeln"), 10, \'0\') '
-                f'WHERE SUBSTRING(TRIM({rr}."fkdat"), 1, 4) = \'{y}\'{where_neg} '
+                f'WHERE SUBSTRING(TRIM({rr}."fkdat"), 1, 4) = \'{y}\'{where_neg}{where_extra} '
                 f'ORDER BY {net_cast} ASC NULLS LAST LIMIT 100'
             )
             return sql.strip()
