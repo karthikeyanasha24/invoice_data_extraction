@@ -42,6 +42,7 @@ try:
     from .schema_loader import get_schema_dict, get_schema_text, schema_to_text
     from .semantic_sql_resolver import resolve_to_sql as semantic_resolve_to_sql
     from .semantic_sql_resolver import resolve_count_by_dimension as semantic_resolve_count_by
+    from .semantic_sql_resolver import semantic_fast_path_matches_question
     from .table_selector_llm import select_tables as schema_select_tables
     from .sql_generator_llm import generate_sql as schema_generate_sql
     from .sql_validator import validate_sql as schema_validate_sql
@@ -69,6 +70,7 @@ except ImportError:
     _SCHEMA_DRIVEN_AVAILABLE = False
     try_resolve_and_build_sql = None
     resolve_deterministic_sql = None
+    semantic_fast_path_matches_question = lambda _q, _s: True  # type: ignore
 
 try:
     from openai import OpenAI
@@ -4087,6 +4089,7 @@ def run_schema_driven_sql_agent(
     question: str,
     db: Session,
     few_shot_examples: Optional[List[Dict[str, str]]] = None,
+    intent_context: Optional[str] = None,
 ) -> SqlAgentResult | None:
     """
     Schema-driven SQL agent: no keyword rules. Flow is:
@@ -4102,6 +4105,22 @@ def run_schema_driven_sql_agent(
     client = _get_openai_client()
     if not client:
         return None
+    def _precision_schema_ok(sql_text: str) -> bool:
+        try:
+            from .sap_sql_precision_validator import validate_sql_precision
+
+            vr = validate_sql_precision(sql_text, schema)
+            if not vr.is_valid:
+                logger.warning(
+                    "schema_driven_agent: precision/schema validation failed: %s",
+                    vr.errors,
+                )
+                return False
+            return True
+        except Exception as ex:
+            logger.warning("schema_driven_agent: precision validation error: %s", ex)
+            return False
+
     try:
         schema = get_schema_dict(db)
         if not schema:
@@ -4137,7 +4156,7 @@ def run_schema_driven_sql_agent(
             )
         if template_sql:
             is_valid, err = schema_validate_sql(template_sql, schema)
-            if is_valid:
+            if is_valid and _precision_schema_ok(template_sql):
                 rows = _run_sql(db, template_sql)
                 return SqlAgentResult(sql=template_sql, rows=rows)
             logger.debug("schema_driven_agent: template SQL invalid (%s), falling back to LLM", err)
@@ -4211,13 +4230,20 @@ def run_schema_driven_sql_agent(
         similar: Optional[List[tuple]] = None
         if few_shot_examples:
             similar = [(ex.get("user_query") or "", ex.get("sql_query") or "") for ex in few_shot_examples if ex.get("sql_query")]
-        sql = schema_generate_sql(question, tables, schema_subset, client, similar_examples=similar)
+        sql = schema_generate_sql(
+            question,
+            tables,
+            schema_subset,
+            client,
+            similar_examples=similar,
+            intent_context=intent_context,
+        )
         if not sql:
             logger.warning("schema_driven_agent: no SQL generated for question: %s", (question or "")[:80])
             return None
         logger.info("schema_driven_agent: generated_sql (first 300 chars): %s", (sql or "")[:300])
         is_valid, err = schema_validate_sql(sql, schema)
-        if not is_valid:
+        if not is_valid or not _precision_schema_ok(sql):
             logger.warning("schema_driven_agent: SQL validation failed: %s", err)
             return None
         rows = _run_sql(db, sql)
@@ -4278,6 +4304,23 @@ def run_sap_sql_agent(
                     sem_sql = semantic_resolve_to_sql(question, available_tables=available)
                 if not sem_sql:
                     sem_sql = semantic_resolve_count_by(question, available_tables=available)
+                if sem_sql:
+                    if not semantic_fast_path_matches_question(question, sem_sql):
+                        sem_sql = None
+                if sem_sql:
+                    try:
+                        from .sap_sql_precision_validator import validate_sql_precision
+
+                        _vr = validate_sql_precision(sem_sql, schema)
+                        if not _vr.is_valid:
+                            logger.info(
+                                "semantic_sql_resolver: skipping fast-path — schema validation: %s",
+                                _vr.errors,
+                            )
+                            sem_sql = None
+                    except Exception as _pv_err:
+                        logger.debug("semantic_sql_resolver: precision check: %s", _pv_err)
+                        sem_sql = None
                 if sem_sql:
                     sem_sql_pg = _quote_catalog_sql_tables(sem_sql)
                     sem_rows = _run_sql(db, sem_sql_pg)

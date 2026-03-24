@@ -974,6 +974,27 @@ If result is empty, say so and suggest a refined question.
             period_info=period_info
         )
 
+    # Underspecified explicit filters (e.g. "billing category" with no code) — ask before SQL
+    if action == "new":
+        try:
+            from .ai_intent_classifier import maybe_clarification_reply
+
+            _clar = maybe_clarification_reply(user_query)
+            if _clar:
+                return OrchestratorResult(
+                    reply=_clar,
+                    action="new",
+                    reason="intent_filter_clarification",
+                    sql="",
+                    rows_preview=None,
+                    memory_updated=False,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                )
+        except Exception as _clar_err:
+            logger.debug("intent clarification check: %s", _clar_err)
+
     # new: run SAP SQL agent, store sql+rows and return summary.
     # IMPORTANT: semantic cache and pattern shortcuts are disabled for analysis answers
     # to guarantee fresh, question-specific SQL execution for every data query.
@@ -1086,7 +1107,19 @@ If result is empty, say so and suggest a refined question.
     if result is None:
         # 1) Schema-driven agent: LLM reads schema → selects tables → generates SQL (no keyword rules).
         try:
-            result = run_schema_driven_sql_agent(user_query, sql_db, few_shot_examples=_few_shot)
+            _intent_ctx = None
+            try:
+                from .ai_intent_classifier import build_intent_sql_prompt_block
+
+                _intent_ctx = build_intent_sql_prompt_block(user_query)
+            except Exception:
+                pass
+            result = run_schema_driven_sql_agent(
+                user_query,
+                sql_db,
+                few_shot_examples=_few_shot,
+                intent_context=_intent_ctx,
+            )
             if result and getattr(result, "rows", None):
                 logger.info("Schema-driven SQL agent returned %d rows", len(result.rows))
         except Exception as schema_err:
@@ -1731,7 +1764,19 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                 "missing_focus retry: entity '%s' not in rows, retrying with explicit filter hint for %s",
                 _entity_val, _entity_type,
             )
-            _retry_result = run_schema_driven_sql_agent(_augmented_q, sql_db, few_shot_examples=_few_shot)
+            _retry_intent = None
+            try:
+                from .ai_intent_classifier import build_intent_sql_prompt_block as _build_intent_block
+
+                _retry_intent = _build_intent_block(_augmented_q)
+            except Exception:
+                pass
+            _retry_result = run_schema_driven_sql_agent(
+                _augmented_q,
+                sql_db,
+                few_shot_examples=_few_shot,
+                intent_context=_retry_intent,
+            )
             if not (_retry_result and _retry_result.rows):
                 _retry_result = run_sap_sql_agent(_augmented_q, sql_db, max_retries=1)
         except Exception as _retry_err:

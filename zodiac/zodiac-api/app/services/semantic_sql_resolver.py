@@ -231,6 +231,46 @@ def resolve_count_by_dimension(question: str, available_tables: Optional[List[st
     )
 
 
+def semantic_fast_path_matches_question(question: str, sql: str) -> bool:
+    """
+    Reject semantic-dictionary fast-path SQL when it answers a different question than the user asked.
+
+    Primary guard: do not return a revenue **by industry** query unless the user asked for
+    industry / sector / brsch (or industry table by name).
+    """
+    q = (question or "").lower()
+    s = (sql or "").lower()
+    if not s.strip():
+        return False
+
+    industry_ask = any(
+        x in q
+        for x in (
+            "industry",
+            "industries",
+            "sector",
+            "sectors",
+            "brsch",
+            "t016",
+            "business sector",
+        )
+    )
+    looks_like_industry_sql = (
+        "t016t" in s
+        or " as industry" in s
+        or " as industry," in s
+        or "brtxt" in s
+        or (" group by " in s and "brsch" in s)
+    )
+    if looks_like_industry_sql and not industry_ask:
+        logger.info(
+            "semantic_sql_resolver: rejecting fast-path SQL — industry breakdown without industry intent",
+        )
+        return False
+
+    return True
+
+
 def resolve_to_spec(
     question: str,
 ) -> Optional[Dict[str, Any]]:

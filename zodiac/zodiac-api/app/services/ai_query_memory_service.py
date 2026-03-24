@@ -281,7 +281,8 @@ def find_similar_stored_query(
             best_score = score
             best_record = rec
 
-    if best_record is not None and best_score >= 12:
+    # Require stronger overlap so different filters (year, category, currency) rarely reuse wrong SQL.
+    if best_record is not None and best_score >= 17:
         if mark_used:
             best_record.mark_used()
             db.commit()

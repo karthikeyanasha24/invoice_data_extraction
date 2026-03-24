@@ -95,6 +95,7 @@ def generate_sql(
     client: OpenAI,
     similar_examples: Optional[List[tuple]] = None,
     model: str = "gpt-4o-mini",
+    intent_context: Optional[str] = None,
 ) -> Optional[str]:
     """
     Ask the LLM to write a PostgreSQL SQL query for the question using only the given tables.
@@ -116,6 +117,10 @@ def generate_sql(
     # Build entity-specific filter block (empty string when no entity detected)
     entity_filter_block = _build_entity_filter_block(question)
 
+    intent_block = ""
+    if intent_context and intent_context.strip():
+        intent_block = intent_context.strip() + "\n\n"
+
     # Restrict schema to selected tables only (subset of full schema)
     prompt = f"""You are a PostgreSQL SAP expert. Write a single SQL query to answer the user's question.
 
@@ -133,7 +138,7 @@ def generate_sql(
 ║  2. NETWR IS TEXT — stored as character varying, not numeric.   ║
 ║     NEVER use SUM(v.netwr) directly — it will fail.             ║
 ║     ✗ Wrong:   SUM(v."netwr")                                   ║
-║     ✓ Correct: SUM(NULLIF(TRIM(v."netwr"::text), '')::NUMERIC)  ║
+║     ✓ Correct: SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) ║
 ║                                                                  ║
 ║  3. JOIN WITH LPAD to avoid leading-zero mismatches:            ║
 ║     ON LPAD(TRIM(v."vbeln"), 10, '0') =                         ║
@@ -142,7 +147,7 @@ def generate_sql(
 ║  4. NEGATIVE / LOWEST SALES — individual billing lines (credit  ║
 ║     memos) have negative netwr. "Negative sales" or "lowest    ║
 ║     sales" means LINE ITEMS, NOT year group totals.             ║
-║     ✓ Correct: WHERE NULLIF(TRIM(v."netwr"::text),'')::NUMERIC <0║
+║     ✓ Correct: WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) < 0 ║
 ║     ✗ WRONG (0 rows always): HAVING SUM(netwr) < 0              ║
 ║       — no year has a negative TOTAL in this database           ║
 ║     For "lowest sales": ORDER BY netwr ASC (no HAVING needed)   ║
@@ -152,7 +157,7 @@ def generate_sql(
 ║     totals across all years — that answers a different question.║
 ╚══════════════════════════════════════════════════════════════════╝
 
-{semantic_block}{entity_filter_block}User question:
+{semantic_block}{intent_block}{entity_filter_block}User question:
 {question}
 
 Relevant tables (use ONLY these):
