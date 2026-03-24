@@ -56,6 +56,18 @@ def main() -> int:
     )
     assert score_match >= threshold, f"Expected score >= {threshold} for true match, got {score_match}"
 
+    # Paraphrase should still match when constraints are same.
+    score_paraphrase_same_filters = _similarity_score(
+        question="smallest billing line amounts for 1999 category A",
+        record_question="lowest billing lines in 1999 for billing category A",
+        record_sql=record_sql_1999_cat_a,
+        source="user",
+        use_count=1,
+    )
+    assert (
+        score_paraphrase_same_filters >= threshold
+    ), f"Expected paraphrase match >= {threshold}, got {score_paraphrase_same_filters}"
+
     print("OK: memory filter guard scoring")
     return 0
 

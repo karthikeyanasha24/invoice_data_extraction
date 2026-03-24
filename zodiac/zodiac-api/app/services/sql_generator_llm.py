@@ -120,6 +120,15 @@ def generate_sql(
     intent_block = ""
     if intent_context and intent_context.strip():
         intent_block = intent_context.strip() + "\n\n"
+    join_hint_block = ""
+    try:
+        from .join_graph import join_hints_for_tables
+
+        join_hint_block = join_hints_for_tables(tables)
+        if join_hint_block:
+            join_hint_block = join_hint_block + "\n\n"
+    except Exception:
+        join_hint_block = ""
 
     # Restrict schema to selected tables only (subset of full schema)
     prompt = f"""You are a PostgreSQL SAP expert. Write a single SQL query to answer the user's question.
@@ -157,7 +166,7 @@ def generate_sql(
 ║     totals across all years — that answers a different question.║
 ╚══════════════════════════════════════════════════════════════════╝
 
-{semantic_block}{intent_block}{entity_filter_block}User question:
+{semantic_block}{intent_block}{join_hint_block}{entity_filter_block}User question:
 {question}
 
 Relevant tables (use ONLY these):
@@ -175,6 +184,7 @@ Rules:
 - For "cost by profit center" or "postings by profit center": use FAGLFLEXA, group by prctr, SUM(hsl) as total_cost.
 - For "jacket" or product name filter: use MAKT.MAKTX ILIKE '%jacket%' and MAKT.SPRAS = 'E' when MAKT is in tables.
 - For sales/revenue: use VBRK (header), VBRP (items); join on VBELN with LPAD; NETWR must be cast (see box above); FKDAT is billing date (TEXT, format YYYYMMDD). For customer join: VBRK.kunag = KNA1.kunnr.
+- Only use JOIN edges listed in the approved join paths block above. Do not invent ad hoc JOIN ... ON between tables without a listed graph path.
 - YEAR FILTERING: ALWAYS use FKDAT (see mandatory box above). NEVER use gjahr.
 - NEVER use SQLAlchemy bind parameters like %(year)s or :year in generated SQL — always inline literal values.
 - For purchases / purchase order: use EKPO (columns: matnr, menge, netpr). Total quantity = SUM(menge), total cost = SUM(menge * netpr). Always include EKPO for "purchase order totals", "PO totals", "vendor spend by material".

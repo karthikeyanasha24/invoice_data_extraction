@@ -3109,6 +3109,15 @@ async def post_ai_analysis_store_query(
         if not stored:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store query")
 
+        try:
+            from ..services.ai_intent_classifier import classify_intent
+            from ..services.join_graph import tables_linked_to_graph
+            _intent_tags = classify_intent(question).tags
+            _linked_to_graph = tables_linked_to_graph(list(execution.validation.tables or []))
+        except Exception:
+            _intent_tags = []
+            _linked_to_graph = False
+
         log_query_feedback_attempt(
             db=db,
             user_id=current_user.id,
@@ -3659,7 +3668,13 @@ Key rules for SAP data:
             attempt_source=approval_source or "chatgpt",
             time_scope=time_scope,
             validation=validation_payload,
-            extra_metadata={"stored_for_reuse": True, "row_count": len(rows)},
+            extra_metadata={
+                "stored_for_reuse": True,
+                "row_count": len(rows),
+                "intent_tags": _intent_tags,
+                "linked_to_graph": _linked_to_graph,
+                "standalone_saved": not _linked_to_graph,
+            },
         )
 
         # Run full orchestrator flow for summarization (reuse last SQL path)

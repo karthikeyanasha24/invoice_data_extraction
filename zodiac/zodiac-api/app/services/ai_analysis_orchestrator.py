@@ -1061,6 +1061,7 @@ If result is empty, say so and suggest a refined question.
     timings["cache_lookup_ms"] = 0
     timings["pattern_matching_ms"] = 0
     timings["used_pattern"] = False
+    timings["sql_path_reason"] = "none"
 
     charts_blocked_reason: Optional[str] = None
 
@@ -1102,6 +1103,7 @@ If result is empty, say so and suggest a refined question.
                         _qsql = _quote_catalog_sql_tables(_det)
                         _drows = _run_sql(sql_db, _qsql)
                         result = SqlAgentResult(sql=_qsql, rows=_drows)
+                        timings["sql_path_reason"] = "deterministic_pre"
                         logger.info(
                             "orchestrator: deterministic negative/lowest billing SQL (before memory), %d rows",
                             len(_drows or []),
@@ -1120,15 +1122,21 @@ If result is empty, say so and suggest a refined question.
                 stored_sql = find_similar_stored_query(db, user_query, user_id)
                 if stored_sql:
                     from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
+                    from .sap_sql_precision_validator import validate_sql_precision_for_db
                     quoted_sql = _quote_catalog_sql_tables(stored_sql)
-                    stored_rows = _run_sql(sql_db, quoted_sql)
-                    if stored_rows:
-                        result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
-                        logger.info(
-                            "ai_query_memory: reused stored SQL for %r (%d rows)",
-                            user_query[:60],
-                            len(stored_rows),
-                        )
+                    _v = validate_sql_precision_for_db(sql_db, quoted_sql, question=user_query)
+                    if _v.is_valid:
+                        stored_rows = _run_sql(sql_db, quoted_sql)
+                        if stored_rows:
+                            result = SqlAgentResult(sql=quoted_sql, rows=stored_rows)
+                            timings["sql_path_reason"] = "memory_hit"
+                            logger.info(
+                                "ai_query_memory: reused stored SQL for %r (%d rows)",
+                                user_query[:60],
+                                len(stored_rows),
+                            )
+                    else:
+                        logger.warning("ai_query_memory: rejected stored SQL by precision/join validation: %s", _v.errors)
         except Exception as mem_err:
             logger.debug("ai_query_memory lookup failed: %s", mem_err)
 
@@ -1160,6 +1168,7 @@ If result is empty, say so and suggest a refined question.
                 proc_rows, proc_sql = query_procurement_type_for_materials(_run_sql_fn, matnrs)
                 if proc_rows:
                     result = SqlAgentResult(sql=proc_sql, rows=proc_rows)
+                    timings["sql_path_reason"] = "procurement_list"
                     logger.info("Procurement-from-list: %d rows for %d materials", len(proc_rows), len(matnrs))
     except Exception as proc_err:
         logger.warning("Procurement-from-list check failed: %s", proc_err)
@@ -1182,6 +1191,7 @@ If result is empty, say so and suggest a refined question.
             )
             if result and getattr(result, "rows", None):
                 logger.info("Schema-driven SQL agent returned %d rows", len(result.rows))
+                timings["sql_path_reason"] = "llm_primary_schema_driven"
         except Exception as schema_err:
             logger.debug("Schema-driven agent failed: %s", schema_err)
         # 2) Fall back to adaptive (keyword/heuristic) then standard sap_sql_agent.
@@ -1193,6 +1203,8 @@ If result is empty, say so and suggest a refined question.
                 time_scope=time_scope,
                 few_shot_examples=_few_shot,
             )
+            if result and getattr(result, "rows", None):
+                timings["sql_path_reason"] = "llm_primary_adaptive"
     if result is None or not (getattr(result, "rows", None)):
         logger.info("Adaptive SQL path returned no result; falling back to standard sap_sql_agent")
         result = run_sap_sql_agent(
@@ -1202,12 +1214,15 @@ If result is empty, say so and suggest a refined question.
             time_scope=time_scope,
             few_shot_examples=_few_shot,
         )
+        if result and getattr(result, "rows", None):
+            timings["sql_path_reason"] = "llm_primary_standard"
     # Purchase-order direct fallback: when all agents fail and question is about purchase orders, run EKPO aggregate
     if result is None or not getattr(result, "rows", None):
         try:
             po_result = run_purchase_order_fallback(sql_db, user_query)
             if po_result and getattr(po_result, "rows", None):
                 result = po_result
+                timings["sql_path_reason"] = "purchase_order_fallback"
                 logger.info("Purchase order fallback returned %d rows", len(po_result.rows))
         except Exception as po_err:
             logger.debug("Purchase order fallback failed: %s", po_err)
@@ -1563,8 +1578,51 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                         if not is_valid:
                             proposed_sql = None
                             logger.warning("ChatGPT proposed invalid SQL: %s", err)
+                        else:
+                            timings["sql_path_reason"] = "llm_secondary_openai_proposed"
                 except Exception as chat_err:
                     logger.debug("ChatGPT fallback failed: %s", chat_err)
+
+            # 3) Optional secondary provider escalation (Gemini) under same guardrails.
+            if not proposed_sql:
+                try:
+                    from ..config.config import ENABLE_SECONDARY_LLM_SQL, GOOGLE_API_KEY
+                    if ENABLE_SECONDARY_LLM_SQL and GOOGLE_API_KEY:
+                        from .schema_loader import get_schema_text
+                        from .join_graph import join_hints_for_tables
+                        from .ai_intent_classifier import build_intent_sql_prompt_block
+                        import google.generativeai as genai
+
+                        schema_text = get_schema_text(sql_db, include_semantic_map=True)
+                        intent_block = build_intent_sql_prompt_block(user_query)
+                        # Best-effort table extraction from schema header lines.
+                        table_names = sorted(set(re.findall(r"^\s*[-*]?\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:(]", schema_text, flags=re.MULTILINE)))
+                        join_hints = join_hints_for_tables(table_names[:40]) if table_names else ""
+                        sec_prompt = (
+                            f"User question: {user_query}\n\n"
+                            f"{intent_block}\n\n"
+                            f"{join_hints}\n\n"
+                            f"Schema excerpt:\n{schema_text[:6000]}\n\n"
+                            "Return ONLY one PostgreSQL SELECT query. "
+                            "Use only approved join paths; do not invent joins. "
+                            "Always use FKDAT for year filtering and CAST(...) for netwr. "
+                            "No markdown, no comments."
+                        )
+                        genai.configure(api_key=GOOGLE_API_KEY)
+                        model = genai.GenerativeModel("models/gemini-2.5-flash")
+                        sec_resp = model.generate_content(sec_prompt)
+                        raw2 = (getattr(sec_resp, "text", "") or "").strip()
+                        if raw2 and "```" in raw2:
+                            _m2 = re.search(r"```(?:\w+)?\s*([\s\S]*?)```", raw2)
+                            if _m2:
+                                raw2 = _m2.group(1).strip()
+                        if raw2 and "SELECT" in raw2.upper():
+                            is_valid2, _err2 = validate_sql_for_safe_execution(raw2)
+                            if is_valid2:
+                                proposed_sql = raw2
+                                timings["sql_path_reason"] = "llm_secondary_gemini_proposed"
+                except Exception as sec_err:
+                    logger.debug("Secondary LLM (Gemini) fallback failed: %s", sec_err)
 
             # --- Entity diagnostic: check if the named entity actually exists in the DB
             # before offering ChatGPT SQL or a bare "no data" message.

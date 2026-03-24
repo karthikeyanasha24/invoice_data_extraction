@@ -17,6 +17,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GEMINI_API_KEY
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ENABLE_MULTI_MODEL = os.getenv("ENABLE_MULTI_MODEL", "false").lower() == "true"
+ENABLE_SECONDARY_LLM_SQL = os.getenv("ENABLE_SECONDARY_LLM_SQL", "true").lower() == "true"
 
 # AI Analysis Model Configuration
 # For insights/summaries, use a more powerful model. Options:

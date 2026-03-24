@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import case
 from sqlalchemy.orm import Session
+from .ai_analysis_constraint_validator import extract_user_constraints
+from .ai_intent_classifier import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +114,24 @@ def _infer_time_scope(text: str) -> Optional[str]:
 
 
 def _question_signature(question: str) -> Dict[str, Any]:
+    c = extract_user_constraints(question or "")
+    intent = classify_intent(question or "")
     return {
         "tokens": _tokenize_question(question),
         "entities": _extract_keyword_hits(question, ENTITY_KEYWORDS),
         "metrics": _extract_keyword_hits(question, METRIC_KEYWORDS),
         "years": _extract_years_from_text(question),
         "time_scope": _infer_time_scope(question),
+        "intent_tags": set(intent.tags),
+        "filter_fp": {
+            "years": sorted(list(c.years)),
+            "billing_category": c.billing_category or "",
+            "billing_type": c.billing_type or "",
+            "currency": c.currency_code or "",
+            "wants_count": bool(c.wants_count),
+            "wants_sum": bool(c.wants_sum),
+            "wants_negative_lines": bool(c.wants_negative_lines),
+        },
     }
 
 
@@ -164,6 +178,21 @@ def _signatures_are_compatible(
     candidate_actors = candidate_entities & actor_entities
     if target_actors and candidate_actors and target_actors != candidate_actors:
         return False
+
+    # Intent family should overlap to allow paraphrase reuse, but avoid generic collisions.
+    target_intents = set(target_signature.get("intent_tags") or set())
+    candidate_intents = set(candidate_signature.get("intent_tags") or set())
+    if target_intents and candidate_intents and not (target_intents & candidate_intents):
+        return False
+
+    # Filter fingerprint must match exactly for constrained fields.
+    tf = target_signature.get("filter_fp") or {}
+    cf = candidate_signature.get("filter_fp") or {}
+    for k in ("years", "billing_category", "billing_type", "currency", "wants_count", "wants_sum", "wants_negative_lines"):
+        tv = tf.get(k)
+        cv = cf.get(k)
+        if tv and cv and tv != cv:
+            return False
 
     return True
 

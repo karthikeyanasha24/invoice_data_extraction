@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
+from .join_graph import allowed_join_column_pairs, allowed_table_edges
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,40 @@ def _extract_join_column_pairs(sql: str, alias_map: Dict[str, str]) -> Dict[froz
     return pairs
 
 
+def _extract_join_table_pairs_from_clauses(sql: str, alias_map: Dict[str, str]) -> Set[frozenset[str]]:
+    """
+    Fallback connectivity extraction from JOIN ... ON clauses.
+    Helps when ON expressions are wrapped in functions and column parser is conservative.
+    """
+    pairs: Set[frozenset[str]] = set()
+    if not sql:
+        return pairs
+    join_pat = re.compile(
+        r"\bJOIN\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"?)"
+        r"(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?\s+ON\s+"
+        r"(?P<on>.*?)(?=\b(?:JOIN|WHERE|GROUP|ORDER|LIMIT|HAVING)\b|$)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for m in join_pat.finditer(sql):
+        table_name = _clean_identifier(m.group(1))
+        alias = _clean_identifier(m.group(2) or table_name)
+        joined_table = alias_map.get(alias.upper()) or table_name
+        on_clause = m.group("on") or ""
+        aliases_in_on = {
+            _clean_identifier(a).upper()
+            for a in re.findall(r'("?([A-Za-z_][A-Za-z0-9_]*)"?\.)', on_clause)
+            for a in [a[1]]
+        }
+        for aup in aliases_in_on:
+            other = alias_map.get(aup)
+            if not other or not joined_table:
+                continue
+            if other.upper() == joined_table.upper():
+                continue
+            pairs.add(frozenset({other.upper(), joined_table.upper()}))
+    return pairs
+
+
 def _parse_join_rule_pairs(rule_sql: str) -> Set[frozenset[str]]:
     pairs: Set[frozenset[str]] = set()
     eq_pattern = re.compile(
@@ -167,27 +202,7 @@ def _parse_join_rule_pairs(rule_sql: str) -> Set[frozenset[str]]:
 
 @lru_cache(maxsize=1)
 def _allowed_join_pairs() -> Dict[frozenset[str], Set[frozenset[str]]]:
-    allowed: Dict[frozenset[str], Set[frozenset[str]]] = {}
-
-    for rule in (_load_schema_ai_config().get("join_rules") or []):
-        left = _clean_identifier(str(rule.get("left") or "")).upper()
-        right = _clean_identifier(str(rule.get("right") or "")).upper()
-        if not left or not right:
-            continue
-        key = frozenset({left, right})
-        allowed.setdefault(key, set()).update(_parse_join_rule_pairs(str(rule.get("on") or "")))
-
-    for join in (_load_semantic_dictionary().get("joins") or []):
-        left = _clean_identifier(str(join.get("left_table") or "")).upper()
-        right = _clean_identifier(str(join.get("right_table") or "")).upper()
-        left_key = _clean_identifier(str(join.get("left_key") or "")).upper()
-        right_key = _clean_identifier(str(join.get("right_key") or "")).upper()
-        if not left or not right or not left_key or not right_key:
-            continue
-        key = frozenset({left, right})
-        allowed.setdefault(key, set()).add(frozenset({left_key, right_key}))
-
-    return allowed
+    return allowed_join_column_pairs()
 
 
 def _normalize_sap_date_filters(sql: str) -> Tuple[str, List[str]]:
@@ -297,10 +312,18 @@ def validate_sql_precision(
             errors.append(f"Column '{table_name}.{column}' is not available in the SAP schema.")
 
     used_join_pairs = _extract_join_column_pairs(normalized_sql, alias_map)
+    join_pairs_from_clauses = _extract_join_table_pairs_from_clauses(normalized_sql, alias_map)
     allowed_join_pairs = _allowed_join_pairs()
+    allowed_edges = allowed_table_edges()
     for table_pair, used_columns in used_join_pairs.items():
+        if table_pair not in allowed_edges:
+            pair_name = " <-> ".join(sorted(table_pair))
+            errors.append(f"Join edge {pair_name} is not in the approved join graph.")
+            continue
         allowed_columns = allowed_join_pairs.get(table_pair)
         if not allowed_columns:
+            pair_name = " <-> ".join(sorted(table_pair))
+            errors.append(f"Join edge {pair_name} has no approved predicate template in join graph.")
             continue
         if not used_columns & allowed_columns:
             pair_name = " <-> ".join(sorted(table_pair))
@@ -309,6 +332,29 @@ def validate_sql_precision(
             errors.append(
                 f"Join keys for {pair_name} do not match configured SAP join rules. "
                 f"Expected one of [{expected}] but SQL uses [{actual}]."
+            )
+
+    # Ensure multi-table queries are connected by approved join edges (no accidental cross joins).
+    if len(tables) > 1:
+        neighbor: Dict[str, Set[str]] = {t: set() for t in tables}
+        all_pairs_for_connectivity = set(used_join_pairs.keys()) | set(join_pairs_from_clauses)
+        for pair in all_pairs_for_connectivity:
+            tlist = sorted(pair)
+            if len(tlist) == 2 and tlist[0] in neighbor and tlist[1] in neighbor:
+                neighbor[tlist[0]].add(tlist[1])
+                neighbor[tlist[1]].add(tlist[0])
+        seen: Set[str] = set()
+        stack: List[str] = [tables[0]]
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            stack.extend(list(neighbor.get(node, set()) - seen))
+        if len(seen) != len(tables):
+            missing = [t for t in tables if t not in seen]
+            errors.append(
+                f"Query tables are not fully connected by approved joins. Unconnected tables: {', '.join(missing)}."
             )
 
     aggregate_functions = _extract_aggregate_functions(normalized_sql)
