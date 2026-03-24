@@ -273,6 +273,36 @@ def _rows_preview(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str,
     return out
 
 
+def _extract_sql_limit(sql: str) -> Optional[int]:
+    if not sql:
+        return None
+    m = re.search(r"\bLIMIT\s+(\d+)\b", sql, flags=re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _build_result_scope(rows: List[Dict[str, Any]], sql: str) -> Dict[str, Any]:
+    row_count = len(rows or [])
+    sql_limit = _extract_sql_limit(sql or "")
+    is_limited = bool(sql_limit is not None and row_count >= int(sql_limit))
+    return {
+        "kind": "limited" if is_limited else "full",
+        "limit": sql_limit,
+        "row_count_returned": row_count,
+        # Conservative default when we do not run a separate unlimited count query.
+        "row_count_in_scope": row_count,
+        "scope_note": (
+            f"This answer is based on {row_count} row(s) returned by the SQL LIMIT {sql_limit} query."
+            if is_limited
+            else f"This answer is based on all {row_count} row(s) returned by the executed query."
+        ),
+    }
+
+
 def _parse_float_maybe(v: Any) -> Optional[float]:
     """
     Best-effort numeric parsing for stats extraction from SQL result rows.
@@ -346,18 +376,25 @@ def _infer_measure_and_currency_keys(rows: List[Dict[str, Any]]) -> Tuple[Option
     return preferred_measure, currency_key
 
 
-def _compute_global_numeric_stats(rows: List[Dict[str, Any]], question: str = "") -> Dict[str, Any]:
+def _compute_global_numeric_stats(
+    rows: List[Dict[str, Any]],
+    question: str = "",
+    result_scope: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Compute small global stats from the FULL result set for narrative consistency.
     """
     measure_key, currency_key = _infer_measure_and_currency_keys(rows)
     if not measure_key:
-        return {
+        base = {
             "measure_key": None,
             "currency_key": currency_key,
             "row_count_total": len(rows),
             "row_count_with_measure": 0,
         }
+        if result_scope:
+            base["result_scope"] = result_scope
+        return base
 
     values: List[Tuple[float, Dict[str, Any]]] = []
     for r in rows:
@@ -371,12 +408,15 @@ def _compute_global_numeric_stats(rows: List[Dict[str, Any]], question: str = ""
     numeric_vals = [v for v, _ in values]
     row_count_with_measure = len(numeric_vals)
     if not numeric_vals:
-        return {
+        base = {
             "measure_key": measure_key,
             "currency_key": currency_key,
             "row_count_total": len(rows),
             "row_count_with_measure": 0,
         }
+        if result_scope:
+            base["result_scope"] = result_scope
+        return base
 
     tol = 1e-9
     count_negative = sum(1 for v in numeric_vals if v < -tol)
@@ -426,7 +466,7 @@ def _compute_global_numeric_stats(rows: List[Dict[str, Any]], question: str = ""
         v0, r0 = values_sorted_positive[0]
         min_positive_example = {**_pick_example_row_fields(r0), "value": round(v0, 6)}
 
-    return {
+    out = {
         "measure_key": measure_key,
         "currency_key": currency_key,
         "row_count_total": len(rows),
@@ -442,6 +482,9 @@ def _compute_global_numeric_stats(rows: List[Dict[str, Any]], question: str = ""
         "top_5_largest": top_5_largest,
         "min_positive_example": min_positive_example,
     }
+    if result_scope:
+        out["result_scope"] = result_scope
+    return out
 
 
 def _select_representative_rows_for_llm(
@@ -516,21 +559,12 @@ def _enforce_negative_lowest_summary_consistency(
     Deterministic guardrail against narrative contradictions like "all amounts are 0"
     when stats show non-zero values.
     """
-    if not _is_negative_or_lowest_line_query(user_query):
-        return reply
-
     count_negative = int(stats.get("count_negative") or 0)
     count_zero = int(stats.get("count_zero") or 0)
     count_positive = int(stats.get("count_positive") or 0)
     min_netwr = float(stats.get("min_netwr") or 0.0)
     max_netwr = float(stats.get("max_netwr") or 0.0)
     min_positive_netwr = stats.get("min_positive_netwr")
-
-    # If there are any non-zero lines (negative or positive), we allow correction
-    # even when max_netwr is 0 (e.g. negatives exist but the largest value is 0).
-    has_non_zero = (count_negative + count_positive) > 0
-    if not has_non_zero:
-        return reply
 
     contradiction_patterns = [
         r"all\s+.*amounts?\s+are\s+0(\.0+)?",
@@ -541,7 +575,14 @@ def _enforce_negative_lowest_summary_consistency(
         r"all\s+.*0\.0",
     ]
 
-    if not any(re.search(pat, reply, flags=re.IGNORECASE) for pat in contradiction_patterns):
+    says_all_zero = any(re.search(pat, reply, flags=re.IGNORECASE) for pat in contradiction_patterns)
+    says_no_negative = bool(re.search(r"\bno\s+negative\b", reply or "", flags=re.IGNORECASE))
+    contradiction = False
+    if says_all_zero and (count_negative + count_positive) > 0:
+        contradiction = True
+    if says_no_negative and count_negative > 0:
+        contradiction = True
+    if not contradiction:
         return reply
 
     top_small = stats.get("top_5_smallest") or []
@@ -591,9 +632,13 @@ def _enforce_negative_lowest_summary_consistency(
         loc = f" ({', '.join(str(p) for p in loc_parts)})" if loc_parts else ""
         examples.append(f"- { _format_currency_value(float(v), cur) }{loc}")
 
+    scope = stats.get("result_scope") or {}
+    scope_note = str(scope.get("scope_note") or "This summary is based on the executed SQL result set.")
+
     deterministic = (
         "**Executive Summary**\n"
-        + (f"For year {header_year}, the SQL result contains non-zero net line amounts.\n" if header_year else "The SQL result contains non-zero net line amounts.\n")
+        + (f"For year {header_year}, the SQL result contains the following numeric profile.\n" if header_year else "The SQL result contains the following numeric profile.\n")
+        + f"- {scope_note}\n"
         + f"- Min net line amount: {min_fmt}\n"
         + f"- Max net line amount: {max_fmt}\n"
         + f"- {negative_sentence}\n"
@@ -1696,7 +1741,8 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     # Summarize rows with LLM.
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
-    global_stats = _compute_global_numeric_stats(result.rows, question=user_query)
+    result_scope = _build_result_scope(result.rows, result.sql)
+    global_stats = _compute_global_numeric_stats(result.rows, question=user_query, result_scope=result_scope)
     preview_rows_for_llm = _select_representative_rows_for_llm(result.rows, global_stats, max_rows=20)
     preview = _rows_preview(preview_rows_for_llm, limit=20)
 
@@ -1714,6 +1760,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
             sql=result.sql,
             global_stats=global_stats,
             representative_rows=preview_rows_for_llm,
+            result_scope=result_scope,
         )
     except Exception as analytics_err:
         logger.debug("Analytics layer skipped: %s", analytics_err)
@@ -1896,9 +1943,14 @@ STRICT RULES (do NOT break these):
   * If `count_negative = 0`, you MUST state that there are no net line amounts < 0 in this SQL result set.
   * You MUST still describe the lowest values using `min_netwr` (which may be 0 or positive).
   * You MUST NOT claim "all values are 0" unless `min_netwr == max_netwr == 0` and `count_positive == 0` and `count_negative == 0`.
+- Never claim "all rows in the dataset/table/year" unless RESULT_SCOPE.kind == "full".
+- If RESULT_SCOPE.kind == "limited", explicitly state that conclusions are based on the returned limited rows.
 
 GLOBAL_NUMERIC_STATS (mandatory):
 {json.dumps(global_stats, default=str)}
+
+RESULT_SCOPE (mandatory):
+{json.dumps(result_scope, default=str)}
 
 Write a clear MARKDOWN answer:
 1. **Executive summary** (2–4 sentences; if there are date columns, mention the overall period covered).
@@ -1962,7 +2014,13 @@ Write a clear MARKDOWN answer:
         try:
             chart_start = time.time()
             logger.info(f"📊 Attempting chart generation for query with {len(result.rows)} rows")
-            chart_specs = analyze_visualization_needs(result.rows, user_query, "new", result.sql)
+            chart_specs = analyze_visualization_needs(
+                result.rows,
+                user_query,
+                "new",
+                result.sql,
+                result_scope=result_scope,
+            )
             timings["chart_generation_ms"] = int((time.time() - chart_start) * 1000)
             
             if chart_specs:

@@ -39,6 +39,7 @@ def generate_analytics_insights(
     max_preview_rows: int = 15,
     global_stats: Optional[Dict[str, Any]] = None,
     representative_rows: Optional[List[Dict[str, Any]]] = None,
+    result_scope: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Use LLM to produce:
@@ -58,6 +59,7 @@ def generate_analytics_insights(
     columns = list(preview[0].keys()) if preview else []
     preview_str = json.dumps(preview, default=str, indent=0)[:3000]
     global_stats_str = json.dumps(global_stats, default=str, indent=2) if global_stats else ""
+    result_scope_str = json.dumps(result_scope, default=str, indent=2) if result_scope else ""
     metrics_str = ""
     if metrics:
         parts = []
@@ -84,9 +86,14 @@ Computed metrics:
 GLOBAL_NUMERIC_STATS (source of truth for numeric claims):
 {global_stats_str or '(not provided)'}
 
+RESULT_SCOPE (scope of claims):
+{result_scope_str or '(not provided)'}
+
 STRICT RULES:
 - If GLOBAL_NUMERIC_STATS is provided, the executive_summary MUST agree with it.
 - Forbidden: stating "all amounts are 0" (or similar) when GLOBAL_NUMERIC_STATS.count_positive + count_negative > 0.
+- Forbidden: claiming "all rows in the dataset/year/table" when RESULT_SCOPE.kind == "limited".
+- Required: when RESULT_SCOPE.kind == "limited", explicitly state that findings are based on the returned limited rows.
 - If GLOBAL_NUMERIC_STATS.count_negative == 0, say explicitly that there are no net line amounts < 0 in this SQL result set for the filters used.
 
 Write a JSON object with exactly these keys (no other text):

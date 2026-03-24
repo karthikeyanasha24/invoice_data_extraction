@@ -179,13 +179,61 @@ def compute_global_numeric_stats(rows: List[Dict[str, Any]], question: str = "")
     }
 
 
+def enforce_narrative_stats_consistency(reply: str, user_query: str, stats: Dict[str, Any]) -> str:
+    """
+    Generic narrative guard: rewrite prose when it contradicts numeric stats.
+    This is intentionally intent-agnostic (no question-specific if-chains).
+    """
+    count_negative = int(stats.get("count_negative") or 0)
+    count_zero = int(stats.get("count_zero") or 0)
+    count_positive = int(stats.get("count_positive") or 0)
+    min_netwr = float(stats.get("min_netwr") or 0.0)
+    max_netwr = float(stats.get("max_netwr") or 0.0)
+    row_count = int(stats.get("row_count_total") or 0)
+    has_non_zero = (count_negative + count_positive) > 0
+
+    says_all_zero = bool(
+        re.search(r"all\s+.*(amount|value|row).*(0(\.0+)?)", reply or "", flags=re.IGNORECASE)
+        or re.search(r"everything\s+is\s+0(\.0+)?", reply or "", flags=re.IGNORECASE)
+    )
+    says_no_negative = bool(re.search(r"\bno\s+negative\b", reply or "", flags=re.IGNORECASE))
+
+    contradiction = False
+    if says_all_zero and has_non_zero:
+        contradiction = True
+    if says_no_negative and count_negative > 0:
+        contradiction = True
+    if not contradiction:
+        return reply
+
+    min_fmt = _format_currency_value(min_netwr, None)
+    max_fmt = _format_currency_value(max_netwr, None)
+    negative_sentence = (
+        "No negative line amounts (< 0) appear in this result set."
+        if count_negative == 0
+        else f"{count_negative} line(s) have net line amount < 0."
+    )
+    deterministic = (
+        "**Executive Summary**\n"
+        f"- This summary is based on the executed SQL result set ({row_count} row(s)).\n"
+        f"- Min net line amount: {min_fmt}\n"
+        f"- Max net line amount: {max_fmt}\n"
+        f"- {negative_sentence}\n"
+        f"- {count_zero} line(s) have net line amount = 0.\n"
+        f"- {count_positive} line(s) have net line amount > 0.\n"
+    )
+    return deterministic
+
+
 def enforce_negative_lowest_summary_consistency(reply: str, user_query: str, stats: Dict[str, Any]) -> str:
     """
     Deterministically correct the narrative if it contradicts global stats
     (e.g. claims "all amounts are 0" but stats show non-zero).
     """
+    # Backward-compatible wrapper name; now delegates to generic stats consistency guard.
     if not _is_negative_or_lowest_line_query(user_query):
-        return reply
+        # For non-negative/lowest questions, still protect against blatant numeric contradiction.
+        return enforce_narrative_stats_consistency(reply, user_query, stats)
 
     count_negative = int(stats.get("count_negative") or 0)
     count_zero = int(stats.get("count_zero") or 0)

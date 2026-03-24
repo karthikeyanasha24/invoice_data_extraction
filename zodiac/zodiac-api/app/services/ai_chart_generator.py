@@ -65,6 +65,18 @@ def _normalize_chart_title(chart: ChartSpec) -> str:
     return chart.title or "Visualization"
 
 
+def _scope_suffix(result_scope: Optional[Dict[str, Any]]) -> str:
+    if not result_scope:
+        return ""
+    if result_scope.get("kind") == "limited":
+        lim = result_scope.get("limit")
+        returned = result_scope.get("row_count_returned")
+        if lim:
+            return f" (limited to {returned} row(s), LIMIT {lim})"
+        return f" (limited to {returned} row(s))"
+    return ""
+
+
 def _get_client() -> OpenAI:
     """Get OpenAI client."""
     return OpenAI(api_key=OPENAI_API_KEY)
@@ -238,7 +250,8 @@ def analyze_visualization_needs(
     rows: List[Dict[str, Any]],
     user_query: str,
     action: str,
-    sql: str = ""
+    sql: str = "",
+    result_scope: Optional[Dict[str, Any]] = None,
 ) -> List[ChartSpec]:
     """
     Analyze query results and determine appropriate visualizations.
@@ -409,6 +422,12 @@ Rules:
             
             # Normalize title to match actual x/y keys used by the generated chart data.
             chart_spec.title = _normalize_chart_title(chart_spec)
+            if result_scope and result_scope.get("kind") == "limited":
+                chart_spec.description = (
+                    (chart_spec.description + " ").strip()
+                    + f"Based on limited result scope: {result_scope.get('row_count_returned')} row(s)."
+                ).strip()
+            chart_spec.title = chart_spec.title + _scope_suffix(result_scope)
             
             charts.append(chart_spec)
             logger.info(f"✅ Created chart spec: {chart_spec.title} (type={chart_type}, data_points={len(chart_data)})")
@@ -416,7 +435,13 @@ Rules:
         # If no charts were generated, try auto-generation
         if not charts:
             logger.info("📊 No charts from LLM, attempting auto-generation")
-            charts = _auto_generate_basic_charts(rows, user_query, numeric_cols, categorical_cols)
+            charts = _auto_generate_basic_charts(
+                rows,
+                user_query,
+                numeric_cols,
+                categorical_cols,
+                result_scope=result_scope,
+            )
         
         return charts
     
@@ -426,7 +451,13 @@ Rules:
         try:
             numeric_cols = _detect_numeric_columns(rows)
             categorical_cols = _detect_categorical_columns(rows)
-            return _auto_generate_basic_charts(rows, user_query, numeric_cols, categorical_cols)
+            return _auto_generate_basic_charts(
+                rows,
+                user_query,
+                numeric_cols,
+                categorical_cols,
+                result_scope=result_scope,
+            )
         except:
             return []
 
@@ -435,7 +466,8 @@ def _auto_generate_basic_charts(
     rows: List[Dict[str, Any]],
     user_query: str,
     numeric_cols: List[str],
-    categorical_cols: List[str]
+    categorical_cols: List[str],
+    result_scope: Optional[Dict[str, Any]] = None,
 ) -> List[ChartSpec]:
     """
     Auto-generate basic charts when LLM doesn't provide recommendations.
@@ -462,7 +494,7 @@ def _auto_generate_basic_charts(
             
             charts.append(ChartSpec(
                 chart_type="bar",
-                title=f"{y_key.replace('_', ' ').title()} by {x_key.replace('_', ' ').title()}",
+                title=f"{y_key.replace('_', ' ').title()} by {x_key.replace('_', ' ').title()}" + _scope_suffix(result_scope),
                 description="Auto-generated visualization",
                 data=formatted_data,
                 x_key=x_key,
@@ -489,7 +521,7 @@ def _auto_generate_basic_charts(
             if pie_data:
                 charts.append(ChartSpec(
                     chart_type="pie",
-                    title=f"{value_key.replace('_', ' ').title()} Distribution",
+                    title=f"{value_key.replace('_', ' ').title()} Distribution" + _scope_suffix(result_scope),
                     description="Auto-generated pie chart",
                     data=pie_data,
                     name_key="name",
@@ -505,8 +537,12 @@ def _auto_generate_basic_charts(
         if len(formatted_data) > 0:
             charts.append(ChartSpec(
                 chart_type="table",
-                title="Data Table",
-                description="Detailed view of query results",
+                title="Data Table" + _scope_suffix(result_scope),
+                description=(
+                    "Detailed view of query results"
+                    if not result_scope or result_scope.get("kind") != "limited"
+                    else f"Detailed view of limited query results ({result_scope.get('row_count_returned')} row(s))."
+                ),
                 data=formatted_data[:20],  # Limit to 20 rows for display
                 show_legend=False,
                 show_grid=False,

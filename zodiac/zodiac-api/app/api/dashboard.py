@@ -3680,10 +3680,12 @@ Key rules for SAP data:
             result = SqlAgentResult(sql=quoted_sql, rows=rows)
             from ..services.ai_analysis_orchestrator import (
                 _compute_global_numeric_stats,
+                _build_result_scope,
                 _select_representative_rows_for_llm,
                 _enforce_negative_lowest_summary_consistency,
             )
-            global_stats = _compute_global_numeric_stats(rows, question=question)
+            result_scope = _build_result_scope(rows, quoted_sql)
+            global_stats = _compute_global_numeric_stats(rows, question=question, result_scope=result_scope)
             preview_rows_for_llm = _select_representative_rows_for_llm(rows, global_stats, max_rows=20)
             preview = preview_rows_for_llm
             metrics_out = None
@@ -3698,12 +3700,15 @@ Key rules for SAP data:
                         sql=quoted_sql,
                         global_stats=global_stats,
                         representative_rows=preview_rows_for_llm,
+                        result_scope=result_scope,
                     )
                 except Exception:
                     pass
             charts_data = None
             try:
-                chart_specs = analyze_visualization_needs(rows, question, "new", quoted_sql)
+                chart_specs = analyze_visualization_needs(
+                    rows, question, "new", quoted_sql, result_scope=result_scope
+                )
                 if chart_specs:
                     charts_data = chart_specs_to_json(chart_specs)
             except Exception:
@@ -3721,11 +3726,16 @@ Representative rows (context only; not complete):
 GLOBAL_NUMERIC_STATS (source of truth for numeric claims):
 {json.dumps(global_stats, default=str, indent=2)}
 
+RESULT_SCOPE (scope of valid claims):
+{json.dumps(result_scope, default=str, indent=2)}
+
 STRICT RULES:
 - GLOBAL_NUMERIC_STATS MUST be consistent with the narrative.
 - If the question is about negative/lowest line amounts:
   * If count_negative = 0, you MUST state that there are no net line amounts < 0.
   * You MUST NOT claim "all amounts are 0" unless min_netwr == max_netwr == 0 and count_positive == 0 and count_negative == 0.
+- Never claim "all rows in the dataset/table/year" when RESULT_SCOPE.kind == "limited".
+- If RESULT_SCOPE.kind == "limited", explicitly say the summary is based on limited returned rows.
 
 Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbers. Use bullet points if listing items."""
             if rows:
