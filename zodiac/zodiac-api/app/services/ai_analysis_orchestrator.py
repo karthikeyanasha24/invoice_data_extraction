@@ -657,6 +657,21 @@ def _enforce_negative_lowest_summary_consistency(
     return deterministic
 
 
+def _enforce_narrative_stats_consistency(
+    reply: str,
+    user_query: str,
+    global_stats: Optional[Dict[str, Any]],
+    result_scope: Optional[Dict[str, Any]] = None,
+) -> str:
+    if not global_stats:
+        logger.warning("narrative_stats_guard: skipped (missing GLOBAL_NUMERIC_STATS)")
+        return reply
+    _stats = dict(global_stats)
+    if result_scope and "result_scope" not in _stats:
+        _stats["result_scope"] = result_scope
+    return _enforce_negative_lowest_summary_consistency(reply, user_query, _stats)
+
+
 def _split_compare_query(client: OpenAI, user_query: str) -> List[str]:
     """
     INVOICE_BOT uses split_comparison_query. We mimic via LLM:
@@ -1738,6 +1753,63 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     except Exception as shape_err:
         logger.warning("Result shaping failed: %s", shape_err)
 
+    # Mandatory precision gate before narrative/charts: reject year/month/revenue shape violations.
+    try:
+        from .sap_sql_precision_validator import validate_sql_precision_for_db
+
+        _precision = validate_sql_precision_for_db(sql_db, result.sql, question=user_query)
+        if not _precision.is_valid:
+            logger.warning("orchestrator: precision gate failed, attempting one schema-driven retry: %s", _precision.errors)
+            _retry_intent = None
+            try:
+                from .ai_intent_classifier import build_intent_sql_prompt_block
+
+                _retry_intent = build_intent_sql_prompt_block(user_query)
+            except Exception:
+                pass
+            _retry = run_schema_driven_sql_agent(
+                user_query,
+                sql_db,
+                few_shot_examples=_few_shot,
+                intent_context=_retry_intent,
+            )
+            if _retry and getattr(_retry, "rows", None):
+                _precision2 = validate_sql_precision_for_db(sql_db, _retry.sql, question=user_query)
+                if _precision2.is_valid:
+                    result = _retry
+                    logger.info("orchestrator: precision retry succeeded")
+                else:
+                    logger.warning("orchestrator: precision retry still invalid: %s", _precision2.errors)
+                    return OrchestratorResult(
+                        reply="I could not produce a schema-valid SQL shape for your year/month constraints. Please refine the filters (year, month bucket, metric).",
+                        action="new",
+                        reason="precision_validation_failed",
+                        sql=_retry.sql,
+                        rows_preview=None,
+                        memory_updated=False,
+                        charts=[],
+                        charts_blocked_reason="SQL blocked by precision validation",
+                        time_scope=time_scope,
+                        date_range=date_range,
+                        period_info=period_info,
+                    )
+            else:
+                return OrchestratorResult(
+                    reply="I could not produce a schema-valid SQL shape for your year/month constraints. Please refine the filters (year, month bucket, metric).",
+                    action="new",
+                    reason="precision_validation_failed",
+                    sql=result.sql,
+                    rows_preview=None,
+                    memory_updated=False,
+                    charts=[],
+                    charts_blocked_reason="SQL blocked by precision validation",
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                )
+    except Exception as _prec_err:
+        logger.warning("orchestrator: precision gate skipped due to error: %s", _prec_err)
+
     # Summarize rows with LLM.
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
@@ -2114,7 +2186,12 @@ Write a clear MARKDOWN answer:
 
     # Deterministic guardrail: negative/lowest narratives must agree with global stats.
     try:
-        reply = _enforce_negative_lowest_summary_consistency(reply or "", user_query, global_stats)
+        reply = _enforce_narrative_stats_consistency(
+            reply or "",
+            user_query,
+            global_stats,
+            result_scope=result_scope,
+        )
     except Exception as guard_err:
         logger.debug("negative/lowest consistency guard failed: %s", guard_err)
 

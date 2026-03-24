@@ -3682,7 +3682,7 @@ Key rules for SAP data:
                 _compute_global_numeric_stats,
                 _build_result_scope,
                 _select_representative_rows_for_llm,
-                _enforce_negative_lowest_summary_consistency,
+                _enforce_narrative_stats_consistency,
             )
             result_scope = _build_result_scope(rows, quoted_sql)
             global_stats = _compute_global_numeric_stats(rows, question=question, result_scope=result_scope)
@@ -3748,7 +3748,12 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
                 reply = (resp.choices[0].message.content or "").strip()
                 # Deterministic guardrail to prevent "all zeros" contradictions.
                 try:
-                    reply = _enforce_negative_lowest_summary_consistency(reply or "", question, global_stats)
+                    reply = _enforce_narrative_stats_consistency(
+                        reply or "",
+                        question,
+                        global_stats,
+                        result_scope=result_scope,
+                    )
                 except Exception:
                     pass
             else:

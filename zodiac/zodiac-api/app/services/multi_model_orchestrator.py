@@ -281,6 +281,8 @@ async def run_all_models_parallel(
     context: str,
     time_scope: str = "current",
     days: int = 30,
+    global_numeric_stats: Optional[Dict[str, Any]] = None,
+    result_scope: Optional[Dict[str, Any]] = None,
 ) -> MultiModelResult:
     """
     Run all three AI models in parallel and synthesize the best response.
@@ -357,6 +359,24 @@ async def run_all_models_parallel(
     
     total_time_ms = int((time.time() - start_time) * 1000)
     
+    # Optional narrative guard (if caller provides stats/scope from executed SQL rows).
+    if global_numeric_stats:
+        try:
+            from .negative_lowest_narrative_guard import enforce_narrative_stats_consistency
+
+            guarded_stats = dict(global_numeric_stats)
+            if result_scope and "result_scope" not in guarded_stats:
+                guarded_stats["result_scope"] = result_scope
+            synthesized = enforce_narrative_stats_consistency(
+                synthesized,
+                user_query,
+                guarded_stats,
+            )
+        except Exception as guard_err:
+            logger.warning("multi_model_orchestrator: narrative stats guard failed: %s", guard_err)
+    else:
+        logger.warning("multi_model_orchestrator: narrative stats guard skipped (missing GLOBAL_NUMERIC_STATS)")
+
     return MultiModelResult(
         synthesized_answer=synthesized,
         individual_responses=individual_responses,

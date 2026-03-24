@@ -21,6 +21,7 @@ class IntentClassification:
     tags: List[str] = field(default_factory=list)
     shape_hint: str = ""
     clarification_questions: List[str] = field(default_factory=list)
+    time_bucket: Optional[str] = None
 
     def tag_set(self) -> Set[str]:
         return set(self.tags)
@@ -50,6 +51,10 @@ def classify_intent(question: str) -> IntentClassification:
         r"\b(19|20)\d{2}\b", q
     ):
         tags.append("time_filter")
+    time_bucket: Optional[str] = None
+    if re.search(r"\bmonth|monthly|per\s+month|by\s+month\b", q):
+        tags.append("time_bucket_month")
+        time_bucket = "month"
     if re.search(r"\b(negative|credit\s+memo|returns?)\b", q):
         tags.append("negative_credit_lines")
     if re.search(r"\b(billing\s*category|fktyp)\b", q):
@@ -77,6 +82,8 @@ def classify_intent(question: str) -> IntentClassification:
         shape_parts.append("Use ORDER BY ... DESC/ASC with LIMIT N; ensure the ORDER BY uses the same numeric expression as the SELECT list.")
     if "time_filter" in tags:
         shape_parts.append("For SAP billing calendar year, filter on VBRK.fkdat (YYYYMMDD text), not gjahr.")
+    if "time_bucket_month" in tags:
+        shape_parts.append("Month intent requires monthly bucketed SQL: derive month from VBRK.fkdat (YYYY-MM or YYYYMM), GROUP BY that bucket, and aggregate values per month.")
     if "industry" in tags:
         shape_parts.append("Join KNA1 to T016T for industry text only when the user asked for industry / sector breakdown.")
 
@@ -95,7 +102,12 @@ def classify_intent(question: str) -> IntentClassification:
                 "Which **billing type** (VBRK.FKART) should I filter on?"
             )
 
-    return IntentClassification(tags=tags, shape_hint=shape_hint, clarification_questions=clar)
+    return IntentClassification(
+        tags=tags,
+        shape_hint=shape_hint,
+        clarification_questions=clar,
+        time_bucket=time_bucket,
+    )
 
 
 def build_intent_sql_prompt_block(question: str) -> str:
@@ -110,6 +122,10 @@ def build_intent_sql_prompt_block(question: str) -> str:
         "- For calendar year on billing, filter with SUBSTRING(TRIM(\"VBRK\".\"fkdat\"),1,4) = 'YYYY' (never rely on gjahr='0000').",
         "- Join VBRP to VBRK: LPAD(TRIM(v.\"vbeln\"),10,'0') = LPAD(TRIM(r.\"vbeln\"),10,'0').",
     ]
+    if c.time_bucket == "month":
+        lines.append(
+            "- Month bucket is mandatory: SELECT month_bucket from VBRK.fkdat and GROUP BY month_bucket (do not return raw line-level fkdat rows for 'by month' questions)."
+        )
     return "\n".join(lines)
 
 

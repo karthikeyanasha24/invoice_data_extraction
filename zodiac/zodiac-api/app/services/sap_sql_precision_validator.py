@@ -316,11 +316,53 @@ def validate_sql_precision(
         warnings.append("Risky aggregate query: consider COUNT(*) alongside SUM/AVG to detect zero-row totals.")
 
     if question:
-        year_match = re.search(r"\b(19|20)\d{2}\b", question)
-        if year_match and not re.search(r"\b(?:GJAHR|RYEAR)\b", normalized_sql, re.IGNORECASE):
-            if not any(col in normalized_sql.upper() for col in SAP_DATE_COLUMNS):
-                warnings.append(
-                    "Question mentions a year but SQL has no SAP date/fiscal-year filter. Review date precision."
+        year_match = re.search(r"\b((?:19|20)\d{2})\b", question)
+        question_l = (question or "").lower()
+        sql_l = (normalized_sql or "").lower()
+
+        has_any_sap_date_ref = any(col in normalized_sql.upper() for col in SAP_DATE_COLUMNS)
+        if year_match and not has_any_sap_date_ref and not re.search(r"\b(?:GJAHR|RYEAR)\b", normalized_sql, re.IGNORECASE):
+            warnings.append(
+                "Question mentions a year but SQL has no SAP date/fiscal-year filter. Review date precision."
+            )
+
+        # Production guard: revenue/aggregate question with explicit calendar year over VBRP/VBRK
+        # MUST include FKDAT-based year predicate (warning is insufficient for this class).
+        revenue_intent = bool(
+            re.search(r"\b(revenue|sales|billing|invoice value|invoice amount|total)\b", question_l)
+        )
+        touches_billing_tables = ("VBRP" in tables) or ("VBRK" in tables)
+        needs_fkdat_year_enforcement = bool(year_match and revenue_intent and touches_billing_tables)
+        if needs_fkdat_year_enforcement:
+            year = year_match.group(1)
+            fkdat_year_ok = bool(
+                re.search(r"fkdat[^;]{0,260}(?:19|20)\d{2}", sql_l, re.IGNORECASE)
+                or re.search(r"substring\s*\([^)]*fkdat[^)]*1\s*,\s*4[^)]*\)\s*=\s*'" + re.escape(year) + r"'", sql_l, re.IGNORECASE)
+                or re.search(r"fkdat\s+between\s*'" + re.escape(year) + r"\d{4}'\s+and\s*'" + re.escape(year) + r"\d{4}'", sql_l, re.IGNORECASE)
+            )
+            if not fkdat_year_ok:
+                errors.append(
+                    f"Year-scoped revenue query must include FKDAT year predicate for {year} (e.g. SUBSTRING(TRIM(fkdat),1,4) = '{year}')."
+                )
+
+        # Month intent guard: "by month/monthly/per month" requires month bucket aggregation.
+        month_intent = bool(re.search(r"\b(month|monthly|per month|by month)\b", question_l))
+        if month_intent and touches_billing_tables:
+            has_month_bucket_expr = bool(
+                re.search(r"to_char\s*\([^)]*fkdat[^)]*'yyyy[-]?mm'\)", sql_l, re.IGNORECASE)
+                or ("substring" in sql_l and "fkdat" in sql_l and ",1,6" in sql_l.replace(" ", ""))
+                or re.search(r"date_trunc\s*\(\s*'month'[^)]*fkdat", sql_l, re.IGNORECASE)
+            )
+            grouped_by_bucket = bool(
+                re.search(
+                    r"group\s+by[^;]{0,260}(to_char|date_trunc|month|substring\s*\([^)]*fkdat[^)]*,\s*1\s*,\s*6\))",
+                    sql_l,
+                    re.IGNORECASE,
+                )
+            )
+            if not (has_month_bucket_expr and grouped_by_bucket):
+                errors.append(
+                    "Month-intent query must aggregate by month bucket derived from FKDAT (do not plot raw line/date rows as 'by month')."
                 )
 
     return SapSqlValidationResult(

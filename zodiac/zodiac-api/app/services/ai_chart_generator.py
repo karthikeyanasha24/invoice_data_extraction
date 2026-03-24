@@ -65,6 +65,25 @@ def _normalize_chart_title(chart: ChartSpec) -> str:
     return chart.title or "Visualization"
 
 
+def _title_implies_month(title: str) -> bool:
+    t = (title or "").lower()
+    return bool(re.search(r"\bmonth|monthly|per month|by month\b", t))
+
+
+def _x_key_is_month_bucket(x_key: Optional[str], data: List[Dict[str, Any]]) -> bool:
+    if not x_key or not data:
+        return False
+    xk = str(x_key).lower()
+    if any(k in xk for k in ("month", "yyyymm", "year_month", "period")):
+        return True
+    samples = [str((r or {}).get(x_key, "")).strip() for r in data[:15]]
+    month_like = 0
+    for s in samples:
+        if re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", s) or re.fullmatch(r"\d{6}", s):
+            month_like += 1
+    return month_like >= 3
+
+
 def _scope_suffix(result_scope: Optional[Dict[str, Any]]) -> str:
     if not result_scope:
         return ""
@@ -422,6 +441,12 @@ Rules:
             
             # Normalize title to match actual x/y keys used by the generated chart data.
             chart_spec.title = _normalize_chart_title(chart_spec)
+            # Guard: never claim "by month" unless x-axis is month-bucketed.
+            if _title_implies_month(chart_spec.title) and not _x_key_is_month_bucket(chart_spec.x_key, chart_data):
+                chart_spec.title = "Lowest line amounts (sample rows)"
+                chart_spec.description = (
+                    "Title adjusted because the data is line-level/date-level, not monthly aggregated."
+                )
             if result_scope and result_scope.get("kind") == "limited":
                 chart_spec.description = (
                     (chart_spec.description + " ").strip()
