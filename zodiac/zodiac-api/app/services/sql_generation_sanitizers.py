@@ -10,6 +10,7 @@ Used by ai_analysis_orchestrator, sap_sql_precision_validator (approve-query pat
 from __future__ import annotations
 
 import re
+from typing import List, Optional, Tuple
 
 
 def escape_postgres_casts_for_sqlalchemy(sql: str) -> str:
@@ -86,6 +87,109 @@ def sanitize_gjahr_sql(sql: str) -> str:
     return sql
 
 
+def _question_needs_fkdat_calendar_year(question: str) -> bool:
+    """Match precision validator: year-scoped billing questions that require FKDAT (not gjahr alone)."""
+    q = (question or "").lower()
+    revenue_intent = bool(
+        re.search(
+            r"\b(revenue|sales|billing|invoice value|invoice amount|total sales|amount|turnover|net value|netwr)\b",
+            q,
+        )
+    )
+    ranking_intent = bool(
+        re.search(
+            r"\b(top|bottom|highest|lowest|largest|smallest|most|least|rank|ranking|best|worst)\b",
+            q,
+        )
+        and re.search(
+            r"\b(customer|customers|material|materials|vendor|vendors|product|products|item|items|article|articles)\b",
+            q,
+        )
+    )
+    breakdown_intent = bool(
+        re.search(r"\b(by customer|by material|by vendor|by product|per customer|per product)\b", q)
+    )
+    return bool(revenue_intent or ranking_intent or breakdown_intent)
+
+
+def _sql_has_fkdat_year_predicate(sql: str, year: str) -> bool:
+    s = (sql or "").lower()
+    if re.search(r"fkdat[^;]{0,260}(?:19|20)\d{2}", s, re.IGNORECASE):
+        return True
+    if re.search(
+        r"substring\s*\([^)]*fkdat[^)]*1\s*,\s*4[^)]*\)\s*=\s*'" + re.escape(year) + r"'",
+        s,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"fkdat\s+between\s*'" + re.escape(year) + r"\d{4}'\s+and\s*'" + re.escape(year) + r"\d{4}'",
+        s,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _infer_vbrk_alias(sql: str) -> Optional[str]:
+    """Return alias used for VBRK in FROM/JOIN, or None."""
+    if not sql:
+        return None
+    m = re.search(
+        r"(?i)(?:FROM|JOIN)\s+(?:\"?VBRK\"?|\bVBRK\b)\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
+        sql,
+    )
+    if m:
+        return m.group(1)
+    return None
+
+
+def inject_fkdat_calendar_year_filter(sql: str, question: Optional[str]) -> Tuple[str, List[str]]:
+    """
+    When the question names a calendar year and asks for billing ranking/revenue/breakdown,
+    ensure VBRK.fkdat is filtered to that year. Best-effort for a single top-level SELECT.
+    """
+    notes: List[str] = []
+    if not sql or not question:
+        return sql, notes
+    ym = re.search(r"\b((?:19|20)\d{2})\b", question)
+    if not ym:
+        return sql, notes
+    year = ym.group(1)
+    sl = sql.lower()
+    if "vbrp" not in sl and "vbrk" not in sl:
+        return sql, notes
+    if not _question_needs_fkdat_calendar_year(question):
+        return sql, notes
+    if _sql_has_fkdat_year_predicate(sql, year):
+        return sql, notes
+    alias = _infer_vbrk_alias(sql)
+    if not alias:
+        return sql, notes
+    cond = f'SUBSTRING(TRIM({alias}."fkdat"),1,4) = \'{year}\''
+    # Prefer: extend existing WHERE before GROUP BY / ORDER BY / LIMIT
+    if re.search(r"\bWHERE\b", sql, re.IGNORECASE):
+        new_sql, n = re.subn(
+            r"(\bWHERE\b)([\s\S]*?)(\s+(?:GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b)",
+            lambda m: m.group(1) + m.group(2) + f" AND ({cond})" + m.group(3),
+            sql,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if n:
+            notes.append(f"Auto-injected FKDAT calendar year filter for {year}.")
+            return new_sql, notes
+        return sql, notes
+    m2 = re.search(r"(\s+)(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.IGNORECASE)
+    if m2:
+        new_sql = sql[: m2.start()] + f" WHERE ({cond})" + sql[m2.start() :]
+        notes.append(f"Auto-injected FKDAT calendar year filter for {year}.")
+        return new_sql, notes
+    new_sql = sql.rstrip().rstrip(";") + f" WHERE ({cond})"
+    notes.append(f"Auto-injected FKDAT calendar year filter for {year}.")
+    return new_sql, notes
+
+
 def sanitize_netwr_sql(sql: str) -> str:
     """
     Replace bare SUM(alias.netwr) with safe TEXT→NUMERIC cast for vbrp.netwr.
@@ -128,8 +232,11 @@ def sanitize_netwr_sql(sql: str) -> str:
     return sql
 
 
-def sanitize_generated_sap_sql(sql: str) -> str:
-    """Apply gjahr then netwr rewrites (order matters: gjahr first)."""
+def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
+    """Apply gjahr then netwr rewrites (order matters: gjahr first), then optional FKDAT year inject."""
     if not sql:
         return sql
-    return sanitize_netwr_sql(sanitize_gjahr_sql(sql))
+    s = sanitize_netwr_sql(sanitize_gjahr_sql(sql))
+    if question:
+        s, _notes = inject_fkdat_calendar_year_filter(s, question)
+    return s

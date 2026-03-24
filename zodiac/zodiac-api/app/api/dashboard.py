@@ -2954,7 +2954,7 @@ def _validate_sql_candidate(sql_db: Session, question: str, sql: str):
     from ..services.sap_sql_precision_validator import validate_sql_precision_for_db
     from ..services.sql_generation_sanitizers import sanitize_generated_sap_sql
 
-    sql = sanitize_generated_sap_sql(sql)
+    sql = sanitize_generated_sap_sql(sql, question)
 
     is_valid, err = validate_sql_for_safe_execution(sql)
     if not is_valid:

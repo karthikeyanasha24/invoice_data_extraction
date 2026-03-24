@@ -20,6 +20,7 @@ if "sqlalchemy" not in sys.modules:
 
 from app.services.ai_intent_classifier import classify_intent  # noqa: E402
 from app.services.sap_sql_precision_validator import validate_sql_precision  # noqa: E402
+from app.services.sql_generation_sanitizers import sanitize_generated_sap_sql  # noqa: E402
 
 
 def main() -> int:
@@ -41,6 +42,11 @@ def main() -> int:
     vr1 = validate_sql_precision(bad_year_sql, schema, question="revenue by customer in 1999")
     assert not vr1.is_valid and any("FKDAT year predicate" in e for e in vr1.errors), vr1.errors
 
+    # 2a) Sanitizer can auto-inject FKDAT year when question + VBRK alias are present.
+    repaired = sanitize_generated_sap_sql(bad_year_sql, "revenue by customer in 1999")
+    vr1b = validate_sql_precision(repaired, schema, question="revenue by customer in 1999")
+    assert vr1b.is_valid, vr1b.errors
+
     good_year_sql = """
     SELECT r."kunag" AS customer, SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue
     FROM vbrp v JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0')
@@ -49,6 +55,15 @@ def main() -> int:
     """
     vr2 = validate_sql_precision(good_year_sql, schema, question="revenue by customer in 1999")
     assert vr2.is_valid, vr2.errors
+
+    # 2b) "Top customers" + year must also require FKDAT (not only literal "revenue").
+    bad_top_sql = """
+    SELECT r."kunag" AS customer, SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS total
+    FROM vbrp v JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0')
+    GROUP BY r."kunag" ORDER BY total DESC LIMIT 20
+    """
+    vr_top_bad = validate_sql_precision(bad_top_sql, schema, question="1999 top customers by sales")
+    assert not vr_top_bad.is_valid and any("FKDAT year predicate" in e for e in vr_top_bad.errors), vr_top_bad.errors
 
     # 3) Month intent must be grouped by month bucket.
     bad_month_sql = """

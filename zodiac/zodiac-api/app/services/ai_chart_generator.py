@@ -84,6 +84,37 @@ def _x_key_is_month_bucket(x_key: Optional[str], data: List[Dict[str, Any]]) -> 
     return month_like >= 3
 
 
+def mixed_currency_disclaimer(rows: List[Dict[str, Any]], sql: str = "") -> str:
+    """
+    If result rows include multiple WAERK/waers values, charts and copy should not imply a single currency.
+    """
+    if not rows:
+        return ""
+    waerk_vals: set[str] = set()
+    for r in rows[:500]:
+        if not isinstance(r, dict):
+            continue
+        for k in r.keys():
+            lk = str(k).lower()
+            if lk in ("waerk", "waers", "currency", "curr"):
+                v = r.get(k)
+                if v is not None and str(v).strip():
+                    waerk_vals.add(str(v).strip())
+    if len(waerk_vals) <= 1:
+        return ""
+    shown = ", ".join(sorted(waerk_vals)[:8])
+    return (
+        f"Mixed currencies in data ({shown}); numeric totals are not a single currency unless split by currency."
+    )
+
+
+def _apply_mixed_currency_note(charts: List[ChartSpec], rows: List[Dict[str, Any]], sql: str) -> None:
+    note = mixed_currency_disclaimer(rows, sql)
+    if note and charts:
+        c0 = charts[0]
+        c0.description = (c0.description + " " + note).strip()
+
+
 def _scope_suffix(result_scope: Optional[Dict[str, Any]]) -> str:
     if not result_scope:
         return ""
@@ -315,7 +346,11 @@ def analyze_visualization_needs(
         logger.warning("⚠️ No numeric columns detected. Generating table view only.")
         # Generate at least a table view
         try:
-            return _auto_generate_basic_charts(rows, user_query, [], categorical_cols)
+            charts = _auto_generate_basic_charts(
+                rows, user_query, [], categorical_cols, result_scope=result_scope, sql=sql
+            )
+            _apply_mixed_currency_note(charts, rows, sql)
+            return charts
         except Exception as e:
             logger.error(f"❌ Table generation failed: {e}")
             return []
@@ -466,8 +501,9 @@ Rules:
                 numeric_cols,
                 categorical_cols,
                 result_scope=result_scope,
+                sql=sql,
             )
-        
+        _apply_mixed_currency_note(charts, rows, sql)
         return charts
     
     except Exception as e:
@@ -476,14 +512,17 @@ Rules:
         try:
             numeric_cols = _detect_numeric_columns(rows)
             categorical_cols = _detect_categorical_columns(rows)
-            return _auto_generate_basic_charts(
+            charts = _auto_generate_basic_charts(
                 rows,
                 user_query,
                 numeric_cols,
                 categorical_cols,
                 result_scope=result_scope,
+                sql=sql,
             )
-        except:
+            _apply_mixed_currency_note(charts, rows, sql)
+            return charts
+        except Exception:
             return []
 
 

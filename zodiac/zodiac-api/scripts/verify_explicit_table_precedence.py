@@ -48,6 +48,17 @@ def main() -> int:
     ids2 = extract_explicit_table_identifiers(q2)
     assert any(t.upper() == "VBRK" for t in ids2), ids2
 
+    # Quoted alternate name, FROM lowercase, mixed case in text
+    q3 = 'select * from vbrp join "VBRK" on 1=1'
+    ids3 = extract_explicit_table_identifiers(q3)
+    assert "vbrp" in [x.lower() for x in ids3] and "VBRK" in ids3, ids3
+
+    q4 = 'Rows from "ai_query_memory" please'
+    ids4 = extract_explicit_table_identifiers(q4)
+    assert "ai_query_memory" in [x.lower() for x in ids4], ids4
+    _, _, unk4 = resolve_tables_for_explicit_intent(ids4, {"VBRK"})
+    assert unk4, "ai_query_memory not in skip_tables should be unknown"
+
     print("OK: explicit table precedence guards")
     return 0
 

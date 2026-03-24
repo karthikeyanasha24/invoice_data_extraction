@@ -9,6 +9,26 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _waerk_mix_note(rows: List[Dict[str, Any]]) -> str:
+    vals: set[str] = set()
+    for r in (rows or [])[:400]:
+        if not isinstance(r, dict):
+            continue
+        for k in r.keys():
+            if str(k).lower() in ("waerk", "waers", "currency", "curr"):
+                v = r.get(k)
+                if v is not None and str(v).strip():
+                    vals.add(str(v).strip())
+    if len(vals) <= 1:
+        return ""
+    return (
+        "Sample rows include multiple currency codes ("
+        + ", ".join(sorted(vals)[:6])
+        + "); do not imply a single-currency total unless the query groups or filters by currency."
+    )
+
+
 try:
     from openai import OpenAI
     _OPENAI_AVAILABLE = True
@@ -58,6 +78,7 @@ def generate_analytics_insights(
     preview = representative_rows if representative_rows else rows[:max_preview_rows]
     columns = list(preview[0].keys()) if preview else []
     preview_str = json.dumps(preview, default=str, indent=0)[:3000]
+    currency_mix_rule = _waerk_mix_note(preview)
     global_stats_str = json.dumps(global_stats, default=str, indent=2) if global_stats else ""
     result_scope_str = json.dumps(result_scope, default=str, indent=2) if result_scope else ""
     metrics_str = ""
@@ -89,12 +110,16 @@ GLOBAL_NUMERIC_STATS (source of truth for numeric claims):
 RESULT_SCOPE (scope of claims):
 {result_scope_str or '(not provided)'}
 
+CURRENCY NOTE (if applicable):
+{currency_mix_rule or '(single currency or no WAERK in sample — no extra rule)'}
+
 STRICT RULES:
 - If GLOBAL_NUMERIC_STATS is provided, the executive_summary MUST agree with it.
 - Forbidden: stating "all amounts are 0" (or similar) when GLOBAL_NUMERIC_STATS.count_positive + count_negative > 0.
 - Forbidden: claiming "all rows in the dataset/year/table" when RESULT_SCOPE.kind == "limited".
 - Required: when RESULT_SCOPE.kind == "limited", explicitly state that findings are based on the returned limited rows.
 - If GLOBAL_NUMERIC_STATS.count_negative == 0, say explicitly that there are no net line amounts < 0 in this SQL result set for the filters used.
+- If CURRENCY NOTE above lists multiple currencies, the executive_summary MUST state that revenue/amount totals mix currencies and are not additive in one currency unless broken down by WAERK/currency.
 
 Write a JSON object with exactly these keys (no other text):
 - executive_summary: 1-2 sentences summarizing the main finding.

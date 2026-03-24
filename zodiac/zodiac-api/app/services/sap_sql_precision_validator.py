@@ -372,13 +372,33 @@ def validate_sql_precision(
                 "Question mentions a year but SQL has no SAP date/fiscal-year filter. Review date precision."
             )
 
-        # Production guard: revenue/aggregate question with explicit calendar year over VBRP/VBRK
-        # MUST include FKDAT-based year predicate (warning is insufficient for this class).
+        # Production guard: revenue / ranking / breakdown questions with explicit calendar year
+        # over VBRP/VBRK MUST include FKDAT-based year predicate (not gjahr alone).
         revenue_intent = bool(
-            re.search(r"\b(revenue|sales|billing|invoice value|invoice amount|total)\b", question_l)
+            re.search(
+                r"\b(revenue|sales|billing|invoice value|invoice amount|total sales|amount|turnover|net value|netwr)\b",
+                question_l,
+            )
+        )
+        ranking_intent = bool(
+            re.search(
+                r"\b(top|bottom|highest|lowest|largest|smallest|most|least|rank|ranking|best|worst)\b",
+                question_l,
+            )
+            and re.search(
+                r"\b(customer|customers|material|materials|vendor|vendors|product|products|item|items|article|articles)\b",
+                question_l,
+            )
+        )
+        breakdown_intent = bool(
+            re.search(r"\b(by customer|by material|by vendor|by product|per customer|per product)\b", question_l)
         )
         touches_billing_tables = ("VBRP" in tables) or ("VBRK" in tables)
-        needs_fkdat_year_enforcement = bool(year_match and revenue_intent and touches_billing_tables)
+        needs_fkdat_year_enforcement = bool(
+            year_match
+            and touches_billing_tables
+            and (revenue_intent or ranking_intent or breakdown_intent)
+        )
         if needs_fkdat_year_enforcement:
             year = year_match.group(1)
             fkdat_year_ok = bool(
@@ -388,7 +408,7 @@ def validate_sql_precision(
             )
             if not fkdat_year_ok:
                 errors.append(
-                    f"Year-scoped revenue query must include FKDAT year predicate for {year} (e.g. SUBSTRING(TRIM(fkdat),1,4) = '{year}')."
+                    f"Year-scoped billing query must include FKDAT year predicate for {year} (e.g. SUBSTRING(TRIM(r.fkdat),1,4) = '{year}')."
                 )
 
         # Month intent guard: "by month/monthly/per month" requires month bucket aggregation.
@@ -409,6 +429,14 @@ def validate_sql_precision(
             if not (has_month_bucket_expr and grouped_by_bucket):
                 errors.append(
                     "Month-intent query must aggregate by month bucket derived from FKDAT (do not plot raw line/date rows as 'by month')."
+                )
+
+        # Currency: summed billing amounts without WAERK may mix currencies.
+        if touches_billing_tables and re.search(r"\b(sum|avg)\s*\([^)]*netwr", sql_l, re.IGNORECASE):
+            if "waerk" not in sql_l:
+                warnings.append(
+                    "Currency (WAERK) is not in the SQL; if multiple currencies exist, totals may mix currencies — "
+                    "group or filter by WAERK for per-currency sums, or state that amounts are mixed."
                 )
 
     return SapSqlValidationResult(
@@ -443,7 +471,7 @@ def execute_sql_with_precision_checks(
     from .sql_generation_sanitizers import sanitize_generated_sap_sql
 
     # Same rewrites as the main orchestrator (memory / manual approve bypassed the agent)
-    sql = sanitize_generated_sap_sql(sql)
+    sql = sanitize_generated_sap_sql(sql, question=question)
 
     validation = validate_sql_precision_for_db(db, sql, question=question)
     if not validation.is_valid:

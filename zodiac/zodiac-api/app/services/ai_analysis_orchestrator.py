@@ -1100,6 +1100,8 @@ If result is empty, say so and suggest a refined question.
             )
             cfg_skip = [str(c) for c in (_load_schema_ai_config().get("skip_tables") or [])]
             if unknown_tbls:
+                timings["sql_path_reason"] = "explicit_table_unknown"
+                timings["total_ms"] = int((time.time() - perf_start) * 1000)
                 return OrchestratorResult(
                     reply=clarification_unknown_tables(unknown_tbls, cfg_skip, list(_sap_keys_orch)[:40]),
                     action="new",
@@ -1110,12 +1112,17 @@ If result is empty, say so and suggest a refined question.
                     time_scope=time_scope,
                     date_range=date_range,
                     period_info=period_info,
+                    performance=timings,
                 )
             if app_tables_resolved and sap_forced_resolved:
+                timings["sql_path_reason"] = "explicit_table_mixed_catalog"
+                timings["total_ms"] = int((time.time() - perf_start) * 1000)
                 return OrchestratorResult(
                     reply=(
-                        "This question references both **app** tables and **SAP** analytics tables. "
-                        "Ask about one catalog at a time (for example, only `ai_analysis_memory` or only `VBRK`)."
+                        "Run **one** of these two questions (app workspace vs SAP analytics), not both in one message:\n\n"
+                        "1. **App only** — e.g. “List the last rows from `ai_analysis_memory` for my user.”\n"
+                        "2. **SAP only** — e.g. “Show billing headers from `VBRK` for last month.”\n\n"
+                        "Then send your next question separately for the other catalog."
                     ),
                     action="new",
                     reason="explicit_table_mixed_catalog",
@@ -1125,12 +1132,15 @@ If result is empty, say so and suggest a refined question.
                     time_scope=time_scope,
                     date_range=date_range,
                     period_info=period_info,
+                    performance=timings,
                 )
             if app_tables_resolved and not sap_forced_resolved:
                 from .ai_analysis_memory_store import ensure_ai_analysis_memory_table
 
                 ensure_ai_analysis_memory_table(db)
                 if len(app_tables_resolved) > 1:
+                    timings["sql_path_reason"] = "explicit_app_multi_table"
+                    timings["total_ms"] = int((time.time() - perf_start) * 1000)
                     return OrchestratorResult(
                         reply="Please name one app table per question (multi-table app queries are not supported yet).",
                         action="new",
@@ -1141,6 +1151,7 @@ If result is empty, say so and suggest a refined question.
                         time_scope=time_scope,
                         date_range=date_range,
                         period_info=period_info,
+                        performance=timings,
                     )
                 _atn = app_tables_resolved[0]
                 _ex = try_execute_explicit_app_table_sql(db, user_id, user_query, _atn)
@@ -1150,6 +1161,8 @@ If result is empty, say so and suggest a refined question.
                     timings["sql_path_reason"] = "explicit_app_table"
                 else:
                     if load_app_table_columns(db, _atn) is None:
+                        timings["sql_path_reason"] = "explicit_app_table_missing"
+                        timings["total_ms"] = int((time.time() - perf_start) * 1000)
                         return OrchestratorResult(
                             reply=f"Table `{_atn}` was not found in the app database.",
                             action="new",
@@ -1160,8 +1173,11 @@ If result is empty, say so and suggest a refined question.
                             time_scope=time_scope,
                             date_range=date_range,
                             period_info=period_info,
+                            performance=timings,
                         )
                     if should_clarify_app_table_ordering(db, _atn, user_query):
+                        timings["sql_path_reason"] = "explicit_app_order_clarification"
+                        timings["total_ms"] = int((time.time() - perf_start) * 1000)
                         return OrchestratorResult(
                             reply=(
                                 "I need a column to order “last N rows” by (for example `updated_at` or `id`). "
@@ -1175,7 +1191,10 @@ If result is empty, say so and suggest a refined question.
                             time_scope=time_scope,
                             date_range=date_range,
                             period_info=period_info,
+                            performance=timings,
                         )
+                    timings["sql_path_reason"] = "explicit_app_table_failed"
+                    timings["total_ms"] = int((time.time() - perf_start) * 1000)
                     return OrchestratorResult(
                         reply=f"Could not run SQL against `{_atn}`. Check database permissions or try again.",
                         action="new",
@@ -1186,6 +1205,7 @@ If result is empty, say so and suggest a refined question.
                         time_scope=time_scope,
                         date_range=date_range,
                         period_info=period_info,
+                        performance=timings,
                     )
     except Exception as _explic_err:
         logger.debug("explicit table routing: %s", _explic_err)
@@ -1339,7 +1359,9 @@ If result is empty, say so and suggest a refined question.
         # 2) Fall back to adaptive (keyword/heuristic) then standard sap_sql_agent.
         if result is None or not getattr(result, "rows", None):
             if explicit_sap_only:
+                timings["sql_path_reason"] = "explicit_sap_forced_failed"
                 timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
+                timings["total_ms"] = int((time.time() - perf_start) * 1000)
                 return OrchestratorResult(
                     reply=(
                         "I could not generate valid SQL using only the table(s) you named: "
@@ -1354,6 +1376,7 @@ If result is empty, say so and suggest a refined question.
                     time_scope=time_scope,
                     date_range=date_range,
                     period_info=period_info,
+                    performance=timings,
                 )
             result = run_adaptive_sap_sql_agent(
                 user_query,
@@ -1366,7 +1389,9 @@ If result is empty, say so and suggest a refined question.
                 timings["sql_path_reason"] = "llm_primary_adaptive"
     if result is None or not (getattr(result, "rows", None)):
         if explicit_sap_only:
+            timings["sql_path_reason"] = "explicit_sap_forced_failed"
             timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
+            timings["total_ms"] = int((time.time() - perf_start) * 1000)
             return OrchestratorResult(
                 reply=(
                     "I could not generate valid SQL using only the table(s) you named: "
@@ -1381,6 +1406,7 @@ If result is empty, say so and suggest a refined question.
                 time_scope=time_scope,
                 date_range=date_range,
                 period_info=period_info,
+                performance=timings,
             )
         logger.info("Adaptive SQL path returned no result; falling back to standard sap_sql_agent")
         result = run_sap_sql_agent(
@@ -1395,7 +1421,9 @@ If result is empty, say so and suggest a refined question.
     # Purchase-order direct fallback: when all agents fail and question is about purchase orders, run EKPO aggregate
     if result is None or not getattr(result, "rows", None):
         if explicit_sap_only:
+            timings["sql_path_reason"] = "explicit_sap_forced_failed"
             timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
+            timings["total_ms"] = int((time.time() - perf_start) * 1000)
             return OrchestratorResult(
                 reply=(
                     "I could not generate valid SQL using only the table(s) you named: "
@@ -1410,6 +1438,7 @@ If result is empty, say so and suggest a refined question.
                 time_scope=time_scope,
                 date_range=date_range,
                 period_info=period_info,
+                performance=timings,
             )
         try:
             po_result = run_purchase_order_fallback(sql_db, user_query)
@@ -1427,7 +1456,7 @@ If result is empty, say so and suggest a refined question.
     #   2. SUM(netwr) bare → rewrite to safe NULLIF TEXT cast
     if result and getattr(result, "sql", None):
         _orig_sql = result.sql
-        _clean_sql = sanitize_generated_sap_sql(_orig_sql)
+        _clean_sql = sanitize_generated_sap_sql(_orig_sql, user_query)
         if _clean_sql != _orig_sql:
             logger.info("SQL sanitizers applied (gjahr→fkdat and/or netwr), re-executing")
             try:
@@ -2494,7 +2523,15 @@ Write a clear MARKDOWN answer:
     timings["chart_count"] = len(charts_data) if charts_data else 0
     timings["used_cache"] = False
     
-    logger.info(f"⏱️ Query performance: {total_time}ms (action: {timings.get('action_decision_ms', 0)}ms, sql: {timings.get('sql_execution_ms', 0)}ms, summary: {timings.get('summarization_ms', 0)}ms, charts: {timings.get('chart_generation_ms', 0)}ms)")
+    logger.info(
+        "⏱️ Query performance: %dms (sql_path_reason=%s, action: %sms, sql: %sms, summary: %sms, charts: %sms)",
+        total_time,
+        timings.get("sql_path_reason"),
+        timings.get("action_decision_ms", 0),
+        timings.get("sql_execution_ms", 0),
+        timings.get("summarization_ms", 0),
+        timings.get("chart_generation_ms", 0),
+    )
 
     return OrchestratorResult(
         reply=reply or "Query executed, but I couldn’t generate a summary.",
@@ -2521,7 +2558,12 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
     # keep payload small and frontend-safe
     if payload.get("rows_preview") is not None and len(payload["rows_preview"]) > 30:
         payload["rows_preview"] = payload["rows_preview"][:30]
-    # Keep performance metrics
-    if payload.get("performance"):
-        logger.debug(f"Performance data: {payload['performance']}")
+    # Support / debugging: which routing path produced SQL (no code reading required)
+    perf = payload.get("performance") or {}
+    spr = perf.get("sql_path_reason")
+    payload["sql_path_reason"] = spr
+    if spr:
+        logger.info("orchestrator_payload: sql_path_reason=%s", spr)
+    elif payload.get("performance"):
+        logger.debug("Performance data: %s", payload["performance"])
     return payload
