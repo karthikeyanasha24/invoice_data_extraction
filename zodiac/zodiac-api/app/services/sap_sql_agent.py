@@ -4090,6 +4090,7 @@ def run_schema_driven_sql_agent(
     db: Session,
     few_shot_examples: Optional[List[Dict[str, str]]] = None,
     intent_context: Optional[str] = None,
+    forced_tables: Optional[List[str]] = None,
 ) -> SqlAgentResult | None:
     """
     Schema-driven SQL agent: no keyword rules. Flow is:
@@ -4099,6 +4100,10 @@ def run_schema_driven_sql_agent(
     4) Validate SQL against schema, execute, return rows.
 
     Use this first; fall back to run_adaptive_sap_sql_agent / run_sap_sql_agent on failure.
+
+    When ``forced_tables`` is set (table names from the user question), deterministic
+    templates and intent-based table fallbacks are skipped — SQL must use only those
+    tables (or joins among them).
     """
     if not _SCHEMA_DRIVEN_AVAILABLE:
         return None
@@ -4129,100 +4134,123 @@ def run_schema_driven_sql_agent(
         available_tables = list(schema.keys())
         schema_table_case = {t.upper(): t for t in available_tables}
 
-        # Layer 1: Deterministic resolver (intent + semantic mapping + templates)
-        # BYPASS for entity-specific questions: deterministic templates produce broad SQL
-        # without entity WHERE clauses (e.g. customer/vendor/product name filters).
-        _skip_deterministic = _is_entity_specific_question(question)
+        _ft = [str(t).strip() for t in (forced_tables or []) if t and str(t).strip()]
         template_sql = None
-        if not _skip_deterministic and resolve_deterministic_sql:
-            try:
-                template_sql = resolve_deterministic_sql(
+        tables: List[str] = []
+
+        if _ft:
+            for ft in _ft:
+                u = ft.upper()
+                if u in schema_table_case:
+                    tables.append(schema_table_case[u])
+                else:
+                    logger.warning(
+                        "schema_driven_agent: forced table %r not in schema — refusing substitution",
+                        ft,
+                    )
+                    return None
+            if not tables:
+                return None
+            logger.info(
+                "schema_driven_agent: explicit user tables — skipping deterministic resolver and intent fallbacks: %s",
+                tables,
+            )
+        else:
+            # Layer 1: Deterministic resolver (intent + semantic mapping + templates)
+            # BYPASS for entity-specific questions: deterministic templates produce broad SQL
+            # without entity WHERE clauses (e.g. customer/vendor/product name filters).
+            _skip_deterministic = _is_entity_specific_question(question)
+            if not _skip_deterministic and resolve_deterministic_sql:
+                try:
+                    template_sql = resolve_deterministic_sql(
+                        question,
+                        available_tables=available_tables,
+                        schema_table_case=schema_table_case,
+                    )
+                    if template_sql:
+                        logger.info("schema_driven_agent: deterministic resolver produced SQL")
+                except Exception as det_err:
+                    logger.debug("deterministic_sql_resolver: %s", det_err)
+            elif _skip_deterministic:
+                logger.info("schema_driven_agent: skipping deterministic/semantic resolver — entity-specific question detected")
+            # Layer 2: Query resolver (metric+dimension from dictionary)
+            if not template_sql and not _skip_deterministic and try_resolve_and_build_sql:
+                template_sql = try_resolve_and_build_sql(
                     question,
                     available_tables=available_tables,
                     schema_table_case=schema_table_case,
                 )
-                if template_sql:
-                    logger.info("schema_driven_agent: deterministic resolver produced SQL")
-            except Exception as det_err:
-                logger.debug("deterministic_sql_resolver: %s", det_err)
-        elif _skip_deterministic:
-            logger.info("schema_driven_agent: skipping deterministic/semantic resolver — entity-specific question detected")
-        # Layer 2: Query resolver (metric+dimension from dictionary)
-        if not template_sql and not _skip_deterministic and try_resolve_and_build_sql:
-            template_sql = try_resolve_and_build_sql(
-                question,
-                available_tables=available_tables,
-                schema_table_case=schema_table_case,
-            )
-        if template_sql:
-            is_valid, err = schema_validate_sql(template_sql, schema)
-            if is_valid and _precision_schema_ok(template_sql):
-                rows = _run_sql(db, template_sql)
-                return SqlAgentResult(sql=template_sql, rows=rows)
-            logger.debug("schema_driven_agent: template SQL invalid (%s), falling back to LLM", err)
+            if template_sql:
+                is_valid, err = schema_validate_sql(template_sql, schema)
+                if is_valid and _precision_schema_ok(template_sql):
+                    rows = _run_sql(db, template_sql)
+                    return SqlAgentResult(sql=template_sql, rows=rows)
+                logger.debug("schema_driven_agent: template SQL invalid (%s), falling back to LLM", err)
 
-        # Use get_schema_text so table selector sees semantic map (vendor→LFA1, delivery→LIKP/LIPS, etc.)
-        schema_text = get_schema_text(db, include_semantic_map=True)
-        tables = schema_select_tables(question, schema_text, client, available_tables)
-        # Intent-based table fallback when LLM returns no tables
-        if not tables:
-            available_upper = {t.upper(): t for t in available_tables}
-            q_lower = (question or "").lower()
-            if any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs")):
-                tables = [available_upper[t] for t in ("CKIS", "MAKT") if t in available_upper]
-                if tables:
-                    logger.info("schema_driven_agent: manufacturing-cost intent fallback tables: %s", tables)
-            elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain products")):
-                tables = [available_upper[t] for t in ("VBRP", "VBRK", "MAKT", "MBEW", "CKIS") if t in available_upper]
-                if tables:
-                    logger.info("schema_driven_agent: profit-margin intent fallback tables: %s", tables)
-            elif _is_purchase_order_question(question) or any(x in q_lower for x in ("purchase order totals", "purchased quantity and cost", "purchase cost by material", "ekpo")):
-                tables = [available_upper[t] for t in ("EKPO", "EKKO", "MAKT", "MARA") if t in available_upper]
-                if tables:
-                    logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
-            elif any(x in q_lower for x in ("vendor invoice", "top vendors by invoice", "vendor invoice totals")):
-                tables = [available_upper[t] for t in ("RBKP", "LFA1", "RSEG") if t in available_upper]
-                if tables:
-                    logger.info("schema_driven_agent: vendor-invoice intent fallback tables: %s", tables)
-            elif _is_internal_order_question(question):
-                # AUFK for order list; COEP for cost by order (join on objnr)
-                tables = [available_upper[t] for t in ("AUFK", "COEP") if t in available_upper]
-                if not tables:
-                    tables = [available_upper["AUFK"]] if "AUFK" in available_upper else []
-                if tables:
-                    logger.info("schema_driven_agent: internal-order intent fallback tables: %s", tables)
+            # Use get_schema_text so table selector sees semantic map (vendor→LFA1, delivery→LIKP/LIPS, etc.)
+            schema_text = get_schema_text(db, include_semantic_map=True)
+            tables = schema_select_tables(question, schema_text, client, available_tables)
+            # Intent-based table fallback when LLM returns no tables
+            if not tables:
+                available_upper = {t.upper(): t for t in available_tables}
+                q_lower = (question or "").lower()
+                if any(x in q_lower for x in ("cost of manufacturing", "costs of manufacturing", "manufacturing cost", "manufacturing costs")):
+                    tables = [available_upper[t] for t in ("CKIS", "MAKT") if t in available_upper]
+                    if tables:
+                        logger.info("schema_driven_agent: manufacturing-cost intent fallback tables: %s", tables)
+                elif any(x in q_lower for x in ("profit margin", "margin by product", "margin on certain products")):
+                    tables = [available_upper[t] for t in ("VBRP", "VBRK", "MAKT", "MBEW", "CKIS") if t in available_upper]
+                    if tables:
+                        logger.info("schema_driven_agent: profit-margin intent fallback tables: %s", tables)
+                elif _is_purchase_order_question(question) or any(x in q_lower for x in ("purchase order totals", "purchased quantity and cost", "purchase cost by material", "ekpo")):
+                    tables = [available_upper[t] for t in ("EKPO", "EKKO", "MAKT", "MARA") if t in available_upper]
+                    if tables:
+                        logger.info("schema_driven_agent: purchase-order intent fallback tables: %s", tables)
+                elif any(x in q_lower for x in ("vendor invoice", "top vendors by invoice", "vendor invoice totals")):
+                    tables = [available_upper[t] for t in ("RBKP", "LFA1", "RSEG") if t in available_upper]
+                    if tables:
+                        logger.info("schema_driven_agent: vendor-invoice intent fallback tables: %s", tables)
+                elif _is_internal_order_question(question):
+                    # AUFK for order list; COEP for cost by order (join on objnr)
+                    tables = [available_upper[t] for t in ("AUFK", "COEP") if t in available_upper]
+                    if not tables:
+                        tables = [available_upper["AUFK"]] if "AUFK" in available_upper else []
+                    if tables:
+                        logger.info("schema_driven_agent: internal-order intent fallback tables: %s", tables)
         if not tables:
             logger.warning("schema_driven_agent: no tables selected for question: %s", (question or "")[:80])
             return None
 
         # Entity table injection: ensure KNA1/LFA1/MAKT are in tables when a named entity is detected.
-        # This guarantees the SQL generator has the correct join table in scope.
-        try:
-            from .invoice_bot_helpers import get_specific_entity_request
-            entity_spec = get_specific_entity_request(question)
-            if entity_spec:
-                entity_type = entity_spec.get("entity", "")
-                available_upper = {t.upper(): t for t in available_tables}
-                if entity_type == "customer":
-                    for tbl in ("KNA1",):
-                        orig = available_upper.get(tbl)
-                        if orig and orig not in tables:
-                            tables.append(orig)
-                            logger.info("schema_driven_agent: injected entity table %s for customer filter", orig)
-                elif entity_type == "vendor":
-                    for tbl in ("LFA1",):
-                        orig = available_upper.get(tbl)
-                        if orig and orig not in tables:
-                            tables.append(orig)
-                            logger.info("schema_driven_agent: injected entity table %s for vendor filter", orig)
-                elif entity_type == "product":
-                    for tbl in ("MAKT",):
-                        orig = available_upper.get(tbl)
-                        if orig and orig not in tables:
-                            tables.append(orig)
-                            logger.info("schema_driven_agent: injected entity table %s for product filter", orig)
-        except Exception as _ent_err:
-            logger.debug("schema_driven_agent: entity table injection error: %s", _ent_err)
+        # When the user explicitly listed tables (forced_tables), do not inject extra masters —
+        # that previously caused unrelated tables (e.g. LFA1) to override the named target.
+        if not _ft:
+            try:
+                from .invoice_bot_helpers import get_specific_entity_request
+                entity_spec = get_specific_entity_request(question)
+                if entity_spec:
+                    entity_type = entity_spec.get("entity", "")
+                    available_upper = {t.upper(): t for t in available_tables}
+                    if entity_type == "customer":
+                        for tbl in ("KNA1",):
+                            orig = available_upper.get(tbl)
+                            if orig and orig not in tables:
+                                tables.append(orig)
+                                logger.info("schema_driven_agent: injected entity table %s for customer filter", orig)
+                    elif entity_type == "vendor":
+                        for tbl in ("LFA1",):
+                            orig = available_upper.get(tbl)
+                            if orig and orig not in tables:
+                                tables.append(orig)
+                                logger.info("schema_driven_agent: injected entity table %s for vendor filter", orig)
+                    elif entity_type == "product":
+                        for tbl in ("MAKT",):
+                            orig = available_upper.get(tbl)
+                            if orig and orig not in tables:
+                                tables.append(orig)
+                                logger.info("schema_driven_agent: injected entity table %s for product filter", orig)
+            except Exception as _ent_err:
+                logger.debug("schema_driven_agent: entity table injection error: %s", _ent_err)
 
         logger.info("schema_driven_agent: selected_tables=%s", tables)
         schema_subset = schema_to_text(schema, table_subset=tables)
@@ -4230,13 +4258,21 @@ def run_schema_driven_sql_agent(
         similar: Optional[List[tuple]] = None
         if few_shot_examples:
             similar = [(ex.get("user_query") or "", ex.get("sql_query") or "") for ex in few_shot_examples if ex.get("sql_query")]
+        _intent_ctx = intent_context or ""
+        if _ft:
+            _intent_ctx += (
+                "\n\n[MANDATORY — user named these tables explicitly: "
+                + ", ".join(tables)
+                + ". Use ONLY these tables in FROM/JOIN; do not substitute a different table. "
+                + "If the user asked for last/first/top N rows, add ORDER BY on a time or id column from the schema.]"
+            )
         sql = schema_generate_sql(
             question,
             tables,
             schema_subset,
             client,
             similar_examples=similar,
-            intent_context=intent_context,
+            intent_context=_intent_ctx,
         )
         if not sql:
             logger.warning("schema_driven_agent: no SQL generated for question: %s", (question or "")[:80])

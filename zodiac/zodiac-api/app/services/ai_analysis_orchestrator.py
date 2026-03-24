@@ -19,7 +19,14 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from ..config.config import OPENAI_API_KEY, AI_INSIGHTS_MODEL, AI_FAST_MODEL
 from .ai_analysis_memory_store import AiAnalysisMemory, load_memory, save_memory, upsert_knowledge
-from .sap_sql_agent import run_sap_sql_agent, run_adaptive_sap_sql_agent, run_schema_driven_sql_agent, run_purchase_order_fallback, _serialize_value  # type: ignore
+from .sap_sql_agent import (
+    run_sap_sql_agent,
+    run_adaptive_sap_sql_agent,
+    run_schema_driven_sql_agent,
+    run_purchase_order_fallback,
+    SqlAgentResult,
+    _serialize_value,
+)  # type: ignore
 from .ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
 from .training_data_collector import log_query_execution, get_few_shot_examples
 from .sql_example_library import get_sql_examples_for_question
@@ -1069,6 +1076,122 @@ If result is empty, say so and suggest a refined question.
     sql_start = time.time()
 
     result = None
+    explicit_ids_q: List[str] = []
+    app_tables_resolved: List[str] = []
+    sap_forced_resolved: List[str] = []
+    # Explicit table names in the user message override generic keyword / template SQL paths.
+    try:
+        from .explicit_table_sql import (
+            clarification_unknown_tables,
+            extract_explicit_table_identifiers,
+            load_app_table_columns,
+            resolve_tables_for_explicit_intent,
+            should_clarify_app_table_ordering,
+            try_execute_explicit_app_table_sql,
+        )
+        from .schema_loader import _load_schema_ai_config, get_schema_dict
+
+        explicit_ids_q = extract_explicit_table_identifiers(user_query)
+        if explicit_ids_q:
+            _schema_orch = get_schema_dict(sql_db)
+            _sap_keys_orch = set(_schema_orch.keys())
+            app_tables_resolved, sap_forced_resolved, unknown_tbls = resolve_tables_for_explicit_intent(
+                explicit_ids_q, _sap_keys_orch
+            )
+            cfg_skip = [str(c) for c in (_load_schema_ai_config().get("skip_tables") or [])]
+            if unknown_tbls:
+                return OrchestratorResult(
+                    reply=clarification_unknown_tables(unknown_tbls, cfg_skip, list(_sap_keys_orch)[:40]),
+                    action="new",
+                    reason="explicit_table_unknown",
+                    sql="",
+                    rows_preview=None,
+                    memory_updated=False,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                )
+            if app_tables_resolved and sap_forced_resolved:
+                return OrchestratorResult(
+                    reply=(
+                        "This question references both **app** tables and **SAP** analytics tables. "
+                        "Ask about one catalog at a time (for example, only `ai_analysis_memory` or only `VBRK`)."
+                    ),
+                    action="new",
+                    reason="explicit_table_mixed_catalog",
+                    sql="",
+                    rows_preview=None,
+                    memory_updated=False,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                )
+            if app_tables_resolved and not sap_forced_resolved:
+                from .ai_analysis_memory_store import ensure_ai_analysis_memory_table
+
+                ensure_ai_analysis_memory_table(db)
+                if len(app_tables_resolved) > 1:
+                    return OrchestratorResult(
+                        reply="Please name one app table per question (multi-table app queries are not supported yet).",
+                        action="new",
+                        reason="explicit_app_multi_table",
+                        sql="",
+                        rows_preview=None,
+                        memory_updated=False,
+                        time_scope=time_scope,
+                        date_range=date_range,
+                        period_info=period_info,
+                    )
+                _atn = app_tables_resolved[0]
+                _ex = try_execute_explicit_app_table_sql(db, user_id, user_query, _atn)
+                if _ex is not None:
+                    _sql, _rows, _order_note = _ex
+                    result = SqlAgentResult(sql=_sql, rows=_rows)
+                    timings["sql_path_reason"] = "explicit_app_table"
+                else:
+                    if load_app_table_columns(db, _atn) is None:
+                        return OrchestratorResult(
+                            reply=f"Table `{_atn}` was not found in the app database.",
+                            action="new",
+                            reason="explicit_app_table_missing",
+                            sql="",
+                            rows_preview=None,
+                            memory_updated=False,
+                            time_scope=time_scope,
+                            date_range=date_range,
+                            period_info=period_info,
+                        )
+                    if should_clarify_app_table_ordering(db, _atn, user_query):
+                        return OrchestratorResult(
+                            reply=(
+                                "I need a column to order “last N rows” by (for example `updated_at` or `id`). "
+                                "Which column should I use?"
+                            ),
+                            action="new",
+                            reason="explicit_app_order_clarification",
+                            sql="",
+                            rows_preview=None,
+                            memory_updated=False,
+                            time_scope=time_scope,
+                            date_range=date_range,
+                            period_info=period_info,
+                        )
+                    return OrchestratorResult(
+                        reply=f"Could not run SQL against `{_atn}`. Check database permissions or try again.",
+                        action="new",
+                        reason="explicit_app_table_failed",
+                        sql="",
+                        rows_preview=None,
+                        memory_updated=False,
+                        time_scope=time_scope,
+                        date_range=date_range,
+                        period_info=period_info,
+                    )
+    except Exception as _explic_err:
+        logger.debug("explicit table routing: %s", _explic_err)
+
+    explicit_sap_only = bool(explicit_ids_q and sap_forced_resolved and not app_tables_resolved)
+
     # Negative / lowest billing LINE ITEMS for a year — MUST run before ai_query_memory.
     # Stored queries often wrongly aggregate SUM by calendar year across all years; users
     # then keep getting that SQL reused forever.
@@ -1084,9 +1207,13 @@ If result is empty, say so and suggest a refined question.
         from .sap_sql_agent import SqlAgentResult, _quote_catalog_sql_tables, _run_sql
 
         if (
-            is_negative_or_lowest_billing_year_query(user_query)
-            or is_lowest_years_by_sales_query(user_query)
-            or should_try_deterministic_sql_for_quality(user_query)
+            result is None
+            and not (app_tables_resolved or sap_forced_resolved)
+            and (
+                is_negative_or_lowest_billing_year_query(user_query)
+                or is_lowest_years_by_sales_query(user_query)
+                or should_try_deterministic_sql_for_quality(user_query)
+            )
         ):
             _schema = get_schema_dict(sql_db)
             if _schema:
@@ -1116,10 +1243,20 @@ If result is empty, say so and suggest a refined question.
         try:
             from .ai_analysis_constraint_validator import should_skip_sql_memory_reuse
             from .ai_query_memory_service import find_similar_stored_query
+            from .explicit_table_sql import stored_sql_covers_explicit_tables
             if should_skip_sql_memory_reuse(user_query):
                 logger.info("ai_query_memory: skipping reuse due to explicit filters in question")
             else:
                 stored_sql = find_similar_stored_query(db, user_query, user_id)
+                if (
+                    stored_sql
+                    and explicit_ids_q
+                    and not stored_sql_covers_explicit_tables(stored_sql, explicit_ids_q)
+                ):
+                    logger.info(
+                        "ai_query_memory: skipping reuse — question names explicit tables not in stored SQL"
+                    )
+                    stored_sql = None
                 if stored_sql:
                     from .sap_sql_agent import _quote_catalog_sql_tables, _run_sql, SqlAgentResult
                     from .sap_sql_precision_validator import validate_sql_precision_for_db
@@ -1160,7 +1297,11 @@ If result is empty, say so and suggest a refined question.
         )
         from .sap_sql_agent import _run_sql, SqlAgentResult
         last_rows = mem.last_rows()
-        if is_from_list_below_procurement_query(user_query) and last_rows:
+        if (
+            is_from_list_below_procurement_query(user_query)
+            and last_rows
+            and not explicit_sap_only
+        ):
             matnrs = get_material_numbers_from_dataframe(last_rows)
             if matnrs:
                 def _run_sql_fn(sql: str):
@@ -1188,6 +1329,7 @@ If result is empty, say so and suggest a refined question.
                 sql_db,
                 few_shot_examples=_few_shot,
                 intent_context=_intent_ctx,
+                forced_tables=sap_forced_resolved if explicit_sap_only else None,
             )
             if result and getattr(result, "rows", None):
                 logger.info("Schema-driven SQL agent returned %d rows", len(result.rows))
@@ -1196,6 +1338,23 @@ If result is empty, say so and suggest a refined question.
             logger.debug("Schema-driven agent failed: %s", schema_err)
         # 2) Fall back to adaptive (keyword/heuristic) then standard sap_sql_agent.
         if result is None or not getattr(result, "rows", None):
+            if explicit_sap_only:
+                timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
+                return OrchestratorResult(
+                    reply=(
+                        "I could not generate valid SQL using only the table(s) you named: "
+                        + ", ".join(f"`{t}`" for t in sap_forced_resolved)
+                        + ". Try simplifying the question or naming columns to filter on."
+                    ),
+                    action="new",
+                    reason="explicit_sap_forced_failed",
+                    sql="",
+                    rows_preview=None,
+                    memory_updated=False,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                )
             result = run_adaptive_sap_sql_agent(
                 user_query,
                 sql_db,
@@ -1206,6 +1365,23 @@ If result is empty, say so and suggest a refined question.
             if result and getattr(result, "rows", None):
                 timings["sql_path_reason"] = "llm_primary_adaptive"
     if result is None or not (getattr(result, "rows", None)):
+        if explicit_sap_only:
+            timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
+            return OrchestratorResult(
+                reply=(
+                    "I could not generate valid SQL using only the table(s) you named: "
+                    + ", ".join(f"`{t}`" for t in sap_forced_resolved)
+                    + ". Try simplifying the question or naming columns to filter on."
+                ),
+                action="new",
+                reason="explicit_sap_forced_failed",
+                sql="",
+                rows_preview=None,
+                memory_updated=False,
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info,
+            )
         logger.info("Adaptive SQL path returned no result; falling back to standard sap_sql_agent")
         result = run_sap_sql_agent(
             user_query,
@@ -1218,6 +1394,23 @@ If result is empty, say so and suggest a refined question.
             timings["sql_path_reason"] = "llm_primary_standard"
     # Purchase-order direct fallback: when all agents fail and question is about purchase orders, run EKPO aggregate
     if result is None or not getattr(result, "rows", None):
+        if explicit_sap_only:
+            timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
+            return OrchestratorResult(
+                reply=(
+                    "I could not generate valid SQL using only the table(s) you named: "
+                    + ", ".join(f"`{t}`" for t in sap_forced_resolved)
+                    + ". Try simplifying the question or naming columns to filter on."
+                ),
+                action="new",
+                reason="explicit_sap_forced_failed",
+                sql="",
+                rows_preview=None,
+                memory_updated=False,
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info,
+            )
         try:
             po_result = run_purchase_order_fallback(sql_db, user_query)
             if po_result and getattr(po_result, "rows", None):
@@ -1830,6 +2023,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                 sql_db,
                 few_shot_examples=_few_shot,
                 intent_context=_retry_intent,
+                forced_tables=sap_forced_resolved if explicit_sap_only else None,
             )
             if _retry and getattr(_retry, "rows", None):
                 _precision2 = validate_sql_precision_for_db(sql_db, _retry.sql, question=user_query)
@@ -1912,9 +2106,10 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     row_text = " ".join(json.dumps(r, default=str).lower() for r in preview) if preview else ""
     missing_focus = focus_terms and not any(term in row_text for term in focus_terms)
     asks_for_cost = any(w in q_tokens for w in {"cost", "price", "margin"})
-    if specific_entity and missing_focus:
+    if specific_entity and missing_focus and not (explicit_sap_only or app_tables_resolved):
         # Before giving up, attempt one targeted retry with an explicit filter instruction embedded
         # in the question. This catches cases where the first SQL pass missed the entity filter.
+        # Skip when the user already named explicit tables — do not inject LFA1/KNA1/MAKT hints.
         _entity_type = specific_entity.get("entity", "item")
         _entity_val = specific_entity.get("value", "")
         _retry_result = None
