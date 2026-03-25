@@ -1306,10 +1306,13 @@ If result is empty, say so and suggest a refined question.
 
             intent_schema = _load_schema_live(sql_db, max_columns_per_table=None)
             intent = extract_intent(user_query, intent_schema)
+            logger.info("🔥 USING INTENT PIPELINE (intent_sql) for: %s", (user_query or "")[:120])
+            logger.info("INTENT_JSON: %s", json.dumps(intent, default=str)[:1200])
 
             # Build SQL strictly from intent (no LLM SQL generation)
             plan = build_sql_plan(intent, intent_schema)
             sql = generate_sql(plan)
+            logger.info("INTENT_SQL: %s", (sql or "")[:1500])
 
             exec_start = time.time()
             rows = sql_db.execute(_sql_text(sql)).mappings().all()

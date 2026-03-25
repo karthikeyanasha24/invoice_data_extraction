@@ -64,6 +64,10 @@ def _extract_top_n(question: str, default: int = 5) -> int:
 
 def _detect_intent_type(question: str) -> str:
     q = (question or "").lower()
+    # Highest sales by year / "which years" is a time-series question (trend over year),
+    # not a product ranking question.
+    if re.search(r"\bwhich\s+years?\b", q):
+        return "trend"
     if re.search(r"\b(last|first|top)\s+\d+\s+rows?\b", q) or re.search(r"\b(raw|rows?)\b", q):
         # Compare/ranking override
         if re.search(r"\b(compare|vs\.?|versus)\b", q):
