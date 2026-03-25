@@ -38,6 +38,11 @@ from .adaptive_ai_context import (
     build_adaptive_query_profile,
     build_result_bound_summary_block,
 )
+from .intent_extractor import extract_intent
+from .intent_sql_planner import build_sql_plan, generate_sql
+from .result_validator_v2 import validate_result as validate_result_v2
+from .intent_summary import generate_summary as generate_intent_summary
+from .intent_charting import generate_chart_config as generate_intent_charts
 
 logger = logging.getLogger(__name__)
 
@@ -1288,6 +1293,117 @@ If result is empty, say so and suggest a refined question.
         logger.debug("explicit table routing: %s", _explic_err)
 
     explicit_sap_only = bool(explicit_ids_q and sap_forced_resolved and not app_tables_resolved)
+
+    # ------------------------------------------------------------
+    # STRICT INTENT-DRIVEN PIPELINE (no reinterpretation)
+    # ------------------------------------------------------------
+    # Applies to standard SAP analysis questions when no explicit table routing is in effect.
+    # Explicit table precedence stays intact; mixed app+sap handled earlier.
+    if result is None and action == "new" and sql_db is not None and not (app_tables_resolved or explicit_ids_q):
+        try:
+            from .schema_loader import load_schema as _load_schema_live
+            from sqlalchemy import text as _sql_text
+
+            intent_schema = _load_schema_live(sql_db, max_columns_per_table=None)
+            intent = extract_intent(user_query, intent_schema)
+
+            # Build SQL strictly from intent (no LLM SQL generation)
+            plan = build_sql_plan(intent, intent_schema)
+            sql = generate_sql(plan)
+
+            exec_start = time.time()
+            rows = sql_db.execute(_sql_text(sql)).mappings().all()
+            result_rows = [dict(r) for r in rows]
+            timings["sql_execution_ms"] = int((time.time() - exec_start) * 1000)
+            timings["sql_path_reason"] = "intent_sql"
+
+            validation = validate_result_v2(intent, sql, result_rows)
+            if not validation.get("valid"):
+                timings["total_ms"] = int((time.time() - perf_start) * 1000)
+                return OrchestratorResult(
+                    reply=json.dumps(
+                        {
+                            "error": "RESULT_MISMATCH",
+                            "reason": validation.get("errors"),
+                            "warnings": validation.get("warnings"),
+                        },
+                        default=str,
+                    ),
+                    action="new",
+                    reason="result_mismatch",
+                    sql=sql,
+                    rows_preview=None,
+                    memory_updated=False,
+                    charts=[],
+                    charts_blocked_reason="Result did not match intent; aborted before summary/chart.",
+                    performance=timings,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                    adaptive_context={"intent": intent, "validation": validation},
+                )
+
+            reply = generate_intent_summary(intent, result_rows, validation)
+            charts_data = generate_intent_charts(intent, result_rows, validation)
+            result_shape = analyze_sql_result_shape(result_rows, sql)
+
+            timings["total_ms"] = int((time.time() - perf_start) * 1000)
+            timings["row_count"] = len(result_rows)
+            timings["chart_count"] = len(charts_data or [])
+            timings["used_cache"] = False
+
+            mem.last_user_query = user_query
+            mem.last_sql = sql
+            mem.last_rows_json = json.dumps(_rows_preview(result_rows, limit=80), default=str)
+            mem.last_reply = reply
+            mem.last_charts_json = json.dumps(charts_data or [], default=str)
+            save_memory(db, mem)
+
+            return OrchestratorResult(
+                reply=reply,
+                action="new",
+                reason="intent_sql",
+                sql=sql,
+                rows_preview=_rows_preview(result_rows, limit=20),
+                memory_updated=True,
+                charts=charts_data,
+                charts_blocked_reason=None,
+                performance=timings,
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info,
+                adaptive_context={
+                    "intent": intent,
+                    "validation": validation,
+                    "result_shape": {
+                        "row_count": result_shape.get("row_count"),
+                        "column_count": result_shape.get("column_count"),
+                        "time_columns": result_shape.get("time_columns"),
+                        "measure_columns": result_shape.get("measure_columns"),
+                        "dimension_columns": (result_shape.get("dimension_columns") or [])[:20],
+                        "mixed_currency": result_shape.get("mixed_currency"),
+                        "wide_row_inspection": result_shape.get("wide_row_inspection"),
+                    },
+                },
+            )
+        except Exception as intent_err:
+            timings["total_ms"] = int((time.time() - perf_start) * 1000)
+            return OrchestratorResult(
+                reply=json.dumps(
+                    {"error": "INTENT_PIPELINE_FAILED", "reason": str(intent_err)}, default=str
+                ),
+                action="new",
+                reason="intent_pipeline_failed",
+                sql="",
+                rows_preview=None,
+                memory_updated=False,
+                charts=[],
+                charts_blocked_reason="Intent pipeline failed; aborted.",
+                performance=timings,
+                time_scope=time_scope,
+                date_range=date_range,
+                period_info=period_info,
+            )
 
     # Negative / lowest billing LINE ITEMS for a year — MUST run before ai_query_memory.
     # Stored queries often wrongly aggregate SUM by calendar year across all years; users

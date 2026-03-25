@@ -195,6 +195,8 @@ type AiAnalysisMeta = {
   compare?: unknown; charts?: any[]; multiModel?: any;
   /** Server-side intent + result-shape summary (adaptive pipeline) */
   adaptive_context?: {
+    intent?: Record<string, unknown>;
+    validation?: Record<string, unknown>;
     query_profile?: { kind?: string; tags?: string[]; explicit_tables?: string[]; flags?: Record<string, boolean> };
     result_shape?: Record<string, unknown>;
   };
