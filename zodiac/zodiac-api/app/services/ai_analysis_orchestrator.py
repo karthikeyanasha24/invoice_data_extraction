@@ -1306,6 +1306,8 @@ If result is empty, say so and suggest a refined question.
 
             intent_schema = _load_schema_live(sql_db, max_columns_per_table=None)
             intent = extract_intent(user_query, intent_schema)
+            print("🔥 USING INTENT PIPELINE")
+            print("INTENT:", json.dumps(intent, default=str)[:1200])
             logger.info("🔥 USING INTENT PIPELINE (intent_sql) for: %s", (user_query or "")[:120])
             logger.info("INTENT_JSON: %s", json.dumps(intent, default=str)[:1200])
 
@@ -1407,6 +1409,32 @@ If result is empty, say so and suggest a refined question.
                 date_range=date_range,
                 period_info=period_info,
             )
+
+    # Hard stop: legacy SQL engines are disabled for new data queries.
+    # If we reached this point without returning from the strict pipeline or explicit-table flow,
+    # abort instead of silently falling back to keyword/semantic/legacy agents.
+    if action == "new" and result is None:
+        timings["total_ms"] = int((time.time() - perf_start) * 1000)
+        return OrchestratorResult(
+            reply=json.dumps(
+                {
+                    "error": "LEGACY_PATH_DISABLED",
+                    "reason": "Strict intent pipeline was required but no result was produced.",
+                },
+                default=str,
+            ),
+            action="new",
+            reason="legacy_path_disabled_guard",
+            sql="",
+            rows_preview=None,
+            memory_updated=False,
+            charts=[],
+            charts_blocked_reason="Legacy SQL path disabled by design.",
+            performance=timings,
+            time_scope=time_scope,
+            date_range=date_range,
+            period_info=period_info,
+        )
 
     # Negative / lowest billing LINE ITEMS for a year — MUST run before ai_query_memory.
     # Stored queries often wrongly aggregate SUM by calendar year across all years; users

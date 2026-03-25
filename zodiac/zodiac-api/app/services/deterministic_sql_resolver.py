@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _DICT: Optional[Dict[str, Any]] = None
+LEGACY_DETERMINISTIC_SQL_RESOLVER_DISABLED = True
 
 
 def _load_dict() -> Dict[str, Any]:
@@ -210,6 +211,8 @@ def resolve_deterministic_sql(
     available_tables: Optional[List[str]] = None,
     schema_table_case: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
+    if LEGACY_DETERMINISTIC_SQL_RESOLVER_DISABLED:
+        raise RuntimeError("DISABLED: deterministic_sql_resolver is disabled; use strict intent pipeline.")
     """
     Resolve question to SQL using intent + semantic mapping + templates.
     Returns SQL or None (fallback to LLM).

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _DICTIONARY: Optional[Dict[str, Any]] = None
+LEGACY_SEMANTIC_SQL_RESOLVER_DISABLED = True
 
 
 def load_semantic_dictionary() -> Dict[str, Any]:
@@ -105,6 +106,8 @@ def resolve_to_sql(
     Step 4: Add JOIN for name table when dimension has name_column in another table
     Returns SQL string or None if resolution fails. Caller should validate and run.
     """
+    if LEGACY_SEMANTIC_SQL_RESOLVER_DISABLED:
+        raise RuntimeError("DISABLED: semantic_sql_resolver is disabled; use strict intent pipeline.")
     if not question or not question.strip():
         return None
     data = load_semantic_dictionary()
