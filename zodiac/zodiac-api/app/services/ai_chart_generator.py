@@ -115,6 +115,348 @@ def _apply_mixed_currency_note(charts: List[ChartSpec], rows: List[Dict[str, Any
         c0.description = (c0.description + " " + note).strip()
 
 
+def _extract_sql_filter_labels(sql: str) -> List[str]:
+    s = sql or ""
+    labels: List[str] = []
+
+    years = sorted(set(re.findall(r"SUBSTRING\s*\(\s*TRIM\s*\([^)]*fkdat[^)]*\)\s*,\s*1\s*,\s*4\s*\)\s*=\s*'((?:19|20)\d{2})'", s, flags=re.IGNORECASE)))
+    if years:
+        labels.append("year=" + ",".join(years))
+
+    m_cat = re.search(r"fktyp\"?\s*=\s*'([A-Za-z0-9]{1,10})'", s, flags=re.IGNORECASE)
+    if m_cat:
+        labels.append(f"billing_category={m_cat.group(1)}")
+
+    m_type = re.search(r"fkart\"?\s*=\s*'([A-Za-z0-9]{1,10})'", s, flags=re.IGNORECASE)
+    if m_type:
+        labels.append(f"billing_type={m_type.group(1)}")
+
+    m_curr = re.search(r"waerk\"?\s*=\s*'([A-Za-z]{3})'", s, flags=re.IGNORECASE)
+    if m_curr:
+        labels.append(f"currency={m_curr.group(1).upper()}")
+
+    return labels
+
+
+def _apply_sql_filter_context(charts: List[ChartSpec], sql: str) -> None:
+    if not charts:
+        return
+    labels = _extract_sql_filter_labels(sql)
+    if not labels:
+        return
+    suffix = " | Filters: " + ", ".join(labels)
+    for c in charts:
+        # Keep title compact and deterministic; dimensions still come from x/y keys.
+        c.title = (c.title or "Visualization") + suffix
+
+
+def is_raw_table_inspection_query(user_query: str) -> bool:
+    """Row/list inspection — prefer table, not a generic KPI bar chart."""
+    ql = (user_query or "").lower()
+    if re.search(r"\b(compare|vs\.?|versus)\b", ql):
+        return False
+    return bool(
+        re.search(r"\b(last|first|top)\s+\d+\s+rows?\b", ql)
+        or re.search(r"\blist\s+(\d+\s+)?(the\s+)?rows?\b", ql)
+        or re.search(r"\bshow\s+(me\s+)?(all\s+)?rows?\b", ql)
+        or re.search(r"\b(raw\s+)?(data|rows?)\s+(please|only)?\b", ql)
+    )
+
+
+def plan_compare_year_bar_chart(
+    merged_rows: List[Dict[str, Any]],
+    user_query: str,
+) -> Optional[List[ChartSpec]]:
+    """
+    Side-by-side / grouped bar: x = calendar_year, y = total_revenue (merged compare path).
+    """
+    if not merged_rows or len(merged_rows) < 2:
+        return None
+    data: List[Dict[str, Any]] = []
+    for r in merged_rows:
+        y = r.get("calendar_year")
+        v = r.get("total_revenue")
+        if y is None:
+            continue
+        data.append(
+            {
+                "calendar_year": str(y),
+                "total_revenue": float(v) if isinstance(v, (int, float)) else v,
+            }
+        )
+    if len(data) < 2:
+        return None
+    note = mixed_currency_disclaimer(data, "")
+    desc = "Total billing revenue by calendar year (from year-scoped SQL)."
+    if note:
+        desc += " " + note
+    y0, y1 = data[0]["calendar_year"], data[-1]["calendar_year"]
+    return [
+        ChartSpec(
+            chart_type="bar",
+            title=f"Revenue by year ({y0} vs {y1})",
+            description=desc,
+            data=data,
+            x_key="calendar_year",
+            y_keys=["total_revenue"],
+            colors=["#3b82f6", "#6366f1", "#10b981", "#f59e0b"],
+            show_legend=True,
+            show_grid=True,
+        )
+    ]
+
+
+def plan_adaptive_chart_specs(
+    rows: List[Dict[str, Any]],
+    user_query: str,
+    sql: str,
+    result_scope: Optional[Dict[str, Any]],
+    action: str,
+    *,
+    query_profile: Optional[Dict[str, Any]] = None,
+    result_shape: Optional[Dict[str, Any]] = None,
+) -> Optional[List[ChartSpec]]:
+    """
+    Data-driven chart selection before the LLM chart recommender.
+    Uses adaptive_ai_context profiles when provided (or builds them here).
+    Returns None to fall through to LLM.
+    """
+    if not rows:
+        return None
+    q = (user_query or "").lower()
+
+    try:
+        from .adaptive_ai_context import (
+            analyze_sql_result_shape,
+            build_adaptive_query_profile,
+            choose_dimension_column,
+            wants_table_first,
+        )
+
+        profile = query_profile or build_adaptive_query_profile(user_query)
+        shape = result_shape or analyze_sql_result_shape(rows, sql)
+    except Exception:
+        profile = {"kind": "general", "tags": [], "flags": {}}
+        shape = {}
+
+    if wants_table_first(profile, shape):
+        fd = _format_chart_data(rows, max_items=100)
+        return [
+            ChartSpec(
+                chart_type="table",
+                title="Query results" + _scope_suffix(result_scope),
+                description="Table-first view for row-level or wide result shape.",
+                data=fd,
+                show_legend=False,
+                show_grid=False,
+            )
+        ]
+
+    if is_raw_table_inspection_query(user_query):
+        fd = _format_chart_data(rows, max_items=80)
+        return [
+            ChartSpec(
+                chart_type="table",
+                title="Query results" + _scope_suffix(result_scope),
+                description="Row-level results as requested.",
+                data=fd,
+                show_legend=False,
+                show_grid=False,
+            )
+        ]
+
+    # Compare action with explicit year scope in result_scope
+    if action == "compare" and isinstance(result_scope, dict) and result_scope.get("kind") == "compare":
+        # Prefer LLM / merged path from orchestrator; no duplicate here
+        return None
+
+    time_keys: List[str] = list(shape.get("time_columns") or [])
+    if not time_keys and rows and isinstance(rows[0], dict):
+        for k in rows[0].keys():
+            lk = str(k).lower()
+            if lk in (
+                "fkdat",
+                "billing_date",
+                "date",
+                "month",
+                "year_month",
+                "period",
+                "calmonth",
+                "calendar_year",
+                "billing_year",
+                "year",
+                "gjahr",
+                "fiscal_year",
+                "fisc_year",
+            ):
+                time_keys.append(k)
+
+    numeric_cols = _detect_numeric_columns(rows)
+    categorical_cols = _detect_categorical_columns(rows)
+    dim_pick = choose_dimension_column(shape) if shape else None
+    if not dim_pick and categorical_cols:
+        dim_pick = categorical_cols[0]
+
+    trendish = profile.get("kind") == "trend" or bool(
+        re.search(r"\b(trend|over\s+time|monthly|each\s+month)\b", q)
+    )
+    use_line_for_time = time_keys and numeric_cols and len(rows) >= 3 and (
+        trendish or len(rows) >= 5 or profile.get("kind") == "trend"
+    )
+    if use_line_for_time:
+        tk = time_keys[0]
+        measures = shape.get("measure_columns") if shape else None
+        y_list = (
+            [m for m in (measures or []) if m in numeric_cols][:3]
+            if measures
+            else [numeric_cols[0]]
+        )
+        if not y_list:
+            y_list = [numeric_cols[0]]
+        fd = _format_chart_data(rows, max_items=60)
+        return [
+            ChartSpec(
+                chart_type="line",
+                title=f"Measures over {tk.replace('_', ' ')}",
+                description="Trend from query results (time axis from data).",
+                data=fd,
+                x_key=tk,
+                y_keys=y_list,
+                colors=["#3b82f6", "#10b981", "#f59e0b"],
+                show_legend=len(y_list) > 1,
+                show_grid=True,
+            )
+        ]
+
+    # Ranking: top/bottom + category + measure
+    if profile.get("kind") == "rank" or re.search(
+        r"\b(top|bottom|rank|largest|smallest|highest|lowest)\b", q
+    ):
+        if dim_pick and numeric_cols and len(rows) <= 45:
+            fd = _format_chart_data(rows, max_items=35)
+            return [
+                ChartSpec(
+                    chart_type="bar",
+                    title=f"{numeric_cols[0].replace('_', ' ').title()} by {dim_pick.replace('_', ' ').title()}",
+                    description="Ranking from SQL result.",
+                    data=fd,
+                    x_key=dim_pick,
+                    y_keys=[numeric_cols[0]],
+                    colors=["#3b82f6", "#6366f1"],
+                    show_legend=True,
+                    show_grid=True,
+                )
+            ]
+
+    # Single-row aggregate: table only (avoid fake single-bar chart)
+    if len(rows) == 1:
+        fd = _format_chart_data(rows, max_items=5)
+        return [
+            ChartSpec(
+                chart_type="table",
+                title="Summary" + _scope_suffix(result_scope),
+                description="Single-row aggregate — values below.",
+                data=fd,
+                show_legend=False,
+                show_grid=False,
+            )
+        ]
+
+    # Distribution / share
+    dist_q = profile.get("kind") == "distribution" or re.search(
+        r"\b(share|distribution|proportion|breakdown|percent)\b", q
+    )
+    if dist_q and dim_pick and numeric_cols:
+        fd = _format_chart_data(rows, max_items=min(len(rows), 40))
+        if len(rows) <= 8:
+            return [
+                ChartSpec(
+                    chart_type="pie",
+                    title=f"{numeric_cols[0].replace('_', ' ').title()} distribution",
+                    description="Share of categories in result set.",
+                    data=fd,
+                    name_key=dim_pick,
+                    value_key=numeric_cols[0],
+                    colors=["#3b82f6", "#6366f1", "#10b981", "#f59e0b", "#ef4444"],
+                    show_legend=True,
+                    show_grid=False,
+                )
+            ]
+        return [
+            ChartSpec(
+                chart_type="bar",
+                title=f"{numeric_cols[0].replace('_', ' ').title()} by {dim_pick.replace('_', ' ')}",
+                description="Distribution — bar used because category count is large for a pie.",
+                data=fd,
+                x_key=dim_pick,
+                y_keys=[numeric_cols[0]],
+                colors=["#3b82f6", "#6366f1"],
+                show_legend=True,
+                show_grid=True,
+            )
+        ]
+
+    smeasures = list(shape.get("measure_columns") or []) if shape else []
+    smeasures = [m for m in smeasures if m in numeric_cols]
+    if (
+        len(smeasures) >= 2
+        and dim_pick
+        and profile.get("kind") in ("aggregate", "general")
+        and not shape.get("time_columns")
+        and len(rows) <= 40
+    ):
+        fd = _format_chart_data(rows, max_items=35)
+        ys = smeasures[:3]
+        return [
+            ChartSpec(
+                chart_type="bar",
+                title="Multiple measures by category",
+                description="Grouped measures from SQL (same category axis).",
+                data=fd,
+                x_key=dim_pick,
+                y_keys=ys,
+                colors=["#3b82f6", "#6366f1", "#10b981", "#f59e0b"],
+                show_legend=True,
+                show_grid=True,
+            )
+        ]
+
+    # Year / period comparison already present in SQL result (e.g. GROUP BY calendar year)
+    years_in_q = list(dict.fromkeys(re.findall(r"\b((?:19|20)\d{2})\b", user_query or "")))
+    multi_year_question = len(set(years_in_q)) >= 2
+    compare_like = bool(
+        profile.get("kind") == "compare"
+        or re.search(r"\b(compare|comparison|vs\.?|versus|between|against)\b", q)
+        or re.search(r"\b(change|changed|difference)\b.*\bfrom\b.*\bto\b", q)
+        or multi_year_question
+    )
+    year_dim_keys: List[str] = []
+    if rows and isinstance(rows[0], dict):
+        for k in rows[0].keys():
+            lk = str(k).lower()
+            if lk in ("calendar_year", "billing_year", "fisc_year", "fiscal_year", "year", "gjahr"):
+                year_dim_keys.append(k)
+    if compare_like and year_dim_keys and len(rows) >= 2 and numeric_cols:
+        fd = _format_chart_data(rows, max_items=25)
+        ycol = year_dim_keys[0]
+        return [
+            ChartSpec(
+                chart_type="bar",
+                title=f"{numeric_cols[0].replace('_', ' ').title()} by {ycol.replace('_', ' ')}"
+                + _scope_suffix(result_scope),
+                description="Period comparison from SQL result (x-axis matches grouped period column).",
+                data=fd,
+                x_key=ycol,
+                y_keys=[numeric_cols[0]],
+                colors=["#3b82f6", "#6366f1", "#10b981", "#f59e0b"],
+                show_legend=True,
+                show_grid=True,
+            )
+        ]
+
+    return None
+
+
 def _scope_suffix(result_scope: Optional[Dict[str, Any]]) -> str:
     if not result_scope:
         return ""
@@ -302,6 +644,9 @@ def analyze_visualization_needs(
     action: str,
     sql: str = "",
     result_scope: Optional[Dict[str, Any]] = None,
+    *,
+    query_profile: Optional[Dict[str, Any]] = None,
+    result_shape: Optional[Dict[str, Any]] = None,
 ) -> List[ChartSpec]:
     """
     Analyze query results and determine appropriate visualizations.
@@ -318,7 +663,22 @@ def analyze_visualization_needs(
     if not rows or len(rows) == 0:
         logger.info("❌ No rows to visualize (rows is empty or None)")
         return []
-    
+
+    adaptive = plan_adaptive_chart_specs(
+        rows,
+        user_query,
+        sql,
+        result_scope,
+        action,
+        query_profile=query_profile,
+        result_shape=result_shape,
+    )
+    if adaptive:
+        logger.info("📊 Adaptive chart plan: %s", [c.chart_type for c in adaptive])
+        _apply_sql_filter_context(adaptive, sql)
+        _apply_mixed_currency_note(adaptive, rows, sql)
+        return adaptive
+
     logger.info(f"📊 Analyzing {len(rows)} rows for visualization")
     logger.info(f"📊 Sample row: {rows[0] if rows else 'None'}")
     
@@ -360,12 +720,37 @@ def analyze_visualization_needs(
         client = _get_client()
         
         sample_rows = rows[:5]
+        try:
+            from .adaptive_ai_context import (
+                analyze_sql_result_shape,
+                build_adaptive_query_profile,
+            )
+
+            _prof = query_profile or build_adaptive_query_profile(user_query)
+            _sh = result_shape or analyze_sql_result_shape(rows, sql)
+            shape_blurb = (
+                f"row_count={_sh.get('row_count')}; time_columns={_sh.get('time_columns')}; "
+                f"measures={(_sh.get('measure_columns') or [])[:6]}; "
+                f"dimensions={(_sh.get('dimension_columns') or [])[:6]}; "
+                f"mixed_currency={_sh.get('mixed_currency')}"
+            )
+            profile_blurb = json.dumps(
+                {"kind": _prof.get("kind"), "tags": _prof.get("tags"), "flags": _prof.get("flags")},
+                default=str,
+            )[:600]
+        except Exception:
+            shape_blurb = ""
+            profile_blurb = ""
+
         prompt = f"""
 You are a data visualization expert. Analyze this query result and recommend the best chart(s).
 
 User question: "{user_query}"
 
 SQL query: {sql[:500] if sql else "N/A"}
+
+Intent profile (follow this; do not contradict): {profile_blurb or "N/A"}
+Result shape: {shape_blurb or "N/A"}
 
 Sample data (first 5 rows):
 {json.dumps(sample_rows, default=str, indent=2)}
@@ -406,6 +791,8 @@ Rules:
 - For line/area charts: x_key = time/sequence column, y_keys = numeric columns
 - Max 3 charts per query
 - Only recommend charts that make sense for the data
+- Chart title and x_key MUST match actual column names in the sample (never title "by year" unless a year column exists in the data).
+- For compare / vs / two-period questions, prefer bar or grouped series only if the data includes a period or year column; otherwise use a table.
 - Chart title MUST reflect the user question specifically:
   * If the query is "total sales by year", title = "Total Sales by Year" (NOT "Total Sales by Billing Date")
   * If the query is "top customers by revenue", title = "Top Customers by Revenue"
@@ -503,6 +890,7 @@ Rules:
                 result_scope=result_scope,
                 sql=sql,
             )
+        _apply_sql_filter_context(charts, sql)
         _apply_mixed_currency_note(charts, rows, sql)
         return charts
     
@@ -520,6 +908,7 @@ Rules:
                 result_scope=result_scope,
                 sql=sql,
             )
+            _apply_sql_filter_context(charts, sql)
             _apply_mixed_currency_note(charts, rows, sql)
             return charts
         except Exception:
@@ -532,11 +921,13 @@ def _auto_generate_basic_charts(
     numeric_cols: List[str],
     categorical_cols: List[str],
     result_scope: Optional[Dict[str, Any]] = None,
+    sql: str = "",
 ) -> List[ChartSpec]:
     """
     Auto-generate basic charts when LLM doesn't provide recommendations.
     Creates sensible default visualizations based on data structure.
     """
+    _ = sql  # reserved for future title/context hints from executed SQL
     charts = []
     
     if not numeric_cols or not rows:

@@ -60,6 +60,7 @@ def generate_analytics_insights(
     global_stats: Optional[Dict[str, Any]] = None,
     representative_rows: Optional[List[Dict[str, Any]]] = None,
     result_scope: Optional[Dict[str, Any]] = None,
+    binding_block: str = "",
 ) -> Optional[Dict[str, Any]]:
     """
     Use LLM to produce:
@@ -91,11 +92,14 @@ def generate_analytics_insights(
                 if total is not None:
                     parts.append(f"  {col}: total={total}, kpi={kpi}")
         metrics_str = "\n".join(parts) if parts else ""
+    bind = (binding_block or "").strip()
+    bind_section = f"\n{bind}\n" if bind else ""
+
     prompt = f"""You are a SAP analytics assistant. Based on the user's question and the query result, write a concise analytics summary.
 
 User question:
 {question}
-
+{bind_section}
 Query result columns: {columns}
 
 Sample rows (first {len(preview)}):
@@ -120,6 +124,9 @@ STRICT RULES:
 - Required: when RESULT_SCOPE.kind == "limited", explicitly state that findings are based on the returned limited rows.
 - If GLOBAL_NUMERIC_STATS.count_negative == 0, say explicitly that there are no net line amounts < 0 in this SQL result set for the filters used.
 - If CURRENCY NOTE above lists multiple currencies, the executive_summary MUST state that revenue/amount totals mix currencies and are not additive in one currency unless broken down by WAERK/currency.
+- Forbidden: claiming years or periods are "not in the data" or "not available" when sample rows or GLOBAL_NUMERIC_STATS contain year-like columns or 4-digit year values that match the user's question.
+- If the user asked about specific years and those years appear in the result, state the numeric outcome for those periods using only values from GLOBAL_NUMERIC_STATS and the sample rows.
+- Avoid generic business filler (e.g. unrelated "focus on top customers") unless the question or result columns clearly support it.
 
 Write a JSON object with exactly these keys (no other text):
 - executive_summary: 1-2 sentences summarizing the main finding.

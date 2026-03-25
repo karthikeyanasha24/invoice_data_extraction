@@ -69,7 +69,7 @@ def classify_intent(question: str) -> IntentClassification:
         tags.append("product_material")
     if re.search(r"\b(industry|sector|brsch|t016)\b", q):
         tags.append("industry")
-    if re.search(r"\b(compare|versus| vs |difference\b)", q):
+    if re.search(r"\b(compare|versus|vs\.?|difference)\b", q):
         tags.append("compare")
 
     # SQL shape guidance for the LLM (short)
@@ -113,6 +113,11 @@ def classify_intent(question: str) -> IntentClassification:
 def build_intent_sql_prompt_block(question: str) -> str:
     """Compact block appended to schema-driven SQL prompts."""
     c = classify_intent(question)
+    try:
+        from .adaptive_ai_context import extend_intent_sql_prompt_lines
+        extra_lines = extend_intent_sql_prompt_lines(question)
+    except Exception:
+        extra_lines = []
     tags = ", ".join(c.tags) if c.tags else "(general)"
     lines = [
         "Intent classification (follow these; do not answer a different question):",
@@ -126,6 +131,7 @@ def build_intent_sql_prompt_block(question: str) -> str:
         lines.append(
             "- Month bucket is mandatory: SELECT month_bucket from VBRK.fkdat and GROUP BY month_bucket (do not return raw line-level fkdat rows for 'by month' questions)."
         )
+    lines.extend(extra_lines)
     return "\n".join(lines)
 
 

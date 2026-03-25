@@ -193,6 +193,11 @@ type AiAnalysisMeta = {
   action?: string; reason?: string; sql?: string;
   rows_preview?: Record<string, unknown>[];
   compare?: unknown; charts?: any[]; multiModel?: any;
+  /** Server-side intent + result-shape summary (adaptive pipeline) */
+  adaptive_context?: {
+    query_profile?: { kind?: string; tags?: string[]; explicit_tables?: string[]; flags?: Record<string, boolean> };
+    result_shape?: Record<string, unknown>;
+  };
   charts_blocked_reason?: string;
   time_scope?: string;
   date_range?: { min_date: string; max_date: string };
@@ -211,6 +216,7 @@ type AiAnalysisMeta = {
     used_cache?: boolean;
     row_count?: number;
     chart_count?: number;
+    sql_path_reason?: string;
   };
 };
 
@@ -1138,6 +1144,9 @@ function ChatPanel({
                       <div>
                         {m.meta.action && <span>Action: {m.meta.action}</span>}
                         {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
+                        {m.meta.adaptive_context?.query_profile?.kind && (
+                          <span> • Intent: {m.meta.adaptive_context.query_profile.kind}</span>
+                        )}
                         {m.meta.sql && <span> • SQL executed</span>}
                         {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} rows</span>}
                         {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
@@ -1602,13 +1611,15 @@ export default function DashboardAIAnalysis() {
           period_info: res?.period_info,
           needs_approval: res?.needs_approval,
           proposed_sql: res?.proposed_sql,
+          adaptive_context: res?.adaptive_context,
+          performance: res?.performance,
         };
 
         console.log('📊 Period Info:', meta.period_info, meta.date_range);
         console.log('📊 Extracted Charts:', meta.charts);
         console.log('📊 Has Charts:', Boolean(meta.charts && meta.charts.length > 0));
 
-        const hasMeta = Boolean(meta.action || meta.sql || meta.validation || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info || meta.needs_approval);
+        const hasMeta = Boolean(meta.action || meta.sql || meta.validation || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info || meta.needs_approval || meta.adaptive_context);
         setMsgs((prev) => [...prev, {
           role: 'assistant', content: reply,
           meta: hasMeta ? meta : undefined, section, ts: Date.now(),
@@ -1651,11 +1662,13 @@ export default function DashboardAIAnalysis() {
         period_info: res?.period_info,
         needs_approval: res?.needs_approval,
         proposed_sql: res?.proposed_sql,
+        adaptive_context: res?.adaptive_context,
+        performance: res?.performance,
       };
       setMsgs((prev) => [...prev, {
         role: 'assistant',
         content: res?.reply ?? 'Query executed and stored for future use.',
-        meta: (meta.sql || meta.validation || meta.rows_preview?.length || meta.needs_approval) ? meta : undefined,
+        meta: (meta.sql || meta.validation || meta.rows_preview?.length || meta.needs_approval || meta.adaptive_context) ? meta : undefined,
         section,
         ts: Date.now(),
       }]);

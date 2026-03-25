@@ -49,14 +49,14 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
   // Format a numeric value with the correct currency symbol
   // currencyCode: ISO 4217 code (e.g. "USD", "KRW") — uses $ only when actually USD
   const formatCurrency = (value: number, currencyCode?: string): string => {
-    const code = (currencyCode || 'USD').toUpperCase();
-    const symbol = CURRENCY_SYMBOLS[code] ?? (code + ' ');
+    const code = (currencyCode || '').toUpperCase();
+    const symbol = code ? (CURRENCY_SYMBOLS[code] ?? (code + ' ')) : '';
     const formatted = Math.abs(value) >= 1_000_000
       ? (value / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M'
       : Math.abs(value) >= 1_000
       ? Math.round(value).toLocaleString('en-US')
       : value.toFixed(2);
-    return `${symbol}${formatted}`;
+    return symbol ? `${symbol}${formatted}` : formatted;
   };
 
   // Check if a key/column likely represents currency/money
@@ -105,6 +105,16 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
   };
 
+  /** When rows mix WAERK/waers, a single-symbol Y-axis is misleading — use plain numbers on axis. */
+  const distinctCurrenciesInData = (data: any[]): string[] => {
+    const s = new Set<string>();
+    for (const row of data || []) {
+      const c = getCurrencyFromRow(row);
+      if (c) s.add(c);
+    }
+    return Array.from(s);
+  };
+
   const downloadChart = (chartTitle: string) => {
     // TODO: Implement SVG export
     console.log('Download chart:', chartTitle);
@@ -140,7 +150,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
         const barHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
-        const barCurrency = getDominantCurrency(chart.data);
+        const barCurrencies = distinctCurrenciesInData(chart.data);
+        const mixedCurrencyAxis = barCurrencies.length > 1;
+        const barCurrency = mixedCurrencyAxis ? undefined : getDominantCurrency(chart.data);
         const isStacked = chart.stacked || chart.chart_type === 'stacked_bar';
         return (
           <ResponsiveContainer width="100%" height={400}>
@@ -156,7 +168,14 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                 stroke="#64748b"
                 style={{ fontSize: '11px', fontWeight: 500 }}
                 tick={{ fill: '#475569' }}
-                tickFormatter={barHasCurrency ? (v) => formatCurrency(Number(v), barCurrency) : undefined}
+                tickFormatter={
+                  barHasCurrency
+                    ? (v) =>
+                        mixedCurrencyAxis
+                          ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })
+                          : formatCurrency(Number(v), barCurrency)
+                    : undefined
+                }
               />
               <Tooltip
                 contentStyle={{
@@ -200,12 +219,27 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
           console.error('📊 Line chart missing required keys:', { x_key: chart.x_key, y_keys: chart.y_keys });
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
+        const lineHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
+        const lineCurrencies = distinctCurrenciesInData(chart.data);
+        const lineMixedCurrencyAxis = lineCurrencies.length > 1;
+        const lineCurrency = lineMixedCurrencyAxis ? undefined : getDominantCurrency(chart.data);
         return (
           <ResponsiveContainer width="100%" height={400}>
             <LineChart data={chart.data}>
               {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />}
               <XAxis dataKey={chart.x_key} stroke="#64748b" style={{ fontSize: '12px' }} />
-              <YAxis stroke="#64748b" style={{ fontSize: '12px' }} />
+              <YAxis
+                stroke="#64748b"
+                style={{ fontSize: '12px' }}
+                tickFormatter={
+                  lineHasCurrency
+                    ? (v) =>
+                        lineMixedCurrencyAxis
+                          ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })
+                          : formatCurrency(Number(v), lineCurrency)
+                    : undefined
+                }
+              />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#FFFFFF',
@@ -213,6 +247,13 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   borderRadius: '12px',
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                }}
+                formatter={(value: any, name: string, props: any) => {
+                  const rowCurrency = getCurrencyFromRow(props?.payload) ?? lineCurrency;
+                  const formattedValue = isCurrencyField(name)
+                    ? formatCurrency(Number(value), rowCurrency)
+                    : Number(value).toLocaleString();
+                  return [formattedValue, name.replace(/_/g, ' ')];
                 }}
               />
               {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
@@ -237,7 +278,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
         const areaHasCurrency = chart.y_keys.some(k => isCurrencyField(k));
-        const areaCurrency = getDominantCurrency(chart.data);
+        const areaCurrencies = distinctCurrenciesInData(chart.data);
+        const areaMixedCurrencyAxis = areaCurrencies.length > 1;
+        const areaCurrency = areaMixedCurrencyAxis ? undefined : getDominantCurrency(chart.data);
         return (
           <ResponsiveContainer width="100%" height={400}>
             <AreaChart data={chart.data}>
@@ -246,7 +289,14 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
               <YAxis
                 stroke="#64748b"
                 style={{ fontSize: '12px' }}
-                tickFormatter={areaHasCurrency ? (v) => formatCurrency(Number(v), areaCurrency) : undefined}
+                tickFormatter={
+                  areaHasCurrency
+                    ? (v) =>
+                        areaMixedCurrencyAxis
+                          ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })
+                          : formatCurrency(Number(v), areaCurrency)
+                    : undefined
+                }
               />
               <Tooltip
                 contentStyle={{
@@ -443,7 +493,9 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
       {charts.map((chart, index) => {
         try {
           const chartTypeIcon = chart.chart_type === 'table' ? '📋' : chart.chart_type === 'pie' ? '🥧' : chart.chart_type === 'line' ? '📈' : chart.chart_type === 'area' || chart.chart_type === 'stacked_area' ? '📉' : '📊';
-          
+          const mixedCurr =
+            chart.chart_type !== 'table' && distinctCurrenciesInData(chart.data).length > 1;
+
           return (
             <div 
               key={index} 
@@ -465,6 +517,14 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700 border border-purple-200">
                         <TrendingUp className="h-3 w-3" />
                         Stacked
+                      </span>
+                    )}
+                    {mixedCurr && (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-900 border border-amber-200"
+                        title="Values use more than one currency code — compare per row, not on a single money axis"
+                      >
+                        Mixed currencies
                       </span>
                     )}
                   </div>

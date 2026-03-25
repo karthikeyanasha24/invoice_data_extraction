@@ -3684,7 +3684,7 @@ Key rules for SAP data:
             from ..services.ai_analysis_orchestrator import OrchestratorResult
             from ..services.ai_chart_generator import analyze_visualization_needs, chart_specs_to_json
             try:
-                from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
+                from ..analysis import compute_metrics, generate_analytics_insights, generate_chart_from_rows
             except ImportError:
                 compute_metrics = None
                 generate_analytics_insights = None
@@ -3699,7 +3699,15 @@ Key rules for SAP data:
                 _select_representative_rows_for_llm,
                 _enforce_narrative_stats_consistency,
             )
+            from ..services.adaptive_ai_context import (
+                analyze_sql_result_shape,
+                build_adaptive_query_profile,
+                build_result_bound_summary_block,
+            )
             result_scope = _build_result_scope(rows, quoted_sql)
+            _ap_profile = build_adaptive_query_profile(question)
+            _ap_shape = analyze_sql_result_shape(rows, quoted_sql)
+            _ap_bind = build_result_bound_summary_block(_ap_profile, _ap_shape)
             global_stats = _compute_global_numeric_stats(rows, question=question, result_scope=result_scope)
             preview_rows_for_llm = _select_representative_rows_for_llm(rows, global_stats, max_rows=20)
             preview = preview_rows_for_llm
@@ -3716,13 +3724,20 @@ Key rules for SAP data:
                         global_stats=global_stats,
                         representative_rows=preview_rows_for_llm,
                         result_scope=result_scope,
+                        binding_block=_ap_bind,
                     )
                 except Exception:
                     pass
             charts_data = None
             try:
                 chart_specs = analyze_visualization_needs(
-                    rows, question, "new", quoted_sql, result_scope=result_scope
+                    rows,
+                    question,
+                    "new",
+                    quoted_sql,
+                    result_scope=result_scope,
+                    query_profile=_ap_profile,
+                    result_shape=_ap_shape,
                 )
                 if chart_specs:
                     charts_data = chart_specs_to_json(chart_specs)
@@ -3731,6 +3746,8 @@ Key rules for SAP data:
             from openai import OpenAI
             client = OpenAI(api_key=ai_openai_key)
             summarization_prompt = f"""You are a data analyst. The user asked: "{question}"
+
+{_ap_bind}
 
 SQL executed:
 {quoted_sql[:1500]}

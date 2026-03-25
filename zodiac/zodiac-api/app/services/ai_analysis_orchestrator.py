@@ -33,6 +33,11 @@ from .sql_example_library import get_sql_examples_for_question
 from .query_cache import find_similar_cached_query, cache_query_result
 from .multi_llm_client import get_multi_llm_client, get_best_available_model, smart_chat_completion
 from .sql_generation_sanitizers import sanitize_generated_sap_sql
+from .adaptive_ai_context import (
+    analyze_sql_result_shape,
+    build_adaptive_query_profile,
+    build_result_bound_summary_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,8 @@ class OrchestratorResult:
     # Analytics layer: KPIs and executive insights (after SQL execution)
     metrics: Optional[Dict[str, Any]] = None  # { column: { total, avg, max, min, kpi_type } }
     analytics_insights: Optional[Dict[str, Any]] = None  # { executive_summary, key_metrics[], insights[], recommendations[] }
+    # Adaptive pipeline: intent + result shape (for UI + debugging; keeps answers result-bound)
+    adaptive_context: Optional[Dict[str, Any]] = None
     # Andy's training loop: when LLM fails, ChatGPT proposes SQL → user approves → store
     needs_approval: bool = False
     proposed_sql: Optional[str] = None
@@ -117,12 +124,18 @@ def _should_force_new_action(user_query: str) -> bool:
     """
     Detect queries that definitely need new SQL execution.
     This prevents misclassification of data queries as "follow-up".
+    Does NOT apply to period-compare questions (handled first in _decide_action).
     """
     q = (user_query or "").strip().lower()
     if not q:
         return False
-    
+
     # Time-based queries (different periods than default 30-day context)
+    if re.search(r"\b(?:19|20)\d{2}\b", q):
+        has_time = True
+    else:
+        has_time = False
+
     time_indicators = [
         "year", "month", "quarter", "last year", "this year", "next year",
         "2020", "2021", "2022", "2023", "2024", "2025", "2026",
@@ -148,7 +161,7 @@ def _should_force_new_action(user_query: str) -> bool:
     ]
     
     # Check for combinations that indicate new data queries
-    has_time = any(t in q for t in time_indicators)
+    has_time = has_time or any(t in q for t in time_indicators)
     has_agg = any(a in q for a in agg_keywords)
     has_data = any(d in q for d in data_keywords)
     
@@ -169,7 +182,17 @@ def _should_force_new_action(user_query: str) -> bool:
 
 
 def _decide_action(client: OpenAI, user_query: str, mem: AiAnalysisMemory) -> Tuple[str, str]:
-    # Fast keyword-based detection first (avoid unnecessary LLM call)
+    # Period-over-period billing/revenue compare must stay on compare path (not generic 'new').
+    try:
+        from .compare_query_router import should_route_period_compare
+
+        if should_route_period_compare(user_query):
+            logger.info("📊 Routing as compare (period / revenue juxtaposition)")
+            return "compare", "period_compare_detected"
+    except Exception as _cmp_err:
+        logger.debug("compare routing check: %s", _cmp_err)
+
+    # Fast keyword-based detection (avoid unnecessary LLM call)
     if _should_force_new_action(user_query):
         logger.info(f"🚀 Forcing 'new' action for data query: {user_query[:100]}")
         return "new", "data_query_detected_by_keywords"
@@ -898,25 +921,36 @@ Answer concisely using MARKDOWN formatting:
 
     # compare: run multiple subqueries, compare numeric summaries, then summarize differences
     if action == "compare":
-        subqueries = _split_compare_query(client, user_query)
+        from .compare_query_router import (
+            build_billing_revenue_subqueries_for_years,
+            extract_distinct_calendar_years,
+            merge_year_compare_rows_for_chart,
+            run_compare_subquery_with_schema_pipeline,
+            should_route_period_compare,
+        )
+
+        sql_db = sap_db or db
+        knowledge = mem.knowledge()
+        knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
+        years = extract_distinct_calendar_years(user_query)
+        subqueries: List[str] = []
+        if should_route_period_compare(user_query) and len(years) >= 2:
+            subqueries = build_billing_revenue_subqueries_for_years(years[:2])
+        if len(subqueries) < 2:
+            subqueries = _split_compare_query(client, user_query)
         if len(subqueries) < 2:
             action = "new"
         else:
-            sql_db = sap_db or db
-            knowledge = mem.knowledge()
-            knowledge_context = "\n".join(str(v) for v in knowledge.values()) if knowledge else None
             datasets: List[Tuple[str, List[Dict[str, Any]]]] = []
             sqls: List[str] = []
             for sq in subqueries[:3]:
-                few_shot = get_sql_examples_for_question(
-                    sq, additional_examples=get_few_shot_examples(db, 2)
-                )
-                r = run_sap_sql_agent(
-                    sq, sql_db,
-                    knowledge_context=knowledge_context,
-                    time_scope=time_scope,
-                    few_shot_examples=few_shot,
-                )
+
+                def _few_for(s: str):
+                    return get_sql_examples_for_question(
+                        s, additional_examples=get_few_shot_examples(db, 2)
+                    )
+
+                r = run_compare_subquery_with_schema_pipeline(sq, sql_db, _few_for)
                 if not r or not r.rows:
                     datasets.append((sq, []))
                     sqls.append(r.sql if r else "")
@@ -924,26 +958,35 @@ Answer concisely using MARKDOWN formatting:
                     datasets.append((sq, r.rows))
                     sqls.append(r.sql)
             compare_summary = _compare_numeric(datasets)
+            year_labels = years[: len(datasets)] if len(years) >= len(datasets) else []
+            merged_compare_rows = (
+                merge_year_compare_rows_for_chart(year_labels, datasets) if len(year_labels) >= 2 else []
+            )
             prompt = f"""
 You are a data analyst. The user asked for a comparison:
 "{user_query}"
 
-We executed these sub-questions:
+We executed these sub-questions (each should filter one calendar year on billing date FKDAT when applicable):
 {json.dumps(subqueries, indent=2)}
 
-Comparison summary (auto-computed numeric sums/means):
+Comparison summary (auto-computed from SQL result rows — ONLY source of truth for numbers):
 {json.dumps(compare_summary, indent=2)}
 
-Write a DEEP comparison analysis using MARKDOWN formatting:
-- Start with **executive summary** (biggest difference and business impact)
-- Use ### main heading, #### subheadings for each comparison aspect
-- Use **bold** for important differences, numbers, and percentages
-- Include % change and absolute differences
-- Use bullet points to organize findings
-- Add > blockquote for the most important strategic insight
-- Use the correct currency symbol per the data: $ for USD, ₩ for KRW, € for EUR, £ for GBP, or 3-letter code otherwise. Never use $ for non-USD values.
-- Explain WHY the differences matter for business strategy
-If data is missing for a dataset, mention it clearly.
+Merged year totals (when available):
+{json.dumps(merged_compare_rows, default=str)}
+
+STRICT RULES:
+- Use ONLY the numeric values in the JSON above. Do NOT say years are "missing" or "not in the data" if merged year totals or dataset numeric sums are present.
+- If merged year rows list calendar_year and total_revenue, state the two totals and the absolute and % change between them in the executive summary.
+- If a dataset has row_count 0 or empty numeric sums, say that period returned no rows — do not generalize to "system cannot query years".
+- If multiple currencies appear in row samples (WAERK/waers), state that totals may mix currencies; never imply a single clean total.
+- Do NOT substitute a generic story (e.g. "focus on top customers") unless the comparison summary is actually about customers.
+
+Write a comparison using MARKDOWN:
+- **Executive summary** with concrete numbers from the JSON
+- ### Details with bullets, **bold** figures, % change where both years have totals
+- > blockquote for the main insight
+- Correct currency symbols from data (never $ for non-USD)
 """
             
             try:
@@ -964,37 +1007,71 @@ If data is missing for a dataset, mention it clearly.
                     max_tokens=800,
                 )
                 reply = (resp.choices[0].message.content or "").strip()
-            # update memory to last dataset (helps follow-ups)
-            last_sql = next((s for s in reversed(sqls) if s), "")
+            # update memory — expose merged year rows when present (true compare shape)
+            last_sql = "\n-- next query --\n".join(s for s in sqls if s)
             last_rows = next((rows for _, rows in reversed(datasets) if rows), [])
-            
-            # Generate comparison charts
+            display_rows = merged_compare_rows if merged_compare_rows else last_rows
+
+            # Generate comparison charts: year on x-axis when merged totals exist
             charts_data = None
             try:
-                if last_rows:
-                    chart_specs = analyze_visualization_needs(last_rows, user_query, "compare", last_sql)
-                    if chart_specs:
-                        charts_data = chart_specs_to_json(chart_specs)
-                        logger.info(f"Generated {len(charts_data)} comparison chart(s)")
+                from .ai_chart_generator import plan_compare_year_bar_chart
+
+                chart_specs = None
+                if merged_compare_rows:
+                    chart_specs = plan_compare_year_bar_chart(merged_compare_rows, user_query)
+                if not chart_specs and last_rows:
+                    _cmp_rows = display_rows if display_rows else last_rows
+                    chart_specs = analyze_visualization_needs(
+                        last_rows,
+                        user_query,
+                        "compare",
+                        last_sql,
+                        result_scope={"kind": "compare", "years": year_labels},
+                        query_profile=build_adaptive_query_profile(user_query),
+                        result_shape=analyze_sql_result_shape(_cmp_rows, last_sql),
+                    )
+                if chart_specs:
+                    charts_data = chart_specs_to_json(chart_specs)
+                    logger.info(f"Generated {len(charts_data)} comparison chart(s)")
             except Exception as chart_err:
                 logger.warning(f"Comparison chart generation failed: {chart_err}")
-            
+
             mem.last_user_query = user_query
             mem.last_sql = last_sql
-            mem.last_rows_json = json.dumps(_rows_preview(last_rows, limit=80), default=str)
+            mem.last_rows_json = json.dumps(_rows_preview(display_rows, limit=80), default=str)
             save_memory(db, mem)
+            _cmp_shape_rows = display_rows if display_rows else last_rows
+            _cmp_rs = analyze_sql_result_shape(_cmp_shape_rows or [], last_sql)
+            _cmp_qp = build_adaptive_query_profile(user_query)
             return OrchestratorResult(
                 reply=reply or "Comparison complete, but I couldn’t generate a narrative summary.",
                 action="compare",
                 reason=reason,
                 sql=last_sql,
-                rows_preview=_rows_preview(last_rows) if last_rows else None,
-                compare={"subqueries": subqueries, "sqls": sqls, "summary": compare_summary},
+                rows_preview=_rows_preview(display_rows) if display_rows else None,
+                compare={
+                    "subqueries": subqueries,
+                    "sqls": sqls,
+                    "summary": compare_summary,
+                    "merged_year_rows": merged_compare_rows,
+                    "years": year_labels,
+                },
                 memory_updated=True,
                 charts=charts_data,
                 time_scope=time_scope,
                 date_range=date_range,
-                period_info=period_info
+                period_info=period_info,
+                adaptive_context={
+                    "query_profile": _cmp_qp,
+                    "result_shape": {
+                        "row_count": _cmp_rs.get("row_count"),
+                        "column_count": _cmp_rs.get("column_count"),
+                        "time_columns": _cmp_rs.get("time_columns"),
+                        "measure_columns": _cmp_rs.get("measure_columns"),
+                        "mixed_currency": _cmp_rs.get("mixed_currency"),
+                    },
+                },
             )
 
     # reuse: re-run last SQL if we have it, otherwise treat as new
@@ -2010,6 +2087,51 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     except Exception:
         pass
 
+    # If explicit constraints still do not match executed SQL after retries,
+    # stop before narrative/chart generation to avoid misleading answers.
+    try:
+        from .ai_analysis_constraint_validator import (
+            extract_user_constraints,
+            validate_sql_against_user_constraints,
+            build_charts_blocked_reason,
+        )
+
+        _c = extract_user_constraints(user_query)
+        _has_explicit = (
+            bool(_c.years)
+            or bool(_c.billing_category or _c.billing_type)
+            or bool(_c.currency_code)
+            or _c.wants_count
+            or _c.wants_sum
+        )
+        if _has_explicit:
+            _ok_final, _fail_final = validate_sql_against_user_constraints(result.sql, user_query)
+            if not _ok_final:
+                _blocked = build_charts_blocked_reason(_fail_final) or "Generated SQL did not satisfy requested filters."
+                timings["sql_path_reason"] = (timings.get("sql_path_reason") or "none") + "|constraint_rejected"
+                timings["total_ms"] = int((time.time() - perf_start) * 1000)
+                return OrchestratorResult(
+                    reply=(
+                        "I could not safely answer this yet because the generated SQL did not match your requested filters.\n\n"
+                        f"Reason: {_blocked}\n\n"
+                        "Please confirm the exact filter values (year, billing category/type, currency, and metric count vs total), "
+                        "or click **Suggest SQL** and approve a corrected query."
+                    ),
+                    action="new",
+                    reason="constraint_validation_failed",
+                    sql=result.sql,
+                    rows_preview=None,
+                    memory_updated=False,
+                    charts=[],
+                    charts_blocked_reason=_blocked,
+                    performance=timings,
+                    time_scope=time_scope,
+                    date_range=date_range,
+                    period_info=period_info,
+                )
+    except Exception:
+        pass
+
     # Invoice-bot result shaping: dedupe, aggregate by customer, filter by product name, apply display labels
     try:
         from .invoice_bot_helpers import (
@@ -2095,6 +2217,9 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     # IMPORTANT: All numeric values and rankings MUST come from the SQL result rows only.
     # We do NOT allow the model to invent numbers or reuse stale narrative context.
     result_scope = _build_result_scope(result.rows, result.sql)
+    query_profile = build_adaptive_query_profile(user_query)
+    result_shape = analyze_sql_result_shape(result.rows, result.sql)
+    adaptive_summary_binding = build_result_bound_summary_block(query_profile, result_shape)
     global_stats = _compute_global_numeric_stats(result.rows, question=user_query, result_scope=result_scope)
     preview_rows_for_llm = _select_representative_rows_for_llm(result.rows, global_stats, max_rows=20)
     preview = _rows_preview(preview_rows_for_llm, limit=20)
@@ -2103,7 +2228,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
     metrics_out = None
     analytics_insights_out = None
     try:
-        from ..analytics import compute_metrics, generate_analytics_insights, generate_chart_from_rows
+        from ..analysis import compute_metrics, generate_analytics_insights, generate_chart_from_rows
         metrics_out = compute_metrics(result.rows)
         # Provide global numeric stats so the LLM cannot claim "all zeros" based only on the first page.
         analytics_insights_out = generate_analytics_insights(
@@ -2114,6 +2239,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
             global_stats=global_stats,
             representative_rows=preview_rows_for_llm,
             result_scope=result_scope,
+            binding_block=adaptive_summary_binding,
         )
     except Exception as analytics_err:
         logger.debug("Analytics layer skipped: %s", analytics_err)
@@ -2279,6 +2405,8 @@ You are an expert SAP sales/finance analyst.
 User question:
 {user_query}
 
+{adaptive_summary_binding}
+
 SQL executed:
 ```sql
 {result.sql}
@@ -2292,6 +2420,9 @@ STRICT RULES (do NOT break these):
 - All numeric values, rankings, and comparisons MUST come from GLOBAL_NUMERIC_STATS above (not from the representative rows alone).
 - Do NOT reuse or copy text from any previous answer or dashboard.
 - Do NOT invent totals, averages, or percentages that cannot be computed from GLOBAL_NUMERIC_STATS (and visible representative rows only for examples).
+- Do NOT claim that years or time periods are "missing from the data" if sample rows or GLOBAL_NUMERIC_STATS include year-like fields (calendar_year, year, gjahr, fkdat, billing_year) or if 4-digit years appear as values in the result.
+- If the question names specific calendar years and those years appear as values in the result, summarize and compare using numbers from GLOBAL_NUMERIC_STATS and the rows — do not say the system cannot show those years.
+- Recommendations must be grounded in this result set; avoid generic advice (e.g. "focus on top customers") unless the question or columns are clearly about customer ranking or segmentation.
 - If a value is not visible in the rows, say that you cannot see it instead of guessing.
 - If the question is about negative/lowest billing LINE amounts:
   * If `count_negative = 0`, you MUST state that there are no net line amounts < 0 in this SQL result set.
@@ -2374,6 +2505,8 @@ Write a clear MARKDOWN answer:
                 "new",
                 result.sql,
                 result_scope=result_scope,
+                query_profile=query_profile,
+                result_shape=result_shape,
             )
             timings["chart_generation_ms"] = int((time.time() - chart_start) * 1000)
             
@@ -2398,11 +2531,20 @@ Write a clear MARKDOWN answer:
             # Analytics layer fallback: one auto bar chart if no chart specs
             if (not charts_data or len(charts_data) == 0):
                 try:
-                    from ..analytics import generate_chart_from_rows
-                    auto_chart = generate_chart_from_rows(result.rows, title="Result", return_base64=True)
-                    if auto_chart:
-                        charts_data = [auto_chart]
-                        logger.info("Analytics layer: added auto bar chart")
+                    from ..analysis import generate_chart_from_rows
+                    from .ai_chart_generator import is_raw_table_inspection_query
+
+                    if is_raw_table_inspection_query(user_query) or len(result.rows) <= 1:
+                        logger.info(
+                            "Skipping generic auto bar chart (raw row inspection or single-row aggregate)"
+                        )
+                    else:
+                        auto_chart = generate_chart_from_rows(
+                            result.rows, title="Result", return_base64=True
+                        )
+                        if auto_chart:
+                            charts_data = [auto_chart]
+                            logger.info("Analytics layer: added auto bar chart")
                 except Exception as ac_err:
                     logger.debug("Auto chart fallback skipped: %s", ac_err)
         except Exception as chart_err:
@@ -2533,6 +2675,19 @@ Write a clear MARKDOWN answer:
         timings.get("chart_generation_ms", 0),
     )
 
+    _ac_payload = {
+        "query_profile": query_profile,
+        "result_shape": {
+            "row_count": result_shape.get("row_count"),
+            "column_count": result_shape.get("column_count"),
+            "time_columns": result_shape.get("time_columns"),
+            "measure_columns": result_shape.get("measure_columns"),
+            "dimension_columns": (result_shape.get("dimension_columns") or [])[:20],
+            "mixed_currency": result_shape.get("mixed_currency"),
+            "wide_row_inspection": result_shape.get("wide_row_inspection"),
+        },
+    }
+
     return OrchestratorResult(
         reply=reply or "Query executed, but I couldn’t generate a summary.",
         action="new",
@@ -2550,6 +2705,7 @@ Write a clear MARKDOWN answer:
         analysis_plan=analysis_plan_out,
         metrics=metrics_out,
         analytics_insights=analytics_insights_out,
+        adaptive_context=_ac_payload,
     )
 
 
