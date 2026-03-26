@@ -297,8 +297,10 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
 
     # Map logical dimensions to sales_analytics columns
     dim_cols: List[str] = []
+    logical_dims: List[str] = []
     for d in dims:
         logical = str(d.get("logical") or "").lower()
+        logical_dims.append(logical)
         if logical == "year":
             dim_cols.append("year")
         elif logical == "month":
@@ -315,6 +317,7 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
             # industry not guaranteed in safe layer unless KNA1/T016T is added
             dim_cols.append("customer_id")
     dim_cols = list(dict.fromkeys(dim_cols))
+    logical_dims = list(dict.fromkeys(logical_dims))
 
     metric_alias = str(metric.get("alias") or "value")
     if metric_logical == "count":
@@ -324,6 +327,17 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
 
     select_parts: List[str] = [f"{c}" for c in dim_cols]
     select_parts.append(f"{metric_expr} AS {metric_alias}")
+
+    # HARD RULE: when intent is year-based sales trend/comparison without extra breakdowns,
+    # SQL MUST return year + total_sales only.
+    year_only_request = (
+        "year" in logical_dims
+        and metric_logical in ("revenue", "sales", "amount", "count")
+        and not any(d in logical_dims for d in ("product", "customer", "country", "currency", "industry"))
+    )
+    if year_only_request:
+        dim_cols = ["year"]
+        select_parts = [f"{dim_cols[0]}", f"{metric_expr} AS {metric_alias}"]
 
     where_parts: List[str] = []
     for f in filters:

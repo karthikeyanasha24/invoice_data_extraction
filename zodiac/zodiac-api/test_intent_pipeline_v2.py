@@ -67,6 +67,14 @@ class TestSqlPlanner(unittest.TestCase):
         self.assertIn("SUBSTRING", sql)  # year extraction
         self.assertIn("IN ('1998', '1999')", sql)
 
+    def test_sales_by_year_hard_rule_no_product_grouping(self):
+        i = extract_intent("Sales by year", SCHEMA)
+        plan = build_sql_plan(i, SCHEMA)
+        sql = generate_sql(plan)
+        self.assertIn("SELECT\n    year,", sql)
+        self.assertIn("AS total_sales", sql)
+        self.assertIn("GROUP BY year", sql)
+
 
 class TestValidatorSummaryChart(unittest.TestCase):
     def test_validator_blocks_missing_dim(self):
@@ -79,7 +87,7 @@ class TestValidatorSummaryChart(unittest.TestCase):
     def test_summary_ranking(self):
         i = extract_intent("Top 2 customers by revenue", SCHEMA)
         # mimic planner output columns (customer + value)
-        rows = [{"customer": "C1", "value": 10.0}, {"customer": "C2", "value": 9.0}]
+        rows = [{"customer": "C1", "total_sales": 10.0}, {"customer": "C2", "total_sales": 9.0}]
         v = validate_result(i, "x", rows)
         self.assertTrue(v["valid"])
         s = generate_summary(i, rows, v)
@@ -87,7 +95,7 @@ class TestValidatorSummaryChart(unittest.TestCase):
 
     def test_chart_trend(self):
         i = extract_intent("Revenue trend by year", SCHEMA)
-        rows = [{"year": "1998", "value": 1.0}, {"year": "1999", "value": 2.0}, {"year": "2000", "value": 3.0}]
+        rows = [{"year": "1998", "total_sales": 1.0}, {"year": "1999", "total_sales": 2.0}, {"year": "2000", "total_sales": 3.0}]
         v = validate_result(i, "x", rows)
         self.assertTrue(v["valid"])
         charts = generate_chart_config(i, rows, v)

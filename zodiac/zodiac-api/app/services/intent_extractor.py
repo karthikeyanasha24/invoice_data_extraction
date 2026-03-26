@@ -199,15 +199,15 @@ def _map_metric(schema: Dict[str, List[str]], logical_metric: str) -> MetricSpec
     # Revenue/sales for SAP billing: prefer VBRP.NETWR (line net value)
     if lm in ("revenue", "sales", "amount"):
         if "VBRP" in schema_u and any(str(c).upper() == "NETWR" for c in schema_u["VBRP"]):
-            return MetricSpec(logical="revenue", aggregation="SUM", column_ref=ColumnRef(table="VBRP", column="NETWR"), alias="value")
+            return MetricSpec(logical="revenue", aggregation="SUM", column_ref=ColumnRef(table="VBRP", column="NETWR"), alias="total_sales")
         if "VBRK" in schema_u and any(str(c).upper() == "NETWR" for c in schema_u["VBRK"]):
-            return MetricSpec(logical="revenue", aggregation="SUM", column_ref=ColumnRef(table="VBRK", column="NETWR"), alias="value")
+            return MetricSpec(logical="revenue", aggregation="SUM", column_ref=ColumnRef(table="VBRK", column="NETWR"), alias="total_sales")
         # fallback to common money columns
         for col in ("RMWWR", "WRBTR", "DMBTR", "BRTWR"):
             t = _find_table_with_column(schema_u, col, ["VBRP", "VBRK", "FAGLFLEXA", "BSAD", "BSEG"])
             if t:
-                return MetricSpec(logical=lm, aggregation="SUM", column_ref=ColumnRef(table=t, column=col), alias="value")
-        return MetricSpec(logical=lm, aggregation="SUM", column_ref=None, alias="value")
+                return MetricSpec(logical=lm, aggregation="SUM", column_ref=ColumnRef(table=t, column=col), alias="total_sales")
+        return MetricSpec(logical=lm, aggregation="SUM", column_ref=None, alias="total_sales")
     if lm == "count":
         # Default count: billing documents if VBRK exists, otherwise rows
         if "VBRK" in schema_u and any(str(c).upper() == "VBELN" for c in schema_u["VBRK"]):
