@@ -33,9 +33,27 @@ class SqlPlan:
     order_by_sql: str
     limit_sql: str
     metric_alias: str
+    prebuilt_sql: str = ""
 
 
 def build_sql_plan(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> SqlPlan:
+    # Prefer analytics-safe layer for sales/revenue/count style questions.
+    # This avoids SAP row multiplication from ad-hoc multi-joins.
+    prebuilt = _build_sales_analytics_sql_if_possible(intent, schema)
+    if prebuilt:
+        return SqlPlan(
+            base_table="sales_analytics",
+            tables=["sales_analytics"],
+            aliases={"SALES_ANALYTICS": "sa"},
+            select_sql=[],
+            group_by_sql=[],
+            where_sql=[],
+            order_by_sql="",
+            limit_sql="",
+            metric_alias=str((intent.get("metric") or {}).get("alias") or "value"),
+            prebuilt_sql=prebuilt,
+        )
+
     metric = intent.get("metric") or {}
     dims = intent.get("dimensions") or []
     filters = intent.get("filters") or []
@@ -204,10 +222,13 @@ def build_sql_plan(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> SqlP
         order_by_sql=order_by_sql,
         limit_sql=limit_sql,
         metric_alias=metric_alias,
+        prebuilt_sql="",
     )
 
 
 def generate_sql(plan: SqlPlan) -> str:
+    if plan.prebuilt_sql:
+        return plan.prebuilt_sql
     base = plan.base_table.upper()
     ba = plan.aliases[base]
     from_sql = f"FROM {base} {ba}"
@@ -247,6 +268,155 @@ def generate_sql(plan: SqlPlan) -> str:
     if plan.limit_sql:
         parts.append(plan.limit_sql)
     return "\n".join(parts)
+
+
+def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> str:
+    """
+    Canonical analytics-safe query layer:
+    - sales_clean: deduplicated invoice line facts
+    - product_master: one product name per material
+    - sales_analytics: clean star-like surface
+    """
+    schema_u = {t.upper(): [str(c).upper() for c in cols] for t, cols in (schema or {}).items()}
+    if "VBRP" not in schema_u or "VBRK" not in schema_u:
+        return ""
+
+    metric = intent.get("metric") or {}
+    metric_logical = str(metric.get("logical") or "").lower()
+    if metric_logical in ("profit", "profit_margin"):
+        # Explicitly fail until cost_clean-like layer is mapped.
+        raise ValueError(
+            "MISSING_COST_LAYER: profit/profit_margin requires canonical cost mapping (e.g. cost_clean)."
+        )
+    if metric_logical not in ("revenue", "sales", "amount", "count"):
+        return ""
+
+    dims = intent.get("dimensions") or []
+    filters = intent.get("filters") or []
+    ranking = intent.get("ranking") or {}
+
+    # Map logical dimensions to sales_analytics columns
+    dim_cols: List[str] = []
+    for d in dims:
+        logical = str(d.get("logical") or "").lower()
+        if logical == "year":
+            dim_cols.append("year")
+        elif logical == "month":
+            dim_cols.append("month")
+        elif logical == "product":
+            dim_cols.append("product_name")
+        elif logical == "customer":
+            dim_cols.append("customer_id")
+        elif logical == "country":
+            dim_cols.append("country")
+        elif logical == "currency":
+            dim_cols.append("currency")
+        elif logical == "industry":
+            # industry not guaranteed in safe layer unless KNA1/T016T is added
+            dim_cols.append("customer_id")
+    dim_cols = list(dict.fromkeys(dim_cols))
+
+    metric_alias = str(metric.get("alias") or "value")
+    if metric_logical == "count":
+        metric_expr = "SUM(sa.invoices)"
+    else:
+        metric_expr = "SUM(sa.revenue)"
+
+    select_parts: List[str] = [f"{c}" for c in dim_cols]
+    select_parts.append(f"{metric_expr} AS {metric_alias}")
+
+    where_parts: List[str] = []
+    for f in filters:
+        op = str(f.get("operator") or "").upper()
+        cref = f.get("column_ref") or {}
+        col = str(cref.get("column") or "").upper()
+        val = f.get("value")
+        if op == "IN_YEAR":
+            years = [str(x) for x in (val or []) if str(x)]
+            if years:
+                where_parts.append("sa.year IN (" + ", ".join("'" + y.replace("'", "''") + "'" for y in years) + ")")
+
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    group_sql = ("GROUP BY " + ", ".join(dim_cols)) if dim_cols else ""
+
+    order_sql = ""
+    limit_sql = ""
+    if ranking.get("enabled"):
+        ord_dir = str(ranking.get("order") or "desc").upper()
+        if ord_dir not in ("ASC", "DESC"):
+            ord_dir = "DESC"
+        lim = ranking.get("limit") or 5
+        try:
+            lim_i = max(1, min(int(lim), 200))
+        except Exception:
+            lim_i = 5
+        order_sql = f"ORDER BY {metric_alias} {ord_dir}"
+        limit_sql = f"LIMIT {lim_i}"
+    else:
+        order_sql = f"ORDER BY {metric_alias} DESC"
+
+    sql = f"""
+WITH sales_clean AS (
+    SELECT
+        TRIM(p."matnr") AS product_id,
+        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4) AS year,
+        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6) AS month,
+        TRIM(v."kunag") AS customer_id,
+        TRIM(v."land1") AS country,
+        TRIM(v."waerk") AS currency,
+        SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+        SUM(CAST(NULLIF(TRIM(CAST(p."fkimg" AS TEXT)), '') AS NUMERIC)) AS quantity,
+        COUNT(DISTINCT v."vbeln") AS invoices
+    FROM "VBRP" p
+    JOIN "VBRK" v
+      ON LPAD(TRIM(p."vbeln"), 10, '0') = LPAD(TRIM(v."vbeln"), 10, '0')
+    WHERE p."matnr" IS NOT NULL
+      AND TRIM(p."matnr") <> ''
+      AND v."fkdat" IS NOT NULL
+      AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''
+    GROUP BY
+        TRIM(p."matnr"),
+        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4),
+        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6),
+        TRIM(v."kunag"),
+        TRIM(v."land1"),
+        TRIM(v."waerk")
+),
+product_master AS (
+    SELECT
+        TRIM(m."matnr") AS product_id,
+        MAX(COALESCE(NULLIF(TRIM(m."maktx"), ''), TRIM(m."matnr"))) AS product_name
+    FROM "MAKT" m
+    WHERE m."matnr" IS NOT NULL
+      AND TRIM(m."matnr") <> ''
+      AND (m."spras" = 'E' OR m."spras" IS NULL)
+    GROUP BY TRIM(m."matnr")
+),
+sales_analytics AS (
+    SELECT
+        s.product_id,
+        COALESCE(pm.product_name, s.product_id) AS product_name,
+        s.year,
+        s.month,
+        s.customer_id,
+        s.country,
+        s.currency,
+        s.revenue,
+        s.quantity,
+        s.invoices
+    FROM sales_clean s
+    LEFT JOIN product_master pm
+      ON pm.product_id = s.product_id
+)
+SELECT
+    {", ".join(select_parts)}
+FROM sales_analytics sa
+{where_sql}
+{group_sql}
+{order_sql}
+{limit_sql}
+""".strip()
+    return sql
 
 
 def build_sql_and_plan(intent: Dict[str, Any], sap_db: Session) -> Tuple[str, SqlPlan, Dict[str, List[str]]]:
