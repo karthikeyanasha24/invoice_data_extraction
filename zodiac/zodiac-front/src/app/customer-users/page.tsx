@@ -9,7 +9,7 @@ import { Plus, Users, Edit2, Loader, X, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export default function CustomerUsersPage() {
-  const { user, isLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const [list, setList] = useState<CustomerUserResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,9 +20,9 @@ export default function CustomerUsersPage() {
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
   const [assignSaving, setAssignSaving] = useState(false);
 
-  // Only redirect after auth has finished loading; never redirect while isLoading
+  // Only redirect after auth has finished loading; never redirect while auth is loading
   useEffect(() => {
-    if (isLoading) return;
+    if (authLoading) return;
     if (!user) {
       router.replace('/');
       return;
@@ -30,7 +30,7 @@ export default function CustomerUsersPage() {
     if (!user.is_admin) {
       router.replace('/dashboard');
     }
-  }, [user, isLoading, router]);
+  }, [user, authLoading, router]);
 
   const loadCustomerUsers = async () => {
     try {
@@ -75,7 +75,7 @@ export default function CustomerUsersPage() {
   };
 
   // Show loader until auth is settled; then only show content if admin (otherwise redirect runs above)
-  const authSettled = !isLoading;
+  const authSettled = !authLoading;
   const isAdmin = user?.is_admin === true;
   const showContent = authSettled && !!user && isAdmin;
 

@@ -3660,6 +3660,16 @@ Key rules for SAP data:
         if not stored:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store approved query")
 
+        # Classify intent for metadata tagging (must be defined before log_query_feedback_attempt)
+        try:
+            from ..services.ai_intent_classifier import classify_intent
+            from ..services.join_graph import tables_linked_to_graph
+            _intent_tags = classify_intent(question).tags
+            _linked_to_graph = tables_linked_to_graph(list(execution.validation.tables or []))
+        except Exception:
+            _intent_tags = []
+            _linked_to_graph = False
+
         log_query_feedback_attempt(
             db=db,
             user_id=current_user.id,

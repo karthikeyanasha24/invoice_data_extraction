@@ -46,6 +46,10 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     # Zodiac operational domain words — not table names in SAP or app schema
     "SAT", "CFDI", "RFC", "MXN", "XML", "EDI", "API", "PDF", "CSV", "ERP",
     "SAP",  # SAP is an app/system name, not a table identifier
+    # Business / reporting English often typed in ALL CAPS — not SAP identifiers (KNA1, VBRK, …)
+    "CUSTOMERS", "CUSTOMER", "REVENUE", "INVOICES", "INVOICE", "PRODUCTS", "PRODUCT",
+    "SUPPLIERS", "SUPPLIER", "PAYMENTS", "PAYMENT", "AMOUNTS", "AMOUNT", "QUANTITIES",
+    "QUANTITY", "PRICES", "PRICE", "TOTALS", "TOTAL", "BALANCE", "BALANCES",
 }
 
 

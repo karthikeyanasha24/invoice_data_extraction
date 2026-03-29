@@ -1597,6 +1597,10 @@ If result is empty, say so and suggest a refined question.
     except Exception as proc_err:
         logger.warning("Procurement-from-list check failed: %s", proc_err)
 
+    # _hint_query: when the user named SAP tables that the schema-driven agent couldn't use,
+    # we append the table names so the adaptive/standard agents still know the user's intent.
+    _hint_query = user_query  # default — overridden below if explicit_sap_only fallthrough occurs
+
     if result is None:
         # 1) Schema-driven agent: LLM reads schema → selects tables → generates SQL (no keyword rules).
         try:
@@ -1622,27 +1626,20 @@ If result is empty, say so and suggest a refined question.
         # 2) Fall back to adaptive (keyword/heuristic) then standard sap_sql_agent.
         if result is None or not getattr(result, "rows", None):
             if explicit_sap_only:
-                timings["sql_path_reason"] = "explicit_sap_forced_failed"
-                timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-                timings["total_ms"] = int((time.time() - perf_start) * 1000)
-                return OrchestratorResult(
-                    reply=(
-                        "I could not generate valid SQL using only the table(s) you named: "
-                        + ", ".join(f"`{t}`" for t in sap_forced_resolved)
-                        + ". Try simplifying the question or naming columns to filter on."
-                    ),
-                    action="new",
-                    reason="explicit_sap_forced_failed",
-                    sql="",
-                    rows_preview=None,
-                    memory_updated=False,
-                    time_scope=time_scope,
-                    date_range=date_range,
-                    period_info=period_info,
-                    performance=timings,
+                # Schema-driven agent with forced tables failed — try again without the
+                # forced-table constraint but include the table names as free-text hints
+                # so the LLM knows the user's intent and can JOIN freely.
+                logger.info(
+                    "explicit_sap_forced: schema-driven agent returned no rows for tables %s — "
+                    "falling through to adaptive agent with table hints (no hard-stop)",
+                    sap_forced_resolved,
                 )
+                _hint_suffix = " (use tables: " + ", ".join(sap_forced_resolved) + ")" if sap_forced_resolved else ""
+                _hint_query = user_query + _hint_suffix
+            else:
+                _hint_query = user_query
             result = run_adaptive_sap_sql_agent(
-                user_query,
+                _hint_query,
                 sql_db,
                 knowledge_context=knowledge_context,
                 time_scope=time_scope,
@@ -1651,29 +1648,9 @@ If result is empty, say so and suggest a refined question.
             if result and getattr(result, "rows", None):
                 timings["sql_path_reason"] = "llm_primary_adaptive"
     if result is None or not (getattr(result, "rows", None)):
-        if explicit_sap_only:
-            timings["sql_path_reason"] = "explicit_sap_forced_failed"
-            timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-            timings["total_ms"] = int((time.time() - perf_start) * 1000)
-            return OrchestratorResult(
-                reply=(
-                    "I could not generate valid SQL using only the table(s) you named: "
-                    + ", ".join(f"`{t}`" for t in sap_forced_resolved)
-                    + ". Try simplifying the question or naming columns to filter on."
-                ),
-                action="new",
-                reason="explicit_sap_forced_failed",
-                sql="",
-                rows_preview=None,
-                memory_updated=False,
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info,
-                performance=timings,
-            )
         logger.info("Adaptive SQL path returned no result; falling back to standard sap_sql_agent")
         result = run_sap_sql_agent(
-            user_query,
+            _hint_query,
             sql_db,
             knowledge_context=knowledge_context,
             time_scope=time_scope,
@@ -1683,26 +1660,8 @@ If result is empty, say so and suggest a refined question.
             timings["sql_path_reason"] = "llm_primary_standard"
     # Purchase-order direct fallback: when all agents fail and question is about purchase orders, run EKPO aggregate
     if result is None or not getattr(result, "rows", None):
-        if explicit_sap_only:
-            timings["sql_path_reason"] = "explicit_sap_forced_failed"
-            timings["sql_execution_ms"] = int((time.time() - sql_start) * 1000)
-            timings["total_ms"] = int((time.time() - perf_start) * 1000)
-            return OrchestratorResult(
-                reply=(
-                    "I could not generate valid SQL using only the table(s) you named: "
-                    + ", ".join(f"`{t}`" for t in sap_forced_resolved)
-                    + ". Try simplifying the question or naming columns to filter on."
-                ),
-                action="new",
-                reason="explicit_sap_forced_failed",
-                sql="",
-                rows_preview=None,
-                memory_updated=False,
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info,
-                performance=timings,
-            )
+        # NOTE: explicit_sap_only no longer hard-stops here — the LLM agents already tried with
+        # table-name hints. Just continue to the purchase-order fallback like any other query.
         try:
             po_result = run_purchase_order_fallback(sql_db, user_query)
             if po_result and getattr(po_result, "rows", None):

@@ -7,16 +7,16 @@ import MainLayout from '@/components/MainLayout';
 import CustomerManagementPanel from '@/components/CustomerManagementPanel';
 
 export default function CustomersPage() {
-  const { user, isLoading } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (!loading && !user) {
       router.push('/');
     }
-  }, [user, isLoading, router]);
+  }, [user, loading, router]);
 
-  if (isLoading) {
+  if (loading) {
     return (
       <MainLayout activeTab="customers">
         <div className="flex items-center justify-center min-h-screen">

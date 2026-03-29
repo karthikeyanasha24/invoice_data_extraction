@@ -802,14 +802,27 @@ Rules:
   * Never use generic titles like "Total Sales" alone — always say "by <dimension>"
 """
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=800,
-        )
-        
-        llm_response = (response.choices[0].message.content or "").strip()
+        # Use smart_chat_completion so chart analysis benefits from the same
+        # GPT-4o → Claude 3.5 Sonnet → Gemini 1.5 Pro → GPT-4o-mini fallback chain.
+        try:
+            from .multi_llm_client import smart_chat_completion as _smart_complete
+            llm_response, _model_used = _smart_complete(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=800,
+                require_premium=False,
+            )
+            llm_response = (llm_response or "").strip()
+            logger.info(f"📊 Chart LLM model used: {_model_used}")
+        except Exception as _sc_err:
+            logger.warning(f"⚠️ smart_chat_completion failed for chart ({_sc_err}), falling back to gpt-4o-mini")
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=800,
+            )
+            llm_response = (response.choices[0].message.content or "").strip()
         logger.info(f"📊 LLM chart recommendation response: {llm_response[:200]}...")
         
         result = _safe_json_extract(llm_response)

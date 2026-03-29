@@ -99,7 +99,40 @@ api.interceptors.response.use(
         const isAuthCredentialRequest =
             reqPath.includes('/user/auth/login') || reqPath.includes('/user/auth/create-user');
 
-        if (error.response?.status === 401 && !isAuthCredentialRequest) {
+        // AI / dashboard / analysis endpoints may return 401 for reasons unrelated to the user's
+        // session (e.g. an LLM provider API key is invalid or rate-limited).  Never force-logout
+        // because of errors from these paths — only a genuine FastAPI JWT rejection should do that.
+        const isNonSessionEndpoint =
+            reqPath.includes('/dashboard/ai') ||
+            reqPath.includes('/dashboard/analyze') ||
+            reqPath.includes('/analysis') ||
+            reqPath.includes('/api-keys');
+
+        // Only force logout when the response body explicitly signals a JWT / session problem.
+        // FastAPI JWT returns {"detail": "Could not validate credentials"} or "Not authenticated".
+        // AI-key or rate-limit 401s have completely different bodies and must NOT log the user out.
+        const responseDetail = String(
+            (error.response?.data as any)?.detail ||
+            (error.response?.data as any)?.message ||
+            (error.response?.data as any)?.error ||
+            ''
+        ).toLowerCase();
+        const isSessionExpiredResponse =
+            responseDetail.includes('could not validate') ||
+            responseDetail.includes('token expired') ||
+            responseDetail.includes('not authenticated') ||
+            responseDetail.includes('invalid token') ||
+            responseDetail.includes('signature has expired');
+
+        // Trigger logout ONLY when: not a credential form, not an AI/dashboard path, AND
+        // the server explicitly told us the session/token is invalid.
+        const shouldForceLogout =
+            error.response?.status === 401 &&
+            !isAuthCredentialRequest &&
+            !isNonSessionEndpoint &&
+            isSessionExpiredResponse;
+
+        if (shouldForceLogout) {
             if (typeof window !== 'undefined') {
                 const authKeys = [
                     'access_token',
@@ -116,9 +149,11 @@ api.interceptors.response.use(
                     sessionStorage.removeItem(key);
                 });
 
-                console.log('🔐 API - 401 (session invalid), clearing auth and redirecting to login');
+                console.log('🔐 API - 401 (session expired), clearing auth and redirecting to login');
                 window.location.href = '/';
             }
+        } else if (error.response?.status === 401 && !isAuthCredentialRequest && !shouldForceLogout) {
+            console.log('🔐 API - 401 received but NOT forcing logout (AI/dashboard endpoint or non-session error):', reqPath);
         }
         return Promise.reject(error);
     }
