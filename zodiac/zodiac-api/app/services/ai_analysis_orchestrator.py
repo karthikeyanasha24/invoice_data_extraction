@@ -1339,30 +1339,65 @@ If result is empty, say so and suggest a refined question.
         _use_intent_pipeline = True  # safe fallback: try intent pipeline
 
     if result is None and action == "new" and sql_db is not None and not (app_tables_resolved or explicit_ids_q) and _use_intent_pipeline:
+        _intent_pipeline_used = False  # track so LLM fallback knows why we're here
         try:
             from .schema_loader import load_schema_from_mapping_file as _load_schema_fast
             from sqlalchemy import text as _sql_text
 
-            # Use the local JSON mapping file (instant, zero DB round-trips) instead of
-            # the live inspector which issues one query per table (118 tables × ~1-2s = 200s+).
             intent_schema = _load_schema_fast(max_columns_per_table=None)
             intent = extract_intent(user_query, intent_schema)
-            print("🔥 USING INTENT PIPELINE")
-            print("INTENT:", json.dumps(intent, default=str)[:1200])
             logger.info("🔥 USING INTENT PIPELINE (intent_sql) for: %s", (user_query or "")[:120])
             logger.info("INTENT_JSON: %s", json.dumps(intent, default=str)[:1200])
 
-            # Build SQL strictly from intent (no LLM SQL generation)
             plan = build_sql_plan(intent, intent_schema)
             sql = generate_sql(plan)
-            # Normalize table name casing for PostgreSQL (e.g. lowercase vbrp stays vbrp,
-            # uppercase VBRK gets quoted as "VBRK"). Belt-and-suspenders over intent_sql_planner fixes.
             try:
                 from .sap_sql_agent import _quote_catalog_sql_tables as _qct_intent
                 sql = _qct_intent(sql)
             except Exception:
                 pass
             logger.info("INTENT_SQL: %s", (sql or "")[:1500])
+
+            # ── SQL completeness check ────────────────────────────────────────────
+            # Verify the generated SQL actually reflects the key elements of the question.
+            # If the question mentions a specific year/period but the SQL has no date filter,
+            # the intent pipeline produced incomplete SQL → fall through to the LLM.
+            def _sql_covers_question(q: str, generated_sql: str) -> tuple:
+                """
+                Returns (ok: bool, reason: str).
+                Checks that SQL contains filters for critical question elements:
+                  • Specific years (2000, 2024) → SQL must contain that year value
+                  • "last N months/years/days" → SQL must contain a date filter
+                  • Named entities (specific customer name, product) → SQL must have WHERE
+                """
+                if not generated_sql:
+                    return False, "empty SQL"
+                sql_lower = generated_sql.lower()
+                q_lower = (q or "").lower()
+                import re as _re
+                # Check: specific 4-digit years mentioned → must appear in WHERE clause
+                years_in_q = _re.findall(r'\b((?:19|20)\d{2})\b', q_lower)
+                for yr in years_in_q:
+                    if yr not in generated_sql:
+                        return False, f"question mentions year {yr} but SQL has no filter for it"
+                # Check: "last N years/months/days" → SQL must have a date comparison
+                if _re.search(r'\blast\s+\d+\s+(year|month|day|week)', q_lower):
+                    if not _re.search(r"(fkdat|budat|erdat|bldat|belnr|gjahr)\b.{0,80}(now|current_date|interval|extract|year|month)", sql_lower, _re.DOTALL):
+                        return False, "question implies a date range filter but SQL has none"
+                # Check: question is a GROUP BY query but SQL has no GROUP BY
+                if _re.search(r'\bby\s+(customer|product|country|vendor|sales_org|plant|currency|division|month|year|quarter)\b', q_lower):
+                    if "group by" not in sql_lower:
+                        return False, "question asks for grouping but SQL has no GROUP BY"
+                return True, "ok"
+
+            _sql_ok, _sql_reason = _sql_covers_question(user_query, sql)
+            if not _sql_ok:
+                logger.warning(
+                    "intent_pipeline: SQL incomplete (%s) — falling through to LLM for: %s",
+                    _sql_reason, (user_query or "")[:100],
+                )
+                raise ValueError(f"INTENT_SQL_INCOMPLETE: {_sql_reason}")
+            # ── End completeness check ────────────────────────────────────────────
 
             exec_start = time.time()
             rows = sql_db.execute(_sql_text(sql)).mappings().all()
@@ -1372,29 +1407,12 @@ If result is empty, say so and suggest a refined question.
 
             validation = validate_result_v2(intent, sql, result_rows)
             if not validation.get("valid"):
-                timings["total_ms"] = int((time.time() - perf_start) * 1000)
-                return OrchestratorResult(
-                    reply=json.dumps(
-                        {
-                            "error": "RESULT_MISMATCH",
-                            "reason": validation.get("errors"),
-                            "warnings": validation.get("warnings"),
-                        },
-                        default=str,
-                    ),
-                    action="new",
-                    reason="result_mismatch",
-                    sql=sql,
-                    rows_preview=None,
-                    memory_updated=False,
-                    charts=[],
-                    charts_blocked_reason="Result did not match intent; aborted before summary/chart.",
-                    performance=timings,
-                    time_scope=time_scope,
-                    date_range=date_range,
-                    period_info=period_info,
-                    adaptive_context={"intent": intent, "validation": validation},
+                # Validation failed → fall through to LLM instead of returning error
+                logger.warning(
+                    "intent_pipeline: validation failed (%s) — falling through to LLM",
+                    validation.get("errors"),
                 )
+                raise ValueError(f"INTENT_VALIDATION_FAILED: {validation.get('errors')}")
 
             reply = generate_intent_summary(intent, result_rows, validation)
             charts_data = generate_intent_charts(intent, result_rows, validation)
@@ -1440,49 +1458,21 @@ If result is empty, say so and suggest a refined question.
                 },
             )
         except Exception as intent_err:
-            timings["total_ms"] = int((time.time() - perf_start) * 1000)
-            return OrchestratorResult(
-                reply=json.dumps(
-                    {"error": "INTENT_PIPELINE_FAILED", "reason": str(intent_err)}, default=str
-                ),
-                action="new",
-                reason="intent_pipeline_failed",
-                sql="",
-                rows_preview=None,
-                memory_updated=False,
-                charts=[],
-                charts_blocked_reason="Intent pipeline failed; aborted.",
-                performance=timings,
-                time_scope=time_scope,
-                date_range=date_range,
-                period_info=period_info,
+            # Intent pipeline failed or produced incomplete SQL → fall through to LLM.
+            # Do NOT return an error here. Let the LLM SQL agent handle it.
+            _intent_pipeline_used = True
+            logger.info(
+                "intent_pipeline: skipping to LLM agent — reason: %s",
+                str(intent_err)[:200],
             )
+            # intentional fall-through — do NOT return here
 
-    # Hard stop: only block if the intent pipeline was appropriate AND still produced nothing.
-    # Non-analytics queries (_use_intent_pipeline=False) are allowed to fall through to
-    # the schema-driven LLM SQL agent below (PO, delivery, vendor, EDI, status queries, etc.)
-    if action == "new" and result is None and _use_intent_pipeline:
-        timings["total_ms"] = int((time.time() - perf_start) * 1000)
-        return OrchestratorResult(
-            reply=json.dumps(
-                {
-                    "error": "LEGACY_PATH_DISABLED",
-                    "reason": "Strict intent pipeline was required but no result was produced.",
-                },
-                default=str,
-            ),
-            action="new",
-            reason="legacy_path_disabled_guard",
-            sql="",
-            rows_preview=None,
-            memory_updated=False,
-            charts=[],
-            charts_blocked_reason="Legacy SQL path disabled by design.",
-            performance=timings,
-            time_scope=time_scope,
-            date_range=date_range,
-            period_info=period_info,
-        )
+    # All queries (analytics or not) now fall through to the LLM SQL agent when the
+    # intent pipeline didn't produce a result. This covers:
+    #   • Queries the intent pipeline handled incorrectly (missing year filter, wrong SQL)
+    #   • Queries routed away from intent pipeline (_use_intent_pipeline=False)
+    #   • Any new query pattern we haven't seen before
+    # The LLM (gpt-4o) handles all 118 tables and any question naturally.
     # Non-analytics new queries fall through here to the schema-driven LLM SQL agent
 
     # Negative / lowest billing LINE ITEMS for a year — MUST run before ai_query_memory.

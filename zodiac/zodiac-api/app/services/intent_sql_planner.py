@@ -292,10 +292,10 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
     metric = intent.get("metric") or {}
     metric_logical = str(metric.get("logical") or "").lower()
     if metric_logical in ("profit", "profit_margin"):
-        # Explicitly fail until cost_clean-like layer is mapped.
-        raise ValueError(
-            "MISSING_COST_LAYER: profit/profit_margin requires canonical cost mapping (e.g. cost_clean)."
-        )
+        # Profit/cost queries need CO tables (COSS/COSP/COEP) which the intent
+        # pipeline doesn't cover. Return "" to fall through to the LLM SQL agent
+        # which can discover and use the right CO tables dynamically.
+        return ""
     if metric_logical not in ("revenue", "sales", "amount", "count"):
         return ""
 
@@ -385,21 +385,29 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
                 year_where = f"\n  AND TRIM(CAST(p.\"fkdat\" AS TEXT)) IS NOT NULL"  # fallback; fkdat may not be on vbrp
 
             if single_logical == "product":
-                # Group by product, join MAKT for name
+                # Product fast path: join MAKT for description + VBRK for currency.
+                # Includes material number, currency, quantity and invoice count so
+                # the result table is as rich as a hand-written analytical query.
                 order_by = f"ORDER BY {metric_alias} {ord_dir}"
                 limit_clause = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
                 sql = f"""
 SELECT
-    COALESCE(NULLIF(TRIM(m."maktx"), ''), TRIM(p."matnr")) AS product,
-    {metric_sql}
+    TRIM(p."matnr")                                                          AS material_number,
+    COALESCE(NULLIF(TRIM(m."maktx"), ''), TRIM(p."matnr"))                  AS product,
+    TRIM(v."waerk")                                                          AS currency,
+    SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC))          AS {metric_alias},
+    SUM(CAST(NULLIF(TRIM(CAST(p."fkimg" AS TEXT)), '') AS NUMERIC))          AS total_quantity,
+    COUNT(DISTINCT TRIM(p."vbeln"))                                          AS invoice_count
 FROM {vbrp_ref} p
+JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")
 LEFT JOIN {makt_ref} m
     ON TRIM(p."matnr") = TRIM(m."matnr")
     AND (m."spras" = 'E' OR m."spras" IS NULL)
 WHERE p."matnr" IS NOT NULL
   AND TRIM(p."matnr") <> ''
   AND p."netwr" IS NOT NULL
-GROUP BY TRIM(p."matnr"), TRIM(m."maktx")
+  AND v."waerk" IS NOT NULL
+GROUP BY TRIM(p."matnr"), TRIM(m."maktx"), TRIM(v."waerk")
 {order_by}
 {limit_clause}""".strip()
             else:

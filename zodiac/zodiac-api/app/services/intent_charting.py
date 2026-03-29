@@ -74,7 +74,7 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
         ]
 
     if it == "ranking":
-        return [
+        charts = [
             {
                 "chart_type": "bar",
                 "title": f"{metric.get('logical', metric_alias)} by {x_label}",
@@ -86,6 +86,14 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
                 "show_grid": True,
             }
         ]
+        # Always include a table so users see the full detail (currency, quantities, etc.)
+        # alongside the chart — no need to run a separate SQL manually.
+        if len(rows[0]) > 2:  # only add table when result has more than just dim+metric
+            charts.append(table_chart(
+                f"{x_label.title()} breakdown",
+                "Full detail table — all columns returned by the query."
+            ))
+        return charts
 
     if it == "comparison":
         return [

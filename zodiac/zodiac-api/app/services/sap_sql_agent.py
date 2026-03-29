@@ -1441,12 +1441,25 @@ Return STRICT JSON only — no explanation:
   ]
 }}
 """
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-    content = resp.choices[0].message.content or ""
+    # Use multi-model client: GPT-4o → Claude 3.5 Sonnet → Gemini 1.5 Pro (auto fallback)
+    try:
+        from .multi_llm_client import smart_chat_completion as _smart_complete
+        content, _model_used = _smart_complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=800,
+            require_premium=True,
+        )
+        logger.info("_pick_tables: used model=%s", _model_used)
+    except Exception as _mc_err:
+        logger.warning("_pick_tables: multi-model failed (%s), falling back to OpenAI", _mc_err)
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        content = resp.choices[0].message.content or ""
+
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
@@ -3242,12 +3255,27 @@ Rules:
     spec: Dict[str, Any] = {}
 
     for _attempt in range(3):  # up to 3 attempts; extra rounds fix markdown-wrapped / truncated JSON
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,  # type: ignore[arg-type]
-            temperature=0,
-        )
-        content = resp.choices[0].message.content or ""
+        # Use multi-model client: GPT-4o → Claude 3.5 Sonnet → Gemini 1.5 Pro (auto fallback)
+        try:
+            from .multi_llm_client import smart_chat_completion as _smart_complete
+            content, _model_used = _smart_complete(
+                messages=messages,  # type: ignore[arg-type]
+                temperature=0,
+                max_tokens=3000,
+                require_premium=True,
+            )
+            logger.info("_generate_sql_json attempt %d: used model=%s", _attempt + 1, _model_used)
+        except Exception as _mc_err:
+            logger.warning(
+                "_generate_sql_json: multi-model failed on attempt %d (%s), falling back to OpenAI",
+                _attempt + 1, _mc_err,
+            )
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,  # type: ignore[arg-type]
+                temperature=0,
+            )
+            content = resp.choices[0].message.content or ""
 
         # ── Try direct parse ──────────────────────────────────────────────────
         parsed: Optional[Dict[str, Any]] = None
