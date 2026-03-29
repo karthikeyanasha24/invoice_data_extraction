@@ -35,17 +35,21 @@ const SEASON_COLORS: Record<string, string> = {
   'Winter': '#3b82f6'
 };
 
+/** Recharts `Pie` `data` rows must be indexable by string */
+interface SeasonBreakdownRow {
+  season: string;
+  revenue: number;
+  invoice_count: number;
+  [key: string]: string | number;
+}
+
 interface RevenueData {
   by_country: Array<{
     country: string;
     revenue: number;
     invoice_count: number;
   }>;
-  by_season: Array<{
-    season: string;
-    revenue: number;
-    invoice_count: number;
-  }>;
+  by_season: SeasonBreakdownRow[];
   by_quarter: Array<{
     quarter: string;
     year: number;
@@ -270,7 +274,10 @@ export default function DashboardRevenue() {
                   cx="50%"
                   cy="50%"
                   outerRadius={100}
-                  label={(entry) => `${entry.season}: $${entry.revenue.toLocaleString()}`}
+                  label={(props: { payload?: SeasonBreakdownRow }) => {
+                    const p = props.payload;
+                    return p ? `${p.season}: $${p.revenue.toLocaleString()}` : '';
+                  }}
                 >
                   {revenueData.by_season.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={SEASON_COLORS[entry.season] || CHART_COLORS[index % CHART_COLORS.length]} />

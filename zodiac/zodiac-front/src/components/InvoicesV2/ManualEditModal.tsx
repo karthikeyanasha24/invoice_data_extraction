@@ -288,10 +288,10 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
           const cleaned: any = {
             line_id: item.line_id || String(lineItems.indexOf(item) + 1),
             item_name: item.item_name || '',
-            quantity: parseFloat(item.quantity) || 0,
+            quantity: parseFloat(item.quantity ?? '') || 0,
             unit_code: item.unit_code || 'C62',
-            price: parseFloat(item.price) || 0,
-            line_amount: parseFloat(item.line_amount) || 0,
+            price: parseFloat(item.price ?? '') || 0,
+            line_amount: parseFloat(item.line_amount ?? '') || 0,
           };
           
           // Add optional fields if they have values
@@ -299,7 +299,7 @@ export default function ManualEditModal({ invoice, onClose, onSuccess, enableRep
           if (item.seller_item_id) cleaned.seller_item_id = item.seller_item_id;
           if (item.buyer_item_id) cleaned.buyer_item_id = item.buyer_item_id;
           if (item.standard_item_id) cleaned.standard_item_id = item.standard_item_id;
-          if (item.tax_percentage) cleaned.tax_percentage = parseFloat(item.tax_percentage);
+          if (item.tax_percentage) cleaned.tax_percentage = parseFloat(item.tax_percentage ?? '');
           if (item.origin_country) cleaned.origin_country = item.origin_country;
           if (item.commodity_code) cleaned.commodity_code = item.commodity_code;
           if (item.line_note) cleaned.line_note = item.line_note;

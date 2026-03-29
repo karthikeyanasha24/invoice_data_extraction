@@ -83,6 +83,8 @@ export interface ProcessingStepResult {
 }
 
 export interface FileUploadResponse {
+  /** Present on some HTTP error bodies (e.g. FastAPI) */
+  detail?: string;
   invoice_operation_success: boolean;
   file_upload_pass: boolean;
   file_upload_message?: string;
@@ -274,6 +276,7 @@ export interface TimelineDataPoint {
 export interface FormatDistribution {
   format: string;
   count: number;
+  [key: string]: string | number;
 }
 
 export interface CustomerDistribution {
@@ -286,6 +289,7 @@ export interface CustomerDistribution {
 export interface RequestTypeDistribution {
   type: string;
   count: number;
+  [key: string]: string | number;
 }
 
 export interface RecentActivity {
@@ -376,6 +380,8 @@ export interface IndustryBreakdown {
   industry: string;
   count: number;
   total_revenue: number;
+  /** Recharts `Pie` expects chart rows to be indexable by string */
+  [key: string]: string | number;
 }
 
 export interface ProductAnalysis {

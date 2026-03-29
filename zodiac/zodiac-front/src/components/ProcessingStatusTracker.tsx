@@ -40,8 +40,9 @@ export default function ProcessingStatusTracker({
                     // Check if processing is complete
                     // Processing is complete if there's a "Database Save" step that succeeded
                     // OR if the last step has succeeded and processing hasn't continued for 2+ polls
-                    const hasDatabaseSaveStep = status.processing_steps.some(step =>
-                        step.step_name === "Database Save" && step.success === true
+                    const hasDatabaseSaveStep = status.processing_steps.some(
+                        (step: ProcessingStepResult) =>
+                            step.step_name === 'Database Save' && step.success === true
                     );
 
                     if (hasDatabaseSaveStep && !completedRef.current) {
@@ -137,7 +138,7 @@ export default function ProcessingStatusTracker({
             return failedStep.step_number;
         }
         // Find the highest step number - that's the current step
-        const maxStepNumber = Math.max(...steps.map(s => s.step_number));
+        const maxStepNumber = Math.max(0, ...steps.map((s) => s.step_number ?? 0));
         return maxStepNumber;
     })();
 

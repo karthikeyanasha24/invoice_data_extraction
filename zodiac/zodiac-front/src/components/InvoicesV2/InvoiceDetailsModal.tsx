@@ -88,7 +88,11 @@ export default function InvoiceDetailsModal({ invoice, onClose }: Props) {
               <div key={field} className={cn('space-y-1', isMissing && 'opacity-50')}>
                 <div className="text-xs font-medium text-gray-500 flex items-center gap-1">
                   {formatFieldName(field)}
-                  {isMissing && <AlertCircle className="h-3 w-3 text-red-500" title="Missing" />}
+                  {isMissing ? (
+                    <span title="Missing">
+                      <AlertCircle className="h-3 w-3 text-red-500" aria-hidden />
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-sm text-gray-900 break-words">
                   {renderFieldValue(field, invoice.invoice_data[field])}

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { dashboardApi } from '@/lib/api';
-import { DashboardStatistics, AIInsights } from '@/types';
+import { DashboardStatistics, AIInsights, FormatDistribution, RequestTypeDistribution } from '@/types';
 import DashboardTabs from './DashboardTabs';
 import DashboardOperations from './DashboardOperations';
 import DashboardBusiness from './DashboardBusiness';
@@ -301,7 +301,10 @@ export default function DashboardNew() {
                       cx="50%"
                       cy="50%"
                       outerRadius={100}
-                      label={({ format, count }) => `${format}: ${count}`}
+                      label={(props: { payload?: FormatDistribution }) => {
+                        const p = props.payload;
+                        return p ? `${p.format}: ${p.count}` : '';
+                      }}
                     >
                       {format_distribution.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
@@ -337,7 +340,11 @@ export default function DashboardNew() {
                       cx="50%"
                       cy="50%"
                       outerRadius={100}
-                      label={({ type, count }) => `${type === 'api' ? 'API/ERP' : 'Web'}: ${count}`}
+                      label={(props: { payload?: RequestTypeDistribution }) => {
+                        const p = props.payload;
+                        if (!p) return '';
+                        return `${p.type === 'api' ? 'API/ERP' : 'Web'}: ${p.count}`;
+                      }}
                     >
                       {request_type_distribution.map((entry, index) => (
                         <Cell
@@ -347,7 +354,10 @@ export default function DashboardNew() {
                       ))}
                     </Pie>
                     <Tooltip 
-                      formatter={(value: any, name: string) => [value, name === 'api' ? 'API/ERP' : 'Web Upload']}
+                      formatter={(value: any, name?: string) => [
+                        value,
+                        name === 'api' ? 'API/ERP' : 'Web Upload',
+                      ]}
                     />
                     <Legend 
                       formatter={(value: string) => value === 'api' ? 'API/ERP' : 'Web Upload'}

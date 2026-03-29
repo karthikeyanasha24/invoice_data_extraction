@@ -29,7 +29,7 @@ import {
 } from 'recharts';
 import { dashboardApi, adminApi } from '@/lib/api';
 import LoadingSpinner from './LoadingSpinner';
-import type { BusinessAnalytics } from '@/types';
+import type { BusinessAnalytics, IndustryBreakdown } from '@/types';
 
 const COLORS = {
   primary: '#3b82f6',
@@ -448,7 +448,9 @@ export default function DashboardBusiness() {
                     cx="50%"
                     cy="50%"
                     outerRadius={80}
-                    label={(entry) => entry.industry}
+                    label={(props: { payload?: IndustryBreakdown }) =>
+                      props.payload?.industry ?? ''
+                    }
                   >
                     {data.industry_breakdown.map((entry, index) => (
                       <Cell 

@@ -1,5 +1,14 @@
 import axios from 'axios';
-import { AuthResponse, LoginRequest, SignupRequest, User, FileUploadResponse, Invoice } from '@/types';
+import {
+    AuthResponse,
+    LoginRequest,
+    SignupRequest,
+    User,
+    FileUploadResponse,
+    Invoice,
+    VersionComparison,
+    FileEditorResponse,
+} from '@/types';
 
 function trimTrailingSlash(url: string): string {
     return url.replace(/\/$/, '');
@@ -293,6 +302,12 @@ export const fileApi = {
         suggestedActions?: string[];
         fileContentPreview?: string;
         warnings?: string[];
+        isDuplicate?: boolean;
+        invoiceNumber?: string;
+        existingInvoiceId?: string | number;
+        isExtractionError?: boolean;
+        supported_formats?: string[];
+        status?: number;
     }> => {
         console.log('📁 File API - Upload attempt:', {
             fileName: file.name,
@@ -371,7 +386,7 @@ export const fileApi = {
                                 success: false,
                                 error: detail.message || 'Could not extract invoice number from XML file.',
                                 isExtractionError: true,
-                                supportedFormats: detail.supported_formats || [],
+                                supported_formats: detail.supported_formats || [],
                                 data: errorData
                             };
                         }
@@ -2724,6 +2739,79 @@ export const convertedInvoicesApi = {
             const detail = error.response?.data?.detail;
             throw new Error(typeof detail === 'string' ? detail : 'Failed to send to customer.');
         }
+    },
+};
+
+async function downloadInvoiceFileAsText(trackingId: string): Promise<string> {
+    const response = await api.get(`/api/v1/invoices/${trackingId}/download`, {
+        responseType: 'blob',
+    });
+    const blob = response.data as Blob;
+    return blob.text();
+}
+
+/** Failed/success invoice file comparison & edit (used by invoice modals). */
+export const versionsApi = {
+    async getVersionComparison(
+        trackingId: string,
+        fileType: 'xml' | 'edi',
+        isSuccessInvoice: boolean
+    ): Promise<VersionComparison> {
+        let content = '';
+        if (isSuccessInvoice) {
+            content = await downloadInvoiceFileAsText(trackingId);
+        } else {
+            const { data } = await api.get(`/api/v1/invoices/failed/${trackingId}`);
+            content = fileType === 'xml' ? (data.xml_content ?? '') : (data.edi_content ?? '');
+        }
+        const lines = content.length ? content.split('\n').length : 1;
+        return {
+            file_type: fileType,
+            original_content: content,
+            fixed_content: content,
+            diffs: [],
+            total_lines: lines,
+            modified_line_count: 0,
+            is_ai_corrected: false,
+        };
+    },
+
+    async getFileContent(
+        trackingId: string,
+        fileType: 'xml' | 'edi',
+        _version: string,
+        isSuccessInvoice: boolean
+    ): Promise<{ content: string }> {
+        if (isSuccessInvoice) {
+            const content = await downloadInvoiceFileAsText(trackingId);
+            return { content };
+        }
+        const { data } = await api.get(`/api/v1/invoices/failed/${trackingId}`);
+        return {
+            content: fileType === 'xml' ? (data.xml_content ?? '') : (data.edi_content ?? ''),
+        };
+    },
+
+    async saveFileEdit(
+        trackingId: string,
+        fileType: 'xml' | 'edi',
+        content: string,
+        isSuccessInvoice: boolean
+    ): Promise<FileEditorResponse> {
+        if (isSuccessInvoice) {
+            throw new Error('Saving edits for successful invoices is not supported yet.');
+        }
+        if (fileType !== 'xml') {
+            throw new Error('Saving edited EDI is not supported yet.');
+        }
+        const formData = new FormData();
+        formData.append('file', new Blob([content], { type: 'application/xml' }), 'invoice.xml');
+        const response = await api.post<FileEditorResponse>(
+            `/api/v1/invoices/${trackingId}/save-xml`,
+            formData,
+            { headers: { 'Content-Type': 'multipart/form-data' } }
+        );
+        return response.data;
     },
 };
 

@@ -224,7 +224,8 @@ export default function DashboardV2Outbound() {
                     cx="50%"
                     cy="50%"
                     outerRadius={80}
-                    label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}
+                    label={({ name, value, percent }) =>
+                      `${name}: ${value} (${((percent ?? 0) * 100).toFixed(0)}%)`}
                     labelLine={{ stroke: '#9ca3af', strokeWidth: 1 }}
                   >
                     {formatChart.map((_: any, i: number) => (
@@ -470,7 +471,8 @@ export default function DashboardV2Outbound() {
                         cx="50%"
                         cy="50%"
                         outerRadius={100}
-                        label={({ name, value, percent }) => `${name}: ${value} (${(percent * 100).toFixed(0)}%)`}
+                        label={({ name, value, percent }) =>
+                      `${name}: ${value} (${((percent ?? 0) * 100).toFixed(0)}%)`}
                         labelLine={{ stroke: '#9ca3af', strokeWidth: 1 }}
                       >
                         <Cell fill={FAILED_COLORS.oneTime} />
@@ -506,7 +508,9 @@ export default function DashboardV2Outbound() {
                         tick={{ fontSize: 12, fill: '#6b7280' }}
                       />
                       <Tooltip 
-                        formatter={(v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        formatter={(v) =>
+                          Number(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })
+                        }
                         contentStyle={{ 
                           backgroundColor: 'white', 
                           border: '2px solid #e5e7eb',

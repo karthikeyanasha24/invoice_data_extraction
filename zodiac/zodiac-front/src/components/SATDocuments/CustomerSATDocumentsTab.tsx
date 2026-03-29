@@ -17,6 +17,7 @@ interface SATDocument {
   supplier_rfc?: string;
   supplier_name?: string;
   receiver_rfc?: string;
+  serie?: string;
   folio?: string;
   fecha?: string;
   total?: string;

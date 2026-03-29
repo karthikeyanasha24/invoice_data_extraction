@@ -155,7 +155,9 @@ export default function DashboardV2Business() {
                 <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
                 <YAxis type="category" dataKey="currency" width={52} tick={{ fontSize: 11 }} />
                 <Tooltip
-                  formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  formatter={(value) =>
+                    Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })
+                  }
                   labelFormatter={(_, payload) => {
                     const p = payload?.[0]?.payload;
                     return p ? `${p.currency} · ${p.invoice_count} invoices` : _;
@@ -187,7 +189,9 @@ export default function DashboardV2Business() {
                 <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
                 <YAxis type="category" dataKey="customer_name" width={120} tick={{ fontSize: 10 }} />
                 <Tooltip
-                  formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  formatter={(value) =>
+                    Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })
+                  }
                   labelFormatter={(_, payload) => payload?.[0]?.payload?.customer_name ?? _}
                 />
                 <Bar dataKey="total_revenue" name="Revenue" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
@@ -218,7 +222,9 @@ export default function DashboardV2Business() {
                     <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
                     <YAxis type="category" dataKey="country_name" width={80} tick={{ fontSize: 10 }} />
                     <Tooltip
-                      formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      formatter={(value) =>
+                    Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })
+                  }
                       labelFormatter={(_, payload) => {
                         const p = payload?.[0]?.payload;
                         if (!p) return _;
@@ -253,7 +259,7 @@ export default function DashboardV2Business() {
                     <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} tickFormatter={(v) => Number(v)?.toLocaleString()} />
                     <YAxis type="category" dataKey="country_name" width={80} tick={{ fontSize: 10 }} />
                     <Tooltip
-                      formatter={(value: number) => [Number(value)?.toLocaleString(), 'Customers']}
+                      formatter={(value) => [Number(value ?? 0).toLocaleString(), 'Customers']}
                       labelFormatter={(_, payload) => {
                         const p = payload?.[0]?.payload;
                         if (!p) return _;
@@ -289,7 +295,9 @@ export default function DashboardV2Business() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis type="number" tick={{ fontSize: 12 }} />
                 <YAxis type="category" dataKey="industry" width={76} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(value: number) => value?.toLocaleString(undefined, { minimumFractionDigits: 2 })} />
+                <Tooltip formatter={(value) =>
+                    Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })
+                  } />
                 <Legend />
                 <Bar dataKey="total_revenue" name="Revenue" fill="#3b82f6" radius={[0, 4, 4, 0]} />
               </BarChart>
@@ -317,7 +325,10 @@ export default function DashboardV2Business() {
                       <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => Number(v)?.toLocaleString(undefined, { maximumFractionDigits: 0 })} />
                       <YAxis type="category" dataKey="product_name" width={84} tick={{ fontSize: 10 }} />
                       <Tooltip
-                        formatter={(value: number) => [Number(value)?.toLocaleString(undefined, { maximumFractionDigits: 2 }), 'Units sold']}
+                        formatter={(value) => [
+                          Number(value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 }),
+                          'Units sold',
+                        ]}
                         labelFormatter={(_, payload) => {
                           const p = payload?.[0]?.payload;
                           return p ? `${p.product_name} · ${p.industry}` : _;
@@ -342,7 +353,10 @@ export default function DashboardV2Business() {
                       <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => Number(v)?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} />
                       <YAxis type="category" dataKey="product_name" width={84} tick={{ fontSize: 10 }} />
                       <Tooltip
-                        formatter={(value: number) => [Number(value)?.toLocaleString(undefined, { minimumFractionDigits: 2 }), 'Avg price']}
+                        formatter={(value) => [
+                          Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 }),
+                          'Avg price',
+                        ]}
                         labelFormatter={(_, payload) => {
                           const p = payload?.[0]?.payload;
                           return p ? `${p.product_name} · ${p.industry}` : _;
