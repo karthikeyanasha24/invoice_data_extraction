@@ -1295,16 +1295,57 @@ If result is empty, say so and suggest a refined question.
     explicit_sap_only = bool(explicit_ids_q and sap_forced_resolved and not app_tables_resolved)
 
     # ------------------------------------------------------------
+    # REAL-TIME OPERATIONAL DB RESOLVER
+    # ------------------------------------------------------------
+    # For time_scope="current" questions about Zodiac operational data
+    # (invoice volume trends, inbound SAT merges, etc.) that live on the
+    # app DB — NOT on the SAP read-replica which only has 1994-2010 data.
+    # This runs BEFORE the intent pipeline so "last 12 months" queries don't
+    # get zero rows from the SAP historical dataset.
+    if result is None and action == "new" and time_scope == "current" and not (app_tables_resolved or explicit_ids_q):
+        try:
+            from .operational_query_resolver import resolve_operational_query
+            from sqlalchemy import text as _op_sql_text
+
+            _op_result = resolve_operational_query(user_query, time_scope=time_scope, api_key=api_key)
+            if _op_result is not None:
+                _op_sql, _op_query_type = _op_result
+                _op_rows_raw = db.execute(_op_sql_text(_op_sql)).mappings().all()
+                _op_rows = [dict(r) for r in _op_rows_raw]
+                result = SqlAgentResult(sql=_op_sql, rows=_op_rows)
+                timings["sql_path_reason"] = f"operational_{_op_query_type}"
+                logger.info(
+                    "operational_query_resolver: %s — %d rows returned",
+                    _op_query_type,
+                    len(_op_rows),
+                )
+        except Exception as _op_err:
+            logger.warning("operational_query_resolver failed, falling through: %s", _op_err)
+            try:
+                db.rollback()  # Reset broken transaction so subsequent DB ops work
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------
     # STRICT INTENT-DRIVEN PIPELINE (no reinterpretation)
     # ------------------------------------------------------------
-    # Applies to standard SAP analysis questions when no explicit table routing is in effect.
-    # Explicit table precedence stays intact; mixed app+sap handled earlier.
-    if result is None and action == "new" and sql_db is not None and not (app_tables_resolved or explicit_ids_q):
+    # Applies ONLY to sales/billing analytics questions (revenue, top customers, etc.).
+    # Non-analytics queries (PO, delivery, vendor, EDI, open invoices, GL, etc.) are
+    # routed directly to the schema-driven LLM SQL agent below.
+    try:
+        from .intent_extractor import is_intent_pipeline_appropriate as _intent_ok
+        _use_intent_pipeline = _intent_ok(user_query)
+    except Exception:
+        _use_intent_pipeline = True  # safe fallback: try intent pipeline
+
+    if result is None and action == "new" and sql_db is not None and not (app_tables_resolved or explicit_ids_q) and _use_intent_pipeline:
         try:
-            from .schema_loader import load_schema as _load_schema_live
+            from .schema_loader import load_schema_from_mapping_file as _load_schema_fast
             from sqlalchemy import text as _sql_text
 
-            intent_schema = _load_schema_live(sql_db, max_columns_per_table=None)
+            # Use the local JSON mapping file (instant, zero DB round-trips) instead of
+            # the live inspector which issues one query per table (118 tables × ~1-2s = 200s+).
+            intent_schema = _load_schema_fast(max_columns_per_table=None)
             intent = extract_intent(user_query, intent_schema)
             print("🔥 USING INTENT PIPELINE")
             print("INTENT:", json.dumps(intent, default=str)[:1200])
@@ -1314,6 +1355,13 @@ If result is empty, say so and suggest a refined question.
             # Build SQL strictly from intent (no LLM SQL generation)
             plan = build_sql_plan(intent, intent_schema)
             sql = generate_sql(plan)
+            # Normalize table name casing for PostgreSQL (e.g. lowercase vbrp stays vbrp,
+            # uppercase VBRK gets quoted as "VBRK"). Belt-and-suspenders over intent_sql_planner fixes.
+            try:
+                from .sap_sql_agent import _quote_catalog_sql_tables as _qct_intent
+                sql = _qct_intent(sql)
+            except Exception:
+                pass
             logger.info("INTENT_SQL: %s", (sql or "")[:1500])
 
             exec_start = time.time()
@@ -1410,10 +1458,10 @@ If result is empty, say so and suggest a refined question.
                 period_info=period_info,
             )
 
-    # Hard stop: legacy SQL engines are disabled for new data queries.
-    # If we reached this point without returning from the strict pipeline or explicit-table flow,
-    # abort instead of silently falling back to keyword/semantic/legacy agents.
-    if action == "new" and result is None:
+    # Hard stop: only block if the intent pipeline was appropriate AND still produced nothing.
+    # Non-analytics queries (_use_intent_pipeline=False) are allowed to fall through to
+    # the schema-driven LLM SQL agent below (PO, delivery, vendor, EDI, status queries, etc.)
+    if action == "new" and result is None and _use_intent_pipeline:
         timings["total_ms"] = int((time.time() - perf_start) * 1000)
         return OrchestratorResult(
             reply=json.dumps(
@@ -1435,6 +1483,7 @@ If result is empty, say so and suggest a refined question.
             date_range=date_range,
             period_info=period_info,
         )
+    # Non-analytics new queries fall through here to the schema-driven LLM SQL agent
 
     # Negative / lowest billing LINE ITEMS for a year — MUST run before ai_query_memory.
     # Stored queries often wrongly aggregate SUM by calendar year across all years; users
@@ -2179,8 +2228,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                 # explicit LLM retry with mandatory FKDAT/FKTYP/FKART/WAERK filters.
                 if charts_blocked_reason:
                     try:
-                        from .sap_sql_agent import run_sap_sql_agent
-
+                        # run_sap_sql_agent already imported at module level (line 23)
                         mandatory_parts: List[str] = []
                         for yy in sorted(constraints.years):
                             mandatory_parts.append(
@@ -2303,8 +2351,13 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
         logger.warning("Result shaping failed: %s", shape_err)
 
     # Mandatory precision gate before narrative/charts: reject year/month/revenue shape violations.
+    # Skip for operational (Zodiac DB) queries — they use app DB tables not present in SAP schema.
+    _is_operational_result = timings.get("sql_path_reason", "").startswith("operational_")
     try:
         from .sap_sql_precision_validator import validate_sql_precision_for_db
+
+        if _is_operational_result:
+            raise Exception("skip_precision_gate_for_operational_query")
 
         _precision = validate_sql_precision_for_db(sql_db, result.sql, question=user_query)
         if not _precision.is_valid:

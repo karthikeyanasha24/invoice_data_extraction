@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { fileApi } from '@/lib/api';
+import { fileApi, getPublicApiBase } from '@/lib/api';
 import { Invoice } from '@/types';
 import {
   FileText,
@@ -256,7 +256,7 @@ export default function InvoicesLanding() {
   const handleDownloadClick = async(invoice: Invoice) => {
     try {
       // Use API endpoint for download (works with both blob storage and local files)
-      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/invoices/${invoice.tracking_id}/download`;
+      const apiUrl = `${getPublicApiBase()}/api/v1/invoices/${invoice.tracking_id}/download`;
       
       console.log('📥 Downloading from API:', apiUrl);
       

@@ -270,6 +270,14 @@ def generate_sql(plan: SqlPlan) -> str:
     return "\n".join(parts)
 
 
+def _quote_table(name: str) -> str:
+    """Return the SQL-safe reference for a table name.
+    Lowercase tables (e.g. vbrp) need no quotes; uppercase ones need "VBRK" style quoting."""
+    if name == name.lower():
+        return name
+    return f'"{name}"'
+
+
 def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> str:
     """
     Canonical analytics-safe query layer:
@@ -319,114 +327,266 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
     dim_cols = list(dict.fromkeys(dim_cols))
     logical_dims = list(dict.fromkeys(logical_dims))
 
-    metric_alias = str(metric.get("alias") or "value")
-    if metric_logical == "count":
-        metric_expr = "SUM(sa.invoices)"
-    else:
-        metric_expr = "SUM(sa.revenue)"
+    # Resolve actual table names from schema (DB may store as lowercase e.g. vbrp)
+    vbrp_actual = next((t for t in (schema or {}) if t.upper() == "VBRP"), "VBRP")
+    vbrk_actual = next((t for t in (schema or {}) if t.upper() == "VBRK"), "VBRK")
+    makt_actual = next((t for t in (schema or {}) if t.upper() == "MAKT"), "MAKT")
+    vbrp_ref = _quote_table(vbrp_actual)
+    vbrk_ref = _quote_table(vbrk_actual)
+    makt_ref = _quote_table(makt_actual)
 
-    select_parts: List[str] = [f"{c}" for c in dim_cols]
-    select_parts.append(f"{metric_expr} AS {metric_alias}")
+    metric_alias = str(metric.get("alias") or "total_sales")
 
-    # HARD RULE: when intent is year-based sales trend/comparison without extra breakdowns,
-    # SQL MUST return year + total_sales only.
-    year_only_request = (
-        "year" in logical_dims
-        and metric_logical in ("revenue", "sales", "amount", "count")
-        and not any(d in logical_dims for d in ("product", "customer", "country", "currency", "industry"))
-    )
-    if year_only_request:
-        dim_cols = ["year"]
-        select_parts = [f"{dim_cols[0]}", f"{metric_expr} AS {metric_alias}"]
+    # If ranking is requested but no dimension was specified, default to product breakdown.
+    if ranking.get("enabled") and not dim_cols:
+        dim_cols = ["product_name"]
+        logical_dims = ["product"]
 
-    where_parts: List[str] = []
-    for f in filters:
-        op = str(f.get("operator") or "").upper()
-        cref = f.get("column_ref") or {}
-        col = str(cref.get("column") or "").upper()
-        val = f.get("value")
-        if op == "IN_YEAR":
-            years = [str(x) for x in (val or []) if str(x)]
-            if years:
-                where_parts.append("sa.year IN (" + ", ".join("'" + y.replace("'", "''") + "'" for y in years) + ")")
-
-    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
-    group_sql = ("GROUP BY " + ", ".join(dim_cols)) if dim_cols else ""
-
-    order_sql = ""
-    limit_sql = ""
+    # ── Ranking / ORDER-BY parameters ──────────────────────────────────────────
+    ord_dir = "DESC"
+    lim_i = 5
     if ranking.get("enabled"):
         ord_dir = str(ranking.get("order") or "desc").upper()
         if ord_dir not in ("ASC", "DESC"):
             ord_dir = "DESC"
-        lim = ranking.get("limit") or 5
         try:
-            lim_i = max(1, min(int(lim), 200))
+            lim_i = max(1, min(int(ranking.get("limit") or 5), 200))
         except Exception:
             lim_i = 5
-        order_sql = f"ORDER BY {metric_alias} {ord_dir}"
-        limit_sql = f"LIMIT {lim_i}"
-    else:
-        order_sql = f"ORDER BY {metric_alias} DESC"
 
-    sql = f"""
-WITH sales_clean AS (
-    SELECT
-        TRIM(p."matnr") AS product_id,
-        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4) AS year,
-        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6) AS month,
-        TRIM(v."kunag") AS customer_id,
-        TRIM(v."land1") AS country,
-        TRIM(v."waerk") AS currency,
-        SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
-        SUM(CAST(NULLIF(TRIM(CAST(p."fkimg" AS TEXT)), '') AS NUMERIC)) AS quantity,
-        COUNT(DISTINCT v."vbeln") AS invoices
-    FROM "VBRP" p
-    JOIN "VBRK" v
-      ON LPAD(TRIM(p."vbeln"), 10, '0') = LPAD(TRIM(v."vbeln"), 10, '0')
-    WHERE p."matnr" IS NOT NULL
-      AND TRIM(p."matnr") <> ''
-      AND v."fkdat" IS NOT NULL
-      AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''
-    GROUP BY
-        TRIM(p."matnr"),
-        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4),
-        SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6),
-        TRIM(v."kunag"),
-        TRIM(v."land1"),
-        TRIM(v."waerk")
-),
+    # ── Year filters from intent ────────────────────────────────────────────────
+    year_filter_parts: List[str] = []
+    for f in filters:
+        op = str(f.get("operator") or "").upper()
+        val = f.get("value")
+        if op == "IN_YEAR":
+            yrs = [str(x) for x in (val or []) if str(x)]
+            if yrs:
+                year_filter_parts.append(yrs)  # stored for later injection
+
+    # ── FAST DIRECT PATH (0 or 1 dimension) ────────────────────────────────────
+    # For simple ranking/aggregate with ≤1 dimension we skip the expensive
+    # full-scan CTE (which joins vbrp+VBRK across ALL years before filtering).
+    # Each case queries only the tables it actually needs.
+    single_dim = dim_cols[0] if len(dim_cols) == 1 else None
+    single_logical = logical_dims[0] if len(logical_dims) == 1 else None
+
+    if len(dim_cols) <= 1:
+        # ── PRODUCT ranking/aggregate: vbrp + MAKT only (no VBRK needed) ──
+        if single_logical in (None, "product"):
+            if metric_logical == "count":
+                metric_sql = f'COUNT(DISTINCT TRIM(p."vbeln")) AS {metric_alias}'
+            else:
+                metric_sql = f'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
+
+            year_where = ""
+            if year_filter_parts:
+                y_list = ", ".join("'" + y + "'" for y in year_filter_parts[0])
+                year_where = f"\n  AND TRIM(CAST(p.\"fkdat\" AS TEXT)) IS NOT NULL"  # fallback; fkdat may not be on vbrp
+
+            if single_logical == "product":
+                # Group by product, join MAKT for name
+                order_by = f"ORDER BY {metric_alias} {ord_dir}"
+                limit_clause = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
+                sql = f"""
+SELECT
+    COALESCE(NULLIF(TRIM(m."maktx"), ''), TRIM(p."matnr")) AS product,
+    {metric_sql}
+FROM {vbrp_ref} p
+LEFT JOIN {makt_ref} m
+    ON TRIM(p."matnr") = TRIM(m."matnr")
+    AND (m."spras" = 'E' OR m."spras" IS NULL)
+WHERE p."matnr" IS NOT NULL
+  AND TRIM(p."matnr") <> ''
+  AND p."netwr" IS NOT NULL
+GROUP BY TRIM(p."matnr"), TRIM(m."maktx")
+{order_by}
+{limit_clause}""".strip()
+            else:
+                # No dimension: total aggregate
+                sql = f"""
+SELECT {metric_sql}
+FROM {vbrp_ref} p
+WHERE p."netwr" IS NOT NULL""".strip()
+            return sql
+
+        # ── CUSTOMER / COUNTRY / CURRENCY / DATE: vbrp + VBRK (simple TRIM join) ──
+        if single_logical in ("customer", "country", "currency", "year", "month"):
+            if metric_logical == "count":
+                metric_sql = f'COUNT(DISTINCT TRIM(v."vbeln")) AS {metric_alias}'
+            else:
+                metric_sql = f'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
+
+            if single_logical == "customer":
+                dim_expr = 'TRIM(v."kunag")'
+                dim_alias = "customer"
+            elif single_logical == "country":
+                dim_expr = 'TRIM(v."land1")'
+                dim_alias = "country"
+            elif single_logical == "currency":
+                dim_expr = 'TRIM(v."waerk")'
+                dim_alias = "currency"
+            elif single_logical == "year":
+                dim_expr = 'SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4)'
+                dim_alias = "year"
+            else:  # month
+                dim_expr = 'SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6)'
+                dim_alias = "month"
+
+            year_where = ""
+            if year_filter_parts and single_logical in ("year", "month"):
+                y_list = ", ".join("'" + y + "'" for y in year_filter_parts[0])
+                year_where = f"\n  AND SUBSTRING(TRIM(CAST(v.\"fkdat\" AS TEXT)), 1, 4) IN ({y_list})"
+            elif year_filter_parts:
+                y_list = ", ".join("'" + y + "'" for y in year_filter_parts[0])
+                year_where = f"\n  AND SUBSTRING(TRIM(CAST(v.\"fkdat\" AS TEXT)), 1, 4) IN ({y_list})"
+
+            order_clause = f"ORDER BY {metric_alias} {ord_dir}" if single_logical not in ("year",) else f"ORDER BY {dim_alias}"
+            if ranking.get("enabled"):
+                order_clause = f"ORDER BY {metric_alias} {ord_dir}"
+            limit_clause = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
+
+            # Extra WHERE guard: exclude null/empty dimension values so they don't
+            # aggregate into a phantom "top customer/country/currency" bucket.
+            dim_notnull_guard = ""
+            if single_logical == "customer":
+                dim_notnull_guard = f"\n  AND {dim_expr} IS NOT NULL AND {dim_expr} <> ''"
+            elif single_logical in ("country", "currency"):
+                dim_notnull_guard = f"\n  AND {dim_expr} IS NOT NULL AND {dim_expr} <> ''"
+
+            sql = f"""
+SELECT
+    {dim_expr} AS {dim_alias},
+    {metric_sql}
+FROM {vbrp_ref} p
+JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")
+WHERE v."fkdat" IS NOT NULL
+  AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''{dim_notnull_guard}{year_where}
+GROUP BY {dim_expr}
+{order_clause}
+{limit_clause}""".strip()
+            return sql
+
+    # ── FULL CTE PATH: multi-dimension queries (product + year, customer + country, etc.) ──
+    # Uses a lighter CTE that only computes what this specific query needs.
+    needs_vbrk = any(d in logical_dims for d in ("customer", "country", "currency", "year", "month"))
+    needs_makt = "product" in logical_dims
+
+    year_only_request = (
+        "year" in logical_dims
+        and not any(d in logical_dims for d in ("product", "customer", "country", "currency", "industry"))
+    )
+
+    # Build CTE select columns — only what's needed
+    cte_select: List[str] = ['TRIM(p."matnr") AS product_key']
+    cte_group: List[str] = ['TRIM(p."matnr")']
+    if needs_vbrk:
+        if "year" in logical_dims or "month" in logical_dims:
+            cte_select.append('SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4) AS year')
+            cte_select.append('SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6) AS month')
+            cte_group.append('SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4)')
+            cte_group.append('SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6)')
+        if "customer" in logical_dims:
+            cte_select.append('TRIM(v."kunag") AS customer')
+            cte_group.append('TRIM(v."kunag")')
+        if "country" in logical_dims:
+            cte_select.append('TRIM(v."land1") AS country')
+            cte_group.append('TRIM(v."land1")')
+        if "currency" in logical_dims:
+            cte_select.append('TRIM(v."waerk") AS currency')
+            cte_group.append('TRIM(v."waerk")')
+
+    if metric_logical == "count":
+        cte_select.append('COUNT(DISTINCT p."vbeln") AS invoices')
+        outer_metric = f"SUM(sc.invoices) AS {metric_alias}"
+    else:
+        cte_select.append('SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS revenue')
+        outer_metric = f"SUM(sc.revenue) AS {metric_alias}"
+
+    cte_join = f"""
+    JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")""" if needs_vbrk else ""
+
+    cte_where_parts: List[str] = ['p."matnr" IS NOT NULL', "TRIM(p.\"matnr\") <> ''"]
+    if needs_vbrk:
+        cte_where_parts.extend(['v."fkdat" IS NOT NULL', "TRIM(CAST(v.\"fkdat\" AS TEXT)) <> ''"])
+    for yf in year_filter_parts:
+        y_list = ", ".join("'" + y + "'" for y in yf)
+        cte_where_parts.append(f'SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 4) IN ({y_list})')
+
+    cte_where = "WHERE " + "\n      AND ".join(cte_where_parts)
+
+    # Map dim_cols to outer SELECT
+    outer_dims: List[str] = []
+    outer_group: List[str] = []
+    for lg in logical_dims:
+        if lg == "year" and needs_vbrk:
+            outer_dims.append("sc.year")
+            outer_group.append("sc.year")
+        elif lg == "month" and needs_vbrk:
+            outer_dims.append("sc.month")
+            outer_group.append("sc.month")
+        elif lg == "product":
+            if needs_makt:
+                outer_dims.append("COALESCE(pm.product_name, sc.product_key) AS product")
+                outer_group.append("COALESCE(pm.product_name, sc.product_key)")
+            else:
+                outer_dims.append("sc.product_key AS product")
+                outer_group.append("sc.product_key")
+        elif lg == "customer":
+            outer_dims.append("sc.customer AS customer")
+            outer_group.append("sc.customer")
+        elif lg == "country":
+            outer_dims.append("sc.country")
+            outer_group.append("sc.country")
+        elif lg == "currency":
+            outer_dims.append("sc.currency")
+            outer_group.append("sc.currency")
+
+    if year_only_request:
+        outer_dims = ["sc.year"]
+        outer_group = ["sc.year"]
+
+    outer_select_parts = outer_dims + [outer_metric]
+    outer_group_sql = ("GROUP BY " + ", ".join(outer_group)) if outer_group else ""
+    order_sql = f"ORDER BY {metric_alias} {ord_dir}"
+    if not ranking.get("enabled") and "year" in logical_dims and not any(d in logical_dims for d in ("product", "customer", "country")):
+        order_sql = "ORDER BY sc.year"
+    limit_sql = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
+
+    makt_cte = ""
+    makt_join = ""
+    if needs_makt:
+        makt_cte = f"""
 product_master AS (
     SELECT
-        TRIM(m."matnr") AS product_id,
+        TRIM(m."matnr") AS product_key,
         MAX(COALESCE(NULLIF(TRIM(m."maktx"), ''), TRIM(m."matnr"))) AS product_name
-    FROM "MAKT" m
+    FROM {makt_ref} m
     WHERE m."matnr" IS NOT NULL
       AND TRIM(m."matnr") <> ''
       AND (m."spras" = 'E' OR m."spras" IS NULL)
     GROUP BY TRIM(m."matnr")
-),
-sales_analytics AS (
+),"""
+        makt_join = "\nLEFT JOIN product_master pm ON pm.product_key = sc.product_key"
+
+    sql = f"""
+WITH sales_clean AS (
     SELECT
-        s.product_id,
-        COALESCE(pm.product_name, s.product_id) AS product_name,
-        s.year,
-        s.month,
-        s.customer_id,
-        s.country,
-        s.currency,
-        s.revenue,
-        s.quantity,
-        s.invoices
-    FROM sales_clean s
-    LEFT JOIN product_master pm
-      ON pm.product_id = s.product_id
+        {(chr(10) + '        ').join(f'{s},' for s in cte_select[:-1])}
+        {cte_select[-1]}
+    FROM {vbrp_ref} p{cte_join}
+    {cte_where}
+    GROUP BY
+        {(',' + chr(10) + '        ').join(cte_group)}
+),{makt_cte}
+outer_agg AS (
+    SELECT
+        {(chr(10) + '        ').join(f'{s},' for s in outer_select_parts[:-1])}
+        {outer_select_parts[-1]}
+    FROM sales_clean sc{makt_join}
+    {outer_group_sql}
 )
-SELECT
-    {", ".join(select_parts)}
-FROM sales_analytics sa
-{where_sql}
-{group_sql}
+SELECT * FROM outer_agg
 {order_sql}
 {limit_sql}
 """.strip()

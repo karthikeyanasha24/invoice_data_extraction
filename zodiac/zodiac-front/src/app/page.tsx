@@ -30,13 +30,19 @@ function HomeContent() {
     }
   }, [searchParams, isClient]);
 
-  // Clear auth data when showing login/signup pages to prevent stale data
+  // Only clear auth data if there is no stored token at all (true fresh session).
+  // Do NOT wipe the token when the server is temporarily unreachable — the token
+  // is still valid and should restore the session once the server is back.
   useEffect(() => {
     if (!isClient) return;
-    
     if (!isAuthenticated && !loading) {
-      console.log('🔐 Home - Clearing auth data before showing login/signup');
-      clearAuthData();
+      const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('access_token');
+      if (!hasToken) {
+        console.log('🔐 Home - No token present, showing login/signup');
+        clearAuthData(); // safe: nothing to wipe, just resets state
+      } else {
+        console.log('🔐 Home - Token present but auth check failed (server may be restarting); preserving session');
+      }
     }
   }, [isAuthenticated, loading, clearAuthData, isClient]);
 

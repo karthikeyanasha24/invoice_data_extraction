@@ -43,6 +43,9 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     "SOME", "SUCH", "THAN", "ONLY", "ALSO", "VERY", "JUST", "MOST", "MANY",
     "SAME", "BEEN", "EVEN", "MADE", "PART", "AREA", "TYPE", "KIND", "NAME",
     "USER", "DATA", "ROWS", "LAST", "NEXT", "HELP", "OPEN", "CLOSE", "READ",
+    # Zodiac operational domain words — not table names in SAP or app schema
+    "SAT", "CFDI", "RFC", "MXN", "XML", "EDI", "API", "PDF", "CSV", "ERP",
+    "SAP",  # SAP is an app/system name, not a table identifier
 }
 
 

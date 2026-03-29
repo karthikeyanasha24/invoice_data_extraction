@@ -19,7 +19,19 @@ security = HTTPBearer()
 # JWT settings
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+
+def _access_token_expire_minutes() -> int:
+    """How long login JWTs remain valid. Override with ACCESS_TOKEN_EXPIRE_MINUTES in .env (minutes)."""
+    raw = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(30 * 24 * 60))
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 30 * 24 * 60
+    return n if n > 0 else 30 * 24 * 60
+
+
+ACCESS_TOKEN_EXPIRE_MINUTES = _access_token_expire_minutes()
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()

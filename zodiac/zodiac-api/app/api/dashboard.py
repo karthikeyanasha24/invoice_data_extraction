@@ -3039,8 +3039,12 @@ async def post_ai_analysis_chat(
                 days=int(days),
             )
             payload = orchestrator_payload(orch)
-            validation_db = sap_session_for_sql or db
-            if payload.get("sql"):
+            # Use Zodiac app DB for operational resolver results (Zodiac tables not in SAP schema).
+            _is_operational_payload = (payload.get("sql_path_reason") or "").startswith("operational_")
+            validation_db = db if _is_operational_payload else (sap_session_for_sql or db)
+            # Skip SAP precision validation for operational Zodiac queries — they use app DB tables
+            # not present in the SAP schema, so validation would produce false "unknown table" errors.
+            if payload.get("sql") and not _is_operational_payload:
                 validation, blocking_detail = _validate_sql_candidate(validation_db, message or "", payload["sql"])
                 if validation and not blocking_detail:
                     payload["validation"] = _validation_to_payload(validation)
@@ -3054,13 +3058,10 @@ async def post_ai_analysis_chat(
                     non_blocking_payload = _non_blocking_validation_payload(validation)
                     if non_blocking_payload.get("warnings") or non_blocking_payload.get("date_normalizations"):
                         payload["validation"] = non_blocking_payload
-            if payload.get("proposed_sql"):
+            if payload.get("proposed_sql") and not _is_operational_payload:
                 proposed_validation, _ = _validate_sql_candidate(validation_db, message or "", payload["proposed_sql"])
                 if proposed_validation:
                     payload["proposed_sql"] = proposed_validation.normalized_sql
-                    # Use non-blocking payload for proposed_sql so column availability errors
-                    # (e.g. 'vbrp.matnr not in schema') are surfaced as warnings rather than
-                    # hard "Blocked:" errors — the user can still review and approve the SQL.
                     payload["proposed_validation"] = _non_blocking_validation_payload(proposed_validation)
         finally:
             if sap_session_for_sql is not None:

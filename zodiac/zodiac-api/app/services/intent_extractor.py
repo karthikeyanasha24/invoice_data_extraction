@@ -288,3 +288,94 @@ def extract_intent(question: str, schema: Optional[Dict[str, List[str]]] = None)
     )
     return intent.to_json()
 
+
+
+def is_intent_pipeline_appropriate(question: str) -> bool:
+    """
+    Routes to the intent pipeline when the query is a billing/sales analytics question
+    that the intent pipeline can answer (aggregations over VBRP/VBRK).
+
+    Priority order (analytics wins over exclusions):
+      1. Strong analytics signal → True  (even if "vendor", "invoice", etc. are present)
+      2. Hard operational exclusion with NO analytics signal → False
+      3. Default → False (route to full LLM SQL agent)
+
+    This means "vendor invoice totals by currency" → True (analytics wins),
+    but "list my open vendor invoices" → False (status/list query, no analytics signal).
+    """
+    q = (question or "").lower()
+
+    # ── 1. Analytics patterns (checked first — these override exclusions) ──────
+    analytics_patterns = [
+        r'\brevenue\b',
+        r'\bsales\b',
+        r'\bturnover\b',
+        r'\b(netwr|waerk)\b',
+        r'\bprofit\b',
+        # "top N by dimension"
+        r'\btop\b.{0,30}\b(customers?|products?|materials?|countr|region|vendor|supplier)',
+        r'\b(customers?|products?|materials?|countr|region|vendor|supplier).{0,30}\btop\b',
+        # "by <dimension>" — the key analytics grouping signal
+        r'\bby\s+(customers?|countr|products?|materials?|year|month|region|currency|vendor|supplier)\b',
+        # superlatives on billing amounts
+        r'\b(highest|lowest|best|worst).{0,25}\b(sale|revenue|amount|billing|invoice)',
+        # totals / sums
+        r'\btotal\s+(revenue|sales|billing|invoice|amount)',
+        r'\bsum\s+of\s+(revenue|sales|netwr|amount)\b',
+        r'\b(invoice|billing)\s+(total|amount|value|sum)\b',
+        # trends
+        r'\brevenue\s+by\b',   r'\bsales\s+by\b',
+        r'\bsales\s+trend\b',  r'\brevenue\s+trend\b',
+        # counts
+        r'\bnumber\s+of\s+(invoices?|billing|orders?)',
+        r'\binvoice\s+(count|volume|value)\b',
+        # "by currency" alone is a strong analytics signal
+        r'\bby\s+currenc',
+        r'\bper\s+currenc',
+        r'\bgrouped?\s+by\b',
+    ]
+    analytics_match = any(re.search(p, q) for p in analytics_patterns)
+    if analytics_match:
+        return True  # analytics intent overrides any exclusion keyword
+
+    # ── 2. Hard operational exclusions (only reached when NO analytics signal) ─
+    exclusion_patterns = [
+        # Purchasing / procurement — non-analytics operational queries
+        r'\bpurchase\s+(order|requisition)',
+        r'\b(po|pos)\b(?!\s*box)',
+        r'\bprocur',
+        r'\b(ekko|ekpo|ekbe|ekes|eket|eban)\b',
+        # Deliveries / logistics
+        r'\bdeliver(y|ies)\b',
+        r'\bshipment',
+        r'\b(likp|lips)\b',
+        # Vendor/supplier lookup (master data, not analytics — only excluded when no analytics signal)
+        r'\bvendor\s+(master|list|detail|record|profile|number|id)\b',
+        r'\bsupplier\s+(master|list|detail|record|profile)\b',
+        r'\b(lfa1|lfb1|lfm1|lfm2)\b',
+        # EDI / operational system queries
+        r'\bedi\b',
+        r'\b(cfdi|sat)\b',
+        r'\bzodiac\b',
+        r'\binbound\b',
+        # GL / accounting entries
+        r'\bgeneral\s+ledger\b',
+        r'\bjournal\s+(entr|posting)',
+        r'\b(bkpf|bseg|bsad|bsak|bsas|faglflexa)\b',
+        r'\bgl\s+(account|posting|doc)',
+        # Inventory / material master lookups
+        r'\bstock\b',
+        r'\binventor(y|ies)\b',
+        r'\b(mard|marc|marm)\b',
+        # Invoice status / list queries (not aggregations)
+        r'\b(open|overdue|pending|blocked|unprocessed)\b.{0,40}\b(invoice|document|billing)\b',
+        r'\b(invoice|document|billing).{0,40}\b(open|overdue|pending|status|blocked)\b',
+        r'\bfailed\b.{0,30}\b(invoice|document|edi|posting)\b',
+        # List/show queries with no aggregation intent
+        r'\b(list|show|display|find|get)\s+(me\s+)?(all\s+)?(vendor|supplier|purchase|delivery)',
+    ]
+    if any(re.search(p, q) for p in exclusion_patterns):
+        return False
+
+    # ── 3. Default: route to LLM SQL agent ────────────────────────────────────
+    return False

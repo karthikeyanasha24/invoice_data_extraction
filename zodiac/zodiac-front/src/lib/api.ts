@@ -1,7 +1,37 @@
 import axios from 'axios';
 import { AuthResponse, LoginRequest, SignupRequest, User, FileUploadResponse, Invoice } from '@/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+function trimTrailingSlash(url: string): string {
+    return url.replace(/\/$/, '');
+}
+
+/**
+ * Axios baseURL: server-side and explicit NEXT_PUBLIC hit the backend directly.
+ * Browser without NEXT_PUBLIC uses same-origin URLs; next.config rewrites proxy /api/v1 → FastAPI (avoids localhost:8000 / wrong-process 404s in dev).
+ */
+function resolveAxiosBaseURL(): string | undefined {
+    const pub = process.env.NEXT_PUBLIC_API_URL?.trim();
+    if (typeof window === 'undefined') {
+        const internal = process.env.INTERNAL_API_URL?.trim();
+        return trimTrailingSlash(internal || pub || 'http://127.0.0.1:8000');
+    }
+    if (pub) return trimTrailingSlash(pub);
+    return undefined;
+}
+
+/** Full origin for download links and logging (browser + no NEXT_PUBLIC → current page origin). */
+export function getPublicApiBase(): string {
+    const pub = process.env.NEXT_PUBLIC_API_URL?.trim();
+    if (typeof window === 'undefined') {
+        return trimTrailingSlash(
+            process.env.INTERNAL_API_URL?.trim() || pub || 'http://127.0.0.1:8000'
+        );
+    }
+    if (pub) return trimTrailingSlash(pub);
+    return trimTrailingSlash(window.location.origin);
+}
+
+const API_BASE_URL = resolveAxiosBaseURL();
 
 export const api = axios.create({
     baseURL: API_BASE_URL,
@@ -64,10 +94,13 @@ api.interceptors.response.use(
         console.log('Full Error:', error);
         console.groupEnd();
 
-        if (error.response?.status === 401) {
-            // Clear invalid token and all auth data
+        // 401 on login/signup is "wrong credentials" / validation — not an expired session. Do not redirect.
+        const reqPath = String(error.config?.url || '');
+        const isAuthCredentialRequest =
+            reqPath.includes('/user/auth/login') || reqPath.includes('/user/auth/create-user');
+
+        if (error.response?.status === 401 && !isAuthCredentialRequest) {
             if (typeof window !== 'undefined') {
-                // Clear all auth-related data
                 const authKeys = [
                     'access_token',
                     'refresh_token',
@@ -75,16 +108,15 @@ api.interceptors.response.use(
                     'auth_state',
                     'token_expiry',
                     'last_login',
-                    'remember_me'
+                    'remember_me',
                 ];
 
-                authKeys.forEach(key => {
+                authKeys.forEach((key) => {
                     localStorage.removeItem(key);
                     sessionStorage.removeItem(key);
                 });
 
-                console.log('🔐 API - 401 detected, clearing all auth data and redirecting to login');
-                // Redirect to login page
+                console.log('🔐 API - 401 (session invalid), clearing auth and redirecting to login');
                 window.location.href = '/';
             }
         }
@@ -101,15 +133,21 @@ export const authApi = {
             console.log('🔐 Auth API - Login success:', { user: response.data.user?.username, tokenLength: response.data.access_token?.length });
             return response.data;
         } catch (error: any) {
-            console.error('🔐 Auth API - Login failed:', {
-                status: error.response?.status,
-                data: error.response?.data,
-                message: error.message,
-                fullError: error
-            });
+            // Avoid logging raw AxiosError in one object — Next dev overlay often shows `{}` (non-serializable).
+            const st = error.response?.status;
+            const detail = error.response?.data?.detail;
+            const baseLabel = API_BASE_URL ?? getPublicApiBase();
+            console.error(
+                `🔐 Auth API - Login failed: status=${st ?? 'none'} code=${error.code ?? 'n/a'} message=${error.message} baseURL=${baseLabel}`
+            );
+            if (detail !== undefined) console.error('🔐 Auth API - Login detail:', detail);
 
             if (error.response?.status === 401) {
                 throw new Error('Invalid email or password. Please check your credentials and try again.');
+            } else if (error.response?.status === 404) {
+                throw new Error(
+                    'Login API returned Not Found. Use same-origin API (leave NEXT_PUBLIC unset locally) or set NEXT_PUBLIC_API_URL to your running backend; ensure the API is on port 8000.'
+                );
             } else if (error.response?.status === 422) {
                 throw new Error('Please check your email format and try again.');
             } else if (error.response?.status >= 500) {
@@ -226,7 +264,7 @@ export const fileApi = {
             fileSize: file.size,
             fileType: file.type,
             lastModified: new Date(file.lastModified).toISOString(),
-            apiBaseUrl: API_BASE_URL,
+            apiBaseUrl: API_BASE_URL ?? getPublicApiBase(),
             hasToken: typeof window !== 'undefined' ? !!localStorage.getItem('access_token') : 'N/A'
         });
 
@@ -234,7 +272,7 @@ export const fileApi = {
             const formData = new FormData();
             formData.append('file', file);
 
-            console.log('📁 File API - Making request to:', `${API_BASE_URL}/api/v1/invoices/process`);
+            console.log('📁 File API - Making request to:', `${API_BASE_URL ?? getPublicApiBase()}/api/v1/invoices/process`);
             console.log('📁 File API - FormData contents:', {
                 fileName: file.name,
                 fileSize: file.size,

@@ -27,17 +27,122 @@ const AI_CONTEXT_KEYS = [
 
 const REALTIME_PROMPTS = [
   { label: 'Failed invoices', query: 'Summarize failed invoices and main failure reasons' },
-  { label: 'Inbound SAT status', query: 'Summarize inbound SAT documents: merges, sent to SAP vs pending, and top suppliers' },
+  { label: 'Inbound SAT', query: 'Summarize inbound SAT documents: merges, sent to SAP vs pending, and top suppliers' },
   { label: 'Top customers', query: 'Show top customers with currency and number of invoices (outbound process)' },
   { label: 'Outbound flow', query: 'Show the outbound process flow and current document counts at each step' },
+  { label: 'EDI status', query: 'Which EDI invoices failed vs succeeded for each customer? Show counts and error summary.' },
+  { label: 'Conversion rate', query: 'What is the invoice conversion success rate, and which step has the most failures?' },
+  { label: 'Open orders', query: 'Show open purchase requisitions (EBAN) and purchase orders that are still pending' },
+  { label: 'Delivery status', query: 'Show recent delivery header and item status for current shipments from LIKP and LIPS tables' },
 ];
 
 const HISTORICAL_PROMPTS = [
   { label: 'Profit margin', query: 'Show profit margin by product for all products in the database' },
   { label: 'Revenue trend', query: 'Summarize revenue by customer and by country with trend analysis' },
+  { label: 'Revenue by country', query: 'Show total revenue grouped by country with invoice count and average order value' },
   { label: 'Flow deviation', query: 'How does my current document flow deviate from the standard process?' },
   { label: 'Period forecast', query: 'Based on historical patterns, forecast next period revenue and invoice volume' },
   { label: 'Anomaly detection', query: 'Identify any anomalies or unusual patterns in the historical data' },
+  { label: 'Top materials', query: 'Show top materials by revenue using billing documents (VBRK joined with vbrp and MARA)' },
+  { label: 'Period compare', query: 'Compare revenue and invoice volume between two different historical periods' },
+];
+
+/* ─── Domain query examples (adaptive, natural-language) ─── */
+// These cover every table domain in the database.
+// The AI pipeline classifies each question, picks a route, runs SQL,
+// and generates dynamic charts/tables — nothing is hardcoded per question.
+const DOMAIN_QUERY_EXAMPLES: { category: string; icon: string; questions: string[] }[] = [
+  {
+    category: 'Invoices & Billing',
+    icon: '🧾',
+    questions: [
+      'Show invoices for the top customer in the last 30 days',
+      'What is the total billed amount for this month?',
+      'List invoices that are open or overdue',
+      'Which invoices were corrected or re-validated recently?',
+      'Compare v1 vs v2 invoice data for recent documents',
+    ],
+  },
+  {
+    category: 'Deliveries & Logistics',
+    icon: '🚚',
+    questions: [
+      'Show delivery headers and items (LIKP, LIPS) for recent sales orders',
+      'What is the delivery status for the most recent shipments?',
+      'Show picking and packing lines for current open deliveries',
+      'Which deliveries are blocked or have exceptions?',
+    ],
+  },
+  {
+    category: 'Sales Orders',
+    icon: '📋',
+    questions: [
+      'Show sales order headers and line items (VBAK, VBAP) for recent orders',
+      'Which orders are not fully delivered?',
+      'Show schedule lines (VBEP) with delivery dates for open orders',
+      'What pricing conditions (KONV) apply to the latest orders?',
+    ],
+  },
+  {
+    category: 'Purchasing',
+    icon: '🛒',
+    questions: [
+      'Show purchase orders and lines (EKKO, EKPO) for the top vendor',
+      'What purchase requisitions (EBAN) are still open?',
+      'List goods receipt vs invoice data (RBKP, RSEG) for recent POs',
+      'Show vendor info records (EINA, EINE) and purchasing org data',
+    ],
+  },
+  {
+    category: 'Master Data',
+    icon: '🗂️',
+    questions: [
+      'Give me customer master and sales org data (KNA1, KNVV) for top customers',
+      'What payment terms and bank details do we have for our top customer?',
+      'Show material master data (MARA, MARC, MARD) and current stock levels',
+      'List vendor company code and purchasing org data (LFA1, LFB1, LFM1)',
+    ],
+  },
+  {
+    category: 'Finance / GL',
+    icon: '💰',
+    questions: [
+      'Show general ledger actual line items (FAGLFLEXA) for the current period',
+      'What accounting documents (BKPF, BSEG) were posted this month?',
+      'Show customer open items and cleared items (BSAD)',
+      'Show CO document line items (COEP) for production orders',
+    ],
+  },
+  {
+    category: 'Costing & CO-PA',
+    icon: '📊',
+    questions: [
+      'Show cost estimate items (CKIS) and costing run results (CKHS)',
+      'What are the cost components for the top product (KEPH, KEKO)?',
+      'Show CO-PA actual line items and compare with plan',
+      'Show material ledger prices and period data (CKMLPR, CKMLPP)',
+    ],
+  },
+  {
+    category: 'Zodiac / EDI',
+    icon: '⚡',
+    questions: [
+      'Which EDI invoices failed vs succeeded for each customer?',
+      'Show converted invoices and their business field details',
+      'What is in the AI query memory and training data for this workflow?',
+      'Show SAT canonical merged documents and supplier mappings',
+    ],
+  },
+  {
+    category: 'Cross-cutting',
+    icon: '🔗',
+    questions: [
+      'Summarize everything we know about a recent order: header, lines, delivery, billing',
+      'Find duplicate or near-duplicate documents using SAT duplicate checks',
+      'Show canonical supplier and customer mappings from SAT tables',
+      'Give a full picture of the top customer: orders, deliveries, invoices, and payments',
+    ],
+  },
 ];
 
 /* ─── SAP Tables catalogue ────────────────────────────────── */
@@ -175,12 +280,18 @@ const SAP_TABLES: { name: string; desc: string; category: string }[] = [
 ];
 
 const CHAT_STARTER_PROMPTS = [
-  { label: 'Explain VBRK & vbrp', query: 'Explain the relationship between VBRK and vbrp tables and what data they contain' },
+  { label: 'VBRK & vbrp', query: 'Explain the relationship between VBRK and vbrp tables and what data they contain' },
   { label: 'Key joins', query: 'What are the most important table joins in this SAP schema for sales analysis?' },
   { label: 'Revenue fields', query: 'Which fields and tables should I use to calculate total revenue or net sales?' },
+  { label: 'Customer lookup', query: 'How do I look up a customer name and sales org data for a billing document?' },
+  { label: 'Profit margin', query: 'Walk me through how to build a profit margin query using CKIS and vbrp' },
+  { label: 'Delivery joins', query: 'How do LIKP, LIPS, and VBFA relate to each other for delivery tracking?' },
+  { label: 'PO to invoice', query: 'Explain the full purchasing flow from EKKO/EKPO through RBKP/RSEG to financial posting' },
+  { label: 'Material stock', query: 'Which tables (MARA, MARC, MARD) should I use to get material stock by plant and storage location?' },
+  { label: 'Vendor master', query: 'How is vendor master data structured across LFA1, LFB1, and LFM1?' },
+  { label: 'CO-PA analysis', query: 'How do CE1* and CE2* CO-PA tables work and what can I analyse from them?' },
   { label: 'Year 2000 data', query: 'How should I filter data for the year 2000? The gjahr field seems unreliable.' },
-  { label: 'Customer lookup', query: 'How do I look up a customer name for a billing document?' },
-  { label: 'Profit margin query', query: 'Walk me through how to build a profit margin query using CKIS and vbrp' },
+  { label: 'EDI tables', query: 'Explain zodiac_invoice_failed_edi and zodiac_invoice_success_edi — what columns exist and how are they used?' },
 ];
 
 /* ─── Types ───────────────────────────────────────────────────── */
@@ -517,12 +628,74 @@ function SchemaDrawer({
   );
 }
 
+/* ─── Domain Explorer ────────────────────────────────────────── */
+// Collapsible panel shown in the AI chat empty state.
+// Organises natural-language examples by domain so users discover
+// what they can ask without being limited to pre-set chips.
+
+function DomainExplorer({ onSelect }: { onSelect: (q: string) => void }) {
+  const [openCategory, setOpenCategory] = useState<string | null>(null);
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 bg-gradient-to-r from-blue-50 to-indigo-50">
+        <Sparkles className="h-3.5 w-3.5 text-blue-500" />
+        <span className="text-[11px] font-semibold text-slate-700">What can you ask?</span>
+        <span className="ml-auto text-[10px] text-slate-400 italic">Click any question to run it</span>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {DOMAIN_QUERY_EXAMPLES.map((domain) => (
+          <div key={domain.category}>
+            <button
+              type="button"
+              onClick={() => setOpenCategory(openCategory === domain.category ? null : domain.category)}
+              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
+            >
+              <span className="text-sm leading-none">{domain.icon}</span>
+              <span className="text-[11px] font-medium text-slate-700 flex-1">{domain.category}</span>
+              <span className="text-[10px] text-slate-400">{domain.questions.length} examples</span>
+              <ChevronRight
+                className={`h-3 w-3 text-slate-400 transition-transform ${openCategory === domain.category ? 'rotate-90' : ''}`}
+              />
+            </button>
+            {openCategory === domain.category && (
+              <div className="bg-slate-50 px-3 pb-2 space-y-1">
+                {domain.questions.map((q, qi) => (
+                  <button
+                    key={qi}
+                    type="button"
+                    onClick={() => { onSelect(q); setOpenCategory(null); }}
+                    className="w-full text-left text-[11px] text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg px-2.5 py-1.5 transition-all flex items-start gap-2 group"
+                  >
+                    <span className="text-blue-400 group-hover:text-blue-600 flex-shrink-0 mt-0.5">›</span>
+                    <span>{q}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ─── Chat Panel ─────────────────────────────────────────────── */
+
+const PROGRESS_STEPS = [
+  { icon: '🔍', label: 'Analyzing your question...', color: 'text-blue-500' },
+  { icon: '📋', label: 'Loading schema & context...', color: 'text-purple-500' },
+  { icon: '⚙️', label: 'Generating SQL query...', color: 'text-orange-500' },
+  { icon: '▶️', label: 'Running query on database...', color: 'text-green-500' },
+  { icon: '✍️', label: 'Composing your answer...', color: 'text-indigo-500' },
+];
 
 function ChatPanel({
   section,
   messages,
   loading,
+  loadingStep = 0,
+  loadingElapsed = 0,
   prompts,
   onSend,
   onApproveQuery,
@@ -539,6 +712,8 @@ function ChatPanel({
   section: 'realtime' | 'historical';
   messages: Message[];
   loading: boolean;
+  loadingStep?: number;
+  loadingElapsed?: number;
   prompts: { label: string; query: string }[];
   onSend: (text: string) => void;
   onApproveQuery?: (question: string, proposedSql: string, approvalSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<boolean>;
@@ -560,6 +735,10 @@ function ChatPanel({
   const [suggestLoading, setSuggestLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const manualSqlRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // User explanation for failed queries
+  const [explanationByIndex, setExplanationByIndex] = useState<Record<number, string>>({});
+  const [showExplainAt, setShowExplainAt] = useState<number | null>(null);
 
   // ChatGPT instruction state — shared across all "Ask ChatGPT" buttons in this panel
   const [showInstructions, setShowInstructions] = useState(false);
@@ -720,20 +899,23 @@ function ChatPanel({
         <div className={`flex flex-col overflow-hidden ${hasCharts ? `w-full ${chartPanelBreakpoint === 'md' ? 'md:w-[45%]' : 'lg:w-[45%]'}` : 'w-full'}`}>
           <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
             {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-center py-10 select-none">
-                <div className="w-10 h-10 rounded-2xl bg-slate-100 flex items-center justify-center mb-3">
-                  {section === 'realtime'
-                    ? <Activity className="h-4 w-4 text-slate-400" />
-                    : <BarChart3 className="h-4 w-4 text-slate-400" />}
+              <div className="w-full py-3 select-none">
+                <div className="flex flex-col items-center text-center mb-3">
+                  <div className="w-10 h-10 rounded-2xl bg-slate-100 flex items-center justify-center mb-2">
+                    {section === 'realtime'
+                      ? <Activity className="h-4 w-4 text-slate-400" />
+                      : <BarChart3 className="h-4 w-4 text-slate-400" />}
+                  </div>
+                  <p className="text-sm font-medium text-slate-500 mb-0.5">
+                    {section === 'realtime' ? 'Real-time Intelligence' : 'Historical Analysis'}
+                  </p>
+                  <p className="text-xs text-slate-400 max-w-xs">
+                    {section === 'realtime'
+                      ? 'Ask in plain English — about invoices, SAT docs, deliveries, purchase orders, master data, or any table. Charts are generated from your results, not fixed templates.'
+                      : 'Ask about trends, forecasts, cost data, revenue by customer or country, materials, or CO-PA analysis. Each chart adapts to what the data actually supports.'}
+                  </p>
                 </div>
-                <p className="text-sm font-medium text-slate-500 mb-1">
-                  {section === 'realtime' ? 'Real-time Intelligence' : 'Historical Analysis'}
-                </p>
-                <p className="text-xs text-slate-400 max-w-xs">
-                  {section === 'realtime'
-                    ? 'Ask about live SAT documents, invoice status, and current process flows.'
-                    : 'Explore trends, compare periods, and generate forward-looking forecasts.'}
-                </p>
+                <DomainExplorer onSelect={(q) => submit(q)} />
               </div>
             ) : (
               messages.map((m, i) => (
@@ -908,41 +1090,102 @@ function ChatPanel({
                       </div>
                     </div>
                   )}
-                  {/* When AI fails (no SQL executed): show Ask ChatGPT / Enter SQL directly */}
+                  {/* When AI fails (no SQL executed): show explanation input + Ask ChatGPT / Enter SQL directly */}
                   {m.role === 'assistant' && !m.meta?.sql && !m.meta?.needs_approval && !m.meta?.proposed_sql && (onSuggestSql || onApproveQuery) && messages[i - 1]?.role === 'user' && (
                     <div className="max-w-[92%] mt-2">
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
-                        <p className="text-xs font-medium text-slate-700">AI couldn&apos;t find data. Train it:</p>
-                        {renderAskChatGPT(() => { setRejectingIndex(i); return messages[i - 1]?.content; })}
-                        {rejectingIndex === i && suggestedSql && (
-                          <div className="space-y-2 pt-2 border-t border-slate-200">
-                            <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
-                            <ValidationNotes validation={suggestedSql.validation} />
-                            {onApproveQuery && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-3">
+                        {/* Header */}
+                        <div className="flex items-start gap-2">
+                          <span className="text-lg leading-none">🤔</span>
+                          <div>
+                            <p className="text-xs font-semibold text-amber-800">AI couldn&apos;t find the right data automatically.</p>
+                            <p className="text-[10px] text-amber-700 mt-0.5">You can describe what you need in plain language, ask ChatGPT to suggest SQL, or write the SQL yourself.</p>
+                          </div>
+                        </div>
+
+                        {/* Option 1: User explains in plain language → retry */}
+                        <div className="rounded-lg border border-amber-300 bg-white p-2.5 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[11px] font-semibold text-slate-700">💬 Explain what you need (plain language)</p>
+                            <button
+                              type="button"
+                              onClick={() => setShowExplainAt(showExplainAt === i ? null : i)}
+                              className="text-[10px] text-blue-600 hover:underline"
+                            >
+                              {showExplainAt === i ? 'Hide' : 'Expand'}
+                            </button>
+                          </div>
+                          {showExplainAt === i && (
+                            <div className="space-y-1.5">
+                              <textarea
+                                value={explanationByIndex[i] || ''}
+                                onChange={(e) => setExplanationByIndex(prev => ({ ...prev, [i]: e.target.value }))}
+                                placeholder={`e.g. "Show me invoices that failed in the last 30 days grouped by error type. The table is zodiac_invoices_failed_edi and has columns: error_message, uploaded_at, customer_name."`}
+                                className="w-full text-[11px] text-slate-800 bg-slate-50 border border-slate-300 rounded p-2 min-h-[72px] resize-y"
+                                rows={3}
+                              />
                               <button
                                 type="button"
-                                onClick={async () => {
-                                  const prevUser = messages[i - 1];
-                                  if (prevUser?.content) {
-                                    const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
-                                    if (stored) {
-                                      setSuggestedSql(null);
-                                      setRejectingIndex(null);
-                                    }
+                                disabled={loading || !(explanationByIndex[i] || '').trim()}
+                                onClick={() => {
+                                  const prevQ = messages[i - 1]?.content || '';
+                                  const explanation = explanationByIndex[i]?.trim() || '';
+                                  if (explanation) {
+                                    onSend(`${prevQ}\n\nAdditional context: ${explanation}`);
+                                    setShowExplainAt(null);
                                   }
                                 }}
-                                disabled={loading}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-40"
                               >
-                                <CheckCircle2 className="h-3 w-3" />
-                                Use this SQL
+                                🔄 Retry with my explanation
                               </button>
-                            )}
-                          </div>
-                        )}
-                        <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Option 2: Ask ChatGPT */}
+                        <div className="rounded-lg border border-amber-300 bg-white p-2.5 space-y-1.5">
+                          <p className="text-[11px] font-semibold text-slate-700">🤖 Ask ChatGPT to suggest SQL</p>
+                          {renderAskChatGPT(() => { setRejectingIndex(i); return messages[i - 1]?.content; })}
+                          {rejectingIndex === i && suggestedSql && (
+                            <div className="space-y-2 pt-2 border-t border-slate-200">
+                              <p className="text-[10px] font-semibold text-slate-600">ChatGPT suggested:</p>
+                              <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
+                              <ValidationNotes validation={suggestedSql.validation} />
+                              <div className="flex gap-2 flex-wrap">
+                                {onApproveQuery && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const prevUser = messages[i - 1];
+                                      if (prevUser?.content) {
+                                        const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
+                                        if (stored) { setSuggestedSql(null); setRejectingIndex(null); }
+                                      }
+                                    }}
+                                    disabled={loading}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
+                                  >
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    ✅ Yes, approve &amp; run
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => { setSuggestedSql(null); }}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-medium"
+                                >
+                                  ❌ No, reject
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Option 3: Enter SQL manually */}
+                        <div className="rounded-lg border border-amber-300 bg-white p-2.5 space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <label className="text-xs font-medium text-slate-700">Or enter SQL manually:</label>
+                            <p className="text-[11px] font-semibold text-slate-700">✏️ Write SQL manually</p>
                             <button
                               type="button"
                               onClick={openSchema}
@@ -964,8 +1207,8 @@ function ChatPanel({
                             ref={manualSqlRef}
                             value={manualSql}
                             onChange={(e) => setManualSql(e.target.value)}
-                            placeholder="SELECT v.vbeln, v.netwr FROM vbrp v JOIN &quot;VBRK&quot; r ON v.vbeln = r.vbeln LIMIT 50"
-                            className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
+                            placeholder="SELECT error_message, COUNT(*) AS count FROM zodiac_invoices_failed_edi WHERE uploaded_at >= NOW() - INTERVAL '30 days' GROUP BY error_message ORDER BY count DESC LIMIT 10"
+                            className="w-full text-[11px] font-mono !text-gray-900 bg-slate-50 border border-slate-300 rounded p-2 min-h-[80px] resize-y"
                             rows={4}
                           />
                           {onApproveQuery && (
@@ -975,11 +1218,7 @@ function ChatPanel({
                                 const prevUser = messages[i - 1];
                                 if (prevUser?.content && manualSql.trim()) {
                                   const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
-                                  if (stored) {
-                                    setManualSql('');
-                                    setRejectingIndex(null);
-                                    setShowSchema(false);
-                                  }
+                                  if (stored) { setManualSql(''); setRejectingIndex(null); setShowSchema(false); }
                                 }
                               }}
                               disabled={loading || !manualSql.trim()}
@@ -1192,14 +1431,49 @@ function ChatPanel({
               ))
             )}
             {loading && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
-                <div className="flex gap-0.5">
-                  {[0, 1, 2].map((i) => (
-                    <span key={i} className="w-1 h-1 rounded-full bg-slate-400 animate-bounce"
-                      style={{ animationDelay: `${i * 150}ms` }} />
-                  ))}
+              <div className="flex flex-col gap-2 my-1">
+                {/* Progress steps */}
+                <div className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-3 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">AI Processing</span>
+                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+                      {loadingElapsed.toFixed(1)}s
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {PROGRESS_STEPS.map((step, i) => {
+                      const isDone = i < loadingStep;
+                      const isActive = i === loadingStep;
+                      return (
+                        <div key={i} className={`flex items-center gap-2 text-xs transition-all duration-300 ${
+                          isDone ? 'opacity-40' : isActive ? 'opacity-100' : 'opacity-20'
+                        }`}>
+                          <span className="text-base leading-none">{isDone ? '✅' : step.icon}</span>
+                          <span className={`font-medium ${isActive ? step.color : 'text-slate-500'}`}>
+                            {step.label}
+                          </span>
+                          {isActive && (
+                            <span className="ml-auto flex gap-0.5">
+                              {[0, 1, 2].map((j) => (
+                                <span key={j} className="w-1 h-1 rounded-full bg-blue-400 animate-bounce"
+                                  style={{ animationDelay: `${j * 150}ms` }} />
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 h-1 w-full bg-blue-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, ((loadingStep + 1) / PROGRESS_STEPS.length) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1.5 italic">
+                    Complex queries may take 30–90s. You'll see results when ready.
+                  </p>
                 </div>
-                Generating...
               </div>
             )}
             <div ref={bottomRef} />
@@ -1211,8 +1485,11 @@ function ChatPanel({
           <div className={`${chartPanelBreakpoint === 'md' ? 'hidden md:flex' : 'hidden lg:flex'} flex-col w-[55%] border-l border-slate-100 bg-gradient-to-br from-slate-50 to-white overflow-hidden`}>
             <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
               <BarChart3 className="h-4 w-4 text-blue-600" />
-              <h3 className="text-sm font-semibold text-slate-900">Visualizations</h3>
-              <span className="ml-auto text-[10px] font-mono text-slate-400">{messagesWithCharts.length} chart{messagesWithCharts.length > 1 ? 's' : ''}</span>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-slate-900">Visualizations</h3>
+                <p className="text-[10px] text-slate-400 leading-tight">Charts are generated per answer from intent &amp; live result shape — type, axes, and series adapt to each query</p>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">{messagesWithCharts.length} chart{messagesWithCharts.length > 1 ? 's' : ''}</span>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
               {messagesWithCharts.map((m, idx) => (
@@ -1371,7 +1648,7 @@ function ChatGPTPanel({
           {filteredTables.map((tbl) => (
             <button
               key={tbl.name}
-              onClick={() => submit(`Tell me about the ${tbl.name} table — what data it contains, key columns, and how it's typically used in queries.`)}
+              onClick={() => submit(`Tell me about the ${tbl.name} table (${tbl.desc}) — key columns, relationships to other tables, and example queries I can run.`)}
               disabled={loading}
               className="w-full text-left rounded-lg px-2 py-1.5 hover:bg-blue-50 hover:border-blue-200 border border-transparent transition-all group disabled:opacity-50"
             >
@@ -1408,7 +1685,7 @@ function ChatGPTPanel({
                 </div>
                 <h3 className="text-sm font-semibold text-slate-900 mb-1">Chat with your data</h3>
                 <p className="text-xs text-slate-500 max-w-xs mx-auto">
-                  Ask about table structures, query logic, business rules, or explore the SAP schema — not just SQL generation.
+                  Ask about table structures, query logic, business rules, or run live SQL analysis — across invoices, logistics, purchasing, finance, master data, and more.
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1427,6 +1704,7 @@ function ChatGPTPanel({
                   </button>
                 ))}
               </div>
+              <DomainExplorer onSelect={(q) => submit(q)} />
             </div>
           )}
 
@@ -1522,6 +1800,13 @@ export default function DashboardAIAnalysis() {
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [historicalLoading, setHistoricalLoading] = useState(false);
 
+  // Progress tracking for loading state
+  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [userExplanation, setUserExplanation] = useState('');
+  const [showExplanationBox, setShowExplanationBox] = useState<number | null>(null);
+
   const [useContext, setUseContext] = useState(true);
   const [useMultiModel, setUseMultiModel] = useState(false);
 
@@ -1555,6 +1840,31 @@ export default function DashboardAIAnalysis() {
   };
 
   useEffect(() => { fetchData(days); }, [days]);
+
+  // Timer effect for progress tracking
+  const isAnyLoading = realtimeLoading || historicalLoading;
+  useEffect(() => {
+    if (isAnyLoading) {
+      const start = Date.now();
+      setLoadingStartTime(start);
+      setLoadingElapsed(0);
+      setLoadingStep(0);
+      const interval = setInterval(() => {
+        const elapsed = (Date.now() - start) / 1000;
+        setLoadingElapsed(elapsed);
+        if (elapsed < 4) setLoadingStep(0);
+        else if (elapsed < 10) setLoadingStep(1);
+        else if (elapsed < 22) setLoadingStep(2);
+        else if (elapsed < 50) setLoadingStep(3);
+        else setLoadingStep(4);
+      }, 300);
+      return () => clearInterval(interval);
+    } else {
+      setLoadingStartTime(null);
+      setLoadingElapsed(0);
+      setLoadingStep(0);
+    }
+  }, [isAnyLoading]);
 
   /* ── Send helpers ───────────────────────────────────────── */
 
@@ -2061,6 +2371,8 @@ export default function DashboardAIAnalysis() {
                   section="realtime"
                   messages={realtimeMessages}
                   loading={realtimeLoading}
+                  loadingStep={realtimeLoading ? loadingStep : 0}
+                  loadingElapsed={realtimeLoading ? loadingElapsed : 0}
                   prompts={REALTIME_PROMPTS}
                   onSend={(t) => {
                     setPendingQuery({ section: 'realtime', text: t });
@@ -2070,7 +2382,7 @@ export default function DashboardAIAnalysis() {
                   onRejectQuery={(q, s, source) => handleRejectQuery('realtime', q, s, source)}
                   onStoreQuery={(q, s) => handleStoreQuery('realtime', q, s)}
                   onSuggestSql={(q, instructions) => handleSuggestSql('realtime', q, instructions)}
-                  placeholder="Ask about live invoices, SAT docs, failures…"
+                  placeholder="e.g. Show failed invoices by customer, or list open purchase orders…"
                   useContext={useContext}
                   setUseContext={setUseContext}
                   useMultiModel={useMultiModel}
@@ -2240,6 +2552,8 @@ export default function DashboardAIAnalysis() {
                     section="historical"
                     messages={historicalMessages}
                     loading={historicalLoading}
+                    loadingStep={historicalLoading ? loadingStep : 0}
+                    loadingElapsed={historicalLoading ? loadingElapsed : 0}
                     prompts={HISTORICAL_PROMPTS}
                     onSend={(t) => {
                       setPendingQuery({ section: 'historical', text: t });
@@ -2249,7 +2563,7 @@ export default function DashboardAIAnalysis() {
                     onRejectQuery={(q, s, source) => handleRejectQuery('historical', q, s, source)}
                     onStoreQuery={(q, s) => handleStoreQuery('historical', q, s)}
                     onSuggestSql={(q, instructions) => handleSuggestSql('historical', q, instructions)}
-                    placeholder="Ask about trends, forecasts, period comparisons…"
+                    placeholder="e.g. Revenue by country last year, or profit margin by material group…"
                     useContext={useContext}
                     setUseContext={setUseContext}
                     useMultiModel={useMultiModel}
@@ -2278,14 +2592,6 @@ export default function DashboardAIAnalysis() {
               </div>
               <h1 className="text-sm font-semibold text-slate-900">Chat with ChatGPT</h1>
               <span className="text-xs font-mono text-slate-400">Explore tables, schema &amp; business logic</span>
-              {chatMessages.length > 0 && (
-                <button
-                  onClick={() => { setChatMessages([]); chatHistoryRef.current = []; }}
-                  className="ml-auto text-[10px] text-slate-500 hover:text-red-500 border border-slate-200 hover:border-red-200 rounded-lg px-2 py-1 transition-colors flex items-center gap-1"
-                >
-                  <XCircle className="h-3 w-3" /> Clear chat
-                </button>
-              )}
             </div>
             <div className="flex-1 min-h-0">
               <ChatGPTPanel
@@ -2294,10 +2600,14 @@ export default function DashboardAIAnalysis() {
                 onSend={sendChatMessage}
               />
             </div>
+            {error && (
+              <div className="flex-shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
+                {error}
+              </div>
+            )}
           </div>
         )}
       </main>
     </div>
   );
 }
-

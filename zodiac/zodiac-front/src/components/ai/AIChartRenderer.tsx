@@ -121,7 +121,11 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
   };
 
   const renderChart = (chart: ChartData, index: number) => {
-    const colors = chart.colors || ['#3b82f6', '#6366f1', '#10b981', '#f59e0b', '#ef4444'];
+    const colors = chart.colors || [
+      '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+      '#06b6d4', '#f97316', '#ec4899', '#14b8a6', '#a855f7',
+      '#eab308', '#6366f1', '#84cc16', '#f43f5e', '#0ea5e9',
+    ];
     
     // Validate chart has data
     if (!chart.data || chart.data.length === 0) {
@@ -208,7 +212,13 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   stackId={isStacked ? 'stack' : undefined}
                   animationDuration={800}
                   animationEasing="ease-out"
-                />
+                >
+                  {/* Color each bar individually on single-metric charts (ranking, distribution, breakdown).
+                      Multi-series charts keep per-series coloring. */}
+                  {chart.y_keys.length === 1 && chart.data.map((_: any, cellIdx: number) => (
+                    <Cell key={`cell-${cellIdx}`} fill={colors[cellIdx % colors.length]} />
+                  ))}
+                </Bar>
               ))}
             </BarChart>
           </ResponsiveContainer>

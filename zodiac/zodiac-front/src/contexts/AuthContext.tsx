@@ -86,15 +86,35 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           console.log('🔐 AuthContext - User data received:', { username: userData.username, email: userData.email });
           setUser(userData);
           setIsAuthenticated(true);
-        } catch (error) {
-          console.error('🔐 AuthContext - Auth check failed:', error);
-          // Clear all auth data on failed validation
-          clearAuthData();
+        } catch (error: any) {
+          // Only clear session on explicit 401 (token actually invalid/expired).
+          // Network errors or server restarts should NOT log the user out — the
+          // token is still valid and will work once the server is back up.
+          const is401 =
+            error?.response?.status === 401 ||
+            (error?.message || '').toLowerCase().includes('session expired');
+          const isNetworkError = !error?.response && (error?.message || '').toLowerCase().includes('network');
+
+          if (is401) {
+            console.error('🔐 AuthContext - Token invalid/expired, clearing session:', error?.message);
+            clearAuthData();
+          } else if (isNetworkError) {
+            // Server temporarily unreachable — preserve token so session restores on reconnect
+            console.warn('🔐 AuthContext - Network error during auth check; keeping token for reconnect:', error?.message);
+            setUser(null);
+            setIsAuthenticated(false);
+            // Do NOT call clearAuthData() — keep the token in localStorage
+          } else {
+            // Other server error (5xx etc.) — keep token, don't log out
+            console.warn('🔐 AuthContext - Server error during auth check; preserving session:', error?.message);
+            setUser(null);
+            setIsAuthenticated(false);
+          }
         }
       } else {
         console.log('🔐 AuthContext - No token found, user not authenticated');
-        // Ensure clean state when no token
-        clearAuthData();
+        setUser(null);
+        setIsAuthenticated(false);
       }
       
       setLoading(false);

@@ -18,7 +18,32 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
     metric_alias = str(metric.get("alias") or metric.get("logical") or "value")
     dims = intent.get("dimensions") or []
     dim0 = dims[0] if dims else None
-    x_key = str((dim0 or {}).get("alias") or (dim0 or {}).get("logical") or "") if dim0 else ""
+    dim_logical = str((dim0 or {}).get("alias") or (dim0 or {}).get("logical") or "") if dim0 else ""
+
+    def _resolve_x_key(logical: str) -> str:
+        """
+        Adaptively find the actual column name for a logical dimension — no hardcoded map.
+        Checks: exact match → prefix/suffix match → first non-numeric column.
+        Works for any column name the SQL generates now or in the future.
+        """
+        if not logical or not rows:
+            return logical
+        row0 = rows[0]
+        keys = list(row0.keys())
+        # 1. Exact match (e.g. "product" → "product", "year" → "year")
+        if logical in keys:
+            return logical
+        # 2. Prefix/suffix match (e.g. "product" → "product_name", "product_id")
+        for k in keys:
+            if k.startswith(logical + "_") or k.endswith("_" + logical):
+                return k
+        # 3. First non-numeric, non-metric column (dimension is usually text)
+        for k in keys:
+            if k != metric_alias and not isinstance(row0[k], (int, float)):
+                return k
+        return logical
+    x_key = _resolve_x_key(dim_logical)
+    x_label = dim_logical or x_key  # use logical name for axis labels/titles
 
     # Always support table chart as a safe representation
     def table_chart(title: str, desc: str) -> Dict[str, Any]:
@@ -38,7 +63,7 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
         return [
             {
                 "chart_type": "line",
-                "title": f"{metric.get('logical', metric_alias)} over {x_key}",
+                "title": f"{metric.get('logical', metric_alias)} over {x_label}",
                 "description": "Intent-driven trend chart (time axis from intent).",
                 "data": rows[:120],
                 "x_key": x_key,
@@ -52,7 +77,7 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
         return [
             {
                 "chart_type": "bar",
-                "title": f"{metric.get('logical', metric_alias)} by {x_key}",
+                "title": f"{metric.get('logical', metric_alias)} by {x_label}",
                 "description": "Intent-driven ranking chart.",
                 "data": rows[:60],
                 "x_key": x_key,
@@ -66,7 +91,7 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
         return [
             {
                 "chart_type": "bar",
-                "title": f"{metric.get('logical', metric_alias)} by {x_key}",
+                "title": f"{metric.get('logical', metric_alias)} by {x_label}",
                 "description": "Intent-driven comparison chart (grouped by period).",
                 "data": rows[:50],
                 "x_key": x_key,
@@ -94,7 +119,7 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
         return [
             {
                 "chart_type": "bar",
-                "title": f"{metric.get('logical', metric_alias)} by {x_key}",
+                "title": f"{metric.get('logical', metric_alias)} by {x_label}",
                 "description": "Distribution intent; bar chart used because category count is large.",
                 "data": rows[:60],
                 "x_key": x_key,
@@ -110,7 +135,7 @@ def generate_chart_config(intent: Dict[str, Any], rows: List[Dict[str, Any]], va
         return [
             {
                 "chart_type": "bar",
-                "title": f"{metric.get('logical', metric_alias)} by {x_key}",
+                "title": f"{metric.get('logical', metric_alias)} by {x_label}",
                 "description": "Intent-driven breakdown chart.",
                 "data": rows[:60],
                 "x_key": x_key,
