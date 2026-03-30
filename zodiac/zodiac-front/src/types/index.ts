@@ -83,6 +83,8 @@ export interface ProcessingStepResult {
 }
 
 export interface FileUploadResponse {
+  /** FastAPI-style error body when present */
+  detail?: string;
   invoice_operation_success: boolean;
   file_upload_pass: boolean;
   file_upload_message?: string;

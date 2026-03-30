@@ -50,6 +50,39 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     "CUSTOMERS", "CUSTOMER", "REVENUE", "INVOICES", "INVOICE", "PRODUCTS", "PRODUCT",
     "SUPPLIERS", "SUPPLIER", "PAYMENTS", "PAYMENT", "AMOUNTS", "AMOUNT", "QUANTITIES",
     "QUANTITY", "PRICES", "PRICE", "TOTALS", "TOTAL", "BALANCE", "BALANCES",
+    # SQL aggregate / window functions
+    "SUM", "AVG", "MIN", "MAX", "COUNT", "RANK", "DENSE", "NTILE", "LEAD", "LAG",
+    "ROWS", "RANGE", "GROUPS", "UNBOUNDED", "PRECEDING", "FOLLOWING", "CURRENT",
+    # Time / date words
+    "TODAY", "YESTERDAY", "WEEKLY", "MONTHLY", "YEARLY", "DAILY", "QUARTER",
+    # Common business terms used as plain words (not tables)
+    "TOP", "HIGH", "LOW", "BEST", "WORST", "AVERAGE", "MEDIAN", "RATE", "RATIO",
+    "ORDER", "ORDERS", "VENDOR", "VENDORS", "ITEM", "ITEMS", "LINE", "LINES",
+    "VALUE", "VALUES", "COST", "COSTS", "PROFIT", "LOSS", "TAX", "TAXES",
+    "NUMBER", "NUMBERS", "COUNT", "COUNTS", "TOTAL", "GRAND", "NET", "GROSS",
+    "STATUS", "ACTIVE", "INACTIVE", "PENDING", "APPROVED", "REJECTED", "OPEN",
+    # Report / analysis words
+    "REPORT", "REPORTS", "ANALYSIS", "ANALYZE", "SUMMARY", "DETAIL", "DETAILS",
+    "CHART", "GRAPH", "TABLE", "TABLES", "VIEW", "VIEWS", "INDEX", "SCHEMA",
+}
+
+# ISO 4217 currency codes — must not be treated as SAP table names.
+# E.g. "show sales in EUR" or "top customers with currency CAD" must NOT
+# classify EUR/CAD as SAP table identifiers.
+_KNOWN_CURRENCY_CODES: Set[str] = {
+    # Major world currencies
+    "EUR", "USD", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY", "HKD", "NZD",
+    "SEK", "NOK", "DKK", "SGD", "KRW", "INR", "BRL", "RUB", "ZAR", "TRY",
+    "PLN", "CZK", "HUF", "RON", "HRK", "BGN", "ISK", "IDR", "MYR", "PHP",
+    "THB", "VND", "AED", "SAR", "QAR", "KWD", "BHD", "OMR", "JOD", "EGP",
+    "NGN", "KES", "GHS", "MAD", "DZD", "TND", "LYD", "ETB", "XOF", "XAF",
+    "ILS", "PKR", "BDT", "LKR", "NPR", "MMK", "KHR", "LAK", "MNT", "KZT",
+    "UZS", "AZN", "GEL", "AMD", "MDL", "BYN", "UAH", "MKD", "ALL", "BAM",
+    "RSD", "HRK", "CLP", "COP", "PEN", "ARS", "BOB", "UYU", "PYG", "VES",
+    "CRC", "GTQ", "HNL", "NIO", "DOP", "JMD", "TTD", "BBD", "BSD", "BZD",
+    "GYD", "SRD", "HTG", "CUP", "PAB", "MXN",
+    # Precious metals / special
+    "XAU", "XAG", "XPT", "XPD", "XDR", "XBT",
 }
 
 
@@ -103,6 +136,8 @@ def extract_explicit_table_identifiers(question: str) -> List[str]:
     for m in re.finditer(r"\b([A-Z][A-Z0-9_]{2,})\b", question):
         w = m.group(1)
         if w in _SAP_UPPER_STOPWORDS:
+            continue
+        if w in _KNOWN_CURRENCY_CODES:
             continue
         add(w)
 
@@ -283,7 +318,6 @@ def clarification_unknown_tables(unknown: List[str], app_names: List[str], sap_s
     return (
         f"I could not resolve these table name(s) in the available catalogs: {unk}.\n\n"
         f"**App tables** (this workspace): {app_hint}\n\n"
-        f"**Sample SAP tables** in the current schema: {sap_hint}\n\n"
         "Reply with the exact table name or fix a typo."
     )
 

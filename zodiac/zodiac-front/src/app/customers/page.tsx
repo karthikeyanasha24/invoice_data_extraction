@@ -18,7 +18,7 @@ export default function CustomersPage() {
 
   if (loading) {
     return (
-      <MainLayout activeTab="customers">
+      <MainLayout>
         <div className="flex items-center justify-center min-h-screen">
           <div className="text-center">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
@@ -34,7 +34,7 @@ export default function CustomersPage() {
   }
 
   return (
-    <MainLayout activeTab="customers">
+    <MainLayout>
       <CustomerManagementPanel />
     </MainLayout>
   );

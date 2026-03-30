@@ -442,7 +442,7 @@ export default function DashboardBusiness() {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={data.industry_breakdown}
+                    data={data.industry_breakdown as unknown as { [key: string]: string | number }[]}
                     dataKey="count"
                     nameKey="industry"
                     cx="50%"

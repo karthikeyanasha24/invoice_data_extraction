@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -19,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 _TABLE_KNOWLEDGE: Optional[Dict[str, Any]] = None
 _SEMANTIC_MAP: Optional[Dict[str, Any]] = None
+
+# ── Process-level TTL cache for schema introspection ──────────────────────────
+# Calling inspect(db.bind) on every query is extremely slow (adds 10-15 min).
+# Cache the schema at process level for 15 minutes so repeated queries reuse it.
+_SCHEMA_CACHE_TTL: int = 900  # 15 minutes
+_schema_cache: Dict[str, List[str]] = {}
+_schema_cache_ts: float = 0.0
+_schema_text_cache: Dict[str, str] = {}
+_schema_text_cache_ts: float = 0.0
+_mapping_file_cache: Optional[Dict[str, Any]] = None
 
 
 @lru_cache(maxsize=1)
@@ -186,11 +197,39 @@ def _is_sap_business_table(table_name: str) -> bool:
     return False
 
 
+def _load_mapping_file_raw() -> Dict[str, Any]:
+    """Load db_table_mapping.json once per process lifetime."""
+    global _mapping_file_cache
+    if _mapping_file_cache is not None:
+        return _mapping_file_cache
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / "db_table_mapping.json"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                _mapping_file_cache = json.load(f)
+                return _mapping_file_cache or {}
+    except Exception as e:
+        logger.warning("schema_loader: could not load db_table_mapping.json: %s", e)
+    _mapping_file_cache = {}
+    return {}
+
+
 def load_schema(db: Session, max_columns_per_table: Optional[int] = None) -> Dict[str, List[str]]:
     """
     Load schema from the database: table_name -> list of column names.
     Only includes SAP business tables. Uses SQLAlchemy inspect.
+    Results are cached process-wide for 15 minutes to avoid repeated slow DB introspection.
     """
+    global _schema_cache, _schema_cache_ts
+    now = time.time()
+    if _schema_cache and (now - _schema_cache_ts) < _SCHEMA_CACHE_TTL:
+        logger.debug("schema_loader: returning cached schema (%d tables)", len(_schema_cache))
+        if max_columns_per_table:
+            return {t: cols[:max_columns_per_table] for t, cols in _schema_cache.items()}
+        return dict(_schema_cache)
+
+    logger.info("schema_loader: refreshing schema from DB (cache expired or empty)")
     insp = inspect(db.bind)
     all_tables = insp.get_table_names()
     schema: Dict[str, List[str]] = {}
@@ -200,9 +239,16 @@ def load_schema(db: Session, max_columns_per_table: Optional[int] = None) -> Dic
         try:
             columns = [c["name"] for c in insp.get_columns(tbl)]
             if columns:
-                schema[tbl] = columns[:max_columns_per_table] if max_columns_per_table else columns
+                schema[tbl] = columns
         except Exception as e:
             logger.warning("schema_loader: could not get columns for %s: %s", tbl, e)
+
+    _schema_cache = schema
+    _schema_cache_ts = now
+    logger.info("schema_loader: cached %d tables", len(schema))
+
+    if max_columns_per_table:
+        return {t: cols[:max_columns_per_table] for t, cols in schema.items()}
     return schema
 
 
@@ -280,11 +326,17 @@ def get_schema_text(
 ) -> str:
     """
     Load schema from DB (or mapping file fallback) and return text for the LLM.
+    Results are cached process-wide for 15 minutes (same TTL as load_schema).
     If include_semantic_map is True, prepends the SAP semantic map (query intent → table chains)
     so the agent can route vendor, delivery, material, finance, etc. questions correctly.
-    The semantic map is dynamic: it only references tables that exist in the schema,
-    preventing MARA/MBEW etc. from being suggested when they are not in the DB.
     """
+    global _schema_text_cache, _schema_text_cache_ts
+    cache_key = f"subset={bool(table_subset)},sem={include_semantic_map}"
+    now = time.time()
+    if cache_key in _schema_text_cache and (now - _schema_text_cache_ts) < _SCHEMA_CACHE_TTL:
+        logger.debug("schema_loader: returning cached schema text")
+        return _schema_text_cache[cache_key]
+
     schema = load_schema(db)
     if not schema:
         schema = load_schema_from_mapping_file()
@@ -304,6 +356,9 @@ def get_schema_text(
             pass
         if map_text:
             text = map_text + "\n\n" + text
+
+    _schema_text_cache[cache_key] = text
+    _schema_text_cache_ts = now
     return text
 
 
@@ -322,4 +377,3 @@ def get_schema_dict(db: Session) -> Dict[str, List[str]]:
         if table not in schema:
             schema[table] = cols
     return schema
-

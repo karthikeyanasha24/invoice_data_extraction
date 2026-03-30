@@ -68,7 +68,7 @@ export default function InvoiceDetailsPage() {
       
       // Construct proper filename from invoice data
       const format = (invoice.target_file_format || 'unknown').toUpperCase();
-      const invoiceId = invoice.customerId || invoice.tracking_id.split('-')[0] || 'invoice';
+      const invoiceId = invoice.customerId || invoice.tracking_id?.split('-')[0] || 'invoice';
       
       let fileExtension: string;
       switch (format) {

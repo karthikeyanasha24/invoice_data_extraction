@@ -504,19 +504,24 @@ function SchemaDrawer({
     .filter((t) => t.toLowerCase().includes(search.toLowerCase()))
     .sort();
 
-  const insertAtCursor = (text: string) => {
+  const insertAtCursor = (text: string, addSep = false) => {
     const ta = textareaRef.current;
     if (ta) {
       const start = ta.selectionStart ?? 0;
       const end = ta.selectionEnd ?? 0;
       const before = ta.value.substring(0, start);
       const after = ta.value.substring(end);
-      const newVal = before + text + after;
+      // If the caller requested a separator and there is already non-whitespace
+      // content before the cursor, prefix with ", " so column names don't run
+      // together (e.g. "vbelnfkartfktyp…" → "vbeln, fkart, fktyp, …")
+      const sep = addSep && before.trimEnd().length > 0 ? ', ' : '';
+      const inserted = sep + text;
+      const newVal = before + inserted + after;
       onInsert(newVal);
       // Restore cursor after insert
       requestAnimationFrame(() => {
         ta.focus();
-        ta.setSelectionRange(start + text.length, start + text.length);
+        ta.setSelectionRange(start + inserted.length, start + inserted.length);
       });
     } else {
       onInsert(text);
@@ -605,7 +610,7 @@ function SchemaDrawer({
                 {expandedCols.map((col) => (
                   <button
                     key={col}
-                    onClick={() => insertAtCursor(col)}
+                    onClick={() => insertAtCursor(col, true)}
                     title={`Insert column: ${col}`}
                     className="w-full text-left text-[10px] font-mono px-2 py-0.5 rounded hover:bg-blue-50 hover:text-blue-700 text-slate-700 transition-colors"
                   >
@@ -2563,7 +2568,7 @@ export default function DashboardAIAnalysis() {
                     onRejectQuery={(q, s, source) => handleRejectQuery('historical', q, s, source)}
                     onStoreQuery={(q, s) => handleStoreQuery('historical', q, s)}
                     onSuggestSql={(q, instructions) => handleSuggestSql('historical', q, instructions)}
-                    placeholder="e.g. Revenue by country last year, or profit margin by material group…"
+                    placeholder="e.g. Compare periods, forecast revenue, or analyze historical SAP billing data…"
                     useContext={useContext}
                     setUseContext={setUseContext}
                     useMultiModel={useMultiModel}
@@ -2574,39 +2579,23 @@ export default function DashboardAIAnalysis() {
             </div>
 
             {error && (
-              <div className="flex-shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
+              <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
                 {error}
               </div>
             )}
           </div>
         )}
 
-        {/* ═══════════════════════════
-            CHAT SECTION
-        ═══════════════════════════ */}
         {activeSection === 'chat' && (
-          <div className="fade-in flex flex-col gap-4 h-full" style={{ minHeight: 'calc(100vh - 120px)' }}>
-            <div className="flex items-center gap-3 flex-shrink-0">
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm">
-                <MessageCircle className="h-3.5 w-3.5 text-white" />
-              </div>
-              <h1 className="text-sm font-semibold text-slate-900">Chat with ChatGPT</h1>
-              <span className="text-xs font-mono text-slate-400">Explore tables, schema &amp; business logic</span>
-            </div>
-            <div className="flex-1 min-h-0">
-              <ChatGPTPanel
-                messages={chatMessages}
-                loading={chatLoading}
-                onSend={sendChatMessage}
-              />
-            </div>
-            {error && (
-              <div className="flex-shrink-0 rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
-                {error}
-              </div>
-            )}
+          <div className="fade-in h-full flex flex-col gap-4 min-h-[calc(100vh-8rem)]">
+            <ChatGPTPanel
+              messages={chatMessages}
+              loading={chatLoading}
+              onSend={sendChatMessage}
+            />
           </div>
         )}
+
       </main>
     </div>
   );
