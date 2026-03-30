@@ -148,13 +148,19 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
 
     switch (chart.chart_type) {
       case 'bar':
-      case 'stacked_bar':
+      case 'stacked_bar': {
         if (!chart.x_key || !chart.y_keys || chart.y_keys.length === 0) {
           console.error('📊 Bar chart missing required keys:', { x_key: chart.x_key, y_keys: chart.y_keys });
           return <div className="text-sm text-red-500">Chart configuration error: missing x_key or y_keys</div>;
         }
+<<<<<<< HEAD
         const barYKeys = chart.y_keys;
         const barHasCurrency = barYKeys.some(k => isCurrencyField(k));
+=======
+        const xKeyBar = chart.x_key;
+        const yKeysBar = chart.y_keys;
+        const barHasCurrency = yKeysBar.some(k => isCurrencyField(k));
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
         const barCurrencies = distinctCurrenciesInData(chart.data);
         const mixedCurrencyAxis = barCurrencies.length > 1;
         const barCurrency = mixedCurrencyAxis ? undefined : getDominantCurrency(chart.data);
@@ -164,7 +170,7 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
             <BarChart data={chart.data}>
               {chart.show_grid && <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.3} />}
               <XAxis
-                dataKey={chart.x_key}
+                dataKey={xKeyBar}
                 stroke="#64748b"
                 style={{ fontSize: '11px', fontWeight: 500 }}
                 tick={{ fill: '#475569' }}
@@ -191,11 +197,19 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
                   padding: '12px',
                 }}
+<<<<<<< HEAD
                 formatter={(value: any, name?: string, props?: any) => {
                   const label = name ?? '';
                   const rowCurrency = getCurrencyFromRow(props?.payload) ?? barCurrency;
                   const formattedValue = isCurrencyField(label) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
                   return [formattedValue, label.replace(/_/g, ' ')];
+=======
+                formatter={(value: any, name: string | undefined, props: any) => {
+                  const n = name ?? '';
+                  const rowCurrency = getCurrencyFromRow(props?.payload) ?? barCurrency;
+                  const formattedValue = isCurrencyField(n) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
+                  return [formattedValue, n.replace(/_/g, ' ')];
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                 }}
                 cursor={{ fill: 'rgba(59, 130, 246, 0.1)' }}
               />
@@ -205,7 +219,11 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   iconType="circle"
                 />
               )}
+<<<<<<< HEAD
               {barYKeys.map((key, idx) => (
+=======
+              {yKeysBar.map((key, idx) => (
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                 <Bar
                   key={key}
                   dataKey={key}
@@ -217,7 +235,11 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                 >
                   {/* Color each bar individually on single-metric charts (ranking, distribution, breakdown).
                       Multi-series charts keep per-series coloring. */}
+<<<<<<< HEAD
                   {barYKeys.length === 1 && chart.data.map((_: any, cellIdx: number) => (
+=======
+                  {yKeysBar.length === 1 && chart.data.map((_: any, cellIdx: number) => (
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                     <Cell key={`cell-${cellIdx}`} fill={colors[cellIdx % colors.length]} />
                   ))}
                 </Bar>
@@ -225,6 +247,7 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
             </BarChart>
           </ResponsiveContainer>
         );
+      }
 
       case 'line':
         if (!chart.x_key || !chart.y_keys || chart.y_keys.length === 0) {
@@ -260,6 +283,7 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                 }}
+<<<<<<< HEAD
                 formatter={(value: any, name?: string, props?: any) => {
                   const label = name ?? '';
                   const rowCurrency = getCurrencyFromRow(props?.payload) ?? lineCurrency;
@@ -267,6 +291,15 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                     ? formatCurrency(Number(value), rowCurrency)
                     : Number(value).toLocaleString();
                   return [formattedValue, label.replace(/_/g, ' ')];
+=======
+                formatter={(value: any, name: string | undefined, props: any) => {
+                  const n = name ?? '';
+                  const rowCurrency = getCurrencyFromRow(props?.payload) ?? lineCurrency;
+                  const formattedValue = isCurrencyField(n)
+                    ? formatCurrency(Number(value), rowCurrency)
+                    : Number(value).toLocaleString();
+                  return [formattedValue, n.replace(/_/g, ' ')];
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                 }}
               />
               {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
@@ -319,11 +352,19 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                   fontSize: '12px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                 }}
+<<<<<<< HEAD
                 formatter={(value: any, name?: string, props?: any) => {
                   const label = name ?? '';
                   const rowCurrency = getCurrencyFromRow(props?.payload) ?? areaCurrency;
                   const formattedValue = isCurrencyField(label) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
                   return [formattedValue, label.replace(/_/g, ' ')];
+=======
+                formatter={(value: any, name: string | undefined, props: any) => {
+                  const n = name ?? '';
+                  const rowCurrency = getCurrencyFromRow(props?.payload) ?? areaCurrency;
+                  const formattedValue = isCurrencyField(n) ? formatCurrency(Number(value), rowCurrency) : Number(value).toLocaleString();
+                  return [formattedValue, n.replace(/_/g, ' ')];
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                 }}
               />
               {chart.show_legend && <Legend wrapperStyle={{ fontSize: '12px' }} />}
@@ -376,9 +417,13 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                     cx="50%"
                     cy="50%"
                     outerRadius={100}
+<<<<<<< HEAD
                     label={(props: { payload?: Record<string, unknown> }) =>
                       String(props.payload?.[autoNameKey] ?? '')
                     }
+=======
+                    label={(entry: Record<string, unknown>) => String(entry[autoNameKey] ?? '')}
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                     labelLine={true}
                   >
                     {chart.data.map((entry, idx) => (
@@ -410,9 +455,13 @@ export default function AIChartRenderer({ charts }: AIChartRendererProps) {
                 cx="50%"
                 cy="50%"
                 outerRadius={100}
+<<<<<<< HEAD
                 label={(props: { payload?: Record<string, unknown> }) =>
                   String(props.payload?.[nameKey] ?? '')
                 }
+=======
+                label={(entry: Record<string, unknown>) => String(entry[nameKey] ?? '')}
+>>>>>>> a1ca5e821e5aa62da9064754c15434e9eb296ab5
                 labelLine={true}
               >
                 {chart.data.map((entry, idx) => (

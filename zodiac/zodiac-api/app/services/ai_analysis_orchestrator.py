@@ -2769,7 +2769,6 @@ Write a clear MARKDOWN answer:
         logger.debug("negative/lowest consistency guard failed: %s", guard_err)
 
     mem.last_user_query = user_query
-    mem.last_sql = result.sql
     mem.last_rows_json = json.dumps(_rows_preview(result.rows, limit=80), default=str)
     mem.last_reply = reply  # Save the AI-generated reply for instant reuse
     mem.last_charts_json = json.dumps(charts_data or [], default=str)  # Save charts for reuse

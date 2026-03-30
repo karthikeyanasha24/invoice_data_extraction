@@ -3378,78 +3378,6 @@ async def get_ai_analysis_schema(
     return {"schema": schema_out, "table_count": len(schema_out)}
 
 
-@router.get("/ai-analysis/schema")
-async def get_ai_analysis_schema(
-    current_user: ZodiacUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Returns the full table→columns schema available for SQL queries.
-    Used by the frontend schema browser when users write SQL manually.
-    Merges db_table_mapping.json (typed columns) with live DB introspection
-    for any tables not in the mapping file.
-    """
-    from ..services.schema_context_builder import load_schema
-    import sqlalchemy
-
-    # 1) Load typed columns from mapping file (48 SAP tables with full metadata)
-    try:
-        mapping = load_schema()
-    except Exception:
-        mapping = {}
-
-    schema_out: dict = {}
-    for table_name, info in mapping.items():
-        cols = list(info.get("columns", {}).keys())
-        schema_out[table_name] = {
-            "columns": cols,
-            "description": info.get("description", ""),
-            "source": "mapping",
-        }
-
-    # 2) Supplement with live DB introspection for all remaining tables
-    try:
-        sql_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
-        try:
-            # Get all table names from the DB
-            result = sql_db.execute(sqlalchemy.text(
-                """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                ORDER BY table_name
-                """
-            )).fetchall()
-            live_tables = [row[0] for row in result]
-
-            for tbl in live_tables:
-                if tbl in schema_out:
-                    continue  # already covered by mapping
-                try:
-                    col_result = sql_db.execute(sqlalchemy.text(
-                        """
-                        SELECT column_name, data_type
-                        FROM information_schema.columns
-                        WHERE table_schema = 'public' AND table_name = :tbl
-                        ORDER BY ordinal_position
-                        """
-                    ), {"tbl": tbl}).fetchall()
-                    schema_out[tbl] = {
-                        "columns": [r[0] for r in col_result],
-                        "description": "",
-                        "source": "live",
-                    }
-                except Exception:
-                    pass
-        finally:
-            if USE_SAP_DB_FOR_AI and sql_db is not db:
-                sql_db.close()
-    except Exception as e:
-        logger.warning("Live DB schema introspection failed: %s", e)
-
-    return {"schema": schema_out, "table_count": len(schema_out)}
-
-
 @router.post("/ai-analysis/approve-query")
 async def post_ai_analysis_approve_query(
     question: str = Body(..., embed=True),
@@ -3842,52 +3770,113 @@ async def ai_analysis_multi_model_chat(
     db: Session = Depends(get_db)
 ):
     """
-    AI analysis chat endpoint with multi-model comparison (GPT + Gemini + Claude).
-    Runs all models in parallel and returns individual + synthesized responses.
+    AI analysis chat endpoint with multi-model comparison (GPT-4o + Gemini + Claude).
+
+    Accuracy design:
+      1. Run the primary SQL orchestrator first — same as the single-model endpoint.
+      2. Pass the REAL result rows + GLOBAL_NUMERIC_STATS to all three models.
+      3. Each model writes NARRATIVE ONLY from the same actual data → no hallucination.
+
     time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (compare periods).
     """
     try:
         from ..config.config import ENABLE_MULTI_MODEL, USE_SAP_DB_FOR_AI
         from ..services.multi_model_orchestrator import run_all_models_parallel
-        
+
         if not ENABLE_MULTI_MODEL:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Multi-model mode is not enabled. Set ENABLE_MULTI_MODEL=true in .env"
             )
-        
-        # Build context (same as regular AI analysis)
-        if USE_SAP_DB_FOR_AI:
-            from ..database import get_sap_session
-            from ..services.sap_ai_context import build_ai_context_from_sap
-            sap_session_for_context = get_sap_session()
+
+        # ── Step 1: Execute SQL via main orchestrator to get real data ────────
+        sql_result_rows = None
+        sql_executed = None
+        global_numeric_stats = None
+        result_scope_data = None
+
+        try:
+            from ..services.ai_analysis_orchestrator import (
+                run_ai_analysis_orchestrator,
+                _compute_global_numeric_stats,
+                _build_result_scope,
+            )
+
+            ai_openai_key = _get_ai_analysis_config()
+            sap_db_for_mm = get_sap_session() if USE_SAP_DB_FOR_AI else None
             try:
-                context_str = build_ai_context_from_sap(
-                    context_keys if isinstance(context_keys, list) else [],
-                    sap_session_for_context,
+                orch = run_ai_analysis_orchestrator(
+                    api_key=ai_openai_key,
+                    user_id=current_user.id,
+                    user_query=message,
+                    db=db,
+                    conversation_history=[],
+                    context_str="",
+                    sap_db=sap_db_for_mm,
+                    time_scope=time_scope,
                     days=int(days),
                 )
-            except Exception as sap_e:
-                logger.warning("SAP AI context failed: %s", sap_e)
-                context_str = ""
             finally:
-                sap_session_for_context.close()
-        else:
-            context_str = _build_ai_analysis_context(
-                context_keys if isinstance(context_keys, list) else [],
-                current_user,
-                db,
-                days=int(days),
-            )
-        
-        # Run multi-model analysis
+                if sap_db_for_mm is not None:
+                    sap_db_for_mm.close()
+
+            rows = getattr(orch, "rows_preview", None) or []
+            sql_executed = getattr(orch, "sql", None) or ""
+            if rows:
+                sql_result_rows = rows
+                result_scope_data = _build_result_scope(rows, sql_executed)
+                global_numeric_stats = _compute_global_numeric_stats(
+                    rows,
+                    question=message,
+                    result_scope=result_scope_data,
+                )
+                logger.info(
+                    "multi-model: SQL returned %d rows — passing real data to all 3 models",
+                    len(rows),
+                )
+            else:
+                logger.warning("multi-model: orchestrator returned no rows — falling back to context mode")
+        except Exception as orch_err:
+            logger.error("multi-model: orchestrator failed: %s", orch_err)
+
+        # ── Step 2: Build legacy context string (used only if SQL returned nothing) ──
+        context_str = ""
+        if not sql_result_rows:
+            try:
+                if USE_SAP_DB_FOR_AI:
+                    from ..database import get_sap_session
+                    from ..services.sap_ai_context import build_ai_context_from_sap
+                    sap_session_for_context = get_sap_session()
+                    try:
+                        context_str = build_ai_context_from_sap(
+                            context_keys if isinstance(context_keys, list) else [],
+                            sap_session_for_context,
+                            days=int(days),
+                        )
+                    finally:
+                        sap_session_for_context.close()
+                else:
+                    context_str = _build_ai_analysis_context(
+                        context_keys if isinstance(context_keys, list) else [],
+                        current_user,
+                        db,
+                        days=int(days),
+                    )
+            except Exception as ctx_err:
+                logger.warning("multi-model: context build failed: %s", ctx_err)
+
+        # ── Step 3: Run all three models with data-grounded prompt ────────────
         result = await run_all_models_parallel(
             user_query=message,
             context=context_str,
             time_scope=time_scope,
             days=int(days),
+            global_numeric_stats=global_numeric_stats,
+            result_scope=result_scope_data,
+            sql_result_rows=sql_result_rows,
+            sql_executed=sql_executed,
         )
-        
+
         return {
             "synthesized_answer": result.synthesized_answer,
             "best_model": result.best_model,
@@ -3895,6 +3884,9 @@ async def ai_analysis_multi_model_chat(
             "time_scope": result.time_scope,
             "date_range": result.date_range,
             "period_info": result.period_info,
+            # Expose SQL + row count so the frontend can show "based on N rows"
+            "sql": sql_executed or "",
+            "row_count": len(sql_result_rows) if sql_result_rows else 0,
             "models": [
                 {
                     "name": r.model_name,
@@ -3907,7 +3899,7 @@ async def ai_analysis_multi_model_chat(
                 for r in result.individual_responses
             ],
         }
-    
+
     except Exception as e:
         logger.error(f"Multi-model analysis failed: {e}")
         raise HTTPException(
@@ -5478,7 +5470,6 @@ async def get_product_demand_analysis(
         logger.error(f"❌ Failed to fetch product demand analysis: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Product demand analysis failed: {str(e)}"
         )
 
 
