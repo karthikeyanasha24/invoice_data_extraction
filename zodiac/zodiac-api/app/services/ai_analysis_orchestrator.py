@@ -53,6 +53,9 @@ class OrchestratorResult:
     action: str
     reason: str = ""
     sql: str = ""
+    # Full rows from executed SQL (bounded by TOP / agent limits). Prefer this for API compatibility
+    # endpoints that return a full "data" array.
+    rows: Optional[List[Dict[str, Any]]] = None
     rows_preview: Optional[List[Dict[str, Any]]] = None
     compare: Optional[Dict[str, Any]] = None
     memory_updated: bool = False
@@ -186,6 +189,50 @@ def _should_force_new_action(user_query: str) -> bool:
     return False
 
 
+# ── Analytical / interpretive question detection ────────────────────────────
+# Questions like "what do you think?", "where should we focus?", "any trends?"
+# should be answered from loaded data + SAP domain knowledge, not new SQL.
+_ANALYTICAL_PATTERNS = [
+    r"\b(what do you think|your thoughts|your opinion|what('s| is) your (take|view))\b",
+    r"\b(where should (we|i|the business|the team|management) focus)\b",
+    r"\b(what (does this|do these|does that|does the data) (mean|tell us?|show us?|suggest|indicate|imply))\b",
+    r"\b(what('s| is) (the|your)(\s+\w+)? (insights?|recommendations?|takeaway|conclusion|key finding|key insight|key takeaway))\b",
+    r"\b(give (me|us) (insights?|recommendations?|advice|analysis|a summary))\b",
+    r"\b(interpret (this|that|these|the results?|the data))\b",
+    r"\b(what (should|can|could|would) (we|i|the business) (do|conclude|infer|learn|focus on))\b",
+    r"\b(how (does this|do these|does that) (look|compare|sound|perform))\b",
+    r"\b(any (patterns?|trends?|anomalies?|concerns?|issues?|opportunities?|red flags?))\b",
+    r"\b(where (is|are)( the)? (issues?|problems?|opportunit(?:y|ies)|risks?|growth|decline|concerns?))\b",
+    r"\b(what('s| is) (driving|causing|behind|explaining) (this|that|the (result|drop|increase|decrease|change)))\b",
+    r"\b(summarize (this|that|the (results?|data|findings?)))\b",
+    r"\b(can you (explain|analyse|analyze|interpret|evaluate|assess) (this|that|the (results?|data)))\b",
+    r"\b(what (action|next step|recommendation)s? (should|do) (we|i|the team|the business))\b",
+    r"\b(is (this|that) (good|bad|normal|expected|concerning|healthy|worrying))\b",
+    r"\bwhat (can you|could you) (tell|say) (me|us) about (this|that|the (data|results?))\b",
+]
+_ANALYTICAL_RE = [re.compile(p, flags=re.IGNORECASE) for p in _ANALYTICAL_PATTERNS]
+
+
+def _is_analytical_question(question: str, mem: AiAnalysisMemory) -> bool:
+    """
+    Detect questions that ask for interpretation, insight, or recommendation
+    rather than new data. Only triggers when prior context (rows) exists in memory.
+    """
+    q = question or ""
+    # Require prior data context — we need something to reason about
+    if not (mem.last_rows_json and len(mem.last_rows_json) > 5):
+        return False
+    # If the question contains specific time/data filters it's requesting NEW data
+    _data_filter_re = re.compile(
+        r"\b((19|20)\d{2}|january|february|march|april|may|june|july|august|"
+        r"september|october|november|december|show me|list all|display|get me)\b",
+        re.IGNORECASE,
+    )
+    if _data_filter_re.search(q):
+        return False
+    return any(p.search(q) for p in _ANALYTICAL_RE)
+
+
 def _decide_action(client: OpenAI, user_query: str, mem: AiAnalysisMemory) -> Tuple[str, str]:
     # Period-over-period billing/revenue compare must stay on compare path (not generic 'new').
     try:
@@ -196,6 +243,13 @@ def _decide_action(client: OpenAI, user_query: str, mem: AiAnalysisMemory) -> Tu
             return "compare", "period_compare_detected"
     except Exception as _cmp_err:
         logger.debug("compare routing check: %s", _cmp_err)
+
+    # Analytical/interpretive questions ("what do you think?", "where should we focus?",
+    # "any trends?") — answer from loaded context + domain knowledge, not new SQL.
+    # This check runs BEFORE _should_force_new_action so it is never accidentally blocked.
+    if _is_analytical_question(user_query, mem):
+        logger.info("🧠 Routing as follow-up (analytical/interpretive question): %s", user_query[:100])
+        return "follow-up", "analytical_question_from_loaded_data"
 
     # Fast keyword-based detection (avoid unnecessary LLM call)
     if _should_force_new_action(user_query):
@@ -781,6 +835,9 @@ def run_ai_analysis_orchestrator(
     sap_db: Optional[Session] = None,
     time_scope: str = "current",
     days: int = 30,
+    # Thread / mode parameters
+    thread_id: Optional[str] = None,
+    query_mode: str = "new",   # "new" | "follow_up"
 ) -> OrchestratorResult:
     """
     Orchestrates INVOICE_BOT-like behaviors:
@@ -814,7 +871,69 @@ def run_ai_analysis_orchestrator(
 
     client = _get_client(effective_key)
     mem = load_memory(db, user_id)
-    
+
+    # ── FOLLOW-UP MODE ────────────────────────────────────────────────────────
+    # When the user explicitly selects "Follow-up" mode, answer from thread
+    # context (last result + metrics + warnings) without running new SQL.
+    # Only falls through to SQL if the data needed isn't in the stored thread.
+    if query_mode == "follow_up" and thread_id:
+        try:
+            from .chat_thread_store import (
+                load_thread, next_turn_index, save_turn,
+                build_followup_prompt, ensure_chat_tables,
+            )
+            ensure_chat_tables(db)
+
+            # Save the user turn first
+            _turn_idx = next_turn_index(db, user_id, thread_id)
+            save_turn(db, user_id=user_id, thread_id=thread_id,
+                      turn_index=_turn_idx, role="user",
+                      content=user_query, query_mode="follow_up")
+
+            thread_turns = load_thread(db, user_id, thread_id, last_n=10)
+
+            # Build the grounded follow-up prompt and call the LLM
+            followup_prompt = build_followup_prompt(user_query, thread_turns)
+            _fu_resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": followup_prompt}],
+                temperature=0.3,
+                max_tokens=800,
+            )
+            _fu_reply = (_fu_resp.choices[0].message.content or "").strip()
+
+            if not _fu_reply:
+                _fu_reply = "I could not generate a follow-up answer. Please try rephrasing."
+
+            # Save the assistant turn
+            save_turn(db, user_id=user_id, thread_id=thread_id,
+                      turn_index=_turn_idx + 1, role="assistant",
+                      content=_fu_reply, query_mode="follow_up",
+                      action="follow_up_thread")
+
+            # Update memory so next turn has correct context
+            mem.last_user_query = user_query
+            mem.last_reply = _fu_reply
+            save_memory(db, mem)
+
+            timings["total_ms"] = int((time.time() - perf_start) * 1000)
+            return OrchestratorResult(
+                reply=_fu_reply,
+                action="follow_up",
+                reason="explicit_follow_up_mode",
+                sql=thread_turns[-1].get("sql_executed", "") if thread_turns else "",
+                rows_preview=None,
+                memory_updated=True,
+                time_scope=time_scope,
+                date_range=None,
+                period_info=None,
+                performance=timings,
+            )
+        except Exception as _fu_err:
+            logger.warning("follow_up mode failed, falling through to SQL: %s", _fu_err)
+            # Graceful degradation: if thread store fails, process as a normal new query
+    # ── END FOLLOW-UP MODE ────────────────────────────────────────────────────
+
     # NOTE: ULTRA-FAST PATH (reuse-instant) intentionally removed.
     # Every query must run fresh SQL against the correct table — returning cached data for a
     # different question caused wrong results (e.g. FAGLFLEXA query returning VBRK rows).
@@ -835,6 +954,28 @@ def run_ai_analysis_orchestrator(
         logger.info(f"🔁 Overriding action '{action}' to 'new' for fresh SQL execution")
         action = "new"
         reason = (reason or "") + "|forced_new_for_fresh_results"
+
+    # ── Conversation context clarification ────────────────────────────────────
+    # When a follow-up query is underspecified (e.g. "show me 2003" after "show me CAD sales 2000"),
+    # return an interactive clarifying question instead of running possibly-wrong SQL.
+    if action == "new":
+        try:
+            from .ai_analysis_memory_store import detect_follow_up_clarification
+            _clarify_msg = detect_follow_up_clarification(user_query, mem)
+            if _clarify_msg:
+                logger.info("conversation_context: returning clarifying question for %r", (user_query or "")[:80])
+                return OrchestratorResult(
+                    reply=_clarify_msg,
+                    action="clarify",
+                    reason="follow_up_context_incomplete",
+                    sql="",
+                    rows=[],
+                    charts=[],
+                    chart_type=None,
+                    performance=timings,
+                )
+        except Exception as _ctx_err:
+            logger.debug("conversation_context check failed: %s", _ctx_err)
 
     # Pure chit-chat (greetings, thanks, etc.) – do NOT hit the database.
     if _is_small_chitchat(user_query):
@@ -871,7 +1012,7 @@ User: {user_query}
     if action == "knowledge":
         upsert_knowledge(db, user_id, f"note_{len(mem.knowledge())+1}", user_query.strip()[:2000])
         return OrchestratorResult(
-            reply="Saved that as a note for this chat session. Ask me a question anytime and I’ll use it as context.",
+            reply="Saved that as a note for this chat session. Ask me a question anytime and I'll use it as context.",
             action=action,
             reason=reason,
             memory_updated=True,
@@ -883,7 +1024,45 @@ User: {user_query}
     # follow-up: respond from memory + context without new SQL
     if action == "follow-up":
         last_rows = mem.last_rows()
-        prompt = f"""
+        _is_analytical = _is_analytical_question(user_query, mem)
+
+        if _is_analytical:
+            # Richer prompt: combine the loaded data with SAP domain expertise
+            # to answer interpretive questions ("what do you think?", "where should we focus?")
+            prompt = f"""You are a senior SAP business analyst with deep expertise in SD (Sales & Distribution),
+FI (Financial Accounting), MM (Materials Management), and BI/reporting. You have been asked to
+provide analytical insight based on data that has already been fetched from the SAP system.
+
+## Data context (what was just queried)
+Previous question: {(mem.last_user_query or 'N/A')[:400]}
+SQL used: {(mem.last_sql or 'N/A')[:1500]}
+Result data (first 20 rows, JSON):
+{json.dumps(last_rows[:20], default=str)[:5000]}
+
+## System / company context
+{context_str[:2000]}
+
+## Conversation history (latest last)
+{json.dumps((conversation_history or [])[-6:], default=str)[:2000]}
+
+## User's analytical question
+{user_query}
+
+## Instructions
+1. Analyse the data above as a senior business consultant would.
+2. Identify the most important patterns, anomalies, strengths, and risks visible in the data.
+3. Give concrete, actionable recommendations (not generic advice).
+4. Where relevant, apply SAP SD/FI domain knowledge (billing types, credit memos, FKDAT vs GJAHR,
+   currency exposure, customer concentration, top-line vs margin, document flow, etc.).
+5. If the data sample is too small to be conclusive, say so and caveat your answer.
+6. Use MARKDOWN: **bold** key numbers, > blockquotes for key takeaways, bullet lists for options.
+7. Currency: use the correct symbol ($ USD, ₩ KRW, € EUR, £ GBP) or 3-letter code. Never $ for non-USD.
+8. Be concise — max 400 words unless depth is genuinely needed.
+"""
+            max_tokens = 900
+        else:
+            # Standard follow-up: answer from prior context without adding SAP domain depth
+            prompt = f"""
 You are a business analyst assistant. Answer the user's follow-up using prior context and the last result sample when relevant.
 
 Dashboard context:
@@ -907,14 +1086,16 @@ Answer concisely using MARKDOWN formatting:
 - Use > blockquotes for key insights
 - Use the correct currency symbol ($ for USD, ₩ for KRW, € for EUR, £ for GBP, or 3-letter code for others). Never use $ for non-USD values.
 """
+            max_tokens = 700
+
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=700,
+            max_tokens=max_tokens,
         )
         return OrchestratorResult(
-            reply=(resp.choices[0].message.content or "").strip() or "I couldn’t generate a response.",
+            reply=(resp.choices[0].message.content or "").strip() or "I couldn't generate a response.",
             action=action,
             reason=reason,
             sql=mem.last_sql or "",
@@ -1050,7 +1231,7 @@ Write a comparison using MARKDOWN:
             _cmp_rs = analyze_sql_result_shape(_cmp_shape_rows or [], last_sql)
             _cmp_qp = build_adaptive_query_profile(user_query)
             return OrchestratorResult(
-                reply=reply or "Comparison complete, but I couldn’t generate a narrative summary.",
+                reply=reply or "Comparison complete, but I couldn't generate a narrative summary.",
                 action="compare",
                 reason=reason,
                 sql=last_sql,
@@ -1202,8 +1383,8 @@ If result is empty, say so and suggest a refined question.
                 return OrchestratorResult(
                     reply=(
                         "Run **one** of these two questions (app workspace vs SAP analytics), not both in one message:\n\n"
-                        "1. **App only** — e.g. “List the last rows from `ai_analysis_memory` for my user.”\n"
-                        "2. **SAP only** — e.g. “Show billing headers from `VBRK` for last month.”\n\n"
+                        "1. **App only** — e.g. \"List the last rows from `ai_analysis_memory` for my user.\"\n"
+                        "2. **SAP only** — e.g. \"Show billing headers from `VBRK` for last month.\"\n\n"
                         "Then send your next question separately for the other catalog."
                     ),
                     action="new",
@@ -1262,7 +1443,7 @@ If result is empty, say so and suggest a refined question.
                         timings["total_ms"] = int((time.time() - perf_start) * 1000)
                         return OrchestratorResult(
                             reply=(
-                                "I need a column to order “last N rows” by (for example `updated_at` or `id`). "
+                                "I need a column to order \"last N rows\" by (for example `updated_at` or `id`). "
                                 "Which column should I use?"
                             ),
                             action="new",
@@ -1310,7 +1491,12 @@ If result is empty, say so and suggest a refined question.
             _op_result = resolve_operational_query(user_query, time_scope=time_scope, api_key=api_key)
             if _op_result is not None:
                 _op_sql, _op_query_type = _op_result
-                _op_rows_raw = db.execute(_op_sql_text(_op_sql)).mappings().all()
+                try:
+                    from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution as _prep_op
+                    _op_sql_safe = _prep_op(_op_sql)
+                except Exception:
+                    _op_sql_safe = _op_sql
+                _op_rows_raw = db.execute(_op_sql_text(_op_sql_safe)).mappings().all()
                 _op_rows = [dict(r) for r in _op_rows_raw]
                 result = SqlAgentResult(sql=_op_sql, rows=_op_rows)
                 timings["sql_path_reason"] = f"operational_{_op_query_type}"
@@ -1400,7 +1586,12 @@ If result is empty, say so and suggest a refined question.
             # ── End completeness check ────────────────────────────────────────────
 
             exec_start = time.time()
-            rows = sql_db.execute(_sql_text(sql)).mappings().all()
+            try:
+                from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution as _prep_sql
+                _safe_intent_sql = _prep_sql(sql)
+            except Exception:
+                _safe_intent_sql = sql
+            rows = sql_db.execute(_sql_text(_safe_intent_sql)).mappings().all()
             result_rows = [dict(r) for r in rows]
             timings["sql_execution_ms"] = int((time.time() - exec_start) * 1000)
             timings["sql_path_reason"] = "intent_sql"
@@ -2102,12 +2293,30 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                     proposed_sql=proposed_sql,
                 )
 
+            # Log failure and generate an inline suggestion for the user
+            _inline_suggestion = ""
+            try:
+                from .smart_query_learner import log_query_failure, _generate_failure_suggestion
+                _failure_reason = (
+                    "SQL ran but returned 0 rows — no matching records for those filters."
+                    if sql_attempted else "Could not generate SQL for this request."
+                )
+                _inline_suggestion = _generate_failure_suggestion(user_query, sql_attempted or "", _failure_reason)
+                log_query_failure(db, user_query, sql_attempted or "", _failure_reason)
+            except Exception:
+                pass
+
+            _suggestion_block = (
+                f"\n\n💡 **Suggestion:** {_inline_suggestion}" if _inline_suggestion else ""
+            )
+
             return OrchestratorResult(
                 reply=(
                     "No data was found for that query. "
                     + ("The SQL ran but returned 0 rows — the table may not have matching records for those filters. " if sql_attempted else "A SQL query could not be generated for this request. ")
                     + ("" if not _entity_diag_msg else _entity_diag_msg + " ")
                     + "Try rephrasing with a specific table name, material, customer, plant, or time period."
+                    + _suggestion_block
                 ),
                 action="new",
                 reason=reason or "sap_sql_agent_no_result",
@@ -2772,7 +2981,99 @@ Write a clear MARKDOWN answer:
     mem.last_rows_json = json.dumps(_rows_preview(result.rows, limit=80), default=str)
     mem.last_reply = reply  # Save the AI-generated reply for instant reuse
     mem.last_charts_json = json.dumps(charts_data or [], default=str)  # Save charts for reuse
+    # Save currency and year for conversation context carry-over
+    try:
+        from .ai_analysis_memory_store import extract_query_currency, extract_query_year
+        _extracted_currency = extract_query_currency(user_query)
+        _extracted_year = extract_query_year(user_query)
+        if _extracted_currency:
+            mem.last_currency = _extracted_currency
+        if _extracted_year:
+            mem.last_year = _extracted_year
+    except Exception:
+        pass
     save_memory(db, mem)
+
+    # Auto-promote successful query to learned patterns (smart caching loop)
+    try:
+        from .smart_query_learner import auto_promote_successful_query
+        auto_promote_successful_query(db, user_query, result.sql, len(result.rows))
+    except Exception as _learn_err:
+        logger.debug("smart_query_learner.auto_promote failed (non-critical): %s", _learn_err)
+
+    # Save this turn to the thread store so follow-up questions can reference it
+    if thread_id:
+        try:
+            from .chat_thread_store import save_turn, next_turn_index, ensure_chat_tables
+            ensure_chat_tables(db)
+            # Compute key metrics for the result (totals, row count, currency breakdown)
+            _km: Dict[str, Any] = {"row_count": len(result.rows)}
+            try:
+                _numeric_col = next(
+                    (k for k in (result.rows[0].keys() if result.rows else [])
+                     if any(s in k.lower() for s in ("sales", "revenue", "total", "amount", "value", "netwr"))),
+                    None
+                )
+                if _numeric_col and result.rows:
+                    import decimal
+                    _vals = []
+                    for r in result.rows:
+                        v = r.get(_numeric_col)
+                        if v is not None:
+                            try: _vals.append(float(v))
+                            except Exception: pass
+                    if _vals:
+                        _km["total"] = round(sum(_vals), 2)
+                        _km["max"] = round(max(_vals), 2)
+                        _km["min"] = round(min(_vals), 2)
+            except Exception:
+                pass
+            # Detect dominant currency in result
+            _dom_currency = mem.last_currency or None
+            try:
+                for r in result.rows[:5]:
+                    for k in r:
+                        if "waerk" in k.lower() or "currency" in k.lower():
+                            _dom_currency = str(r[k])
+                            break
+                    if _dom_currency: break
+            except Exception:
+                pass
+            # Extract warnings from reply
+            _reply_warnings = []
+            if "mixed currenc" in (reply or "").lower():
+                _reply_warnings.append("Mixed currencies in result")
+            if "risky aggregate" in (reply or "").lower() or "0 rows" in (reply or ""):
+                _reply_warnings.append("Risky aggregate or zero rows")
+
+            _thread_turn_idx = next_turn_index(db, user_id, thread_id)
+            # User turn (if not already saved in follow_up path)
+            if query_mode != "follow_up":
+                save_turn(db, user_id=user_id, thread_id=thread_id,
+                          turn_index=_thread_turn_idx, role="user",
+                          content=user_query, query_mode=query_mode or "new")
+                _thread_turn_idx += 1
+            # Assistant turn with full result artifact
+            _col_names = list(result.rows[0].keys()) if result.rows else []
+            save_turn(
+                db, user_id=user_id, thread_id=thread_id,
+                turn_index=_thread_turn_idx, role="assistant",
+                content=reply or "",
+                sql_executed=result.sql,
+                result_rows=result.rows[:30],
+                result_columns=_col_names,
+                key_metrics=_km,
+                warnings=_reply_warnings or None,
+                charts=charts_data,
+                time_scope=time_scope,
+                date_range=str(date_range) if date_range else None,
+                dominant_currency=_dom_currency,
+                dominant_year=mem.last_year or None,
+                query_mode=query_mode or "new",
+                action=action,
+            )
+        except Exception as _thread_err:
+            logger.debug("chat_thread_store.save_turn failed (non-critical): %s", _thread_err)
 
     # Log to training data for fine-tuning
     try:
@@ -2837,10 +3138,11 @@ Write a clear MARKDOWN answer:
     }
 
     return OrchestratorResult(
-        reply=reply or "Query executed, but I couldn’t generate a summary.",
+        reply=reply or "Query executed, but I couldn't generate a summary.",
         action="new",
         reason=reason,
         sql=result.sql,
+        rows=result.rows,
         rows_preview=preview,
         memory_updated=True,
         charts=charts_data,

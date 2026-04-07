@@ -146,9 +146,17 @@ def initialize_ai_knowledge_base(
                 except Exception as pattern_err:
                     logger.error(f"❌ Error caching pattern {pattern.get('pattern_name')}: {pattern_err}")
         
+        # Create / refresh sap_billing_lines_v convenience view (VBRP+VBRK pre-joined)
+        if sap_db is not None:
+            try:
+                from .smart_query_learner import ensure_sap_billing_view
+                ensure_sap_billing_view(sap_db)
+            except Exception as view_err:
+                logger.warning("sap_billing_lines_v view creation failed (non-critical): %s", view_err)
+
         # Calculate total time
         results["total_time_ms"] = int((time.time() - start_time) * 1000)
-        
+
         logger.info("=" * 70)
         logger.info("✅ AI KNOWLEDGE BASE INITIALIZATION COMPLETE")
         logger.info(f"   Tables cached: {results['tables_cached']}")

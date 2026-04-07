@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import pprint
 import sys
 from pathlib import Path
 
@@ -27,6 +29,12 @@ def main() -> int:
         "--schema",
         default="public",
         help="Table schema (default: public)",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["pretty", "dict", "json"],
+        default="pretty",
+        help="Output format: pretty (default), dict (Python literal), json",
     )
     parser.add_argument(
         "--csv",
@@ -57,6 +65,7 @@ def main() -> int:
     )
 
     rows_out: list[dict] = []
+    grouped: dict[str, list[dict[str, str]]] = {}
 
     with engine.connect() as conn:
         result = conn.execute(sql, {"schema": args.schema})
@@ -75,15 +84,22 @@ def main() -> int:
                 }
             )
             key = f"{schema}.{table}"
-            if key != current_table:
-                if current_table is not None:
-                    print()
-                print(f"=== {key} ===")
-                current_table = key
-            print(f"  {col}  ({dtype})")
+            grouped.setdefault(key, []).append({"column": col, "data_type": dtype})
+            if args.format == "pretty":
+                if key != current_table:
+                    if current_table is not None:
+                        print()
+                    print(f"=== {key} ===")
+                    current_table = key
+                print(f"  {col}  ({dtype})")
 
-    if current_table is not None:
-        print()
+    if args.format == "pretty":
+        if current_table is not None:
+            print()
+    elif args.format == "dict":
+        pprint.pprint(grouped, sort_dicts=True, width=120)
+    elif args.format == "json":
+        print(json.dumps(grouped, indent=2, sort_keys=True))
 
     if args.csv:
         path = Path(args.csv)

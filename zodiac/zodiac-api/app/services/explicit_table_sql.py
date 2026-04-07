@@ -43,6 +43,8 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     "SOME", "SUCH", "THAN", "ONLY", "ALSO", "VERY", "JUST", "MOST", "MANY",
     "SAME", "BEEN", "EVEN", "MADE", "PART", "AREA", "TYPE", "KIND", "NAME",
     "USER", "DATA", "ROWS", "LAST", "NEXT", "HELP", "OPEN", "CLOSE", "READ",
+    # SQL set operators / common keywords that often appear in pasted queries
+    "UNION", "ALL",
     # Zodiac operational domain words — not table names in SAP or app schema
     "SAT", "CFDI", "RFC", "MXN", "XML", "EDI", "API", "PDF", "CSV", "ERP",
     "SAP",  # SAP is an app/system name, not a table identifier
@@ -64,6 +66,19 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     # Report / analysis words
     "REPORT", "REPORTS", "ANALYSIS", "ANALYZE", "SUMMARY", "DETAIL", "DETAILS",
     "CHART", "GRAPH", "TABLE", "TABLES", "VIEW", "VIEWS", "INDEX", "SCHEMA",
+    # SAP column names — commonly appear in user questions but are NOT table names.
+    # These are field-level identifiers that users might type when asking about data,
+    # e.g. "show me FKDAT for 2000" or "filter by WAERK = CAD".
+    "FKDAT", "WAERK", "NETWR", "VBELN", "POSNR", "MANDT", "KUNNR", "LIFNR",
+    "MATNR", "WERKS", "BUKRS", "EKORG", "GJAHR", "AUGDT", "BLDAT", "BUDAT",
+    "FKIMG", "MAKTX", "KUNAG", "PRCTR", "RCNTR", "RACCT", "BELNR", "BUZEI",
+    "DMBTR", "WRBTR", "HKONT", "KOSTL", "AUFNR", "OBJNR", "SPRAS", "LAND1",
+    "STRAS", "ORT01", "PSTLZ", "REGIO", "TELF1", "KTOKD", "KVGR1", "KVGR2",
+    "MTART", "MBRSH", "MATKL", "MEINS", "BSTME", "BRGEW", "NTGEW", "GEWEI",
+    "VKORG", "VTWEG", "SPART", "VKBUR", "AUART", "FKTYP", "FKART", "RFBSK",
+    "ZTERM", "VALDT", "PRSDT", "ERDAT", "ERZET", "ERNAM", "AEDAT", "AENAM",
+    "STGRD", "ABGRU", "LIFSK", "FAKSK", "VKAUS", "VRKME", "NETPR", "KPEIN",
+    "KMEIN", "SHKZG", "KOART", "GSBER", "RBKPV", "RBKPZ",
 }
 
 # ISO 4217 currency codes — must not be treated as SAP table names.

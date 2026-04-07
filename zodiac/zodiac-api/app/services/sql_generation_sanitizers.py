@@ -2,8 +2,11 @@
 Post-process LLM / stored SQL before validation and execution.
 
 - GJAHR: In this DB VBRK.gjahr is often '0000' for all rows — never use it for year logic.
-- NETWR: vbrp.netwr is TEXT — SUM() needs NULLIF(TRIM(...::text),'')::NUMERIC.
-- SQLAlchemy text(): escape PostgreSQL :: casts (otherwise :text is treated as a bind).
+- NETWR: vbrp.netwr is TEXT — SUM() needs CAST(NULLIF(TRIM(CAST(x AS TEXT)),'') AS NUMERIC).
+- SQLAlchemy text(): must convert PostgreSQL ::type shorthand to CAST(expr AS type).
+  The backslash-escape approach (\\:\\:) does NOT work reliably — SQLAlchemy removes the
+  backslash but keeps the colon, so psycopg2 receives \\: which is invalid SQL.
+  The correct fix is to eliminate ::type entirely before passing to text().
 
 Used by ai_analysis_orchestrator, sap_sql_precision_validator (approve-query path), and dashboard suggest-sql.
 """
@@ -12,17 +15,192 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
+# SQL function names that can appear before '(' in a CAST-target expression
+_SQL_FUNC_NAMES = frozenset({
+    "NULLIF", "TRIM", "COALESCE", "CAST", "SUM", "MAX", "MIN", "AVG", "COUNT",
+    "UPPER", "LOWER", "SUBSTRING", "LEFT", "RIGHT", "REPLACE", "TO_CHAR",
+    "TO_DATE", "TO_NUMBER", "LENGTH", "LPAD", "RPAD", "LTRIM", "RTRIM",
+    "ROUND", "FLOOR", "CEIL", "CEILING", "ABS", "NULLIF", "GREATEST", "LEAST",
+    "CONCAT", "SPLIT_PART", "REGEXP_REPLACE", "EXTRACT", "DATE_PART",
+    "DATE_TRUNC", "TO_TIMESTAMP", "NOW", "CURRENT_DATE", "ARRAY_AGG",
+    "STRING_AGG", "ARRAY_LENGTH", "UNNEST",
+})
 
-def escape_postgres_casts_for_sqlalchemy(sql: str) -> str:
-    """
-    SQLAlchemy's text() treats :name as bind parameters. PostgreSQL casts use ::text,
-    ::numeric, etc. — the second colon starts :text which gets replaced and corrupts SQL.
 
-    Doubling backslash-colon is the documented workaround: \\:\\: → :: in the final SQL.
+def _find_expr_start(buf: str) -> int:
     """
-    if not sql:
+    Given a buffer ending with an atom (identifier, quoted string, or ')'),
+    return the index where that atom starts so it can be wrapped in CAST().
+
+    Handles:
+    - Simple identifiers: word chars, dots, underscores
+    - Quoted identifiers: "col", alias."col"
+    - Parenthesized expressions ending with ')', including the function name before '('
+    """
+    stripped = buf.rstrip()
+    if not stripped:
+        return len(buf)
+
+    last = stripped[-1]
+
+    if last == ')':
+        # Find matching '(' — respects nesting, string literals, quoted identifiers
+        depth = 0
+        k = len(stripped) - 1
+        while k >= 0:
+            c = stripped[k]
+            if c == ')':
+                depth += 1
+                k -= 1
+            elif c == '(':
+                depth -= 1
+                if depth == 0:
+                    break
+                k -= 1
+            elif c == '"':
+                # Scan past quoted identifier (backwards)
+                k -= 1
+                while k >= 0 and stripped[k] != '"':
+                    k -= 1
+                k -= 1
+            elif c == "'":
+                # Scan past string literal (backwards)
+                k -= 1
+                while k >= 0 and stripped[k] != "'":
+                    k -= 1
+                k -= 1
+            else:
+                k -= 1
+
+        # k is at the opening '(' — check for function name before it
+        func_end = k - 1
+        while func_end >= 0 and stripped[func_end] == ' ':
+            func_end -= 1
+        func_start = func_end
+        while func_start > 0 and (stripped[func_start - 1].isalnum() or stripped[func_start - 1] == '_'):
+            func_start -= 1
+        candidate_func = stripped[func_start:func_end + 1].upper()
+        if candidate_func in _SQL_FUNC_NAMES:
+            expr_start = func_start
+        else:
+            expr_start = k  # just the parenthesized expression without function name
+
+        return expr_start + (len(buf) - len(stripped))  # adjust for trailing whitespace
+
+    # Identifier / quoted identifier / string literal at end
+    k = len(stripped)
+    while k > 0:
+        c = stripped[k - 1]
+        if c.isalnum() or c == '_':
+            k -= 1
+        elif c == '"':
+            # Double-quoted identifier — find opening '"'
+            k -= 1
+            while k > 0 and stripped[k - 1] != '"':
+                k -= 1
+            k -= 1  # skip opening '"'
+        elif c == "'":
+            # Single-quoted string literal — find opening "'"
+            k -= 1
+            while k > 0:
+                if stripped[k - 1] == "'":
+                    # Could be '' (escaped quote) — peek further
+                    if k >= 2 and stripped[k - 2] == "'":
+                        k -= 2  # skip ''
+                        continue
+                    k -= 1  # skip opening "'"
+                    break
+                k -= 1
+        elif c == '.':
+            # Qualified name separator (alias.column)
+            k -= 1
+        else:
+            break
+
+    return k + (len(buf) - len(stripped))
+
+
+def convert_pg_casts_to_ansi(sql: str) -> str:
+    """
+    Convert every PostgreSQL ::typename shorthand to ANSI CAST(expr AS TYPENAME).
+
+    This eliminates all '::' sequences before the SQL is handed to SQLAlchemy text(),
+    which would otherwise mis-parse ':typename' as a named bind parameter and replace it
+    with an empty string, corrupting the SQL entirely.
+
+    Handles:
+    - Simple identifiers:          p."netwr"::text   →  CAST(p."netwr" AS TEXT)
+    - Parenthesized expressions:   NULLIF(...)::NUMERIC → CAST(NULLIF(...) AS NUMERIC)
+    - String literals:             ''::text          →  CAST('' AS TEXT)
+    - Skips content inside single-quoted strings and double-quoted identifiers.
+    """
+    if not sql or '::' not in sql:
         return sql
-    return sql.replace("::", r"\:\:")
+
+    result: List[str] = []
+    i = 0
+    n = len(sql)
+
+    while i < n:
+        ch = sql[i]
+
+        # ── Single-quoted string literal — copy verbatim ──────────────────────
+        if ch == "'":
+            result.append(ch)
+            i += 1
+            while i < n:
+                c = sql[i]
+                result.append(c)
+                i += 1
+                if c == "'":
+                    # '' is an escaped quote — keep going
+                    if i < n and sql[i] == "'":
+                        result.append(sql[i])
+                        i += 1
+                    else:
+                        break
+            continue
+
+        # ── Double-quoted identifier — copy verbatim ─────────────────────────
+        if ch == '"':
+            result.append(ch)
+            i += 1
+            while i < n and sql[i] != '"':
+                result.append(sql[i])
+                i += 1
+            if i < n:
+                result.append(sql[i])
+                i += 1
+            continue
+
+        # ── PostgreSQL ::typename ─────────────────────────────────────────────
+        if ch == ':' and i + 1 < n and sql[i + 1] == ':':
+            # Require a letter or underscore after :: (true typename, not :: operator misuse)
+            if i + 2 < n and (sql[i + 2].isalpha() or sql[i + 2] == '_'):
+                # Extract the typename
+                j = i + 2
+                while j < n and (sql[j].isalnum() or sql[j] == '_'):
+                    j += 1
+                typename = sql[i + 2:j].upper()
+
+                # Find the expression preceding :: in the accumulated result
+                buf = ''.join(result)
+                expr_start = _find_expr_start(buf)
+                prefix = buf[:expr_start]
+                expr = buf[expr_start:]
+
+                if expr.strip():
+                    result = [prefix, f'CAST({expr.strip()} AS {typename})']
+                else:
+                    # Nothing recognisable before :: — keep the :: and move on
+                    result.append('::')
+                i = j
+                continue
+
+        result.append(ch)
+        i += 1
+
+    return ''.join(result)
 
 
 def substitute_literal_sqlalchemy_bind_placeholders(sql: str) -> str:
@@ -42,15 +220,24 @@ def substitute_literal_sqlalchemy_bind_placeholders(sql: str) -> str:
     return sql
 
 
+def escape_postgres_casts_for_sqlalchemy(sql: str) -> str:
+    """
+    DEPRECATED: Use convert_pg_casts_to_ansi() instead.
+    Kept for backward compatibility — now delegates to the proper CAST converter.
+    """
+    return convert_pg_casts_to_ansi(sql)
+
+
 def prepare_sql_for_sqlalchemy_text_execution(sql: str) -> str:
     """
     Full prep before db.execute(text(...)) with NO second argument:
-    1) Escape :: casts
-    2) Replace :limit-style placeholders that would otherwise corrupt LIMIT
+    1) Convert PostgreSQL ::type shorthand to ANSI CAST(expr AS type) — eliminates
+       the SQLAlchemy bind-param confusion that corrupts ::text → :'' in executed SQL.
+    2) Replace :limit-style placeholders that would otherwise corrupt LIMIT.
     """
     if not sql:
         return sql
-    s = escape_postgres_casts_for_sqlalchemy(sql)
+    s = convert_pg_casts_to_ansi(sql)
     s = substitute_literal_sqlalchemy_bind_placeholders(s)
     return s
 
@@ -193,21 +380,24 @@ def inject_fkdat_calendar_year_filter(sql: str, question: Optional[str]) -> Tupl
 def sanitize_netwr_sql(sql: str) -> str:
     """
     Replace bare SUM(alias.netwr) with safe TEXT→NUMERIC cast for vbrp.netwr.
-    Skips expressions that already use NULLIF or ::numeric.
+    Skips expressions that already use NULLIF or CAST.
+
+    Uses ANSI CAST() syntax — never :: shorthand — so the output is safe to pass
+    to SQLAlchemy text() without any further escaping.
     """
     if not sql:
         return sql
 
     def _already_cast(expr: str) -> bool:
         low = expr.lower()
-        return "::numeric" in low or "nullif" in low or "::float" in low
+        return "cast(" in low or "nullif" in low
 
     def _replace_alias_netwr(m: re.Match) -> str:
         full = m.group(0)
         if _already_cast(full):
             return full
         alias = m.group(1)
-        return f'SUM(NULLIF(TRIM({alias}."netwr"::text),\'\')::NUMERIC)'
+        return f"SUM(CAST(NULLIF(TRIM(CAST({alias}.\"netwr\" AS TEXT)), '') AS NUMERIC))"
 
     sql = re.sub(
         r'SUM\s*\(\s*(\b[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"?netwr"?\s*\)',
@@ -220,7 +410,7 @@ def sanitize_netwr_sql(sql: str) -> str:
         full = m.group(0)
         if _already_cast(full):
             return full
-        return "SUM(NULLIF(TRIM(netwr::text),'')::NUMERIC)"
+        return "SUM(CAST(NULLIF(TRIM(CAST(netwr AS TEXT)), '') AS NUMERIC))"
 
     sql = re.sub(
         r'SUM\s*\(\s*"?netwr"?\s*\)',

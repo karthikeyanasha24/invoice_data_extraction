@@ -13,7 +13,7 @@ This is used to:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
 
@@ -47,7 +47,8 @@ class UserConstraints:
     years: Set[str]
     billing_category: Optional[str]
     billing_type: Optional[str]
-    currency_code: Optional[str]
+    currency_code: Optional[str]          # first code (backwards compat)
+    currency_codes: Tuple[str, ...]       # all codes (multi-currency support)
     wants_count: bool
     wants_sum: bool
     wants_negative_lines: bool
@@ -57,20 +58,27 @@ def _extract_years(question: str) -> Set[str]:
     return set(re.findall(r"\b((?:19|20)\d{2})\b", question or ""))
 
 
-def _extract_currency_code(question: str) -> Optional[str]:
+def _extract_currency_codes(question: str) -> List[str]:
+    """Return ALL ISO-4217 codes mentioned — supports 'show me CAD and USD sales'."""
     q = (question or "").upper()
+    found: List[str] = []
     for code in sorted(_COMMON_CURRENCY_CODES, key=len, reverse=True):
         if re.search(rf"\b{re.escape(code)}\b", q):
-            return code
+            found.append(code)
+    if not found:
+        if "€" in question:
+            found.append("EUR")
+        elif "£" in question:
+            found.append("GBP")
+        elif "$" in question and "USD" in q:
+            found.append("USD")
+    return found
 
-    # Support common symbol-only mentions (best-effort).
-    if "€" in question:
-        return "EUR"
-    if "£" in question:
-        return "GBP"
-    if "$" in question and "USD" in q:
-        return "USD"
-    return None
+
+def _extract_currency_code(question: str) -> Optional[str]:
+    """Return the first currency code found (backwards compat)."""
+    codes = _extract_currency_codes(question)
+    return codes[0] if codes else None
 
 
 def _extract_billing_category(question: str) -> Optional[str]:
@@ -111,14 +119,20 @@ def _extract_metric_intent(question: str) -> Tuple[bool, bool]:
         or "invoice count" in q
         or "number of invoices" in q
     )
+    # Only require SUM() when the question EXPLICITLY asks for aggregates/totals.
+    # Bare "show me sales" or "show me invoice amounts" could be row-level queries —
+    # the constraint validator should NOT require SUM() in those cases.
     wants_sum = bool(
-        "total" in q
-        or "sum" in q
-        or "revenue" in q
-        or "sales" in q
-        or "invoice value" in q
-        or "invoice amount" in q
-        or "amount" in q
+        re.search(r"\b(total|sum|aggregate|cumulative|overall)\b", q)
+        or "total sales" in q
+        or "total revenue" in q
+        or "total amount" in q
+        or "sum of" in q
+        or re.search(r"\b(top|bottom|highest|lowest|largest|smallest)\s+\d+", q)  # ranking queries always aggregate
+        or re.search(r"\bby\s+(customer|product|country|material|vendor|region|year|month|quarter)\b", q)
+        # Explicit revenue/sales WITH a year = aggregate intent
+        or (re.search(r"\b(revenue|sales)\b", q) and re.search(r"\b(19|20)\d{2}\b", q)
+            and re.search(r"\b(total|sum|how much|what is|what was)\b", q))
     )
     return wants_count, wants_sum
 
@@ -138,11 +152,13 @@ def extract_user_constraints(question: str) -> UserConstraints:
     if wants_negative_lines:
         wants_sum = False
 
+    currency_codes_list = _extract_currency_codes(question)
     return UserConstraints(
         years=_extract_years(question),
         billing_category=_extract_billing_category(question),
         billing_type=_extract_billing_type(question),
-        currency_code=_extract_currency_code(question),
+        currency_code=currency_codes_list[0] if currency_codes_list else None,
+        currency_codes=tuple(currency_codes_list),
         wants_count=wants_count,
         wants_sum=wants_sum,
         wants_negative_lines=wants_negative_lines,
@@ -254,10 +270,31 @@ def _sql_has_sum(sql: str) -> bool:
 
 
 def _sql_has_currency_filter(sql: str, currency_code: str) -> bool:
+    """Check that the SQL filters on the given currency (single-code check, backwards compat)."""
     s = sql or ""
     code = currency_code or ""
-    # Best-effort: require waerk and the literal code near each other.
-    return bool(re.search(rf"waerk[^;]{{0,200}}'{re.escape(code)}'", s, flags=re.IGNORECASE))
+    # Matches equality:  waerk = 'CAD'
+    if re.search(rf"waerk[^;]{{0,200}}'{re.escape(code)}'", s, flags=re.IGNORECASE):
+        return True
+    # Matches IN list:   waerk IN ('CAD','USD')
+    if re.search(rf"waerk[^;]{{0,200}}IN\s*\([^)]*'{re.escape(code)}'", s, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _sql_has_all_currency_filters(sql: str, codes: Tuple[str, ...]) -> bool:
+    """For multi-currency queries, verify the SQL references every requested code."""
+    if not codes:
+        return True
+    if len(codes) == 1:
+        return _sql_has_currency_filter(sql, codes[0])
+    s = sql or ""
+    # Accept either: an IN list containing all codes, or individual equality filters
+    all_present = all(
+        re.search(rf"waerk[^;]{{0,300}}'{re.escape(c)}'", s, flags=re.IGNORECASE)
+        for c in codes
+    )
+    return all_present
 
 
 def validate_sql_against_user_constraints(sql: str, question: str) -> Tuple[bool, List[str]]:
@@ -295,10 +332,18 @@ def validate_sql_against_user_constraints(sql: str, question: str) -> Tuple[bool
         elif not _sql_has_fkart_value(sql_s, constraints.billing_type):
             reasons.append("SQL FKART predicate does not match requested billing type.")
 
-    if constraints.currency_code:
-        # Treat explicit currency codes as an explicit filter request for reliability.
-        if not _sql_has_currency_filter(sql_s, constraints.currency_code):
-            reasons.append(f"SQL does not filter WAERK = {constraints.currency_code}.")
+    if constraints.currency_codes:
+        # Multi-currency: accept if ALL requested codes appear in the SQL (equality or IN list).
+        # Single-currency: enforce equality/IN match for the one code.
+        if not _sql_has_all_currency_filters(sql_s, constraints.currency_codes):
+            if len(constraints.currency_codes) == 1:
+                reasons.append(f"SQL does not filter WAERK = {constraints.currency_codes[0]}.")
+            else:
+                missing = [c for c in constraints.currency_codes
+                           if not _sql_has_currency_filter(sql_s, c)]
+                reasons.append(
+                    f"SQL currency filter incomplete — missing: {', '.join(missing)}."
+                )
 
     if constraints.wants_count:
         if not _sql_has_count(sql_s):
@@ -324,6 +369,7 @@ def validate_sql_against_user_constraints(sql: str, question: str) -> Tuple[bool
             if not (
                 re.search(r"netwr[^;]{0,200}<\s*0", sql_s, flags=re.IGNORECASE)
                 or re.search(r"netwr[^;]{0,200}::numeric[^;]{0,200}<\s*0", sql_s, flags=re.IGNORECASE)
+                or re.search(r"CAST\s*\([^)]{0,200}netwr[^;]{0,200}<\s*0", sql_s, flags=re.IGNORECASE)
             ):
                 reasons.append("SQL does not appear to filter negative line items (expected netwr < 0).")
 

@@ -74,20 +74,43 @@ def _extract_billing_type_value(question: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
-def _extract_currency_code(question: str) -> Optional[str]:
+_ISO_CURRENCY_CODES = (
+    "USD", "EUR", "GBP", "KRW", "INR", "JPY", "AUD", "CAD", "CHF", "CNY",
+    "SEK", "NOK", "DKK", "BRL", "MXN", "SGD", "HKD", "NZD", "ZAR", "TRY",
+)
+
+
+def _extract_currency_codes(question: str) -> List[str]:
+    """Extract ALL ISO-4217 currency codes mentioned in the question (multi-currency support)."""
     q = (question or "").upper()
-    # Best-effort: look for common ISO-4217 codes mentioned explicitly.
-    for code in ("USD", "EUR", "GBP", "KRW", "INR", "JPY", "AUD", "CAD", "CHF", "CNY"):
+    found: List[str] = []
+    for code in _ISO_CURRENCY_CODES:
         if re.search(rf"\b{re.escape(code)}\b", q):
-            return code
-    # Symbols only (best-effort).
-    if "€" in question:
-        return "EUR"
-    if "£" in question:
-        return "GBP"
-    if "$" in question and "USD" in q:
-        return "USD"
-    return None
+            found.append(code)
+    if not found:
+        if "€" in question:
+            found.append("EUR")
+        elif "£" in question:
+            found.append("GBP")
+        elif "$" in question and "USD" in q:
+            found.append("USD")
+    return found
+
+
+def _extract_currency_code(question: str) -> Optional[str]:
+    """Return a single currency code (first found) — kept for backwards compat."""
+    codes = _extract_currency_codes(question)
+    return codes[0] if codes else None
+
+
+def _currency_where_clause(alias: str, codes: List[str]) -> str:
+    """Build the SQL WHERE fragment for one or many currency codes."""
+    if not codes:
+        return ""
+    if len(codes) == 1:
+        return f"{alias}.\"waerk\" = '{codes[0]}'"
+    code_list = ", ".join(f"'{c}'" for c in codes)
+    return f"{alias}.\"waerk\" IN ({code_list})"
 
 
 def _wants_invoice_count(question: str) -> bool:
@@ -241,7 +264,8 @@ def resolve_deterministic_sql(
     y = _extract_single_year(question)
     billing_cat = _extract_billing_category_value(question)
     billing_type = _extract_billing_type_value(question)
-    currency_code = _extract_currency_code(question)
+    currency_codes = _extract_currency_codes(question)
+    currency_code = currency_codes[0] if currency_codes else None  # kept for single-code paths
     wants_count = _wants_invoice_count(question)
     wants_total = _wants_sales_total(question)
 
@@ -267,7 +291,7 @@ def resolve_deterministic_sql(
         rr = "r"
         v = "v"
 
-        netwr_sum = "SUM(NULLIF(TRIM(v.\"netwr\"::text), '')::NUMERIC)"
+        netwr_sum = "SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC))"
         year_filter = f"SUBSTRING(TRIM({rr}.\"fkdat\"),1,4) = '{y}'"
         where_parts = [year_filter]
 
@@ -275,8 +299,8 @@ def resolve_deterministic_sql(
             where_parts.append(f"{rr}.\"fktyp\" = '{billing_cat}'")
         if billing_type:
             where_parts.append(f"{rr}.\"fkart\" = '{billing_type}'")
-        if currency_code:
-            where_parts.append(f"{rr}.\"waerk\" = '{currency_code}'")
+        if currency_codes:
+            where_parts.append(_currency_where_clause(rr, currency_codes))
 
         where_sql = " WHERE " + " AND ".join(where_parts)
 
@@ -329,7 +353,7 @@ def resolve_deterministic_sql(
             y = ym.group(1)
             v = "v"
             rr = "r"
-            net_cast = f"NULLIF(TRIM({v}.\"netwr\"::text), '')::numeric"
+            net_cast = f"CAST(NULLIF(TRIM(CAST({v}.\"netwr\" AS TEXT)), '') AS NUMERIC)"
             vk = tbl("VBRK")
             has_neg = bool(re.search(r"\bnegative\b", q))
             has_low = bool(re.search(r"\b(lowest|smallest|minimum)\b", q))
@@ -343,8 +367,8 @@ def resolve_deterministic_sql(
                 where_extra += f" AND {rr}.\"fktyp\" = '{billing_cat}'"
             if billing_type:
                 where_extra += f" AND {rr}.\"fkart\" = '{billing_type}'"
-            if currency_code:
-                where_extra += f" AND {rr}.\"waerk\" = '{currency_code}'"
+            if currency_codes:
+                where_extra += f" AND {_currency_where_clause(rr, currency_codes)}"
             sql = (
                 f'SELECT {v}."vbeln" AS billing_doc, {v}."posnr" AS line_pos, '
                 f'{rr}."fkdat" AS billing_date, {rr}."kunag" AS sold_to_party, '
@@ -368,7 +392,7 @@ def resolve_deterministic_sql(
     )
     if any(p in q for p in _lowest_years_phrases) and ok("VBRP") and ok("VBRK"):
         vk = tbl("VBRK")
-        net = 'NULLIF(TRIM(v."netwr"::text), \'\')::numeric'
+        net = "CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)"
         sql = (
             f"SELECT SUBSTRING(TRIM(r.\"fkdat\"), 1, 4) AS year, "
             f"SUM(({net})) AS sales, "
@@ -394,7 +418,7 @@ def resolve_deterministic_sql(
         where_parts = [f"f.{_quote('prctr')} IS NOT NULL"]
         if current_year_only:
             # FAGLFLEXA: ryear (New GL) or gjahr - prefer ryear
-            where_parts.append(f"f.{_quote('ryear')}::text = EXTRACT(YEAR FROM CURRENT_DATE)::text")
+            where_parts.append(f"CAST(f.{_quote('ryear')} AS TEXT) = CAST(EXTRACT(YEAR FROM CURRENT_DATE) AS TEXT)")
         where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
         sql = (
             f"SELECT f.{_quote('prctr')} AS profit_center, "
@@ -504,7 +528,7 @@ def resolve_deterministic_sql(
             where_clause = f"WHERE SUBSTRING(TRIM(r.{_quote('fkdat')}),1,4) = '{yr}' "
         sql = (
             f"SELECT SUBSTRING(TRIM(r.{_quote('fkdat')}),1,4) AS year, "
-            f"SUM(NULLIF(TRIM(v.{_quote('netwr')}::text),'')::numeric) AS sales, "
+            f"SUM(CAST(NULLIF(TRIM(CAST(v.{_quote('netwr')} AS TEXT)),'') AS NUMERIC)) AS sales, "
             f"COUNT(*) AS records "
             f"FROM {tbl('VBRP')} v "
             f"JOIN {tbl('VBRK')} r ON LPAD(TRIM(v.{_quote('vbeln')}),10,'0') = LPAD(TRIM(r.{_quote('vbeln')}),10,'0') "

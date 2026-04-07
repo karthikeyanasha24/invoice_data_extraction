@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import uuid
 
 from ..database import get_db
 from ..models.user import ZodiacUser
@@ -2983,6 +2984,9 @@ async def post_ai_analysis_chat(
     context_keys: list = Body(default=[], embed=True),
     days: int = Body(default=30, embed=True),
     time_scope: str = Body(default="current", embed=True),
+    # Thread / mode parameters for follow-up vs new-question routing
+    thread_id: str = Body(default="", embed=True),
+    query_mode: str = Body(default="new", embed=True),  # "new" | "follow_up"
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -3038,6 +3042,8 @@ async def post_ai_analysis_chat(
                 sap_db=sap_session_for_sql,
                 time_scope=time_scope or "current",
                 days=int(days),
+                thread_id=thread_id or None,
+                query_mode=(query_mode or "new").lower().strip(),
             )
             payload = orchestrator_payload(orch)
             # Use Zodiac app DB for operational resolver results (Zodiac tables not in SAP schema).
@@ -3075,6 +3081,293 @@ async def post_ai_analysis_chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
+
+
+_SAP_SCHEMA_CONTEXT = """
+You have expert knowledge of the following SAP tables and Zodiac application tables:
+
+SALES & LOGISTICS: VBRK (Billing Document Header), VBRP (Billing Document Items),
+VBAK (Sales Order Header), VBAP (Sales Order Items), VBEP (Sales Order Schedule Lines),
+VBFA (Document Flow), KONV (Pricing Conditions), MVKE (Material Sales Data),
+LIKP (Delivery Header), LIPS (Delivery Items), LSEG (Delivery Segment)
+
+CUSTOMER MASTER: KNA1 (Customer Master General), KNVV (Customer Sales Data),
+KNVP (Customer Partner Functions), KNBK (Customer Bank Data)
+
+VENDOR & PURCHASING: LFA1 (Vendor Master General), LFB1 (Vendor Company Data),
+LFM1 (Vendor Purchasing Data), EKKO (Purchase Order Header), EKPO (Purchase Order Items),
+EBAN (Purchase Requisition), EINA (Purchasing Info Record General),
+EINE (Purchasing Info Record Org Data), RBKP (Invoice Receipt Header MM-IV),
+RSEG (Invoice Receipt Line Items), RESB (Reservation / Dependent Requirements)
+
+MATERIAL MASTER: MAKT (Material Descriptions), MARA (Material Master General),
+MARC (Material Plant Data), MARD (Storage Location Stock), MARM (Units of Measure),
+MBEW (Material Valuation), MBEWH (Material Valuation History), MCHB (Batch Stocks),
+MEAN (EAN/International Article Numbers), MKPF (Material Document Header),
+MLAN (Tax Classification), MSLB (Special Stocks at Vendor),
+STKO (BOM Header), STPO (BOM Items), CABN (Characteristic Definition),
+AUSP (Characteristic Values), KLAH (Class Header)
+
+FINANCE: BKPF (Accounting Document Header), BSEG (Accounting Document Segment),
+BSAD (Customer Open Item cleared), FAGLFLEXA (General Ledger Actual Line Items),
+DFKKOP (FI-CA Document Item), T016T (Credit Control Area Texts)
+
+CONTROLLING & COSTING: COEP (CO Document Line Items actual),
+COSP (Cost Totals External Postings), COSS (Cost Totals Internal Postings),
+CEPC (Profit Center Master Data), CSKS (Cost Center Master Data),
+CSKT (Cost Center Texts), CRHD (Work Center / Resource Header),
+AUFK (Order Master Data), AFKO (Production Order Header), AFPO (Production Order Item),
+CKIS (Cost Estimate Items), CKHS (Costing Run Header), CKIT (Costing Item Detail),
+KEKO (Product Costing Header), KEPH (Cost Components for Cost Estimate),
+CKMLCR (Material Ledger Currency & Qty), CKMLHD (Material Ledger Header),
+CKMLPP (Material Ledger Period Data), CKMLPR (Material Ledger Prices),
+TCKH1 (Cost Element Hierarchy), TCKH2 (Cost Element Hierarchy Nodes)
+
+CO-PA ACTUALS: CE1BGIS, CE1IDEA, CE1INT1, CE1PR22, CE1R300, CE1S_AL, CE1S_CP, CE1S_GO
+CO-PA PLAN: CE2BGIS, CE2IDEA, CE2S_AL, CE2S_CP, CS2S_GO
+
+KEY SAP FIELD CONVENTIONS:
+- VBRK/VBRP: netwr=net value, waerk=currency, fkdat=billing date, kunnr=customer, vkorg=sales org,
+  fkart=billing type, fktyp=billing category, matnr=material, arktx=item description,
+  fkimg=billed quantity, vrkme=unit of measure, mwsbp=tax amount
+- VBAK/VBAP: vbeln=order number, erdat=creation date, auart=order type, netwr=net value
+- KNA1: kunnr=customer code, name1=customer name, land1=country, ort01=city
+- BKPF/BSEG: belnr=document number, budat=posting date, gjahr=fiscal year, blart=doc type
+- MARA: matnr=material number, mtart=material type, matkl=material group, meins=base UOM
+
+ZODIAC APP TABLES: ai_analysis_memory, ai_query_embeddings, ai_query_memory,
+ai_training_data, converted_invoices, customers, zodiac_users,
+sat_documents, sat_company_mappings, sat_canonical_merged,
+zodiac_invoice_failed_edi, zodiac_invoice_success_edi
+
+COMMON JOINS:
+- Revenue query: VBRK JOIN VBRP ON vbrk.vbeln=vbrp.vbeln
+- Customer name: JOIN KNA1 ON kna1.kunnr=vbrk.kunnr
+- Material desc: JOIN MAKT ON makt.matnr=vbrp.matnr
+- Document flow: VBFA links deliveries, orders, billings
+"""
+
+
+@router.get("/ai-analysis/schema-chat/history")
+async def get_ai_schema_chat_history(
+    thread_id: str = Query(..., min_length=8),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Restore schema-chat messages for a persisted thread (same user only)."""
+    from ..services.chat_thread_store import ensure_chat_tables, load_thread, thread_owner_user_id
+
+    if not thread_id.startswith("sch_"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid schema chat thread id")
+    ensure_chat_tables(db)
+    owner = thread_owner_user_id(db, thread_id)
+    if owner is not None and owner != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this chat thread")
+    turns = load_thread(db, current_user.id, thread_id, last_n=80)
+    out = []
+    for t in turns:
+        role = t.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        c = (t.get("content") or "").strip()
+        if not c:
+            continue
+        out.append({"role": role, "content": c})
+    if not out:
+        from ..services.ai_analysis_memory_store import load_memory, schema_chat_messages_from_knowledge
+
+        mem = load_memory(db, current_user.id)
+        for m in schema_chat_messages_from_knowledge(mem, thread_id):
+            out.append({"role": m["role"], "content": m["content"]})
+    return {"thread_id": thread_id, "messages": out}
+
+
+@router.post("/ai-analysis/schema-chat")
+async def post_ai_schema_chat(
+    message: str = Body(..., embed=True),
+    conversation_history: list = Body(default=[], embed=True),
+    thread_id: Optional[str] = Body(default=None, embed=True),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Pure conversational AI endpoint for the Chat tab.
+    Answers questions about SAP schema, table relationships, business logic,
+    and data analysis — using full conversation history so follow-up questions work.
+    Always persists to ai_chat_threads and mirrors the full transcript in
+    ai_analysis_memory.knowledge_json (schema_chat). If thread_id is missing but the client
+    sends conversation_history, the server reuses the user's latest sch_* thread when possible.
+    Never generates or runs SQL; this is a knowledge/advisory endpoint only."""
+    from ..services.chat_thread_store import (
+        ensure_chat_tables,
+        load_thread,
+        next_turn_index,
+        save_turn,
+        thread_owner_user_id,
+    )
+
+    ai_openai_key = _get_ai_analysis_config()
+    if not ai_openai_key or not openai_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI chat not available (set OPENAI_API_KEY or OPEN_AI_KEY in .env)",
+        )
+    try:
+        system_prompt = (
+            "You are a senior SAP consultant and data analyst with deep expertise in SAP SD (Sales & Distribution), "
+            "FI (Finance), MM (Materials Management), CO (Controlling), and CO-PA (Profitability Analysis). "
+            "You help users understand table structures, field meanings, JOIN relationships, business logic, "
+            "and how to query or interpret their SAP and Zodiac application data.\n\n"
+            "MEMORY (critical): The messages after this system prompt are the user's real saved conversation from "
+            "Zodiac's database (ai_chat_turns and a backup in ai_analysis_memory.knowledge_json). "
+            "If you see any prior USER or ASSISTANT messages before the latest user message, that IS your memory — "
+            "reference them by topic, quote what was discussed, and answer follow-ups from that transcript. "
+            "NEVER say you cannot recall, have no memory, or that each turn is isolated when those prior messages exist. "
+            "Only treat the chat as brand-new if the only user content is the single latest question with no prior turns.\n\n"
+            "If the user asks how persistence works, say Zodiac stores Schema Chat per account in the database "
+            "(thread rows plus ai_analysis_memory) so it can reload across sessions and tabs.\n\n"
+            "IMPORTANT RULES:\n"
+            "1. Answer conversationally — this is a chat, not a query runner. Do NOT generate runnable SQL unless the user explicitly asks for example SQL.\n"
+            "2. Use the full conversation history in the messages array for follow-ups "
+            "('what did I ask', 'do you remember', 'last time we discussed', etc.).\n"
+            "3. Be concise and direct. Use markdown formatting (bold, code blocks, bullet points) where helpful.\n"
+            "4. If a question is ambiguous, answer the most likely interpretation and offer a clarification.\n"
+            "5. For data/business questions that require actual numbers, explain what tables/fields to use and how — "
+            "   but remind the user they can ask for live data in the Analysis tab.\n\n"
+            + _SAP_SCHEMA_CONTEXT
+        )
+
+        tid_in = (thread_id or "").strip()
+
+        if tid_in:
+            if not tid_in.startswith("sch_"):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid schema chat thread id")
+            owner = thread_owner_user_id(db, tid_in)
+            if owner is not None and owner != current_user.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this chat thread")
+            effective_tid = tid_in
+        elif conversation_history:
+            # Client lost thread_id in localStorage but still has transcript — reattach to latest sch_* thread
+            from ..services.chat_thread_store import latest_schema_chat_thread_id
+
+            recovered = latest_schema_chat_thread_id(db, current_user.id)
+            effective_tid = recovered or f"sch_{uuid.uuid4().hex}"
+        else:
+            effective_tid = f"sch_{uuid.uuid4().hex}"
+
+        def _normalize_schema_hist(hist: list) -> List[dict]:
+            out: List[dict] = []
+            for h in (hist or [])[-40:]:
+                if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
+                    c = str(h["content"]).strip()
+                    if c:
+                        out.append({"role": h["role"], "content": c[:3000]})
+            return out
+
+        client_turns = _normalize_schema_hist(conversation_history)
+
+        server_turns: List[dict] = []
+        ensure_chat_tables(db)
+        if effective_tid:
+            raw = load_thread(db, current_user.id, effective_tid, last_n=40)
+            if not raw:
+                from ..services.ai_analysis_memory_store import load_memory, schema_chat_messages_from_knowledge
+
+                _mem = load_memory(db, current_user.id)
+                _fb = schema_chat_messages_from_knowledge(_mem, effective_tid)
+                raw = [{"role": m["role"], "content": m["content"]} for m in _fb]
+            for row in raw:
+                role = row.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                content = (row.get("content") or "").strip()
+                if not content:
+                    continue
+                server_turns.append({"role": role, "content": content[:3000]})
+
+        # Prefer server when it has at least as many turns as the client (authoritative DB).
+        # If DB/memory is empty or behind (persist lag), use the client's in-memory transcript so
+        # follow-ups like "do you remember…" still see prior turns.
+        if len(server_turns) >= len(client_turns) and server_turns:
+            transcript = server_turns
+        else:
+            transcript = client_turns or server_turns
+
+        sp = system_prompt
+        if transcript:
+            sp += (
+                f"\n\n[This API call includes {len(transcript)} prior transcript messages before the latest "
+                "user question (user/assistant alternation). They are the real conversation — use them to answer "
+                "memory and recall questions.]"
+            )
+
+        messages: List[dict] = [{"role": "system", "content": sp}]
+        for row in transcript:
+            messages.append({"role": row["role"], "content": row["content"][:3000]})
+
+        messages.append({"role": "user", "content": message[:2000]})
+
+        client = OpenAI(api_key=ai_openai_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.25,
+            max_tokens=800,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+
+        persist_ok = True
+        ensure_chat_tables(db)
+        _ti = next_turn_index(db, current_user.id, effective_tid)
+        ok_u = save_turn(
+            db,
+            user_id=current_user.id,
+            thread_id=effective_tid,
+            turn_index=_ti,
+            role="user",
+            content=message[:10000],
+            action="schema_chat",
+        )
+        ok_a = save_turn(
+            db,
+            user_id=current_user.id,
+            thread_id=effective_tid,
+            turn_index=_ti + 1,
+            role="assistant",
+            content=reply[:10000],
+            action="schema_chat",
+        )
+        persist_ok = bool(ok_u and ok_a)
+        from ..services.ai_analysis_memory_store import save_schema_chat_snapshot_to_memory
+
+        if not persist_ok:
+            logger.error(
+                "schema_chat DB persist failed user=%s tid=%s ok_user=%s ok_asst=%s",
+                current_user.id,
+                effective_tid,
+                ok_u,
+                ok_a,
+            )
+
+        # Full transcript for ai_analysis_memory backup (not only rows in ai_chat_turns).
+        merged_snap: List[dict] = [
+            {"role": str(r["role"]), "content": str(r.get("content") or "")[:8000]}
+            for r in transcript
+            if r.get("role") in ("user", "assistant") and str(r.get("content") or "").strip()
+        ]
+        merged_snap.append({"role": "user", "content": message.strip()[:8000]})
+        merged_snap.append({"role": "assistant", "content": reply[:8000]})
+        save_schema_chat_snapshot_to_memory(db, current_user.id, effective_tid, merged_snap)
+
+        return {
+            "reply": reply,
+            "thread_id": effective_tid,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Schema chat failed: %s", e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.post("/ai-analysis/store-query")
@@ -3349,6 +3642,15 @@ async def get_ai_analysis_schema(
                 """
             )).fetchall()
             live_tables = [row[0] for row in result]
+            # Large SAP catalogs: N tables × column query can hang the UI for minutes.
+            _cap = int(os.getenv("ZODIAC_SCHEMA_LIVE_TABLE_CAP", "120"))
+            if _cap > 0 and len(live_tables) > _cap:
+                logger.info(
+                    "schema live introspection capped: %s tables (had %s in public schema)",
+                    _cap,
+                    len(live_tables),
+                )
+                live_tables = live_tables[:_cap]
 
             for tbl in live_tables:
                 if tbl in schema_out:

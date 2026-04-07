@@ -8,12 +8,22 @@ const backendOrigin = (
   "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
 
+/** Lock Turbopack to this app so Next does not pick a parent folder lockfile (e.g. C:\\Users\\…\\package-lock.json). */
+const projectRoot = path.resolve(__dirname);
+
 const nextConfig: NextConfig = {
+  turbopack: {
+    root: projectRoot,
+  },
   async rewrites() {
     return [
       {
         source: "/api/v1/:path*",
         destination: `${backendOrigin}/api/v1/:path*`,
+      },
+      {
+        source: "/api/query/:path*",
+        destination: `${backendOrigin}/api/query/:path*`,
       },
     ];
   },

@@ -7,18 +7,43 @@ import {
   GitBranch, RefreshCw, Mic, MicOff,
   Activity, BarChart3, Clock, Zap, AlertTriangle, CheckCircle2,
   ArrowUpRight, ArrowDownRight, Minus, CalendarRange, Eye,
-  FlaskConical, TrendingDown, DollarSign, XCircle, FileCode,
-  MessageCircle, Database, Table2, ChevronRight, Bot, User as UserIcon,
+  FlaskConical, TrendingDown, DollarSign,
+  MessageCircle, Database, Table2, TableProperties, ChevronRight, Bot, User as UserIcon,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
-import MultiModelComparison from './ai/MultiModelComparison';
 import { useVoiceRecording } from '../hooks/useVoiceRecording';
+import { useAuth } from '@/contexts/AuthContext';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 /* ─── Constants ──────────────────────────────────────────────── */
 
 const DEFAULT_DAYS = 30;
+
+/** Always set when schema-chat returns thread_id (even if user-specific key not ready yet). */
+const SCHEMA_CHAT_THREAD_PENDING_LS = 'zodiac_schema_chat_thread_pending';
+
+function readSchemaChatThreadIdFromStorage(userKey: string | null): string | null {
+  if (typeof window === 'undefined') return null;
+  if (userKey) {
+    const v = localStorage.getItem(userKey);
+    if (v?.startsWith('sch_')) return v;
+  }
+  const p = localStorage.getItem(SCHEMA_CHAT_THREAD_PENDING_LS);
+  return p?.startsWith('sch_') ? p : null;
+}
+
+function writeSchemaChatThreadIdToStorage(userKey: string | null, threadId: string) {
+  if (typeof window === 'undefined' || !threadId.startsWith('sch_')) return;
+  localStorage.setItem(SCHEMA_CHAT_THREAD_PENDING_LS, threadId);
+  if (userKey) localStorage.setItem(userKey, threadId);
+}
+
+function clearSchemaChatThreadFromStorage(userKey: string | null) {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(SCHEMA_CHAT_THREAD_PENDING_LS);
+  if (userKey) localStorage.removeItem(userKey);
+}
 
 const AI_CONTEXT_KEYS = [
   'stats', 'failed_summary', 'top_customers',
@@ -342,12 +367,6 @@ type SqlValidationMeta = {
   aggregate_functions?: string[];
 };
 
-type SuggestedSqlResult = {
-  sql: string;
-  source?: string;
-  validation?: SqlValidationMeta;
-};
-
 type Message = {
   role: 'user' | 'assistant';
   content: string;
@@ -480,159 +499,6 @@ function FunnelStep({ step, label, count, total, warn = false }: {
   );
 }
 
-/* ─── Schema Browser (for manual SQL entry) ──────────────────── */
-
-type SchemaTable = { columns: string[]; description: string; source: string };
-type SchemaData = Record<string, SchemaTable>;
-
-function SchemaDrawer({
-  schema,
-  loading,
-  textareaRef,
-  onInsert,
-}: {
-  schema: SchemaData;
-  loading: boolean;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  onInsert: (text: string) => void;
-}) {
-  const [search, setSearch] = useState('');
-  const [expandedTable, setExpandedTable] = useState<string | null>(null);
-  const [colSearch, setColSearch] = useState('');
-
-  const filteredTables = Object.keys(schema)
-    .filter((t) => t.toLowerCase().includes(search.toLowerCase()))
-    .sort();
-
-  const insertAtCursor = (text: string, addSep = false) => {
-    const ta = textareaRef.current;
-    if (ta) {
-      const start = ta.selectionStart ?? 0;
-      const end = ta.selectionEnd ?? 0;
-      const before = ta.value.substring(0, start);
-      const after = ta.value.substring(end);
-      // If the caller requested a separator and there is already non-whitespace
-      // content before the cursor, prefix with ", " so column names don't run
-      // together (e.g. "vbelnfkartfktyp…" → "vbeln, fkart, fktyp, …")
-      const sep = addSep && before.trimEnd().length > 0 ? ', ' : '';
-      const inserted = sep + text;
-      const newVal = before + inserted + after;
-      onInsert(newVal);
-      // Restore cursor after insert
-      requestAnimationFrame(() => {
-        ta.focus();
-        ta.setSelectionRange(start + inserted.length, start + inserted.length);
-      });
-    } else {
-      onInsert(text);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
-        <div className="h-3.5 w-3.5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
-        Loading schema…
-      </div>
-    );
-  }
-
-  const expandedCols = expandedTable
-    ? (schema[expandedTable]?.columns ?? []).filter((c) =>
-        c.toLowerCase().includes(colSearch.toLowerCase())
-      )
-    : [];
-
-  return (
-    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white mt-2">
-      <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2">
-        <Database className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
-        <span className="text-[11px] font-semibold text-slate-700">Schema Browser</span>
-        <span className="text-[10px] text-slate-400 ml-auto">{filteredTables.length} tables — click to insert</span>
-      </div>
-
-      <div className="flex" style={{ maxHeight: '220px' }}>
-        {/* Table list */}
-        <div className="w-44 flex-shrink-0 border-r border-slate-200 flex flex-col">
-          <div className="p-1.5 border-b border-slate-100">
-            <input
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setExpandedTable(null); }}
-              placeholder="Search tables…"
-              className="w-full text-[10px] px-2 py-1 rounded border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 font-mono"
-            />
-          </div>
-          <div className="overflow-y-auto flex-1">
-            {filteredTables.map((tbl) => (
-              <div
-                key={tbl}
-                className={`group flex items-center justify-between px-2 py-1 cursor-pointer hover:bg-blue-50 transition-colors ${expandedTable === tbl ? 'bg-blue-50 border-l-2 border-blue-500' : ''}`}
-              >
-                <button
-                  className="flex-1 text-left text-[10px] font-mono text-slate-800 group-hover:text-blue-700 truncate"
-                  onClick={() => {
-                    setExpandedTable(expandedTable === tbl ? null : tbl);
-                    setColSearch('');
-                  }}
-                  title={schema[tbl]?.description || tbl}
-                >
-                  {tbl}
-                </button>
-                <button
-                  onClick={() => insertAtCursor(`"${tbl}"`)}
-                  title="Insert table name"
-                  className="opacity-0 group-hover:opacity-100 text-[9px] text-blue-500 hover:text-blue-700 font-bold px-1 flex-shrink-0"
-                >
-                  +
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Column list */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {expandedTable ? (
-            <>
-              <div className="px-2 py-1.5 border-b border-slate-100 flex items-center gap-1.5">
-                <span className="text-[10px] font-mono font-bold text-blue-700 truncate">{expandedTable}</span>
-                <span className="text-[10px] text-slate-400">({schema[expandedTable]?.columns.length} cols)</span>
-              </div>
-              <div className="p-1.5 border-b border-slate-100">
-                <input
-                  value={colSearch}
-                  onChange={(e) => setColSearch(e.target.value)}
-                  placeholder="Search columns…"
-                  className="w-full text-[10px] px-2 py-1 rounded border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 font-mono"
-                />
-              </div>
-              <div className="overflow-y-auto flex-1 p-1">
-                {expandedCols.map((col) => (
-                  <button
-                    key={col}
-                    onClick={() => insertAtCursor(col, true)}
-                    title={`Insert column: ${col}`}
-                    className="w-full text-left text-[10px] font-mono px-2 py-0.5 rounded hover:bg-blue-50 hover:text-blue-700 text-slate-700 transition-colors"
-                  >
-                    {col}
-                  </button>
-                ))}
-                {expandedCols.length === 0 && (
-                  <p className="text-[10px] text-slate-400 px-2 py-2">No columns match</p>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-[10px] text-slate-400 p-4 text-center">
-              ← Select a table to browse columns.<br />Click any table or column to insert it.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ─── Domain Explorer ────────────────────────────────────────── */
 // Collapsible panel shown in the AI chat empty state.
 // Organises natural-language examples by domain so users discover
@@ -695,6 +561,59 @@ const PROGRESS_STEPS = [
   { icon: '✍️', label: 'Composing your answer...', color: 'text-indigo-500' },
 ];
 
+const FOLLOWUP_PROGRESS_STEPS = [
+  { icon: '🧠', label: 'Analyzing previous result…', color: 'text-indigo-600' },
+  { icon: '✍️', label: 'Composing your answer…', color: 'text-slate-600' },
+];
+
+function formatCellValue(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function DataPreviewTable({ rows, maxHeight = 280 }: { rows: Record<string, unknown>[]; maxHeight?: number }) {
+  if (!rows?.length) return null;
+  const keys = Array.from(
+    rows.reduce((acc, row) => {
+      Object.keys(row || {}).forEach((k) => acc.add(k));
+      return acc;
+    }, new Set<string>()),
+  );
+  return (
+    <div
+      className="mt-2 rounded-lg border border-slate-200 bg-white overflow-auto"
+      style={{ maxHeight }}
+    >
+      <table className="w-full text-[10px] font-mono border-collapse">
+        <thead className="sticky top-0 bg-slate-100 border-b border-slate-200">
+          <tr>
+            {keys.map((k) => (
+              <th key={k} className="text-left px-2 py-1.5 text-slate-600 font-semibold whitespace-nowrap">
+                {k}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className="border-b border-slate-50 hover:bg-slate-50/80">
+              {keys.map((k) => (
+                <td key={k} className="px-2 py-1 text-slate-800 align-top break-all max-w-[14rem]">
+                  {formatCellValue(row[k])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="text-[9px] text-slate-400 px-2 py-1 border-t border-slate-100 bg-slate-50">
+        Showing {rows.length} row{rows.length === 1 ? '' : 's'} (server preview)
+      </p>
+    </div>
+  );
+}
+
 function ChatPanel({
   section,
   messages,
@@ -703,15 +622,13 @@ function ChatPanel({
   loadingElapsed = 0,
   prompts,
   onSend,
-  onApproveQuery,
-  onRejectQuery,
-  onStoreQuery,
-  onSuggestSql,
   placeholder,
   useContext,
   setUseContext,
-  useMultiModel,
-  setUseMultiModel,
+  queryMode = 'new',
+  setQueryMode,
+  timeScope,
+  setTimeScope,
   fullWidth = false,
 }: {
   section: 'realtime' | 'historical';
@@ -721,124 +638,18 @@ function ChatPanel({
   loadingElapsed?: number;
   prompts: { label: string; query: string }[];
   onSend: (text: string) => void;
-  onApproveQuery?: (question: string, proposedSql: string, approvalSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<boolean>;
-  onRejectQuery?: (question: string, rejectedSql: string, attemptSource?: 'chatgpt' | 'manual' | 'assistant_sql') => Promise<void>;
-  onStoreQuery?: (question: string, sql: string) => Promise<void>;
-  onSuggestSql?: (question: string, instructions?: string) => Promise<SuggestedSqlResult>;
   placeholder: string;
   useContext: boolean;
   setUseContext: (v: boolean) => void;
-  useMultiModel: boolean;
-  setUseMultiModel: (v: boolean) => void;
+  queryMode?: 'new' | 'follow_up';
+  setQueryMode?: (m: 'new' | 'follow_up') => void;
+  timeScope: 'current' | 'historical' | 'both';
+  setTimeScope: (s: 'current' | 'historical' | 'both') => void;
   fullWidth?: boolean;
 }) {
   const [input, setInput] = useState('');
-  const [confirmedIndices, setConfirmedIndices] = useState<Set<number>>(new Set());
-  const [rejectingIndex, setRejectingIndex] = useState<number | null>(null);
-  const [suggestedSql, setSuggestedSql] = useState<SuggestedSqlResult | null>(null);
-  const [manualSql, setManualSql] = useState('');
-  const [suggestLoading, setSuggestLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const manualSqlRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // User explanation for failed queries
-  const [explanationByIndex, setExplanationByIndex] = useState<Record<number, string>>({});
-  const [showExplainAt, setShowExplainAt] = useState<number | null>(null);
-
-  // ChatGPT instruction state — shared across all "Ask ChatGPT" buttons in this panel
-  const [showInstructions, setShowInstructions] = useState(false);
-  const [chatgptInstructions, setChatgptInstructions] = useState('');
-
-  // Reusable block: instructions input + Ask ChatGPT button
-  const renderAskChatGPT = (getQuestion: () => string | undefined) => {
-    if (!onSuggestSql) return null;
-    return (
-      <div className="space-y-1.5">
-        {/* Toggle instructions */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={async () => {
-              const q = getQuestion();
-              if (!q) return;
-              setSuggestLoading(true);
-              try {
-                const sql = await onSuggestSql(q, chatgptInstructions.trim() || undefined);
-                setSuggestedSql(sql);
-              } catch (err) {
-                console.error('Suggest failed:', err);
-              } finally {
-                setSuggestLoading(false);
-              }
-            }}
-            disabled={suggestLoading || loading}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50"
-          >
-            <Sparkles className="h-3 w-3" />
-            {suggestLoading ? 'Asking ChatGPT…' : 'Ask ChatGPT'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowInstructions((v) => !v)}
-            className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border transition-all ${
-              showInstructions
-                ? 'bg-purple-600 text-white border-purple-600'
-                : 'border-slate-300 text-purple-600 hover:bg-purple-50'
-            }`}
-            title="Tell ChatGPT exactly how to write the SQL"
-          >
-            <MessageCircle className="h-3 w-3" />
-            {showInstructions ? 'Hide instructions' : 'Tell ChatGPT how…'}
-          </button>
-          {chatgptInstructions.trim() && !showInstructions && (
-            <span className="text-[10px] text-purple-600 italic truncate max-w-[180px]" title={chatgptInstructions}>
-              ✎ {chatgptInstructions.trim().slice(0, 40)}{chatgptInstructions.trim().length > 40 ? '…' : ''}
-            </span>
-          )}
-        </div>
-        {showInstructions && (
-          <div className="rounded-xl border border-purple-200 bg-purple-50 p-2.5 space-y-1.5">
-            <p className="text-[10px] text-purple-700 font-medium flex items-center gap-1">
-              <MessageCircle className="h-3 w-3" />
-              Tell ChatGPT how to write the SQL:
-            </p>
-            <textarea
-              value={chatgptInstructions}
-              onChange={(e) => setChatgptInstructions(e.target.value)}
-              placeholder={`e.g. "use FKDAT for year 2000, group by customer name, show negative sales first, include invoice count"`}
-              rows={3}
-              className="w-full text-[11px] font-mono text-slate-900 bg-white border border-purple-200 rounded-lg p-2 resize-none focus:outline-none focus:ring-2 focus:ring-purple-400 placeholder:text-slate-400"
-            />
-            <p className="text-[10px] text-purple-500">
-              These instructions are sent to ChatGPT alongside your question. Leave blank to let ChatGPT decide.
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Schema browser state
-  const [showSchema, setShowSchema] = useState(false);
-  const [schemaData, setSchemaData] = useState<SchemaData>({});
-  const [schemaLoading, setSchemaLoading] = useState(false);
-  const [schemaFetched, setSchemaFetched] = useState(false);
-
-  const openSchema = async () => {
-    setShowSchema((v) => !v);
-    if (!schemaFetched && !schemaLoading) {
-      setSchemaLoading(true);
-      try {
-        const res = await dashboardApi.getAIAnalysisSchema();
-        setSchemaData(res.schema ?? {});
-        setSchemaFetched(true);
-      } catch {
-        // silently fail, schema will be empty
-      } finally {
-        setSchemaLoading(false);
-      }
-    }
-  };
   const {
     isListening, transcript, isSupported: isVoiceSupported,
     error: voiceError, startListening, stopListening, resetTranscript,
@@ -858,31 +669,18 @@ function ChatPanel({
     onSend(msg);
   };
 
-  // Check if any message has charts
   const messagesWithCharts = messages.filter(
-    m => m.role === 'assistant' && m.meta?.charts && m.meta.charts.length > 0
+    (m) => m.role === 'assistant' && m.meta?.charts && m.meta.charts.length > 0,
   );
   const hasCharts = messagesWithCharts.length > 0;
-
-  // In full-width mode, charts appear in a side panel at md+ breakpoint
   const chartPanelBreakpoint = fullWidth ? 'md' : 'lg';
-
-  const recordRejection = async (
-    question: string | undefined,
-    rejectedSql: string | undefined,
-    attemptSource: 'chatgpt' | 'manual' | 'assistant_sql',
-  ) => {
-    if (!question || !rejectedSql || !onRejectQuery) return;
-    try {
-      await onRejectQuery(question, rejectedSql, attemptSource);
-    } catch (err) {
-      console.error('Reject feedback failed:', err);
-    }
-  };
+  const effectiveSteps = queryMode === 'follow_up' ? FOLLOWUP_PROGRESS_STEPS : PROGRESS_STEPS;
+  const effectiveStepIdx = queryMode === 'follow_up'
+    ? (loadingElapsed < 2 ? 0 : 1)
+    : loadingStep;
 
   return (
     <div className="flex flex-col h-full">
-      {/* Suggested prompts */}
       <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-1.5">
         {prompts.map((p) => (
           <button
@@ -897,10 +695,7 @@ function ChatPanel({
         ))}
       </div>
 
-      {/* Main content area: messages + optional chart panel */}
       <div className="flex-1 overflow-hidden min-h-0 flex gap-0">
-
-        {/* Messages column */}
         <div className={`flex flex-col overflow-hidden ${hasCharts ? `w-full ${chartPanelBreakpoint === 'md' ? 'md:w-[45%]' : 'lg:w-[45%]'}` : 'w-full'}`}>
           <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
             {messages.length === 0 ? (
@@ -914,10 +709,8 @@ function ChatPanel({
                   <p className="text-sm font-medium text-slate-500 mb-0.5">
                     {section === 'realtime' ? 'Real-time Intelligence' : 'Historical Analysis'}
                   </p>
-                  <p className="text-xs text-slate-400 max-w-xs">
-                    {section === 'realtime'
-                      ? 'Ask in plain English — about invoices, SAT docs, deliveries, purchase orders, master data, or any table. Charts are generated from your results, not fixed templates.'
-                      : 'Ask about trends, forecasts, cost data, revenue by customer or country, materials, or CO-PA analysis. Each chart adapts to what the data actually supports.'}
+                  <p className="text-xs text-slate-400 max-w-md">
+                    Ask in plain English. The server generates safe SQL, runs it on the database, and returns rows plus an optional summary and charts — the same adaptive NL→SQL→results flow. Use <strong className="text-slate-600">Follow-up</strong> to analyse the last result without a new query (server thread).
                   </p>
                 </div>
                 <DomainExplorer onSelect={(q) => submit(q)} />
@@ -952,430 +745,13 @@ function ChatPanel({
                       </div>
                     )}
                   </div>
-                  {/* ChatGPT proposes SQL (AI failed): show SQL + Yes/No + Ask ChatGPT + Enter SQL always */}
-                  {m.role === 'assistant' && m.meta?.needs_approval && (onApproveQuery || onSuggestSql) && (
-                    <div className="max-w-[92%] mt-2">
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
-                        <p className="text-xs font-medium text-slate-700">ChatGPT suggested SQL:</p>
-                        {m.meta?.proposed_sql ? (
-                          <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-40 whitespace-pre-wrap font-mono">{m.meta.proposed_sql}</pre>
-                        ) : (
-                          <p className="text-[10px] text-slate-500 italic">(SQL not available — use Ask ChatGPT or enter manually below)</p>
-                        )}
-                        <ValidationNotes validation={m.meta?.proposed_validation} />
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs text-slate-600">Is this SQL correct?</span>
-                          {m.meta?.proposed_sql && onApproveQuery && (
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                if (prevUser && m.meta?.proposed_sql) {
-                                  try {
-                                    const stored = await onApproveQuery(prevUser.content, m.meta.proposed_sql, 'chatgpt');
-                                    if (stored) {
-                                      setConfirmedIndices((s) => new Set(s).add(i));
-                                    }
-                                  } catch (err) {
-                                    console.error('Approve failed:', err);
-                                  }
-                                }
-                              }}
-                              disabled={loading}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Yes, approve &amp; run
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                              await recordRejection(prevUser?.content, m.meta?.proposed_sql, 'chatgpt');
-                              setRejectingIndex(rejectingIndex === i ? null : i);
-                              setSuggestedSql(null);
-                              // Keep manualSql - user may have typed their own SQL
-                            }}
-                            disabled={loading}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium disabled:opacity-50"
-                          >
-                            <XCircle className="h-3 w-3" />
-                            No
-                          </button>
-                        </div>
-                        <div className="pt-2 border-t border-slate-200 space-y-2">
-                          <p className="text-xs font-medium text-slate-700">
-                            {rejectingIndex === i ? 'Rejected — enter your own SQL or ask for a new suggestion:' : 'Or get a new suggestion / enter SQL manually:'}
-                          </p>
-                            {renderAskChatGPT(() => messages.slice(0, i).reverse().find(x => x.role === 'user')?.content)}
-                            {suggestedSql && (
-                              <div className="space-y-2">
-                                <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
-                                <ValidationNotes validation={suggestedSql.validation} />
-                                {onApproveQuery && (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                      if (prevUser) {
-                                        const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
-                                        if (stored) {
-                                          setSuggestedSql(null);
-                                          setRejectingIndex(null);
-                                        }
-                                      }
-                                    }}
-                                    disabled={loading}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
-                                  >
-                                    <CheckCircle2 className="h-3 w-3" />
-                                    Use this SQL
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                            <div className="pt-2 border-t border-slate-200 space-y-1.5">
-                              <div className="flex items-center justify-between">
-                                <label className="text-xs font-medium text-slate-700">Enter SQL manually:</label>
-                                <button
-                                  type="button"
-                                  onClick={openSchema}
-                                  className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-all ${showSchema ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-blue-600 hover:bg-blue-50'}`}
-                                >
-                                  <Database className="h-3 w-3" />
-                                  {showSchema ? 'Hide Schema' : 'Browse Schema'}
-                                </button>
-                              </div>
-                              {showSchema && (
-                                <SchemaDrawer
-                                  schema={schemaData}
-                                  loading={schemaLoading}
-                                  textareaRef={manualSqlRef}
-                                  onInsert={(val) => setManualSql(val)}
-                                />
-                              )}
-                              <textarea
-                                ref={manualSqlRef}
-                                value={manualSql}
-                                onChange={(e) => setManualSql(e.target.value)}
-                                placeholder="SELECT v.vbeln, v.netwr FROM vbrp v JOIN &quot;VBRK&quot; r ON v.vbeln = r.vbeln LIMIT 50"
-                                className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-slate-300 rounded p-2 min-h-[80px] resize-y"
-                                rows={4}
-                              />
-                              {onApproveQuery && (
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                    if (prevUser && manualSql.trim()) {
-                                      const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
-                                      if (stored) {
-                                        setManualSql('');
-                                        setRejectingIndex(null);
-                                        setShowSchema(false);
-                                      }
-                                    }
-                                  }}
-                                  disabled={loading || !manualSql.trim()}
-                                  className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium disabled:opacity-50"
-                                >
-                                  <FileCode className="h-3 w-3" />
-                                  Submit &amp; store
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        {confirmedIndices.has(i) && (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-medium">
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            Stored for future use
-                          </div>
-                        )}
-                      </div>
+                  {m.role === 'assistant' && m.meta?.rows_preview && m.meta.rows_preview.length > 0 && (
+                    <div className="max-w-[92%] w-full">
+                      <DataPreviewTable rows={m.meta.rows_preview as Record<string, unknown>[]} />
                     </div>
                   )}
-                  {/* When AI fails (no SQL executed): show explanation input + Ask ChatGPT / Enter SQL directly */}
-                  {m.role === 'assistant' && !m.meta?.sql && !m.meta?.needs_approval && !m.meta?.proposed_sql && (onSuggestSql || onApproveQuery) && messages[i - 1]?.role === 'user' && (
-                    <div className="max-w-[92%] mt-2">
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-3">
-                        {/* Header */}
-                        <div className="flex items-start gap-2">
-                          <span className="text-lg leading-none">🤔</span>
-                          <div>
-                            <p className="text-xs font-semibold text-amber-800">AI couldn&apos;t find the right data automatically.</p>
-                            <p className="text-[10px] text-amber-700 mt-0.5">You can describe what you need in plain language, ask ChatGPT to suggest SQL, or write the SQL yourself.</p>
-                          </div>
-                        </div>
-
-                        {/* Option 1: User explains in plain language → retry */}
-                        <div className="rounded-lg border border-amber-300 bg-white p-2.5 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <p className="text-[11px] font-semibold text-slate-700">💬 Explain what you need (plain language)</p>
-                            <button
-                              type="button"
-                              onClick={() => setShowExplainAt(showExplainAt === i ? null : i)}
-                              className="text-[10px] text-blue-600 hover:underline"
-                            >
-                              {showExplainAt === i ? 'Hide' : 'Expand'}
-                            </button>
-                          </div>
-                          {showExplainAt === i && (
-                            <div className="space-y-1.5">
-                              <textarea
-                                value={explanationByIndex[i] || ''}
-                                onChange={(e) => setExplanationByIndex(prev => ({ ...prev, [i]: e.target.value }))}
-                                placeholder={`e.g. "Show me invoices that failed in the last 30 days grouped by error type. The table is zodiac_invoices_failed_edi and has columns: error_message, uploaded_at, customer_name."`}
-                                className="w-full text-[11px] text-slate-800 bg-slate-50 border border-slate-300 rounded p-2 min-h-[72px] resize-y"
-                                rows={3}
-                              />
-                              <button
-                                type="button"
-                                disabled={loading || !(explanationByIndex[i] || '').trim()}
-                                onClick={() => {
-                                  const prevQ = messages[i - 1]?.content || '';
-                                  const explanation = explanationByIndex[i]?.trim() || '';
-                                  if (explanation) {
-                                    onSend(`${prevQ}\n\nAdditional context: ${explanation}`);
-                                    setShowExplainAt(null);
-                                  }
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-40"
-                              >
-                                🔄 Retry with my explanation
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Option 2: Ask ChatGPT */}
-                        <div className="rounded-lg border border-amber-300 bg-white p-2.5 space-y-1.5">
-                          <p className="text-[11px] font-semibold text-slate-700">🤖 Ask ChatGPT to suggest SQL</p>
-                          {renderAskChatGPT(() => { setRejectingIndex(i); return messages[i - 1]?.content; })}
-                          {rejectingIndex === i && suggestedSql && (
-                            <div className="space-y-2 pt-2 border-t border-slate-200">
-                              <p className="text-[10px] font-semibold text-slate-600">ChatGPT suggested:</p>
-                              <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
-                              <ValidationNotes validation={suggestedSql.validation} />
-                              <div className="flex gap-2 flex-wrap">
-                                {onApproveQuery && (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      const prevUser = messages[i - 1];
-                                      if (prevUser?.content) {
-                                        const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
-                                        if (stored) { setSuggestedSql(null); setRejectingIndex(null); }
-                                      }
-                                    }}
-                                    disabled={loading}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
-                                  >
-                                    <CheckCircle2 className="h-3 w-3" />
-                                    ✅ Yes, approve &amp; run
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => { setSuggestedSql(null); }}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-medium"
-                                >
-                                  ❌ No, reject
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Option 3: Enter SQL manually */}
-                        <div className="rounded-lg border border-amber-300 bg-white p-2.5 space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <p className="text-[11px] font-semibold text-slate-700">✏️ Write SQL manually</p>
-                            <button
-                              type="button"
-                              onClick={openSchema}
-                              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-all ${showSchema ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-blue-600 hover:bg-blue-50'}`}
-                            >
-                              <Database className="h-3 w-3" />
-                              {showSchema ? 'Hide Schema' : 'Browse Schema'}
-                            </button>
-                          </div>
-                          {showSchema && (
-                            <SchemaDrawer
-                              schema={schemaData}
-                              loading={schemaLoading}
-                              textareaRef={manualSqlRef}
-                              onInsert={(val) => setManualSql(val)}
-                            />
-                          )}
-                          <textarea
-                            ref={manualSqlRef}
-                            value={manualSql}
-                            onChange={(e) => setManualSql(e.target.value)}
-                            placeholder="SELECT error_message, COUNT(*) AS count FROM zodiac_invoices_failed_edi WHERE uploaded_at >= NOW() - INTERVAL '30 days' GROUP BY error_message ORDER BY count DESC LIMIT 10"
-                            className="w-full text-[11px] font-mono !text-gray-900 bg-slate-50 border border-slate-300 rounded p-2 min-h-[80px] resize-y"
-                            rows={4}
-                          />
-                          {onApproveQuery && (
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const prevUser = messages[i - 1];
-                                if (prevUser?.content && manualSql.trim()) {
-                                  const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
-                                  if (stored) { setManualSql(''); setRejectingIndex(null); setShowSchema(false); }
-                                }
-                              }}
-                              disabled={loading || !manualSql.trim()}
-                              className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium disabled:opacity-50"
-                            >
-                              <FileCode className="h-3 w-3" />
-                              Submit &amp; store
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {/* SQL confirmation for every successful query */}
-                  {m.role === 'assistant' && m.meta?.sql && !m.meta?.needs_approval && (m.meta?.rows_preview?.length || m.meta?.sql) && (
-                    <div className="max-w-[92%] mt-2 space-y-2">
-                      {confirmedIndices.has(i) ? (
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-medium">
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Stored for future use
-                        </div>
-                      ) : rejectingIndex === i ? (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs font-medium text-amber-800">SQL incorrect. How would you like to fix it?</p>
-                            <button
-                              type="button"
-                              onClick={() => { setRejectingIndex(null); setSuggestedSql(null); setManualSql(''); }}
-                              className="text-[10px] text-amber-600 hover:text-amber-800 underline"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                          {renderAskChatGPT(() => messages.slice(0, i).reverse().find(x => x.role === 'user')?.content)}
-                          {suggestedSql && (
-                            <div className="space-y-2">
-                              <pre className="text-[10px] bg-slate-900 text-slate-50 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap">{suggestedSql.sql}</pre>
-                              <ValidationNotes validation={suggestedSql.validation} />
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                  if (prevUser && onApproveQuery) {
-                                    const stored = await onApproveQuery(prevUser.content, suggestedSql.sql, suggestedSql.source === 'chatgpt' ? 'chatgpt' : 'assistant_sql');
-                                    if (stored) {
-                                      setSuggestedSql(null);
-                                      setRejectingIndex(null);
-                                    }
-                                  }
-                                }}
-                                disabled={loading}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-medium"
-                              >
-                                <CheckCircle2 className="h-3 w-3" />
-                                Use this SQL
-                              </button>
-                            </div>
-                          )}
-                          <div className="pt-2 border-t border-amber-200 space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-medium text-amber-800">Or enter SQL manually:</label>
-                              <button
-                                type="button"
-                                onClick={openSchema}
-                                className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border transition-all ${showSchema ? 'bg-blue-600 text-white border-blue-600' : 'border-amber-300 text-blue-600 hover:bg-blue-50'}`}
-                              >
-                                <Database className="h-3 w-3" />
-                                {showSchema ? 'Hide Schema' : 'Browse Schema'}
-                              </button>
-                            </div>
-                            {showSchema && (
-                              <SchemaDrawer
-                                schema={schemaData}
-                                loading={schemaLoading}
-                                textareaRef={manualSqlRef}
-                                onInsert={(val) => setManualSql(val)}
-                              />
-                            )}
-                            <textarea
-                              ref={manualSqlRef}
-                              value={manualSql}
-                              onChange={(e) => setManualSql(e.target.value)}
-                              placeholder="SELECT v.vbeln, v.netwr FROM vbrp v JOIN &quot;VBRK&quot; r ON v.vbeln = r.vbeln LIMIT 50"
-                              className="w-full text-[11px] font-mono !text-gray-900 bg-white border border-amber-300 rounded p-2 min-h-[80px] resize-y"
-                              rows={4}
-                            />
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                                if (prevUser && manualSql.trim() && onApproveQuery) {
-                                  const stored = await onApproveQuery(prevUser.content, manualSql.trim(), 'manual');
-                                  if (stored) {
-                                    setManualSql('');
-                                    setRejectingIndex(null);
-                                    setShowSchema(false);
-                                  }
-                                }
-                              }}
-                              disabled={loading || !manualSql.trim()}
-                              className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium disabled:opacity-50"
-                            >
-                              <FileCode className="h-3 w-3" />
-                              Submit &amp; store
-                            </button>
-                          </div>
-                        </div>
-                      ) : onStoreQuery ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-600">Is this SQL correct?</span>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                              if (prevUser && m.meta?.sql) {
-                                try {
-                                  await onStoreQuery(prevUser.content, m.meta.sql);
-                                  setConfirmedIndices((s) => new Set(s).add(i));
-                                } catch (err) {
-                                  console.error('Store failed:', err);
-                                }
-                              }
-                            }}
-                            disabled={loading}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium disabled:opacity-50"
-                          >
-                            <CheckCircle2 className="h-3 w-3" />
-                            Yes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const prevUser = messages.slice(0, i).reverse().find(x => x.role === 'user');
-                              void recordRejection(prevUser?.content, m.meta?.sql, 'assistant_sql');
-                              setRejectingIndex(i);
-                              setSuggestedSql(null);
-                              setManualSql('');
-                            }}
-                            disabled={loading}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium disabled:opacity-50"
-                          >
-                            <XCircle className="h-3 w-3" />
-                            No
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                  {/* Show SQL and data info for assistant messages */}
                   {m.role === 'assistant' && m.meta && (
                     <div className="max-w-[92%] mt-1 text-[10px] font-mono text-slate-400 px-1 space-y-0.5">
-                      {/* Period Information */}
                       {m.meta.period_info && (
                         <div className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1 rounded-md mb-1">
                           <CalendarRange className="h-3 w-3" />
@@ -1391,16 +767,16 @@ function ChatPanel({
                         {m.meta.action && <span>Action: {m.meta.action}</span>}
                         {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
                         {m.meta.adaptive_context?.query_profile?.kind && (
-                          <span> • Intent: {m.meta.adaptive_context.query_profile.kind}</span>
+                          <span> • Intent: {String(m.meta.adaptive_context.query_profile.kind)}</span>
                         )}
                         {m.meta.sql && <span> • SQL executed</span>}
-                        {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} rows</span>}
+                        {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} preview rows</span>}
                         {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
                       </div>
                       {m.meta.sql && (
                         <details className="mt-0.5">
                           <summary className="cursor-pointer text-[10px] text-blue-600 underline">
-                            View SQL query
+                            View generated SQL
                           </summary>
                           <pre className="mt-1 max-h-40 overflow-auto text-[10px] bg-slate-900 text-slate-50 rounded p-2 whitespace-pre-wrap">
                             {m.meta.sql}
@@ -1418,17 +794,15 @@ function ChatPanel({
                           ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
                           {m.meta.performance.used_pattern && <span className="text-green-600"> • pattern-matched</span>}
                           {m.meta.performance.used_cache && <span className="text-blue-600"> • cached</span>}
-                          {m.meta.performance.sql_execution_ms && (
+                          {m.meta.performance.sql_execution_ms != null && (
                             <span> • sql: {m.meta.performance.sql_execution_ms}ms</span>
                           )}
                         </div>
                       )}
                     </div>
                   )}
-                  {m.meta?.multiModel && <MultiModelComparison result={m.meta.multiModel} />}
-                  {/* On small screens, show charts inline below message */}
-                  {m.meta?.charts && m.meta.charts.length > 0 && (
-                    <div className={`${chartPanelBreakpoint === 'md' ? 'md:hidden' : 'lg:hidden'} w-full mt-2`}>
+                  {m.role === 'assistant' && m.meta?.charts && m.meta.charts.length > 0 && (
+                    <div className={`${chartPanelBreakpoint === 'md' ? 'md:hidden' : 'lg:hidden'} w-full mt-2 max-w-[92%]`}>
                       <AIChartRenderer charts={m.meta.charts} />
                     </div>
                   )}
@@ -1437,7 +811,6 @@ function ChatPanel({
             )}
             {loading && (
               <div className="flex flex-col gap-2 my-1">
-                {/* Progress steps */}
                 <div className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-3 shadow-sm">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">AI Processing</span>
@@ -1446,11 +819,11 @@ function ChatPanel({
                     </span>
                   </div>
                   <div className="flex flex-col gap-1">
-                    {PROGRESS_STEPS.map((step, i) => {
-                      const isDone = i < loadingStep;
-                      const isActive = i === loadingStep;
+                    {effectiveSteps.map((step, si) => {
+                      const isDone = si < effectiveStepIdx;
+                      const isActive = si === effectiveStepIdx;
                       return (
-                        <div key={i} className={`flex items-center gap-2 text-xs transition-all duration-300 ${
+                        <div key={si} className={`flex items-center gap-2 text-xs transition-all duration-300 ${
                           isDone ? 'opacity-40' : isActive ? 'opacity-100' : 'opacity-20'
                         }`}>
                           <span className="text-base leading-none">{isDone ? '✅' : step.icon}</span>
@@ -1472,11 +845,13 @@ function ChatPanel({
                   <div className="mt-2 h-1 w-full bg-blue-100 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-full transition-all duration-500"
-                      style={{ width: `${Math.min(100, ((loadingStep + 1) / PROGRESS_STEPS.length) * 100)}%` }}
+                      style={{ width: `${Math.min(100, ((effectiveStepIdx + 1) / effectiveSteps.length) * 100)}%` }}
                     />
                   </div>
                   <p className="text-[10px] text-slate-400 mt-1.5 italic">
-                    Complex queries may take 30–90s. You'll see results when ready.
+                    {queryMode === 'follow_up'
+                      ? 'Follow-ups analyze the last result — no new database query.'
+                      : 'Complex queries may take 30–90s. Results appear when ready.'}
                   </p>
                 </div>
               </div>
@@ -1485,14 +860,13 @@ function ChatPanel({
           </div>
         </div>
 
-        {/* Charts panel — shows at md+ for fullWidth, lg+ otherwise */}
         {hasCharts && (
           <div className={`${chartPanelBreakpoint === 'md' ? 'hidden md:flex' : 'hidden lg:flex'} flex-col w-[55%] border-l border-slate-100 bg-gradient-to-br from-slate-50 to-white overflow-hidden`}>
             <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
               <BarChart3 className="h-4 w-4 text-blue-600" />
               <div className="flex-1 min-w-0">
                 <h3 className="text-sm font-semibold text-slate-900">Visualizations</h3>
-                <p className="text-[10px] text-slate-400 leading-tight">Charts are generated per answer from intent &amp; live result shape — type, axes, and series adapt to each query</p>
+                <p className="text-[10px] text-slate-400 leading-tight">Charts from your query results</p>
               </div>
               <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">{messagesWithCharts.length} chart{messagesWithCharts.length > 1 ? 's' : ''}</span>
             </div>
@@ -1512,7 +886,6 @@ function ChatPanel({
         )}
       </div>
 
-      {/* Voice / error notices */}
       {voiceError && (
         <div className="mx-3 mb-1 rounded-lg bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-700">
           {voiceError}
@@ -1530,22 +903,64 @@ function ChatPanel({
         </div>
       )}
 
-      {/* Input area */}
       <div className="px-3 pt-2 pb-2 border-t border-slate-100">
-        {/* Toggles row */}
-        <div className="flex items-center gap-3 mb-1.5">
+        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+          {setQueryMode && (
+            <div className="flex items-center gap-0.5 bg-slate-100 rounded-full p-0.5 text-[11px] font-medium select-none">
+              <button
+                type="button"
+                onClick={() => setQueryMode('new')}
+                title="Run a fresh SQL query on the database"
+                className={`px-2.5 py-0.5 rounded-full transition-all ${
+                  queryMode === 'new'
+                    ? 'bg-white text-slate-800 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                New question
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueryMode('follow_up')}
+                title="Analyse the previous result set — no new SQL (server thread)"
+                className={`px-2.5 py-0.5 rounded-full transition-all ${
+                  queryMode === 'follow_up'
+                    ? 'bg-white text-indigo-700 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                Follow-up
+              </button>
+            </div>
+          )}
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input type="checkbox" checked={useContext} onChange={(e) => setUseContext(e.target.checked)}
               className="rounded border-slate-300 text-slate-800 focus:ring-slate-500 w-3 h-3" />
-            <span className="text-[11px] text-slate-500 font-medium">Context</span>
+            <span className="text-[11px] text-slate-500 font-medium">Dashboard context</span>
           </label>
-          <label className="flex items-center gap-1.5 cursor-pointer select-none">
-            <input type="checkbox" checked={useMultiModel} onChange={(e) => setUseMultiModel(e.target.checked)}
-              className="rounded border-slate-300 text-slate-800 focus:ring-slate-500 w-3 h-3" />
-            <span className="text-[11px] text-slate-500 font-medium">Multi-model</span>
-          </label>
+          <div className="flex items-center gap-1 ml-auto">
+            <span className="text-[10px] text-slate-400">Scope</span>
+            <select
+              value={timeScope}
+              onChange={(e) => setTimeScope(e.target.value as 'current' | 'historical' | 'both')}
+              className="text-[10px] font-mono border border-slate-200 rounded-lg px-1.5 py-0.5 bg-white text-slate-700"
+            >
+              <option value="current">Current</option>
+              <option value="historical">Historical</option>
+              <option value="both">Both</option>
+            </select>
+          </div>
         </div>
-        {/* Input row */}
+        {queryMode === 'follow_up' && (
+          <div className="flex items-center gap-1.5 mb-1.5 px-2.5 py-1 bg-indigo-50 border border-indigo-100 rounded-lg text-[11px] text-indigo-600">
+            <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10c0 4.418-3.582 8-8 8S2 14.418 2 10 5.582 2 10 2s8 3.582 8 8zm-8-3a1 1 0 100 2 1 1 0 000-2zm-1 4a1 1 0 012 0v3a1 1 0 01-2 0v-3z" clipRule="evenodd" />
+            </svg>
+            <span>
+              <strong>Follow-up</strong> — answers from the last query in this session (server-side thread). For new data, switch to <button type="button" className="underline font-semibold" onClick={() => setQueryMode?.('new')}>New question</button>.
+            </span>
+          </div>
+        )}
         <div className="flex gap-1.5">
           <input
             type="text"
@@ -1584,27 +999,70 @@ function ChatPanel({
     </div>
   );
 }
-
-/* ═══════════════════════════════════════════════════════════════
-   MAIN COMPONENT
-══════════════════════════════════════════════════════════════ */
-
 /* ─── ChatGPT Free-Chat Panel ─────────────────────────────── */
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string; ts: number };
+
+type SapTableRow = (typeof SAP_TABLES)[number];
+
+/** Case-insensitive lookup for API schema (table name keys vary). */
+function buildSchemaColumnLookup(
+  schema: Record<string, { columns?: string[] }>,
+): Map<string, string[]> {
+  const m = new Map<string, string[]>();
+  for (const [table, info] of Object.entries(schema)) {
+    const cols = info?.columns ?? [];
+    if (!cols.length) continue;
+    for (const k of new Set([table, table.toLowerCase(), table.toUpperCase()])) {
+      if (!m.has(k)) m.set(k, cols);
+    }
+  }
+  return m;
+}
+
+function lookupTableColumns(map: Map<string, string[]>, tableName: string): string[] | undefined {
+  return (
+    map.get(tableName) ||
+    map.get(tableName.toLowerCase()) ||
+    map.get(tableName.toUpperCase())
+  );
+}
 
 function ChatGPTPanel({
   messages,
   loading,
   onSend,
+  onNewChat,
 }: {
   messages: ChatMessage[];
   loading: boolean;
   onSend: (text: string) => void;
+  onNewChat?: () => void;
 }) {
   const [input, setInput] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedTable, setSelectedTable] = useState<SapTableRow | null>(null);
+  const [columnLookup, setColumnLookup] = useState<Map<string, string[]>>(() => new Map());
+  const [schemaLoadState, setSchemaLoadState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSchemaLoadState('loading');
+    dashboardApi
+      .getAIAnalysisSchema()
+      .then((res) => {
+        if (cancelled) return;
+        setColumnLookup(buildSchemaColumnLookup(res.schema || {}));
+        setSchemaLoadState('done');
+      })
+      .catch(() => {
+        if (!cancelled) setSchemaLoadState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -1620,68 +1078,146 @@ function ChatGPTPanel({
     ? SAP_TABLES.filter((t) => t.category === selectedCategory)
     : SAP_TABLES;
 
+  const selectedCols = selectedTable ? lookupTableColumns(columnLookup, selectedTable.name) : undefined;
+
+  const askAboutTable = (tbl: SapTableRow) => {
+    submit(
+      `Tell me about the ${tbl.name} table (${tbl.desc}) — key columns, relationships to other tables, and example queries I can run.`,
+    );
+  };
+
   return (
-    <div className="flex gap-3 h-full min-h-0">
-      {/* Left: Table browser */}
-      <div className="hidden md:flex flex-col w-52 flex-shrink-0 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+    <div className="flex gap-3 flex-1 min-h-0 h-full max-h-full">
+      {/* Left: Table browser — height-bounded; table list + columns each scroll */}
+      <div className="hidden md:flex flex-col w-[13.5rem] lg:w-60 flex-shrink-0 rounded-2xl border border-slate-200 bg-white min-h-0 min-w-0 max-h-full overflow-hidden">
         <div className="px-3 pt-3 pb-2 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
-          <Database className="h-3.5 w-3.5 text-blue-600" />
-          <span className="text-xs font-semibold text-slate-900">SAP Tables</span>
+          <Database className="h-3.5 w-3.5 text-blue-600 flex-shrink-0" />
+          <span className="text-xs font-semibold text-slate-900 truncate">SAP Tables</span>
         </div>
 
-        {/* Category filter */}
-        <div className="px-2 pt-2 flex flex-wrap gap-1 flex-shrink-0">
-          <button
-            onClick={() => setSelectedCategory(null)}
-            className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${!selectedCategory ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`}
-          >
-            All
-          </button>
-          {categories.map((cat) => (
+        {/* Category filter — scroll if many chips */}
+        <div className="px-2 pt-2 max-h-[4.5rem] overflow-y-auto overscroll-y-contain flex-shrink-0 border-b border-slate-50">
+          <div className="flex flex-wrap gap-1">
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
-              className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${selectedCategory === cat ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`}
+              type="button"
+              onClick={() => setSelectedCategory(null)}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${!selectedCategory ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`}
             >
-              {cat}
+              All
             </button>
-          ))}
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${selectedCategory === cat ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Table list */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        <div className="flex-[3] min-h-[6rem] min-w-0 overflow-y-auto overscroll-y-contain p-2 space-y-0.5 border-b border-slate-100">
           {filteredTables.map((tbl) => (
             <button
               key={tbl.name}
-              onClick={() => submit(`Tell me about the ${tbl.name} table (${tbl.desc}) — key columns, relationships to other tables, and example queries I can run.`)}
+              type="button"
+              onClick={() => setSelectedTable(tbl)}
               disabled={loading}
-              className="w-full text-left rounded-lg px-2 py-1.5 hover:bg-blue-50 hover:border-blue-200 border border-transparent transition-all group disabled:opacity-50"
+              className={`w-full text-left rounded-lg px-2 py-1.5 border transition-all group disabled:opacity-50 ${
+                selectedTable?.name === tbl.name
+                  ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-200'
+                  : 'border-transparent hover:bg-blue-50/80 hover:border-blue-200'
+              }`}
             >
               <div className="flex items-center gap-1.5">
                 <Table2 className="h-3 w-3 text-slate-400 flex-shrink-0 group-hover:text-blue-500 transition-colors" />
                 <span className="text-[11px] font-mono font-semibold text-slate-800 group-hover:text-blue-700">{tbl.name}</span>
               </div>
-              <p className="text-[10px] text-slate-500 ml-4.5 leading-tight mt-0.5">{tbl.desc}</p>
+              <p className="text-[10px] text-slate-500 ml-4 leading-tight mt-0.5">{tbl.desc}</p>
             </button>
           ))}
+        </div>
+
+        {/* Selected table: columns from /ai-analysis/schema */}
+        <div className="flex-[2] min-h-[5rem] min-w-0 flex flex-col bg-slate-50/80">
+          <div className="px-2 py-1.5 border-b border-slate-100 flex items-center gap-1 flex-shrink-0">
+            <TableProperties className="h-3 w-3 text-slate-500 flex-shrink-0" />
+            <span className="text-[10px] font-semibold text-slate-700 truncate">
+              {selectedTable ? selectedTable.name : 'Columns'}
+            </span>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-2 py-1.5">
+            {!selectedTable && (
+              <p className="text-[10px] text-slate-500 leading-snug">Select a table to list columns from the connected schema.</p>
+            )}
+            {selectedTable && schemaLoadState === 'loading' && (
+              <p className="text-[10px] text-slate-500">Loading schema…</p>
+            )}
+            {selectedTable && schemaLoadState === 'error' && (
+              <p className="text-[10px] text-amber-700">Could not load schema. Try again or use Ask AI.</p>
+            )}
+            {selectedTable && schemaLoadState === 'done' && !selectedCols?.length && (
+              <p className="text-[10px] text-slate-500 leading-snug">
+                No columns in the live schema mapping for <span className="font-mono text-slate-700">{selectedTable.name}</span>. Use Ask AI for typical SAP fields.
+              </p>
+            )}
+            {selectedTable && selectedCols && selectedCols.length > 0 && (
+              <ul className="space-y-0.5">
+                {selectedCols.map((col) => (
+                  <li key={col} className="text-[10px] font-mono text-slate-800 leading-tight break-all">
+                    {col}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {selectedTable && (
+            <div className="p-2 border-t border-slate-100 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => askAboutTable(selectedTable)}
+                disabled={loading}
+                className="w-full text-[10px] font-medium py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                Ask AI about this table
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Right: Chat area */}
-      <div className="flex-1 min-w-0 flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col rounded-2xl border border-slate-200 bg-white overflow-hidden max-h-full">
         {/* Header */}
-        <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
-          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
-            <Bot className="h-3.5 w-3.5 text-white" />
+        <div className="px-4 pt-3 pb-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0 justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center flex-shrink-0">
+              <Bot className="h-3.5 w-3.5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-xs font-semibold text-slate-900">Chat with ChatGPT</h2>
+              <p className="text-[10px] text-slate-500 truncate">
+                Ask about tables, schema, or logic — chat is saved and restores after reload
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xs font-semibold text-slate-900">Chat with ChatGPT</h2>
-            <p className="text-[10px] text-slate-500">Ask anything about tables, data, schema, or business logic</p>
-          </div>
+          {onNewChat && (
+            <button
+              type="button"
+              onClick={onNewChat}
+              disabled={loading}
+              className="flex-shrink-0 text-[10px] font-medium px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 disabled:opacity-40"
+            >
+              New chat
+            </button>
+          )}
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain p-4 space-y-3">
           {messages.length === 0 && (
             <div className="space-y-4">
               <div className="text-center py-4">
@@ -1792,6 +1328,7 @@ function ChatGPTPanel({
 ══════════════════════════════════════════════════════════════ */
 
 export default function DashboardAIAnalysis() {
+  const { user } = useAuth();
   const [activeSection, setActiveSection] = useState<'realtime' | 'historical' | 'chat'>('realtime');
   const [days, setDays] = useState(DEFAULT_DAYS);
   const [historicalDays, setHistoricalDays] = useState(90);
@@ -1801,19 +1338,104 @@ export default function DashboardAIAnalysis() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const chatHistoryRef = useRef<{ role: string; content: string }[]>([]);
+  /** Persisted schema-chat thread (server); restored from DB + localStorage on reload */
+  const schemaChatThreadIdRef = useRef<string | null>(null);
+  /** Which thread_id we already hydrated into UI (reset on effect cleanup for Strict Mode). */
+  const schemaChatHydratedTidRef = useRef<string | null>(null);
+  /** Blocks duplicate POSTs before React re-renders with chatLoading (double-click / Enter churn). */
+  const schemaChatSendInFlightRef = useRef(false);
+
+  // "New question" vs "Follow-up" mode
+  // follow_up: answer from this thread's context (like ChatGPT follow-ups) — no new SQL
+  // new: full SQL generation pipeline (default, always safe)
+  const [queryMode, setQueryMode] = useState<'new' | 'follow_up'>('new');
+  // Thread ID: stable per page load so all turns share a thread for follow-up context
+  const threadIdRef = useRef<string>(
+    `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  );
+
+  const schemaChatStorageKey = user ? `zodiac_schema_chat_thread_u${user.id}` : null;
+
+  useEffect(() => {
+    const saved = readSchemaChatThreadIdFromStorage(schemaChatStorageKey);
+    if (saved) schemaChatThreadIdRef.current = saved;
+  }, [schemaChatStorageKey]);
+
+  /* Copy pending thread id to per-user key once auth is ready */
+  useEffect(() => {
+    if (!user?.id || typeof window === 'undefined') return;
+    const uk = `zodiac_schema_chat_thread_u${user.id}`;
+    const pending = localStorage.getItem(SCHEMA_CHAT_THREAD_PENDING_LS);
+    if (!pending?.startsWith('sch_')) return;
+    const existing = localStorage.getItem(uk);
+    if (!existing?.startsWith('sch_')) {
+      localStorage.setItem(uk, pending);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (activeSection !== 'chat' || !user || !schemaChatStorageKey) {
+      return;
+    }
+    const tid =
+      schemaChatThreadIdRef.current || readSchemaChatThreadIdFromStorage(schemaChatStorageKey);
+    if (!tid?.startsWith('sch_')) {
+      return;
+    }
+    if (chatMessages.length > 0) {
+      return;
+    }
+    if (schemaChatHydratedTidRef.current === tid) {
+      return;
+    }
+    schemaChatHydratedTidRef.current = tid;
+    schemaChatThreadIdRef.current = tid;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { messages } = await dashboardApi.getAISchemaChatHistory(tid);
+        if (cancelled) return;
+        if (!messages?.length) {
+          clearSchemaChatThreadFromStorage(schemaChatStorageKey);
+          schemaChatThreadIdRef.current = null;
+          schemaChatHydratedTidRef.current = null;
+          return;
+        }
+        const base = Date.now();
+        setChatMessages(
+          messages.map((m, i) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            ts: base - (messages.length - i) * 1000,
+          })),
+        );
+        chatHistoryRef.current = messages.map((m) => ({ role: m.role, content: m.content }));
+      } catch {
+        schemaChatHydratedTidRef.current = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+      schemaChatHydratedTidRef.current = null;
+    };
+  }, [activeSection, user, schemaChatStorageKey, chatMessages.length]);
+
+  const startNewSchemaChat = () => {
+    clearSchemaChatThreadFromStorage(schemaChatStorageKey);
+    schemaChatThreadIdRef.current = null;
+    schemaChatHydratedTidRef.current = null;
+    chatHistoryRef.current = [];
+    setChatMessages([]);
+  };
 
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [historicalLoading, setHistoricalLoading] = useState(false);
 
   // Progress tracking for loading state
-  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
   const [loadingElapsed, setLoadingElapsed] = useState(0);
   const [loadingStep, setLoadingStep] = useState(0);
-  const [userExplanation, setUserExplanation] = useState('');
-  const [showExplanationBox, setShowExplanationBox] = useState<number | null>(null);
 
   const [useContext, setUseContext] = useState(true);
-  const [useMultiModel, setUseMultiModel] = useState(false);
 
   const [outboundData, setOutboundData] = useState<OutboundData | null>(null);
   const [inboundData, setInboundData] = useState<InboundData | null>(null);
@@ -1821,10 +1443,6 @@ export default function DashboardAIAnalysis() {
   const [dataLoading, setDataLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
-  
-  // Time scope modal state
-  const [showTimeScopeModal, setShowTimeScopeModal] = useState(false);
-  const [pendingQuery, setPendingQuery] = useState<{ section: 'realtime' | 'historical'; text: string } | null>(null);
   const [timeScope, setTimeScope] = useState<'current' | 'historical' | 'both'>('current');
 
   /* ── Data fetch ─────────────────────────────────────────── */
@@ -1851,7 +1469,6 @@ export default function DashboardAIAnalysis() {
   useEffect(() => {
     if (isAnyLoading) {
       const start = Date.now();
-      setLoadingStartTime(start);
       setLoadingElapsed(0);
       setLoadingStep(0);
       const interval = setInterval(() => {
@@ -1865,7 +1482,6 @@ export default function DashboardAIAnalysis() {
       }, 300);
       return () => clearInterval(interval);
     } else {
-      setLoadingStartTime(null);
       setLoadingElapsed(0);
       setLoadingStep(0);
     }
@@ -1873,7 +1489,7 @@ export default function DashboardAIAnalysis() {
 
   /* ── Send helpers ───────────────────────────────────────── */
 
-  const sendMessage = async (section: 'realtime' | 'historical', text: string, selectedTimeScope?: 'current' | 'historical' | 'both') => {
+  const sendMessage = async (section: 'realtime' | 'historical', text: string) => {
     const isRT = section === 'realtime';
     const setLoading = isRT ? setRealtimeLoading : setHistoricalLoading;
     const setMsgs = isRT ? setRealtimeMessages : setHistoricalMessages;
@@ -1884,64 +1500,52 @@ export default function DashboardAIAnalysis() {
     setMsgs((prev) => [...prev, { role: 'user', content: text, section, ts: Date.now() }]);
     setLoading(true);
 
-    const contextKeys = useContext ? AI_CONTEXT_KEYS : [];
-    const scopeToUse = selectedTimeScope || timeScope;
-
     try {
-      if (useMultiModel) {
-        const res = await dashboardApi.postAIAnalysisMultiModel(text, contextKeys, d, scopeToUse);
+      const lastAssistant = currentMsgs.slice().reverse().find((m) => m.role === 'assistant' && m.meta?.sql);
+      const res = await dashboardApi.postAdaptiveQuery({
+        question: text,
+        tableHint: null,
+        contextData: queryMode === 'follow_up' ? {
+          previousQuestion: currentMsgs.slice().reverse().find((m) => m.role === 'user')?.content,
+          previousSQL: lastAssistant?.meta?.sql,
+          data: (lastAssistant?.meta?.rows_preview as any[]) || [],
+        } : null,
+      });
+
+      // Reference-style follow-up response (no SQL)
+      if (res?.type === 'analysis' && typeof res?.answer === 'string') {
         setMsgs((prev) => [...prev, {
-          role: 'assistant', content: res.synthesized_answer,
-          meta: { 
-            multiModel: res,
-            time_scope: res.time_scope,
-            date_range: res.date_range,
-            period_info: res.period_info,
-          }, 
-          section, 
+          role: 'assistant',
+          content: res.answer,
+          meta: { action: 'follow_up', reason: 'contextData_analysis' },
+          section,
           ts: Date.now(),
         }]);
-      } else {
-        const history = currentMsgs.map((m) => ({ role: m.role, content: m.content }));
-        const res = await dashboardApi.postAIAnalysisChat(text, history, contextKeys, d, scopeToUse);
-
-        console.log('📊 AI Analysis Response:', res);
-        if (res?.sql) {
-          console.log('🧠 Generated SQL:', res.sql);
-        }
-
-        const reply = res?.reply ?? 'No response received.';
-        const meta: AiAnalysisMeta = {
-          action: res?.action,
-          reason: res?.reason,
-          sql: res?.sql,
-          validation: res?.validation,
-          proposed_validation: res?.proposed_validation,
-          query_origin: res?.query_origin,
-          suggestion_source: res?.suggestion_source,
-          rows_preview: res?.rows_preview,
-          compare: res?.compare,
-          charts: res?.charts,
-          charts_blocked_reason: res?.charts_blocked_reason,
-          time_scope: res?.time_scope,
-          date_range: res?.date_range,
-          period_info: res?.period_info,
-          needs_approval: res?.needs_approval,
-          proposed_sql: res?.proposed_sql,
-          adaptive_context: res?.adaptive_context,
-          performance: res?.performance,
-        };
-
-        console.log('📊 Period Info:', meta.period_info, meta.date_range);
-        console.log('📊 Extracted Charts:', meta.charts);
-        console.log('📊 Has Charts:', Boolean(meta.charts && meta.charts.length > 0));
-
-        const hasMeta = Boolean(meta.action || meta.sql || meta.validation || (meta.rows_preview?.length) || (meta.charts?.length) || meta.period_info || meta.needs_approval || meta.adaptive_context);
-        setMsgs((prev) => [...prev, {
-          role: 'assistant', content: reply,
-          meta: hasMeta ? meta : undefined, section, ts: Date.now(),
-        }]);
+        return;
       }
+
+      // New query response
+      if (res?.sql && queryMode === 'new') {
+        setQueryMode('follow_up');
+      }
+
+      const reply = (res?.summary ?? res?.answer ?? '') || 'No response received.';
+      const meta: AiAnalysisMeta = {
+        action: queryMode === 'follow_up' ? 'follow_up' : 'new',
+        reason: res?.retried ? 'auto_retry' : undefined,
+        sql: res?.sql,
+        rows_preview: Array.isArray(res?.data) ? res.data : undefined,
+        charts: res?.charts,
+      };
+
+      const hasMeta = Boolean(
+        meta.action || meta.sql || meta.validation || (meta.rows_preview?.length)
+        || (meta.charts?.length) || meta.period_info || meta.adaptive_context,
+      );
+      setMsgs((prev) => [...prev, {
+        role: 'assistant', content: reply,
+        meta: hasMeta ? meta : undefined, section, ts: Date.now(),
+      }]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to get AI response.';
       setError(msg);
@@ -1951,109 +1555,71 @@ export default function DashboardAIAnalysis() {
     }
   };
 
-  const handleApproveQuery = async (
-    section: 'realtime' | 'historical',
-    question: string,
-    proposedSql: string,
-    approvalSource: 'chatgpt' | 'manual' | 'assistant_sql' = 'chatgpt',
-  ): Promise<boolean> => {
-    const setMsgs = section === 'realtime' ? setRealtimeMessages : setHistoricalMessages;
-    const setLoading = section === 'realtime' ? setRealtimeLoading : setHistoricalLoading;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await dashboardApi.postAIAnalysisApproveQuery(question, proposedSql, timeScope, approvalSource);
-      const meta: AiAnalysisMeta = {
-        action: res?.action,
-        reason: res?.reason,
-        sql: res?.sql,
-        validation: res?.validation,
-        proposed_validation: res?.proposed_validation,
-        query_origin: res?.query_origin,
-        suggestion_source: res?.suggestion_source,
-        rows_preview: res?.rows_preview,
-        charts: res?.charts,
-        charts_blocked_reason: res?.charts_blocked_reason,
-        time_scope: res?.time_scope,
-        date_range: res?.date_range,
-        period_info: res?.period_info,
-        needs_approval: res?.needs_approval,
-        proposed_sql: res?.proposed_sql,
-        adaptive_context: res?.adaptive_context,
-        performance: res?.performance,
-      };
-      setMsgs((prev) => [...prev, {
-        role: 'assistant',
-        content: res?.reply ?? 'Query executed and stored for future use.',
-        meta: (meta.sql || meta.validation || meta.rows_preview?.length || meta.needs_approval || meta.adaptive_context) ? meta : undefined,
-        section,
-        ts: Date.now(),
-      }]);
-      return !Boolean(res?.needs_approval);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to approve query.';
-      setError(msg);
-      setMsgs((prev) => [...prev, { role: 'assistant', content: `Error: ${msg}`, section, ts: Date.now() }]);
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStoreQuery = async (section: 'realtime' | 'historical', question: string, sql: string) => {
-    setError(null);
-    try {
-      await dashboardApi.postAIAnalysisStoreQuery(question, sql, timeScope, 'assistant_sql');
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to store query.';
-      setError(msg);
-      throw err;
-    }
-  };
-
-  const handleSuggestSql = async (section: 'realtime' | 'historical', question: string, instructions?: string): Promise<SuggestedSqlResult> => {
-    const res = await dashboardApi.postAIAnalysisSuggestSql(question, timeScope, instructions);
-    return {
-      sql: res?.proposed_sql ?? '',
-      source: res?.suggestion_source,
-      validation: res?.validation,
-    };
-  };
-
-  const handleRejectQuery = async (
-    section: 'realtime' | 'historical',
-    question: string,
-    rejectedSql: string,
-    attemptSource: 'chatgpt' | 'manual' | 'assistant_sql' = 'assistant_sql',
-  ) => {
-    await dashboardApi.postAIAnalysisRejectQuery(question, rejectedSql, timeScope, attemptSource);
-  };
-
   /* ── Free chat with ChatGPT ──────────────────────────────── */
   const sendChatMessage = async (text: string) => {
-    const userMsg: ChatMessage = { role: 'user', content: text, ts: Date.now() };
-    setChatMessages((prev) => [...prev, userMsg]);
+    const trimmed = text.trim();
+    if (!trimmed || schemaChatSendInFlightRef.current) return;
+    schemaChatSendInFlightRef.current = true;
     setChatLoading(true);
 
-    // Append to conversation history for context
-    const history = [...chatHistoryRef.current, { role: 'user', content: text }];
+    const tid =
+      schemaChatThreadIdRef.current ||
+      readSchemaChatThreadIdFromStorage(schemaChatStorageKey);
 
     try {
-      const res = await dashboardApi.postAIAnalysisChat(
-        text,
+      // After refresh, localStorage still has sch_* but chatHistoryRef may be empty until
+      // the hydrate effect finishes — prefetch so the POST always includes prior turns.
+      if (chatHistoryRef.current.length === 0 && tid?.startsWith('sch_')) {
+        try {
+          const { messages: hist } = await dashboardApi.getAISchemaChatHistory(tid);
+          if (hist?.length) {
+            chatHistoryRef.current = hist.map((m) => ({ role: m.role, content: m.content }));
+            schemaChatThreadIdRef.current = tid;
+          }
+        } catch {
+          /* history optional; POST still uses server DB merge */
+        }
+      }
+
+      const userMsg: ChatMessage = { role: 'user', content: trimmed, ts: Date.now() };
+      setChatMessages((prev) => {
+        if (prev.length === 0 && chatHistoryRef.current.length > 0) {
+          const base = Date.now() - (chatHistoryRef.current.length + 1) * 1000;
+          const priorUi: ChatMessage[] = chatHistoryRef.current.map((m, i) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            ts: base + i * 1000,
+          }));
+          return [...priorUi, userMsg];
+        }
+        return [...prev, userMsg];
+      });
+
+      // Build updated history including the new user message
+      const history = [...chatHistoryRef.current, { role: 'user', content: trimmed }];
+
+      // Use the dedicated schema-chat endpoint so every turn — including follow-up
+      // questions like "is that right?", "what did I ask?", "where should we focus?" —
+      // is answered from full conversation context without triggering SQL generation.
+      const res = await dashboardApi.postAISchemaChat(
+        trimmed,
         chatHistoryRef.current,
-        AI_CONTEXT_KEYS,
-        30,
-        'both',
+        tid ?? undefined,
       );
-      const reply = res?.reply ?? res?.message ?? 'No response received.';
+      const reply = res?.reply ?? 'No response received.';
+      if (res?.thread_id) {
+        schemaChatThreadIdRef.current = res.thread_id;
+        writeSchemaChatThreadIdToStorage(schemaChatStorageKey, res.thread_id);
+      }
       const assistantMsg: ChatMessage = { role: 'assistant', content: reply, ts: Date.now() };
       setChatMessages((prev) => [...prev, assistantMsg]);
+      // Save full history (user + assistant) for next turn's context
       chatHistoryRef.current = [...history, { role: 'assistant', content: reply }];
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Chat error. Please try again.';
       setChatMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${msg}`, ts: Date.now() }]);
     } finally {
+      schemaChatSendInFlightRef.current = false;
       setChatLoading(false);
     }
   };
@@ -2072,104 +1638,6 @@ export default function DashboardAIAnalysis() {
 
   return (
     <div className="w-full -m-4 sm:-m-6 min-h-screen bg-gray-50 font-sans flex flex-col">
-      {/* Time Scope Selection Modal */}
-      {showTimeScopeModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTimeScopeModal(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
-                <CalendarRange className="h-5 w-5 text-white" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Select Data Scope</h3>
-                <p className="text-xs text-slate-500">Choose which period to analyze</p>
-              </div>
-            </div>
-
-            <div className="space-y-3 mb-6">
-              {/* Current Period Option */}
-              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
-                <input
-                  type="radio"
-                  name="timeScope"
-                  value="current"
-                  checked={timeScope === 'current'}
-                  onChange={(e) => setTimeScope(e.target.value as any)}
-                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Clock className="h-4 w-4 text-blue-600" />
-                    <span className="font-semibold text-slate-900">Current Period</span>
-                  </div>
-                  <p className="text-xs text-slate-600">Analyze recent data (default: last 30 days)</p>
-                </div>
-              </label>
-
-              {/* Historical Period Option */}
-              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
-                <input
-                  type="radio"
-                  name="timeScope"
-                  value="historical"
-                  checked={timeScope === 'historical'}
-                  onChange={(e) => setTimeScope(e.target.value as any)}
-                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <BarChart3 className="h-4 w-4 text-indigo-600" />
-                    <span className="font-semibold text-slate-900">Historical Data</span>
-                  </div>
-                  <p className="text-xs text-slate-600">Long-term trends and patterns (1994-2010)</p>
-                </div>
-              </label>
-
-              {/* Both Option */}
-              <label className="flex items-start gap-3 p-4 border-2 border-slate-200 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
-                <input
-                  type="radio"
-                  name="timeScope"
-                  value="both"
-                  checked={timeScope === 'both'}
-                  onChange={(e) => setTimeScope(e.target.value as any)}
-                  className="mt-0.5 w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <GitBranch className="h-4 w-4 text-purple-600" />
-                    <span className="font-semibold text-slate-900">Both Periods</span>
-                  </div>
-                  <p className="text-xs text-slate-600">Compare historical and current data</p>
-                </div>
-              </label>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowTimeScopeModal(false)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-medium hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (pendingQuery) {
-                    sendMessage(pendingQuery.section, pendingQuery.text, timeScope);
-                    setShowTimeScopeModal(false);
-                    setPendingQuery(null);
-                  }
-                }}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 text-white font-semibold hover:shadow-lg transition-all flex items-center justify-center gap-2"
-              >
-                <Sparkles className="h-4 w-4" />
-                Analyze
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
         body { font-family: 'DM Sans', sans-serif; }
@@ -2243,7 +1711,11 @@ export default function DashboardAIAnalysis() {
       </header>
 
       {/* ── Main content ── */}
-      <main className="flex-1 w-full px-4 md:px-6 lg:px-8 py-4 overflow-y-auto">
+      <main
+        className={`flex-1 w-full px-4 md:px-6 lg:px-8 py-4 min-h-0 ${
+          activeSection === 'chat' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'
+        }`}
+      >
 
         {/* ═══════════════════════════
             REAL-TIME SECTION
@@ -2379,19 +1851,14 @@ export default function DashboardAIAnalysis() {
                   loadingStep={realtimeLoading ? loadingStep : 0}
                   loadingElapsed={realtimeLoading ? loadingElapsed : 0}
                   prompts={REALTIME_PROMPTS}
-                  onSend={(t) => {
-                    setPendingQuery({ section: 'realtime', text: t });
-                    setShowTimeScopeModal(true);
-                  }}
-                  onApproveQuery={(q, s, source) => handleApproveQuery('realtime', q, s, source)}
-                  onRejectQuery={(q, s, source) => handleRejectQuery('realtime', q, s, source)}
-                  onStoreQuery={(q, s) => handleStoreQuery('realtime', q, s)}
-                  onSuggestSql={(q, instructions) => handleSuggestSql('realtime', q, instructions)}
+                  onSend={(t) => void sendMessage('realtime', t)}
                   placeholder="e.g. Show failed invoices by customer, or list open purchase orders…"
                   useContext={useContext}
                   setUseContext={setUseContext}
-                  useMultiModel={useMultiModel}
-                  setUseMultiModel={setUseMultiModel}
+                  queryMode={queryMode}
+                  setQueryMode={setQueryMode}
+                  timeScope={timeScope}
+                  setTimeScope={setTimeScope}
                   fullWidth
                 />
               </div>
@@ -2560,19 +2027,14 @@ export default function DashboardAIAnalysis() {
                     loadingStep={historicalLoading ? loadingStep : 0}
                     loadingElapsed={historicalLoading ? loadingElapsed : 0}
                     prompts={HISTORICAL_PROMPTS}
-                    onSend={(t) => {
-                      setPendingQuery({ section: 'historical', text: t });
-                      setShowTimeScopeModal(true);
-                    }}
-                    onApproveQuery={(q, s, source) => handleApproveQuery('historical', q, s, source)}
-                    onRejectQuery={(q, s, source) => handleRejectQuery('historical', q, s, source)}
-                    onStoreQuery={(q, s) => handleStoreQuery('historical', q, s)}
-                    onSuggestSql={(q, instructions) => handleSuggestSql('historical', q, instructions)}
+                    onSend={(t) => void sendMessage('historical', t)}
                     placeholder="e.g. Compare periods, forecast revenue, or analyze historical SAP billing data…"
                     useContext={useContext}
                     setUseContext={setUseContext}
-                    useMultiModel={useMultiModel}
-                    setUseMultiModel={setUseMultiModel}
+                    queryMode={queryMode}
+                    setQueryMode={setQueryMode}
+                    timeScope={timeScope}
+                    setTimeScope={setTimeScope}
                   />
                 </div>
               </div>
@@ -2587,11 +2049,12 @@ export default function DashboardAIAnalysis() {
         )}
 
         {activeSection === 'chat' && (
-          <div className="fade-in h-full flex flex-col gap-4 min-h-[calc(100vh-8rem)]">
+          <div className="fade-in flex flex-col flex-1 min-h-0 gap-4 max-h-[calc(100dvh-7rem)] h-[calc(100dvh-7rem)]">
             <ChatGPTPanel
               messages={chatMessages}
               loading={chatLoading}
               onSend={sendChatMessage}
+              onNewChat={startNewSchemaChat}
             />
           </div>
         )}

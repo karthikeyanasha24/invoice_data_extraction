@@ -49,6 +49,12 @@ export const api = axios.create({
     },
 });
 
+/** Single in-flight / cached schema fetch — avoids duplicate pending requests (e.g. React Strict Mode). */
+let aiSchemaFetchPromise: Promise<{
+    schema: Record<string, { columns: string[]; description: string; source: string }>;
+    table_count: number;
+}> | null = null;
+
 // Add request interceptor to include auth token and log requests
 api.interceptors.request.use(
     (config) => {
@@ -1769,7 +1775,9 @@ export const dashboardApi = {
         conversationHistory: { role: string; content: string }[] = [],
         contextKeys: string[] = [],
         days: number = 30,
-        timeScope?: 'current' | 'historical' | 'both'
+        timeScope?: 'current' | 'historical' | 'both',
+        threadId?: string,
+        queryMode?: 'new' | 'follow_up'
     ) => {
         try {
             const response = await api.post('/api/v1/dashboard/ai-analysis/chat', {
@@ -1778,6 +1786,8 @@ export const dashboardApi = {
                 context_keys: contextKeys,
                 time_scope: timeScope || 'current',
                 days: Math.max(1, Math.min(365, days)),
+                thread_id: threadId || '',
+                query_mode: queryMode || 'new',
             });
             return response.data;
         } catch (error: any) {
@@ -1786,6 +1796,76 @@ export const dashboardApi = {
                 throw new Error('Session expired. Please log in again.');
             }
             throw new Error(error.response?.data?.detail || 'Failed to get AI analysis response.');
+        }
+    },
+
+    /**
+     * Compatibility endpoint (reference project): POST /api/query/adaptive
+     * Body: { question, tableHint?, contextData? }
+     *
+     * - New question: returns { sql, rowCount, data, summary?, retried?, originalSql? }
+     * - Follow-up analysis (contextData): returns { type: "analysis", answer }
+     */
+    postAdaptiveQuery: async (body: {
+        question: string;
+        tableHint?: string | null;
+        contextData?: {
+            previousQuestion?: string;
+            previousSQL?: string;
+            data?: any[];
+        } | null;
+    }) => {
+        try {
+            const response = await api.post('/api/query/adaptive', body);
+            return response.data;
+        } catch (error: any) {
+            console.error('Adaptive query failed:', error);
+            throw new Error(error.response?.data?.message || error.response?.data?.detail || 'Adaptive query failed.');
+        }
+    },
+
+    /**
+     * Pure conversational chat for the Schema/Chat tab.
+     * Answers questions about SAP tables, field meanings, joins, and business logic.
+     * Full conversation history is sent so follow-up questions ("is that right?",
+     * "what did I just ask?") are answered from context — never runs SQL.
+     */
+    postAISchemaChat: async (
+        message: string,
+        conversationHistory: { role: string; content: string }[] = [],
+        threadId?: string | null
+    ) => {
+        try {
+            const response = await api.post('/api/v1/dashboard/ai-analysis/schema-chat', {
+                message,
+                conversation_history: conversationHistory,
+                thread_id: threadId ?? null,
+            });
+            return response.data as { reply: string; thread_id: string | null };
+        } catch (error: any) {
+            console.error('Schema chat failed:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to get chat response.');
+        }
+    },
+
+    getAISchemaChatHistory: async (threadId: string) => {
+        try {
+            const response = await api.get('/api/v1/dashboard/ai-analysis/schema-chat/history', {
+                params: { thread_id: threadId },
+            });
+            return response.data as {
+                thread_id: string;
+                messages: { role: string; content: string }[];
+            };
+        } catch (error: any) {
+            console.error('Schema chat history failed:', error);
+            if (error.response?.status === 401) {
+                throw new Error('Session expired. Please log in again.');
+            }
+            throw new Error(error.response?.data?.detail || 'Failed to load chat history.');
         }
     },
 
@@ -1865,13 +1945,22 @@ export const dashboardApi = {
         schema: Record<string, { columns: string[]; description: string; source: string }>;
         table_count: number;
     }> => {
-        try {
-            const response = await api.get('/api/v1/dashboard/ai-analysis/schema');
-            return response.data;
-        } catch (error: any) {
-            console.error('Schema fetch failed:', error);
-            return { schema: {}, table_count: 0 };
+        if (!aiSchemaFetchPromise) {
+            aiSchemaFetchPromise = api
+                .get('/api/v1/dashboard/ai-analysis/schema', { timeout: 90000 })
+                .then((response) => response.data)
+                .catch((error: any) => {
+                    aiSchemaFetchPromise = null;
+                    console.error('Schema fetch failed:', error);
+                    return { schema: {}, table_count: 0 };
+                });
         }
+        return aiSchemaFetchPromise;
+    },
+
+    /** Clear cached schema (e.g. after logout or env change). */
+    invalidateAIAnalysisSchemaCache: () => {
+        aiSchemaFetchPromise = null;
     },
 
     postAIAnalysisSuggestSql: async (

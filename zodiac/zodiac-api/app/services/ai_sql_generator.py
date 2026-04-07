@@ -16,7 +16,7 @@ def generate_sql(question: str) -> str:
     Use the OpenAI API to generate a SELECT-only PostgreSQL query
     based on the current schema and a natural-language question.
     """
-    schema_context = build_schema_context()
+    schema_context = build_schema_context(question=question)
 
     prompt = f"""
 You are a PostgreSQL expert working with SAP billing data.
@@ -32,24 +32,24 @@ CRITICAL DATA QUALITY RULES (these are NOT optional — they reflect proven bugs
      Wrong:    WHERE r.gjahr = '2000'   ← will ALWAYS return 0 rows
 
 2. NETWR IS TEXT — the column vbrp.netwr is stored as TEXT, not numeric.
-   ALWAYS cast it like this:
-     NULLIF(TRIM(v."netwr"::text), '')::NUMERIC
+   ALWAYS cast it using ANSI CAST() syntax:
+     CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)
    Never use SUM(v.netwr) directly — it will fail or silently return NULL.
 
 3. NEGATIVE / LOWEST SALES — individual billing lines can have negative netwr (credit memos).
    "Negative sales" or "lowest sales" = individual LINE ITEMS with netwr < 0, NOT year totals.
    CORRECT — use WHERE on individual rows:
-     WHERE NULLIF(TRIM(v."netwr"::text), '')::NUMERIC < 0
+     WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) < 0
    WRONG (returns 0 rows — no year has a negative TOTAL):
-     HAVING SUM(NULLIF(TRIM(v."netwr"::text), '')::NUMERIC) < 0
+     HAVING SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) < 0
    Example query for "negative sales in year 2000":
      SELECT v."vbeln", v."matnr", r."fkdat",
-            NULLIF(TRIM(v."netwr"::text), '')::NUMERIC AS netwr
+            CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) AS netwr
      FROM vbrp v
      JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"),10,'0') = LPAD(TRIM(r."vbeln"),10,'0')
      WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
-       AND NULLIF(TRIM(v."netwr"::text), '')::NUMERIC < 0
-     ORDER BY NULLIF(TRIM(v."netwr"::text), '')::NUMERIC ASC
+       AND CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) < 0
+     ORDER BY CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) ASC
 
 4. JOIN RULE — always join with LPAD to handle leading-zero differences:
      ON LPAD(TRIM(v."vbeln"), 10, '0') = LPAD(TRIM(r."vbeln"), 10, '0')

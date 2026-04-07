@@ -33,6 +33,48 @@ _mapping_file_cache: Optional[Dict[str, Any]] = None
 
 
 @lru_cache(maxsize=1)
+def _tables_columns_csv_path() -> Path:
+    # zodiac-api/tables_columns.csv
+    return Path(__file__).resolve().parents[2] / "tables_columns.csv"
+
+
+def load_schema_from_tables_columns_csv(
+    max_columns_per_table: Optional[int] = None,
+) -> Dict[str, List[str]]:
+    """
+    Load table -> columns from zodiac-api/tables_columns.csv.
+    This is treated as an authoritative schema catalog when present (generated from the same DB).
+    Only SAP business tables are included.
+    """
+    schema: Dict[str, List[str]] = {}
+    path = _tables_columns_csv_path()
+    if not path.exists():
+        return schema
+    try:
+        import csv
+
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row:
+                    continue
+                table_name = str(row.get("table") or "").strip()
+                col = str(row.get("column") or "").strip()
+                if not table_name or not col:
+                    continue
+                if not _is_sap_business_table(table_name):
+                    continue
+                cols = schema.setdefault(table_name, [])
+                if col not in cols:
+                    cols.append(col)
+        if max_columns_per_table:
+            schema = {t: cols[:max_columns_per_table] for t, cols in schema.items()}
+    except Exception as e:
+        logger.warning("schema_loader: could not load tables_columns.csv: %s", e)
+    return schema
+
+
+@lru_cache(maxsize=1)
 def _load_schema_ai_config() -> Dict[str, Any]:
     """Load schema_ai_config.json for skip-table rules and other AI hints."""
     try:
@@ -340,6 +382,8 @@ def get_schema_text(
     schema = load_schema(db)
     if not schema:
         schema = load_schema_from_mapping_file()
+    if not schema:
+        schema = load_schema_from_tables_columns_csv()
     available_tables = list(schema.keys())
     text = schema_to_text(schema, table_subset)
     if include_semantic_map:
@@ -372,8 +416,13 @@ def get_schema_dict(db: Session) -> Dict[str, List[str]]:
     """
     schema = load_schema(db)
     mapping_schema = load_schema_from_mapping_file()
+    csv_schema = load_schema_from_tables_columns_csv()
     # Fill in tables that are in the mapping file but missing from the live schema
     for table, cols in mapping_schema.items():
+        if table not in schema:
+            schema[table] = cols
+    # Fill in tables from the CSV catalog that are missing from the live schema
+    for table, cols in csv_schema.items():
         if table not in schema:
             schema[table] = cols
     return schema

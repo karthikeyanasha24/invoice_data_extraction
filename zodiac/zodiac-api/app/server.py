@@ -152,6 +152,14 @@ except Exception as e:
     logger.error(f"[ERROR] Failed to load dashboard router: {err_msg}")
 
 try:
+    from .api.adaptive_query import router as adaptive_query_router
+    app.include_router(adaptive_query_router)
+    logger.info("[OK] Adaptive query router loaded")
+except Exception as e:
+    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+    logger.error(f"[ERROR] Failed to load adaptive query router: {err_msg}")
+
+try:
     from .api.admin import router as admin_router
     app.include_router(admin_router, prefix="/api/v1")
     logger.info("[OK] Admin router loaded")
