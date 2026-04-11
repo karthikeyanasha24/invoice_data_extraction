@@ -100,6 +100,11 @@ def _looks_like_rowcount_question(question: str) -> bool:
     )
 
 
+def _wants_exact_rowcount(question: str) -> bool:
+    q = (question or "").lower()
+    return any(k in q for k in ("exact", "accurate", "precise"))
+
+
 def _extract_known_tables_from_question(question: str) -> List[str]:
     """
     Extract table tokens mentioned in the question, but only keep those that exist
@@ -278,10 +283,25 @@ async def post_query_adaptive(
             # Keep it bounded and deterministic
             tables = tables[:10]
             if tables:
-                selects = [
-                    f"SELECT '{t}' AS table_name, CAST(COUNT(*) AS bigint) AS row_count FROM \"{t}\""
-                    for t in tables
-                ]
+                # IMPORTANT: COUNT(*) on large SAP tables can be extremely slow.
+                # By default, return an approximate row count from pg_class.reltuples (fast).
+                # If user explicitly asks "exact", we fall back to COUNT(*).
+                exact = _wants_exact_rowcount(q)
+                if exact:
+                    selects = [
+                        f"SELECT '{t}' AS table_name, CAST(COUNT(*) AS bigint) AS row_count, 'exact' AS count_type FROM \"{t}\""
+                        for t in tables
+                    ]
+                else:
+                    # reltuples is an estimate maintained by ANALYZE/VACUUM; good for diagnostics.
+                    selects = [
+                        (
+                            f"SELECT '{t}' AS table_name, "
+                            f"CAST(COALESCE((SELECT reltuples FROM pg_class WHERE relname = '{t}'), 0) AS bigint) AS row_count, "
+                            f"'approx' AS count_type"
+                        )
+                        for t in tables
+                    ]
                 sql = "\nUNION ALL\n".join(selects) + "\nLIMIT 10;"
 
                 sess = None
@@ -299,7 +319,7 @@ async def post_query_adaptive(
                     "rowCount": len(data),
                     "data": data,
                     "tableHint": tableHint or None,
-                    "summary": "Row counts by table.",
+                    "summary": "Row counts by table (approx by default; ask for 'exact' if needed).",
                 }
 
         from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
