@@ -2,22 +2,40 @@
 
 import { useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { 
-  LayoutDashboard, 
-  FileText, 
+import {
+  LayoutDashboard,
+  FileText,
   Receipt,
-  Settings, 
-  ChevronLeft, 
+  Settings,
+  ChevronLeft,
   ChevronRight,
   User,
   LogOut,
   Building2,
   Key,
   Users,
-  Sparkles
+  Sparkles,
+  Wifi,
+  WifiOff,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+
+// ── Environment detection ─────────────────────────────────────────────────────
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || '').trim();
+const IS_LOCAL  = !API_URL || API_URL.includes('localhost') || API_URL.includes('127.0.0.1');
+const IS_PROD   = API_URL.includes('vercel.app') || (!!API_URL && !IS_LOCAL);
+const ENV_LABEL = IS_LOCAL ? '⚠ LOCAL DEV' : IS_PROD ? '● PRODUCTION' : 'UNKNOWN';
+const ENV_COLOR = IS_LOCAL
+  ? 'bg-amber-100 text-amber-800 border-amber-300'
+  : IS_PROD
+  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+  : 'bg-slate-100 text-slate-600 border-slate-200';
+const ENV_DOT   = IS_LOCAL ? 'bg-amber-400' : 'bg-emerald-400';
+const ENV_TIP   = IS_LOCAL
+  ? `Connecting to: ${API_URL || 'localhost:8000'}\n⚠ LOCAL database — no SAP/production data.\nChange NEXT_PUBLIC_API_URL to the production backend.`
+  : `Connecting to: ${API_URL}\n✓ Production database — real SAP data.`;
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -141,6 +159,36 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
           })}
         </div>
       </nav>
+
+      {/* Environment Indicator */}
+      {(!isCollapsed || isMobile) && (
+        <div className="px-3 pb-2">
+          <div
+            className={cn(
+              'flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-help select-none',
+              ENV_COLOR,
+            )}
+            title={ENV_TIP}
+          >
+            <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse', ENV_DOT)} />
+            <span className="flex-1 truncate">{ENV_LABEL}</span>
+            {IS_LOCAL && <AlertCircle className="h-3 w-3 flex-shrink-0 text-amber-600" />}
+          </div>
+          {IS_LOCAL && (
+            <p className="text-[10px] text-amber-700 mt-1 px-1 leading-tight">
+              No production data. Switch to prod API.
+            </p>
+          )}
+        </div>
+      )}
+      {isCollapsed && !isMobile && (
+        <div className="flex justify-center pb-2">
+          <div
+            className={cn('w-2 h-2 rounded-full animate-pulse', ENV_DOT)}
+            title={ENV_TIP}
+          />
+        </div>
+      )}
 
       {/* User Section */}
       <div className="p-3 sm:p-4 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100">

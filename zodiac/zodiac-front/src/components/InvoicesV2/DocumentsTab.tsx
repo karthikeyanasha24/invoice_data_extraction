@@ -22,26 +22,43 @@ export default function DocumentsTab() {
   const { handleAuthError } = useAuth();
   const [documents, setDocuments] = useState<InvoiceV2Document[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'manual' | 'sap'>('all');
   const [uploading, setUploading] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<InvoiceV2Document | null>(null);
 
+  // Detect environment for user-friendly messages
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+  const isLocalEnv = !apiUrl || apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1');
+
   const fetchDocuments = useCallback(async () => {
     try {
       setLoading(true);
+      setFetchError(null);
       const source = sourceFilter === 'all' ? undefined : sourceFilter;
       const response = await invoicesV2Api.getDocuments(source);
-      setDocuments(response.data.documents);
+      setDocuments(response.data.documents ?? []);
     } catch (error: any) {
       console.error('Failed to fetch documents:', error);
-      if (error.message?.includes('Session expired')) {
+      const status = error?.response?.status;
+      if (error.message?.includes('Session expired') || status === 401) {
         handleAuthError();
+      } else {
+        setFetchError(
+          status === 404
+            ? 'Documents endpoint not found. Check backend is running.'
+            : status === 503
+            ? 'Backend unavailable. Is the server running?'
+            : isLocalEnv
+            ? `Could not load documents from local backend (${apiUrl || 'localhost:8000'}). The local database may be empty — switch NEXT_PUBLIC_API_URL to the production backend to see real SAP data.`
+            : `Failed to load documents: ${error.message || 'Unknown error'}`
+        );
       }
     } finally {
       setLoading(false);
     }
-  }, [sourceFilter, handleAuthError]);
+  }, [sourceFilter, handleAuthError, isLocalEnv, apiUrl]);
 
   useEffect(() => {
     fetchDocuments();
@@ -141,6 +158,49 @@ export default function DocumentsTab() {
 
   return (
     <div className="space-y-4">
+
+      {/* Environment / Error Banner */}
+      {fetchError && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
+          <span className="text-lg flex-shrink-0">⚠️</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-900">Could not load invoice data</p>
+            <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">{fetchError}</p>
+            {isLocalEnv && (
+              <p className="text-xs text-amber-700 mt-1.5 font-medium">
+                💡 <strong>Quick fix:</strong> Open{' '}
+                <code className="bg-amber-100 px-1 rounded">.env.local</code> and set{' '}
+                <code className="bg-amber-100 px-1 rounded">NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app</code>,
+                then restart the dev server.
+              </p>
+            )}
+            <button
+              onClick={fetchDocuments}
+              className="mt-2 text-xs font-medium text-amber-800 underline hover:text-amber-900"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLocalEnv && !fetchError && documents.length === 0 && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 flex items-start gap-3">
+          <span className="text-lg flex-shrink-0">ℹ️</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-blue-900">Connected to local backend</p>
+            <p className="text-xs text-blue-700 mt-0.5">
+              You are using <code className="bg-blue-100 px-1 rounded">{apiUrl || 'localhost:8000'}</code>.
+              The local database is empty — no SAP invoices will appear here.
+            </p>
+            <p className="text-xs text-blue-700 mt-1">
+              To see production data, set{' '}
+              <code className="bg-blue-100 px-1 rounded">NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app</code>{' '}
+              in <code className="bg-blue-100 px-1 rounded">.env.local</code> and restart.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Header with filters and upload */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         {/* Source Filter */}
