@@ -3610,23 +3610,24 @@ async def get_ai_analysis_schema(
     Merges db_table_mapping.json (typed columns) with live DB introspection
     for any tables not in the mapping file.
     """
-    from ..services.schema_context_builder import load_schema
+    from ..services.schema_index import build_canonical_schema_index
     import sqlalchemy
 
-    # 1) Load typed columns from mapping file (48 SAP tables with full metadata)
-    try:
-        mapping = load_schema()
-    except Exception:
-        mapping = {}
-
+    # 1) Authoritative catalog: tables_columns.csv (+ db_table_mapping.json merge)
     schema_out: dict = {}
-    for table_name, info in mapping.items():
-        cols = list(info.get("columns", {}).keys())
-        schema_out[table_name] = {
-            "columns": cols,
-            "description": info.get("description", ""),
-            "source": "mapping",
-        }
+    try:
+        idx = build_canonical_schema_index(include_non_sap=True)
+        for tname, tbl in idx.tables.items():
+            cols = [c.name for c in tbl.columns if c.name]
+            types = {c.name: (c.data_type or "") for c in tbl.columns if c.name}
+            schema_out[tname] = {
+                "columns": cols,
+                "column_types": types,
+                "description": (tbl.description or ""),
+                "source": "catalog",
+            }
+    except Exception as e:
+        logger.warning("get_ai_analysis_schema: catalog load failed: %s", e)
 
     # 2) Supplement with live DB introspection for all remaining tables
     try:
@@ -3686,15 +3687,24 @@ async def post_ai_analysis_approve_query(
     proposed_sql: str = Body(..., embed=True),
     time_scope: str = Body(default="both", embed=True),
     approval_source: str = Body(default="chatgpt", embed=True),
+    store_for_reuse: bool = Body(default=False, embed=True),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Andy's training loop: User approves ChatGPT-proposed SQL.
-    Stores question→SQL in ai_query_memory, executes, and returns full result.
+    Executes approved SQL and returns full result.
+    Stores query in ai_query_memory only when store_for_reuse=true.
     """
     try:
-        return _do_approve_query(question, proposed_sql, time_scope, approval_source, current_user, db)
+        return _do_approve_query(
+            question,
+            proposed_sql,
+            time_scope,
+            approval_source,
+            store_for_reuse,
+            current_user,
+            db,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -3704,7 +3714,15 @@ async def post_ai_analysis_approve_query(
         )
 
 
-def _do_approve_query(question: str, proposed_sql: str, time_scope: str, approval_source: str, current_user, db):
+def _do_approve_query(
+    question: str,
+    proposed_sql: str,
+    time_scope: str,
+    approval_source: str,
+    store_for_reuse: bool,
+    current_user,
+    db,
+):
     from ..services.ai_query_memory_service import store_approved_query
     from ..services.ai_analysis_orchestrator import orchestrator_payload
     from ..services.sap_sql_agent import SqlAgentResult
@@ -3879,17 +3897,18 @@ Key rules for SAP data:
         except Exception:
             pass
 
-        stored = store_approved_query(
-            db,
-            current_user.id,
-            question,
-            quoted_sql,
-            source="user" if approval_source == "manual" else "chatgpt",
-            model_used="gpt-4o" if approval_source != "manual" else None,
-            tables_used=list(execution.validation.tables or []),
-        )
-        if not stored:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store approved query")
+        if store_for_reuse:
+            stored = store_approved_query(
+                db,
+                current_user.id,
+                question,
+                quoted_sql,
+                source="user" if approval_source == "manual" else "chatgpt",
+                model_used="gpt-4o" if approval_source != "manual" else None,
+                tables_used=list(execution.validation.tables or []),
+            )
+            if not stored:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to store approved query")
 
         # Classify intent for metadata tagging (must be defined before log_query_feedback_attempt)
         try:
@@ -3911,7 +3930,7 @@ Key rules for SAP data:
             time_scope=time_scope,
             validation=validation_payload,
             extra_metadata={
-                "stored_for_reuse": True,
+                "stored_for_reuse": bool(store_for_reuse),
                 "row_count": len(rows),
                 "intent_tags": _intent_tags,
                 "linked_to_graph": _linked_to_graph,
@@ -4036,7 +4055,7 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
             orch = OrchestratorResult(
                 reply=reply or "Query executed successfully.",
                 action="new",
-                reason="approved_and_stored",
+                reason="approved_and_stored" if store_for_reuse else "approved_executed_not_stored",
                 sql=quoted_sql,
                 rows_preview=preview,
                 charts=charts_data,
@@ -4049,13 +4068,15 @@ Summarize the answer in 3-8 sentences using MARKDOWN. Use **bold** for key numbe
             )
             payload = orchestrator_payload(orch)
             payload["validation"] = validation_payload
+            payload["stored_for_reuse"] = bool(store_for_reuse)
             return payload
         return {
-            "reply": "Query executed and stored for future use.",
+            "reply": "Query executed successfully.",
             "sql": quoted_sql,
             "rows_preview": rows[:30],
             "needs_approval": False,
             "validation": validation_payload,
+            "stored_for_reuse": bool(store_for_reuse),
         }
     finally:
         if USE_SAP_DB_FOR_AI and sql_db is not None and sql_db is not db:

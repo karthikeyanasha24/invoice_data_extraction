@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
+from .schema_index import build_canonical_schema_index
 
 logger = logging.getLogger(__name__)
 
@@ -46,31 +47,9 @@ def load_schema_from_tables_columns_csv(
     This is treated as an authoritative schema catalog when present (generated from the same DB).
     Only SAP business tables are included.
     """
-    schema: Dict[str, List[str]] = {}
-    path = _tables_columns_csv_path()
-    if not path.exists():
-        return schema
-    try:
-        import csv
-
-        with path.open("r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if not row:
-                    continue
-                table_name = str(row.get("table") or "").strip()
-                col = str(row.get("column") or "").strip()
-                if not table_name or not col:
-                    continue
-                if not _is_sap_business_table(table_name):
-                    continue
-                cols = schema.setdefault(table_name, [])
-                if col not in cols:
-                    cols.append(col)
-        if max_columns_per_table:
-            schema = {t: cols[:max_columns_per_table] for t, cols in schema.items()}
-    except Exception as e:
-        logger.warning("schema_loader: could not load tables_columns.csv: %s", e)
+    schema = build_canonical_schema_index(include_non_sap=False).get_table_columns_map()
+    if max_columns_per_table:
+        return {t: cols[:max_columns_per_table] for t, cols in schema.items()}
     return schema
 
 
@@ -299,25 +278,9 @@ def load_schema_from_mapping_file(max_columns_per_table: Optional[int] = None) -
     Fallback: load table -> columns from db_table_mapping.json (no DB needed).
     Only SAP business tables.
     """
-    schema: Dict[str, List[str]] = {}
-    try:
-        root = Path(__file__).resolve().parent.parent
-        path = root / "db_table_mapping.json"
-        if not path.exists():
-            return schema
-        import json
-        with path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-        if not isinstance(raw, dict):
-            return schema
-        for table_name, entry in raw.items():
-            if not _is_sap_business_table(table_name):
-                continue
-            if isinstance(entry, dict) and isinstance(entry.get("columns"), dict):
-                columns = list(entry["columns"].keys())
-                schema[table_name] = columns[:max_columns_per_table] if max_columns_per_table else columns
-    except Exception as e:
-        logger.warning("schema_loader: could not load db_table_mapping.json: %s", e)
+    schema = build_canonical_schema_index(include_non_sap=False).get_table_columns_map()
+    if max_columns_per_table:
+        return {t: cols[:max_columns_per_table] for t, cols in schema.items()}
     return schema
 
 

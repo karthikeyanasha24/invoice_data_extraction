@@ -12,7 +12,7 @@ if sys.platform == "win32":
     except:
         pass
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
@@ -158,6 +158,15 @@ try:
 except Exception as e:
     err_msg = str(e).encode('ascii', 'replace').decode('ascii')
     logger.error(f"[ERROR] Failed to load adaptive query router: {err_msg}")
+    # Do not return 404 for adaptive-query path when router import fails.
+    # Return a clear 503 so the frontend can surface actionable diagnostics.
+    @app.api_route("/api/query/adaptive", methods=["GET", "POST"])
+    @app.api_route("/api/v1/query/adaptive", methods=["GET", "POST"])
+    async def _adaptive_query_unavailable():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Adaptive query router failed to load. Check server logs for import errors.",
+        )
 
 try:
     from .api.admin import router as admin_router

@@ -8617,6 +8617,43 @@ public,ai_analysis_memory,knowledge_json,text
 public,ai_analysis_memory,updated_at,timestamp with time zone
 public,ai_analysis_memory,last_reply,text
 public,ai_analysis_memory,last_charts_json,text
+public,ai_analysis_memory,last_currency,text
+public,ai_analysis_memory,last_year,text
+public,ai_chat_threads,id,bigint
+public,ai_chat_threads,user_id,integer
+public,ai_chat_threads,thread_id,text
+public,ai_chat_threads,title,text
+public,ai_chat_threads,turn_count,integer
+public,ai_chat_threads,last_active_at,timestamp with time zone
+public,ai_chat_threads,created_at,timestamp with time zone
+public,ai_chat_turns,id,bigint
+public,ai_chat_turns,user_id,integer
+public,ai_chat_turns,thread_id,text
+public,ai_chat_turns,turn_index,integer
+public,ai_chat_turns,role,text
+public,ai_chat_turns,content,text
+public,ai_chat_turns,sql_executed,text
+public,ai_chat_turns,result_rows,jsonb
+public,ai_chat_turns,result_columns,jsonb
+public,ai_chat_turns,key_metrics,jsonb
+public,ai_chat_turns,warnings,jsonb
+public,ai_chat_turns,charts,jsonb
+public,ai_chat_turns,time_scope,text
+public,ai_chat_turns,date_range,text
+public,ai_chat_turns,dominant_currency,text
+public,ai_chat_turns,dominant_year,text
+public,ai_chat_turns,query_mode,text
+public,ai_chat_turns,action,text
+public,ai_chat_turns,created_at,timestamp with time zone
+public,ai_learned_patterns,id,bigint
+public,ai_learned_patterns,pattern_hash,character varying
+public,ai_learned_patterns,user_query_tpl,text
+public,ai_learned_patterns,sql_template,text
+public,ai_learned_patterns,hit_count,integer
+public,ai_learned_patterns,first_seen_at,timestamp with time zone
+public,ai_learned_patterns,last_used_at,timestamp with time zone
+public,ai_learned_patterns,avg_row_count,double precision
+public,ai_learned_patterns,tables_used,jsonb
 public,ai_query_embeddings,id,bigint
 public,ai_query_embeddings,query_text,text
 public,ai_query_embeddings,query_hash,character varying

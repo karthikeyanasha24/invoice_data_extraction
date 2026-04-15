@@ -77,6 +77,33 @@ OUTBOUND FUNNEL NOTE: To show the processing funnel for V2 invoices:
   - Failed = COUNT(*) from v2_validated_invoices WHERE status = 'failed'
   - Not yet validated = v2_invoice_documents WHERE validation_status = 'not_validated'
 
+### invoice_v2_business_data
+Business-level extracted invoice metrics (current app pipeline).
+Columns:
+- id (INTEGER, primary key)
+- user_id (INTEGER)
+- customer_id (TEXT, nullable)
+- customer_name (TEXT, nullable)
+- total_amount (NUMERIC, nullable)
+- tax_amount (NUMERIC, nullable)
+- currency (TEXT, nullable)
+- invoice_date (DATE, nullable)
+- created_at (TIMESTAMPTZ)
+- updated_at (TIMESTAMPTZ)
+
+### invoice_business_data
+Legacy invoice business metrics table.
+Columns:
+- id (INTEGER, primary key)
+- user_id (INTEGER)
+- customer_id (TEXT, nullable)
+- customer_name (TEXT, nullable)
+- total_amount (NUMERIC, nullable)
+- tax_amount (NUMERIC, nullable)
+- currency (TEXT, nullable)
+- created_at (TIMESTAMPTZ)
+- updated_at (TIMESTAMPTZ)
+
 ### zodiac_customers
 Registered customer configurations.
 Columns:
@@ -180,6 +207,9 @@ def _is_operational_question(question: str) -> bool:
         # Status queries
         "invoice status", "current status", "processing status",
         "pending invoice", "stuck invoice", "backlog invoice",
+        # App analytics wording
+        "invoice app tables", "invoice app table", "invoice business table",
+        "total amount", "tax amount",
     )
 
     # Also detect "last N months/weeks/days" + invoice/document context
@@ -442,6 +472,28 @@ LIMIT {limit}
 """.strip()
 
 
+def build_invoice_amount_tax_by_currency_sql(days: int = 90, limit: int = 50) -> str:
+    """
+    Average total/tax by currency from invoice app business tables.
+    Uses current V2 business table.
+    """
+    return f"""
+SELECT
+    COALESCE(NULLIF(TRIM(currency), ''), 'UNKNOWN') AS currency,
+    COUNT(*) AS invoice_count,
+    ROUND(AVG(total_amount), 2) AS avg_total_amount,
+    ROUND(AVG(tax_amount), 2) AS avg_tax_amount,
+    ROUND(SUM(total_amount), 2) AS total_amount_sum,
+    ROUND(SUM(tax_amount), 2) AS tax_amount_sum
+FROM invoice_v2_business_data
+WHERE created_at >= NOW() - INTERVAL '{days} days'
+  AND total_amount IS NOT NULL
+GROUP BY COALESCE(NULLIF(TRIM(currency), ''), 'UNKNOWN')
+ORDER BY total_amount_sum DESC
+LIMIT {limit}
+""".strip()
+
+
 def _extract_days(question: str, default: int = 30) -> int:
     """Extract 'last N days' window from question, default 30."""
     m = re.search(r"\blast\s+(\d{1,3})\s+days?\b", question.lower())
@@ -587,7 +639,19 @@ def resolve_operational_query(
         logger.info("operational_resolver: fast-path top_customers (%d days)", days_val)
         return sql, "top_customers"
 
-    # --- Fast-path 5: Inbound SAT merge stats ---
+    # --- Fast-path 5: Invoice avg total/tax by currency (app tables) ---
+    amount_tax_signals = (
+        "average total amount", "avg total amount", "tax amount by currency",
+        "total amount and tax amount by currency", "invoice app tables",
+        "invoice business data by currency", "invoice_v2_business_data",
+    )
+    if any(p in q for p in amount_tax_signals):
+        days_val = _extract_days(question, default=90)
+        sql = build_invoice_amount_tax_by_currency_sql(days=days_val, limit=50)
+        logger.info("operational_resolver: fast-path invoice_amount_tax_by_currency (%d days)", days_val)
+        return sql, "invoice_amount_tax_by_currency"
+
+    # --- Fast-path 6: Inbound SAT merge stats ---
     sat_signals = (
         "inbound sat", "sat document", "sat merge", "cfdi",
         "canonical merge", "merge pending", "merges pending",

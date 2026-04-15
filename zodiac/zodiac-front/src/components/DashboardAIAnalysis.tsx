@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { dashboardApi } from '@/lib/api';
 import {
   Sparkles, Send, ArrowDownToLine, ArrowUpFromLine, TrendingUp,
@@ -9,6 +9,7 @@ import {
   ArrowUpRight, ArrowDownRight, Minus, CalendarRange, Eye,
   FlaskConical, TrendingDown, DollarSign,
   MessageCircle, Database, Table2, TableProperties, ChevronRight, Bot, User as UserIcon,
+  ThumbsUp, ThumbsDown, X, Check, Code2, Pencil, ChevronDown,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
 import { useVoiceRecording } from '../hooks/useVoiceRecording';
@@ -367,12 +368,31 @@ type SqlValidationMeta = {
   aggregate_functions?: string[];
 };
 
+/** Feedback lifecycle for each AI answer in the Real-time / Historical panels */
+type MessageFeedbackState =
+  | 'pending'            // awaiting yes / no from user
+  | 'approved'           // user said yes → SQL saved
+  | 'rejected'           // user said no → showing choice panel
+  | 'rejected_loading'   // fetching ChatGPT suggestion
+  | 'rejected_chatgpt'   // ChatGPT suggested alternative SQL, showing it
+  | 'rejected_manual'    // user picked "enter SQL manually"
+  | 'sql_used';          // user clicked "Use this SQL" — query re-run
+
+type MessageFeedbackInfo = {
+  state: MessageFeedbackState;
+  suggestedSql?: string;   // SQL proposed by ChatGPT
+  manualSql?: string;      // SQL being typed by user
+  error?: string;
+  appliedSql?: string;     // SQL that was finally used/saved
+};
+
 type Message = {
   role: 'user' | 'assistant';
   content: string;
   meta?: AiAnalysisMeta;
   section?: 'realtime' | 'historical';
   ts?: number;
+  feedback?: MessageFeedbackInfo;
 };
 
 type OutboundData = {
@@ -553,13 +573,156 @@ function DomainExplorer({ onSelect }: { onSelect: (q: string) => void }) {
 
 /* ─── Chat Panel ─────────────────────────────────────────────── */
 
-const PROGRESS_STEPS = [
-  { icon: '🔍', label: 'Analyzing your question...', color: 'text-blue-500' },
-  { icon: '📋', label: 'Loading schema & context...', color: 'text-purple-500' },
-  { icon: '⚙️', label: 'Generating SQL query...', color: 'text-orange-500' },
-  { icon: '▶️', label: 'Running query on database...', color: 'text-green-500' },
-  { icon: '✍️', label: 'Composing your answer...', color: 'text-indigo-500' },
+/* ─── Detailed backend-accurate progress log ─────────────────── */
+
+type LogEntry = {
+  startAt: number;   // seconds elapsed when this log line appears
+  icon: string;
+  service: string;
+  message: string;
+  kind: 'info' | 'warn' | 'success' | 'query' | 'db' | 'llm';
+};
+
+const PIPELINE_LOG: LogEntry[] = [
+  { startAt: 0,   icon: '🚀', service: 'orchestrator',           kind: 'info',    message: 'Query received — routing to AI analysis pipeline' },
+  { startAt: 1,   icon: '🔍', service: 'ai_query_memory',        kind: 'info',    message: 'Searching memory for similar approved queries…' },
+  { startAt: 3,   icon: '⚠️',  service: 'precision_validator',    kind: 'warn',    message: 'Memory match found — validating against join graph…' },
+  { startAt: 5,   icon: '📋', service: 'schema_loader',           kind: 'info',    message: 'Loading schema index (121 tables, 9,353 columns)…' },
+  { startAt: 9,   icon: '🗂️',  service: 'schema_loader',           kind: 'success', message: 'Schema cached — 83 SAP + 38 app tables indexed' },
+  { startAt: 10,  icon: '🧠', service: 'intent_classifier',       kind: 'info',    message: 'Classifying query intent and domain…' },
+  { startAt: 12,  icon: '📌', service: 'table_selector_llm',      kind: 'llm',     message: 'Selecting relevant tables via GPT-4o…' },
+  { startAt: 16,  icon: '✏️',  service: 'sql_generator_llm',       kind: 'llm',     message: 'Generating SQL specification via GPT-4o…' },
+  { startAt: 20,  icon: '🔒', service: 'sap_sql_precision_validator', kind: 'info', message: 'Validating SQL against approved join graph…' },
+  { startAt: 21,  icon: '🛠️',  service: 'sql_sanitizers',          kind: 'info',    message: 'Applying type casts for SAP text/numeric columns…' },
+  { startAt: 22,  icon: '▶️',  service: 'sap_database',            kind: 'db',      message: 'Executing query on SAP PostgreSQL database…' },
+  { startAt: 45,  icon: '✅', service: 'sap_database',            kind: 'success', message: 'Query executed — processing result rows…' },
+  { startAt: 47,  icon: '📊', service: 'chart_generator',         kind: 'info',    message: 'Generating chart specifications from result shape…' },
+  { startAt: 50,  icon: '✍️',  service: 'ai_summarizer',           kind: 'llm',     message: 'Composing natural language summary…' },
+  { startAt: 58,  icon: '🎯', service: 'response_builder',        kind: 'success', message: 'Building final response payload…' },
 ];
+
+const FOLLOWUP_LOG: LogEntry[] = [
+  { startAt: 0,  icon: '🧠', service: 'orchestrator',    kind: 'info',    message: 'Follow-up mode — loading prior query context…' },
+  { startAt: 1,  icon: '📎', service: 'context_store',   kind: 'info',    message: 'Attaching previous SQL and result rows to prompt…' },
+  { startAt: 2,  icon: '✍️',  service: 'ai_summarizer',  kind: 'llm',     message: 'Generating follow-up answer via GPT-4o…' },
+  { startAt: 5,  icon: '✅', service: 'response_builder', kind: 'success', message: 'Answer ready — no new database query needed' },
+];
+
+const KIND_STYLES: Record<LogEntry['kind'], { dot: string; text: string; prefix: string }> = {
+  info:    { dot: 'bg-blue-400',   text: 'text-slate-300',  prefix: 'text-blue-400' },
+  warn:    { dot: 'bg-amber-400',  text: 'text-amber-200',  prefix: 'text-amber-400' },
+  success: { dot: 'bg-emerald-400',text: 'text-emerald-300',prefix: 'text-emerald-400' },
+  query:   { dot: 'bg-purple-400', text: 'text-purple-200', prefix: 'text-purple-400' },
+  db:      { dot: 'bg-cyan-400',   text: 'text-cyan-200',   prefix: 'text-cyan-400' },
+  llm:     { dot: 'bg-violet-400', text: 'text-violet-200', prefix: 'text-violet-400' },
+};
+
+function fmtTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m${s.toString().padStart(2, '0')}s` : `${s.toFixed(0).padStart(2, '0')}s`;
+}
+
+function AIProgressLog({
+  elapsed,
+  isFollowUp = false,
+}: {
+  elapsed: number;
+  isFollowUp?: boolean;
+}) {
+  const log = isFollowUp ? FOLLOWUP_LOG : PIPELINE_LOG;
+  const visible = log.filter((e) => e.startAt <= elapsed);
+  const active = visible[visible.length - 1];
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-[#0d1117] shadow-xl overflow-hidden text-[11px] font-mono">
+      {/* Terminal title bar */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-[#161b22] border-b border-slate-700">
+        <div className="flex gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
+          <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
+          <span className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
+        </div>
+        <span className="text-slate-500 text-[10px] flex-1 text-center tracking-wider">
+          zodiac-api — AI pipeline
+        </span>
+        <span className="text-slate-500 text-[10px] font-mono tabular-nums">
+          {elapsed.toFixed(1)}s
+        </span>
+      </div>
+
+      {/* Log lines */}
+      <div className="px-3 py-2.5 space-y-0.5 min-h-[80px]">
+        {visible.map((entry, i) => {
+          const styles = KIND_STYLES[entry.kind];
+          const isLast = i === visible.length - 1;
+          return (
+            <div
+              key={i}
+              className={`flex items-start gap-2 transition-all duration-300 ${isLast ? 'opacity-100' : 'opacity-60'}`}
+            >
+              {/* Timestamp */}
+              <span className="text-slate-600 flex-shrink-0 w-8 tabular-nums text-right">
+                [{fmtTime(entry.startAt)}]
+              </span>
+              {/* Status dot */}
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1 ${styles.dot} ${isLast ? 'animate-pulse' : ''}`} />
+              {/* Service tag */}
+              <span className="text-slate-600 flex-shrink-0 truncate max-w-[110px]">
+                {entry.service}
+              </span>
+              {/* Arrow */}
+              <span className="text-slate-700">›</span>
+              {/* Message */}
+              <span className={`flex-1 ${isLast ? styles.text : 'text-slate-500'}`}>
+                <span className="mr-1.5">{entry.icon}</span>
+                {entry.message}
+                {isLast && (
+                  <span className="inline-flex ml-1.5 gap-0.5 align-middle">
+                    {[0, 1, 2].map((j) => (
+                      <span
+                        key={j}
+                        className={`w-0.5 h-2.5 rounded-full ${styles.dot} animate-pulse`}
+                        style={{ animationDelay: `${j * 200}ms` }}
+                      />
+                    ))}
+                  </span>
+                )}
+              </span>
+            </div>
+          );
+        })}
+
+        {/* Empty state spacer while first line appears */}
+        {visible.length === 0 && (
+          <div className="flex items-center gap-2 text-slate-600 animate-pulse">
+            <span className="w-8" />
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+            <span>initializing pipeline…</span>
+          </div>
+        )}
+      </div>
+
+      {/* Progress bar */}
+      <div className="px-3 pb-2.5">
+        <div className="h-0.5 w-full bg-slate-800 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-blue-500 via-violet-500 to-emerald-500 rounded-full transition-all duration-1000"
+            style={{ width: `${Math.min(95, (elapsed / (isFollowUp ? 8 : 65)) * 100)}%` }}
+          />
+        </div>
+        <div className="flex justify-between mt-1">
+          <span className="text-[9px] text-slate-600 tracking-widest uppercase">
+            {isFollowUp ? 'follow-up analysis' : 'nl → sql → result'}
+          </span>
+          <span className="text-[9px] text-slate-600">
+            {active ? `${active.icon} ${active.service}` : '…'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const FOLLOWUP_PROGRESS_STEPS = [
   { icon: '🧠', label: 'Analyzing previous result…', color: 'text-indigo-600' },
@@ -614,6 +777,281 @@ function DataPreviewTable({ rows, maxHeight = 280 }: { rows: Record<string, unkn
   );
 }
 
+/* ─── Feedback: Yes / No buttons ──────────────────────────── */
+
+function FeedbackButtons({
+  onYes, onNo,
+}: { onYes: () => void; onNo: () => void }) {
+  return (
+    <div className="flex items-center gap-1.5 mt-1.5">
+      <span className="text-[10px] text-slate-400 mr-0.5">Was this helpful?</span>
+      <button
+        type="button"
+        onClick={onYes}
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-all"
+      >
+        <ThumbsUp className="h-3 w-3" /> Yes
+      </button>
+      <button
+        type="button"
+        onClick={onNo}
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-all"
+      >
+        <ThumbsDown className="h-3 w-3" /> No
+      </button>
+    </div>
+  );
+}
+
+/* ─── Feedback: Rejection flow with ChatGPT + Manual options ── */
+
+function ManualSQLPanel({
+  initialSql,
+  onUse,
+  onCancel,
+}: {
+  initialSql: string;
+  onUse: (sql: string) => void;
+  onCancel: () => void;
+}) {
+  const [sql, setSql] = useState(initialSql);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedTable, setSelectedTable] = useState<(typeof SAP_TABLES)[number] | null>(null);
+  const [columnLookup, setColumnLookup] = useState<Map<string, string[]>>(() => new Map());
+  const [schemaState, setSchemaState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+
+  useEffect(() => {
+    setSchemaState('loading');
+    dashboardApi.getAIAnalysisSchema()
+      .then((res) => {
+        setColumnLookup(buildSchemaColumnLookup(res.schema || {}));
+        setSchemaState('done');
+      })
+      .catch(() => setSchemaState('error'));
+  }, []);
+
+  const categories = Array.from(new Set(SAP_TABLES.map((t) => t.category)));
+  const filteredTables = selectedCategory
+    ? SAP_TABLES.filter((t) => t.category === selectedCategory)
+    : SAP_TABLES;
+
+  const selectedCols = selectedTable ? lookupTableColumns(columnLookup, selectedTable.name) : undefined;
+
+  return (
+    <div className="mt-2 rounded-xl border border-blue-200 bg-blue-50/60 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold text-blue-800 flex items-center gap-1.5">
+          <Pencil className="h-3 w-3" /> Enter SQL manually
+        </span>
+        <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-600">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Table browser */}
+      <div className="flex gap-2">
+        {/* Category + table list */}
+        <div className="w-40 flex-shrink-0 rounded-lg border border-slate-200 bg-white overflow-hidden">
+          <div className="px-2 py-1.5 border-b border-slate-100 flex items-center gap-1">
+            <Database className="h-3 w-3 text-blue-500" />
+            <span className="text-[10px] font-semibold text-slate-700">Tables</span>
+          </div>
+          {/* Category pills */}
+          <div className="flex flex-wrap gap-0.5 p-1.5 border-b border-slate-100 max-h-14 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => setSelectedCategory(null)}
+              className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${!selectedCategory ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600'}`}
+            >All</button>
+            {categories.map((cat) => (
+              <button key={cat} type="button"
+                onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${selectedCategory === cat ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-200 text-slate-600'}`}
+              >{cat}</button>
+            ))}
+          </div>
+          {/* Table list */}
+          <div className="overflow-y-auto max-h-48 p-1 space-y-0.5">
+            {filteredTables.map((tbl) => (
+              <button key={tbl.name} type="button"
+                onClick={() => setSelectedTable(selectedTable?.name === tbl.name ? null : tbl)}
+                className={`w-full text-left rounded px-1.5 py-1 transition-all ${
+                  selectedTable?.name === tbl.name ? 'bg-blue-100 text-blue-800' : 'hover:bg-slate-50 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-1">
+                  <Table2 className="h-2.5 w-2.5 text-slate-400 flex-shrink-0" />
+                  <span className="text-[10px] font-mono font-semibold truncate">{tbl.name}</span>
+                </div>
+                <p className="text-[9px] text-slate-400 ml-3.5 leading-tight truncate">{tbl.desc}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Columns panel */}
+        <div className="flex-1 rounded-lg border border-slate-200 bg-white overflow-hidden flex flex-col">
+          <div className="px-2 py-1.5 border-b border-slate-100 flex items-center gap-1">
+            <TableProperties className="h-3 w-3 text-slate-500" />
+            <span className="text-[10px] font-semibold text-slate-700 truncate">
+              {selectedTable ? `${selectedTable.name} columns` : 'Select a table'}
+            </span>
+          </div>
+          <div className="flex-1 overflow-y-auto max-h-56 p-2">
+            {!selectedTable && (
+              <p className="text-[10px] text-slate-400">Click a table to see its columns</p>
+            )}
+            {selectedTable && schemaState === 'loading' && (
+              <p className="text-[10px] text-slate-400">Loading columns…</p>
+            )}
+            {selectedTable && schemaState === 'error' && (
+              <p className="text-[10px] text-amber-600">Could not load schema</p>
+            )}
+            {selectedTable && schemaState === 'done' && !selectedCols?.length && (
+              <p className="text-[10px] text-slate-400">No columns found for {selectedTable.name}</p>
+            )}
+            {selectedTable && selectedCols && selectedCols.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {selectedCols.map((col) => (
+                  <button
+                    key={col}
+                    type="button"
+                    onClick={() => setSql((s) => s ? `${s}, "${col}"` : `"${col}"`)}
+                    title="Click to insert into SQL"
+                    className="text-[10px] font-mono text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded hover:bg-blue-100 transition-colors cursor-pointer"
+                  >
+                    {col}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* SQL textarea */}
+      <div>
+        <label className="text-[10px] font-semibold text-slate-600 mb-1 block">Your SQL (SELECT only):</label>
+        <textarea
+          value={sql}
+          onChange={(e) => setSql(e.target.value)}
+          rows={5}
+          className="w-full rounded-lg border border-slate-200 text-[11px] font-mono p-2 text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+          placeholder="SELECT ... FROM &quot;TABLE&quot; WHERE ... LIMIT 100;"
+          spellCheck={false}
+        />
+      </div>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel}
+          className="text-[11px] font-medium px-3 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all">
+          Cancel
+        </button>
+        <button type="button" onClick={() => sql.trim() && onUse(sql.trim())} disabled={!sql.trim()}
+          className="text-[11px] font-medium px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-all flex items-center gap-1.5">
+          <Check className="h-3 w-3" /> Use this SQL
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RejectionPanel({
+  feedback,
+  question,
+  onFetchChatGPT,
+  onPickManual,
+  onUseSuggestedSql,
+  onUseManualSql,
+  onUpdateManualSql,
+  onClose,
+}: {
+  feedback: MessageFeedbackInfo;
+  question: string;
+  onFetchChatGPT: () => void;
+  onPickManual: () => void;
+  onUseSuggestedSql: (sql: string) => void;
+  onUseManualSql: (sql: string) => void;
+  onUpdateManualSql: (sql: string) => void;
+  onClose: () => void;
+}) {
+  const { state, suggestedSql, manualSql, error } = feedback;
+
+  if (state === 'rejected_loading') {
+    return (
+      <div className="mt-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 flex items-center gap-2 text-[11px] text-amber-700">
+        <div className="h-3.5 w-3.5 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+        Asking ChatGPT to suggest a better SQL…
+      </div>
+    );
+  }
+
+  if (state === 'rejected_chatgpt' && suggestedSql) {
+    return (
+      <div className="mt-1.5 rounded-xl border border-purple-200 bg-purple-50/70 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold text-purple-800 flex items-center gap-1.5">
+            <Bot className="h-3 w-3" /> ChatGPT suggested this SQL:
+          </span>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <pre className="text-[10px] font-mono text-slate-800 bg-white border border-slate-200 rounded-lg p-2 overflow-auto max-h-48 whitespace-pre-wrap">
+          {suggestedSql}
+        </pre>
+        {error && <p className="text-[10px] text-red-600">{error}</p>}
+        <div className="flex gap-2 justify-end flex-wrap">
+          <button type="button" onClick={onPickManual}
+            className="text-[11px] font-medium px-2.5 py-1 rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50 transition-all flex items-center gap-1">
+            <Pencil className="h-3 w-3" /> Edit manually instead
+          </button>
+          <button type="button" onClick={() => onUseSuggestedSql(suggestedSql)}
+            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-all flex items-center gap-1.5">
+            <Check className="h-3 w-3" /> Use this SQL
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'rejected_manual') {
+    return (
+      <ManualSQLPanel
+        initialSql={manualSql || ''}
+        onUse={onUseManualSql}
+        onCancel={onClose}
+      />
+    );
+  }
+
+  // Default: show choice buttons (state === 'rejected' or unknown)
+  return (
+    <div className="mt-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold text-amber-800">SQL didn't give the right answer. What next?</span>
+        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {error && <p className="text-[10px] text-red-600">{error}</p>}
+      <div className="flex gap-2 flex-wrap">
+        <button type="button" onClick={onFetchChatGPT}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border border-purple-300 bg-white text-purple-700 hover:bg-purple-50 transition-all">
+          <Bot className="h-3.5 w-3.5" />
+          Ask ChatGPT for SQL
+        </button>
+        <button type="button" onClick={onPickManual}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border border-blue-300 bg-white text-blue-700 hover:bg-blue-50 transition-all">
+          <Pencil className="h-3.5 w-3.5" />
+          Enter SQL manually
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Chat Panel ─────────────────────────────────────────────── */
+
 function ChatPanel({
   section,
   messages,
@@ -630,6 +1068,13 @@ function ChatPanel({
   timeScope,
   setTimeScope,
   fullWidth = false,
+  onFeedbackYes,
+  onFeedbackNo,
+  onFetchChatGPTSql,
+  onUseSuggestedSql,
+  onUseManualSql,
+  onUpdateManualSql,
+  onDismissFeedback,
 }: {
   section: 'realtime' | 'historical';
   messages: Message[];
@@ -646,6 +1091,13 @@ function ChatPanel({
   timeScope: 'current' | 'historical' | 'both';
   setTimeScope: (s: 'current' | 'historical' | 'both') => void;
   fullWidth?: boolean;
+  onFeedbackYes?: (msgIndex: number) => void;
+  onFeedbackNo?: (msgIndex: number) => void;
+  onFetchChatGPTSql?: (msgIndex: number, question: string) => void;
+  onUseSuggestedSql?: (msgIndex: number, sql: string, source: 'chatgpt' | 'manual', question: string) => void;
+  onUseManualSql?: (msgIndex: number, sql: string, question: string) => void;
+  onUpdateManualSql?: (msgIndex: number, sql: string) => void;
+  onDismissFeedback?: (msgIndex: number) => void;
 }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -674,10 +1126,6 @@ function ChatPanel({
   );
   const hasCharts = messagesWithCharts.length > 0;
   const chartPanelBreakpoint = fullWidth ? 'md' : 'lg';
-  const effectiveSteps = queryMode === 'follow_up' ? FOLLOWUP_PROGRESS_STEPS : PROGRESS_STEPS;
-  const effectiveStepIdx = queryMode === 'follow_up'
-    ? (loadingElapsed < 2 ? 0 : 1)
-    : loadingStep;
 
   return (
     <div className="flex flex-col h-full">
@@ -716,144 +1164,158 @@ function ChatPanel({
                 <DomainExplorer onSelect={(q) => submit(q)} />
               </div>
             ) : (
-              messages.map((m, i) => (
-                <div key={i} className={`flex flex-col gap-0.5 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-                  <span className="text-[10px] font-mono text-slate-400 px-1">
-                    {m.role === 'user' ? 'YOU' : 'AI'}{m.ts ? ` · ${new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
-                  </span>
-                  <div className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words ${
-                    m.role === 'user'
-                      ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-tr-sm shadow-md'
-                      : 'bg-slate-50 border border-slate-200 text-slate-800 rounded-tl-sm'
-                  }`}>
-                    {m.role === 'user' ? (
-                      <div className="whitespace-pre-wrap">{m.content}</div>
-                    ) : (
-                      <div className="prose prose-sm max-w-none
-                        prose-headings:mt-3 prose-headings:mb-2 prose-headings:font-semibold prose-headings:text-slate-900
-                        prose-h3:text-base prose-h4:text-sm
-                        prose-p:my-1.5 prose-p:text-slate-700
-                        prose-strong:text-slate-900 prose-strong:font-bold prose-strong:bg-yellow-100 prose-strong:px-1 prose-strong:rounded
-                        prose-ul:my-2 prose-ul:ml-4 prose-li:my-0.5 prose-li:text-slate-700
-                        prose-ol:my-2 prose-ol:ml-4
-                        prose-code:text-xs prose-code:bg-slate-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-blue-700
-                        prose-pre:bg-slate-800 prose-pre:text-slate-100 prose-pre:rounded-lg prose-pre:p-3
-                        prose-blockquote:border-l-4 prose-blockquote:border-blue-500 prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-slate-600
-                        prose-table:text-xs
-                      ">
-                        <ReactMarkdown>{m.content}</ReactMarkdown>
+              messages.map((m, i) => {
+                /* Find the corresponding user question for this assistant message */
+                const questionForMsg = m.role === 'assistant'
+                  ? (messages.slice(0, i).reverse().find((x) => x.role === 'user')?.content ?? '')
+                  : '';
+
+                return (
+                  <div key={i} className={`flex flex-col gap-0.5 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <span className="text-[10px] font-mono text-slate-400 px-1">
+                      {m.role === 'user' ? 'YOU' : 'AI'}{m.ts ? ` · ${new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                    </span>
+                    <div className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words ${
+                      m.role === 'user'
+                        ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-tr-sm shadow-md'
+                        : 'bg-slate-50 border border-slate-200 text-slate-800 rounded-tl-sm'
+                    }`}>
+                      {m.role === 'user' ? (
+                        <div className="whitespace-pre-wrap">{m.content}</div>
+                      ) : (
+                        <div className="prose prose-sm max-w-none
+                          prose-headings:mt-3 prose-headings:mb-2 prose-headings:font-semibold prose-headings:text-slate-900
+                          prose-h3:text-base prose-h4:text-sm
+                          prose-p:my-1.5 prose-p:text-slate-700
+                          prose-strong:text-slate-900 prose-strong:font-bold prose-strong:bg-yellow-100 prose-strong:px-1 prose-strong:rounded
+                          prose-ul:my-2 prose-ul:ml-4 prose-li:my-0.5 prose-li:text-slate-700
+                          prose-ol:my-2 prose-ol:ml-4
+                          prose-code:text-xs prose-code:bg-slate-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-blue-700
+                          prose-pre:bg-slate-800 prose-pre:text-slate-100 prose-pre:rounded-lg prose-pre:p-3
+                          prose-blockquote:border-l-4 prose-blockquote:border-blue-500 prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-slate-600
+                          prose-table:text-xs
+                        ">
+                          <ReactMarkdown>{m.content}</ReactMarkdown>
+                        </div>
+                      )}
+                    </div>
+                    {m.role === 'assistant' && m.meta?.rows_preview && m.meta.rows_preview.length > 0 && (
+                      <div className="max-w-[92%] w-full">
+                        <DataPreviewTable rows={m.meta.rows_preview as Record<string, unknown>[]} />
+                      </div>
+                    )}
+                    {m.role === 'assistant' && m.meta && (
+                      <div className="max-w-[92%] mt-1 text-[10px] font-mono text-slate-400 px-1 space-y-0.5">
+                        {m.meta.period_info && (
+                          <div className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1 rounded-md mb-1">
+                            <CalendarRange className="h-3 w-3" />
+                            <span className="font-semibold">{m.meta.period_info}</span>
+                            {m.meta.date_range && (
+                              <span className="text-blue-600">
+                                ({m.meta.date_range.min_date} to {m.meta.date_range.max_date})
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div>
+                          {m.meta.action && <span>Action: {m.meta.action}</span>}
+                          {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
+                          {m.meta.adaptive_context?.query_profile?.kind && (
+                            <span> • Intent: {String(m.meta.adaptive_context.query_profile.kind)}</span>
+                          )}
+                          {m.meta.sql && <span> • SQL executed</span>}
+                          {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} preview rows</span>}
+                          {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
+                        </div>
+                        {m.meta.sql && (
+                          <details className="mt-0.5">
+                            <summary className="cursor-pointer text-[10px] text-blue-600 underline">
+                              View generated SQL
+                            </summary>
+                            <pre className="mt-1 max-h-40 overflow-auto text-[10px] bg-slate-900 text-slate-50 rounded p-2 whitespace-pre-wrap">
+                              {m.meta.sql}
+                            </pre>
+                          </details>
+                        )}
+                        <ValidationNotes validation={m.meta.validation} />
+                        {m.meta.charts_blocked_reason && (
+                          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
+                            Charts suppressed: {m.meta.charts_blocked_reason}
+                          </div>
+                        )}
+                        {m.meta.performance && (
+                          <div className="text-slate-500">
+                            ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
+                            {m.meta.performance.used_pattern && <span className="text-green-600"> • pattern-matched</span>}
+                            {m.meta.performance.used_cache && <span className="text-blue-600"> • cached</span>}
+                            {m.meta.performance.sql_execution_ms != null && (
+                              <span> • sql: {m.meta.performance.sql_execution_ms}ms</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {m.role === 'assistant' && m.meta?.charts && m.meta.charts.length > 0 && (
+                      <div className={`${chartPanelBreakpoint === 'md' ? 'md:hidden' : 'lg:hidden'} w-full mt-2 max-w-[92%]`}>
+                        <AIChartRenderer charts={m.meta.charts} />
+                      </div>
+                    )}
+
+                    {/* ── Feedback: Yes / No and rejection flow ── */}
+                    {m.role === 'assistant' && onFeedbackYes && onFeedbackNo && (
+                      <div className="max-w-[92%] w-full px-1">
+                        {/* Approved badge */}
+                        {m.feedback?.state === 'approved' && (
+                          <div className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+                            <Check className="h-3 w-3" /> SQL saved — will be reused for similar questions
+                            {m.feedback.appliedSql && (
+                              <button type="button" onClick={() => {}} className="ml-1 text-emerald-500 hover:text-emerald-700">
+                                <Code2 className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* SQL used badge */}
+                        {m.feedback?.state === 'sql_used' && (
+                          <div className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-full">
+                            <Check className="h-3 w-3" /> SQL saved and applied — will be reused next time
+                          </div>
+                        )}
+
+                        {/* Pending: show yes/no buttons */}
+                        {(!m.feedback || m.feedback.state === 'pending') && (
+                          <FeedbackButtons
+                            onYes={() => onFeedbackYes(i)}
+                            onNo={() => onFeedbackNo(i)}
+                          />
+                        )}
+
+                        {/* Rejection flow */}
+                        {m.feedback && ['rejected', 'rejected_loading', 'rejected_chatgpt', 'rejected_manual'].includes(m.feedback.state) && onFetchChatGPTSql && onUseSuggestedSql && onUseManualSql && onUpdateManualSql && onDismissFeedback && (
+                          <RejectionPanel
+                            feedback={m.feedback}
+                            question={questionForMsg}
+                            onFetchChatGPT={() => onFetchChatGPTSql(i, questionForMsg)}
+                            onPickManual={() => onDismissFeedback(i)}
+                            onUseSuggestedSql={(sql) => onUseSuggestedSql(i, sql, 'chatgpt', questionForMsg)}
+                            onUseManualSql={(sql) => onUseManualSql(i, sql, questionForMsg)}
+                            onUpdateManualSql={(sql) => onUpdateManualSql(i, sql)}
+                            onClose={() => onDismissFeedback(i)}
+                          />
+                        )}
                       </div>
                     )}
                   </div>
-                  {m.role === 'assistant' && m.meta?.rows_preview && m.meta.rows_preview.length > 0 && (
-                    <div className="max-w-[92%] w-full">
-                      <DataPreviewTable rows={m.meta.rows_preview as Record<string, unknown>[]} />
-                    </div>
-                  )}
-                  {m.role === 'assistant' && m.meta && (
-                    <div className="max-w-[92%] mt-1 text-[10px] font-mono text-slate-400 px-1 space-y-0.5">
-                      {m.meta.period_info && (
-                        <div className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1 rounded-md mb-1">
-                          <CalendarRange className="h-3 w-3" />
-                          <span className="font-semibold">{m.meta.period_info}</span>
-                          {m.meta.date_range && (
-                            <span className="text-blue-600">
-                              ({m.meta.date_range.min_date} to {m.meta.date_range.max_date})
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <div>
-                        {m.meta.action && <span>Action: {m.meta.action}</span>}
-                        {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
-                        {m.meta.adaptive_context?.query_profile?.kind && (
-                          <span> • Intent: {String(m.meta.adaptive_context.query_profile.kind)}</span>
-                        )}
-                        {m.meta.sql && <span> • SQL executed</span>}
-                        {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} preview rows</span>}
-                        {m.meta.charts && <span> • {m.meta.charts.length} chart(s)</span>}
-                      </div>
-                      {m.meta.sql && (
-                        <details className="mt-0.5">
-                          <summary className="cursor-pointer text-[10px] text-blue-600 underline">
-                            View generated SQL
-                          </summary>
-                          <pre className="mt-1 max-h-40 overflow-auto text-[10px] bg-slate-900 text-slate-50 rounded p-2 whitespace-pre-wrap">
-                            {m.meta.sql}
-                          </pre>
-                        </details>
-                      )}
-                      <ValidationNotes validation={m.meta.validation} />
-                      {m.meta.charts_blocked_reason && (
-                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
-                          Charts suppressed: {m.meta.charts_blocked_reason}
-                        </div>
-                      )}
-                      {m.meta.performance && (
-                        <div className="text-slate-500">
-                          ⏱ {(m.meta.performance.total_ms || 0) / 1000}s
-                          {m.meta.performance.used_pattern && <span className="text-green-600"> • pattern-matched</span>}
-                          {m.meta.performance.used_cache && <span className="text-blue-600"> • cached</span>}
-                          {m.meta.performance.sql_execution_ms != null && (
-                            <span> • sql: {m.meta.performance.sql_execution_ms}ms</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {m.role === 'assistant' && m.meta?.charts && m.meta.charts.length > 0 && (
-                    <div className={`${chartPanelBreakpoint === 'md' ? 'md:hidden' : 'lg:hidden'} w-full mt-2 max-w-[92%]`}>
-                      <AIChartRenderer charts={m.meta.charts} />
-                    </div>
-                  )}
-                </div>
-              ))
+                );
+              })
             )}
             {loading && (
-              <div className="flex flex-col gap-2 my-1">
-                <div className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-3 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600">AI Processing</span>
-                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                      {loadingElapsed.toFixed(1)}s
-                    </span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {effectiveSteps.map((step, si) => {
-                      const isDone = si < effectiveStepIdx;
-                      const isActive = si === effectiveStepIdx;
-                      return (
-                        <div key={si} className={`flex items-center gap-2 text-xs transition-all duration-300 ${
-                          isDone ? 'opacity-40' : isActive ? 'opacity-100' : 'opacity-20'
-                        }`}>
-                          <span className="text-base leading-none">{isDone ? '✅' : step.icon}</span>
-                          <span className={`font-medium ${isActive ? step.color : 'text-slate-500'}`}>
-                            {step.label}
-                          </span>
-                          {isActive && (
-                            <span className="ml-auto flex gap-0.5">
-                              {[0, 1, 2].map((j) => (
-                                <span key={j} className="w-1 h-1 rounded-full bg-blue-400 animate-bounce"
-                                  style={{ animationDelay: `${j * 150}ms` }} />
-                              ))}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-2 h-1 w-full bg-blue-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-full transition-all duration-500"
-                      style={{ width: `${Math.min(100, ((effectiveStepIdx + 1) / effectiveSteps.length) * 100)}%` }}
-                    />
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-1.5 italic">
-                    {queryMode === 'follow_up'
-                      ? 'Follow-ups analyze the last result — no new database query.'
-                      : 'Complex queries may take 30–90s. Results appear when ready.'}
-                  </p>
-                </div>
+              <div className="my-1">
+                <AIProgressLog
+                  elapsed={loadingElapsed}
+                  isFollowUp={queryMode === 'follow_up'}
+                />
               </div>
             )}
             <div ref={bottomRef} />
@@ -1555,6 +2017,204 @@ export default function DashboardAIAnalysis() {
     }
   };
 
+  /* ── Feedback helpers ───────────────────────────────────── */
+
+  /**
+   * Update the feedback field of a specific message in either panel.
+   * Identifies the message by its array index.
+   */
+  const updateMsgFeedback = useCallback(
+    (section: 'realtime' | 'historical', msgIndex: number, update: Partial<MessageFeedbackInfo>) => {
+      const setMsgs = section === 'realtime' ? setRealtimeMessages : setHistoricalMessages;
+      setMsgs((prev) =>
+        prev.map((m, i) =>
+          i === msgIndex
+            ? { ...m, feedback: { ...(m.feedback ?? { state: 'pending' }), ...update } as MessageFeedbackInfo }
+            : m,
+        ),
+      );
+    },
+    [],
+  );
+
+  /**
+   * User clicked Yes → store the SQL in ai_query_memory for future reuse.
+   */
+  const handleFeedbackYes = useCallback(
+    async (section: 'realtime' | 'historical', msgIndex: number) => {
+      const msgs = section === 'realtime' ? realtimeMessages : historicalMessages;
+      const msg = msgs[msgIndex];
+      if (!msg || msg.role !== 'assistant') return;
+
+      const sql = msg.meta?.sql;
+      const question = msgs.slice(0, msgIndex).reverse().find((m) => m.role === 'user')?.content ?? '';
+
+      updateMsgFeedback(section, msgIndex, { state: 'approved', appliedSql: sql });
+
+      if (sql && question) {
+        try {
+          await dashboardApi.postAIAnalysisStoreQuery(question, sql, timeScope, 'assistant_sql');
+        } catch {
+          /* silently ignore — badge still shows */
+        }
+      }
+    },
+    [realtimeMessages, historicalMessages, timeScope, updateMsgFeedback],
+  );
+
+  /**
+   * User clicked No → show the rejection panel (choice between ChatGPT and manual).
+   * Uses a special 'rejected' state that triggers RejectionPanel's default branch.
+   */
+  const handleFeedbackNo = useCallback(
+    (section: 'realtime' | 'historical', msgIndex: number) => {
+      const setMsgs = section === 'realtime' ? setRealtimeMessages : setHistoricalMessages;
+      setMsgs((prev) =>
+        prev.map((m, i) =>
+          i === msgIndex
+            ? { ...m, feedback: { state: 'rejected' as const, error: undefined } }
+            : m,
+        ),
+      );
+    },
+    [],
+  );
+
+  /**
+   * Fetch a ChatGPT-suggested SQL for the question.
+   */
+  const handleFetchChatGPTSql = useCallback(
+    async (section: 'realtime' | 'historical', msgIndex: number, question: string) => {
+      updateMsgFeedback(section, msgIndex, { state: 'rejected_loading', error: undefined });
+      try {
+        const res = await dashboardApi.postAIAnalysisSuggestSql(question, timeScope);
+        const suggestedSql: string = res?.sql || res?.proposed_sql || '';
+        if (!suggestedSql) throw new Error('No SQL returned');
+        updateMsgFeedback(section, msgIndex, { state: 'rejected_chatgpt', suggestedSql });
+      } catch (e: any) {
+        updateMsgFeedback(section, msgIndex, {
+          state: 'rejected' as any,
+          error: e?.message || 'Failed to get suggestion from ChatGPT',
+        });
+      }
+    },
+    [timeScope, updateMsgFeedback],
+  );
+
+  /**
+   * Switch to the manual SQL entry mode.
+   */
+  const handlePickManualSQL = useCallback(
+    (section: 'realtime' | 'historical', msgIndex: number) => {
+      updateMsgFeedback(section, msgIndex, { state: 'rejected_manual', manualSql: '' });
+    },
+    [updateMsgFeedback],
+  );
+
+  /**
+   * User typed something in the manual SQL textarea — keep it in state.
+   */
+  const handleUpdateManualSql = useCallback(
+    (section: 'realtime' | 'historical', msgIndex: number, sql: string) => {
+      updateMsgFeedback(section, msgIndex, { manualSql: sql });
+    },
+    [updateMsgFeedback],
+  );
+
+  /**
+   * User clicked "Use this SQL" (from either ChatGPT suggestion or manual entry).
+   * Executes the SQL via the adaptive query API and adds a real result message.
+   */
+  const handleUseSuggestedSql = useCallback(
+    async (
+      section: 'realtime' | 'historical',
+      msgIndex: number,
+      sql: string,
+      source: 'chatgpt' | 'manual',
+      question: string,
+    ) => {
+      // Mark the original message as having its SQL overridden (not saved yet)
+      updateMsgFeedback(section, msgIndex, { state: 'sql_used', appliedSql: sql });
+
+      // Execute the provided SQL directly via the overrideSql fast path
+      const setLoading = section === 'realtime' ? setRealtimeLoading : setHistoricalLoading;
+      const setMsgs = section === 'realtime' ? setRealtimeMessages : setHistoricalMessages;
+
+      setError(null);
+      // Add a user message showing what's happening
+      setMsgs((prev) => [...prev, {
+        role: 'user',
+        content: `▶ Running custom SQL for: ${question}`,
+        section,
+        ts: Date.now(),
+      }]);
+      setLoading(true);
+
+      try {
+        const res = await dashboardApi.postAdaptiveQuery({
+          question,
+          overrideSql: sql,
+          tableHint: null,
+          contextData: null,
+        });
+
+        const reply = res?.summary || `Executed custom SQL. Returned ${res?.rowCount ?? 0} row(s).`;
+        const meta: AiAnalysisMeta = {
+          action: 'custom_sql',
+          sql: res?.sql ?? sql,
+          rows_preview: Array.isArray(res?.data) ? res.data : undefined,
+          charts: res?.charts,
+        };
+
+        // Add result — with fresh 'pending' feedback so user can click Yes to save this SQL
+        setMsgs((prev) => [...prev, {
+          role: 'assistant',
+          content: reply,
+          meta,
+          section,
+          ts: Date.now(),
+          // No feedback field — defaults to showing yes/no buttons
+          // When user clicks Yes, handleFeedbackYes will save the SQL from meta.sql
+        }]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to execute custom SQL.';
+        setError(msg);
+        setMsgs((prev) => [...prev, {
+          role: 'assistant',
+          content: `Error running custom SQL: ${msg}`,
+          section,
+          ts: Date.now(),
+        }]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [setRealtimeMessages, setHistoricalMessages, setRealtimeLoading, setHistoricalLoading,
+     setError, updateMsgFeedback],
+  );
+
+  /**
+   * "Enter SQL manually" or "Edit manually instead" — switches to the manual SQL entry panel.
+   * When coming from ChatGPT suggestion, pre-fills the textarea with the suggested SQL.
+   */
+  const handleDismissFeedback = useCallback(
+    (section: 'realtime' | 'historical', msgIndex: number) => {
+      const msgs = section === 'realtime' ? realtimeMessages : historicalMessages;
+      const fb = msgs[msgIndex]?.feedback;
+      if (fb?.state === 'rejected_chatgpt') {
+        // "Edit manually instead" — pre-fill textarea with ChatGPT SQL
+        updateMsgFeedback(section, msgIndex, { state: 'rejected_manual', manualSql: fb.suggestedSql ?? '' });
+      } else if (fb?.state === 'rejected') {
+        // "Enter SQL manually" from initial choice panel
+        updateMsgFeedback(section, msgIndex, { state: 'rejected_manual', manualSql: '' });
+      } else {
+        // X button / cancel → back to pending (yes/no buttons)
+        updateMsgFeedback(section, msgIndex, { state: 'pending' });
+      }
+    },
+    [realtimeMessages, historicalMessages, updateMsgFeedback],
+  );
+
   /* ── Free chat with ChatGPT ──────────────────────────────── */
   const sendChatMessage = async (text: string) => {
     const trimmed = text.trim();
@@ -1860,6 +2520,13 @@ export default function DashboardAIAnalysis() {
                   timeScope={timeScope}
                   setTimeScope={setTimeScope}
                   fullWidth
+                  onFeedbackYes={(idx) => void handleFeedbackYes('realtime', idx)}
+                  onFeedbackNo={(idx) => handleFeedbackNo('realtime', idx)}
+                  onFetchChatGPTSql={(idx, q) => void handleFetchChatGPTSql('realtime', idx, q)}
+                  onUseSuggestedSql={(idx, sql, src, q) => void handleUseSuggestedSql('realtime', idx, sql, src, q)}
+                  onUseManualSql={(idx, sql, q) => void handleUseSuggestedSql('realtime', idx, sql, 'manual', q)}
+                  onUpdateManualSql={(idx, sql) => handleUpdateManualSql('realtime', idx, sql)}
+                  onDismissFeedback={(idx) => handleDismissFeedback('realtime', idx)}
                 />
               </div>
             </div>
@@ -2035,6 +2702,13 @@ export default function DashboardAIAnalysis() {
                     setQueryMode={setQueryMode}
                     timeScope={timeScope}
                     setTimeScope={setTimeScope}
+                    onFeedbackYes={(idx) => void handleFeedbackYes('historical', idx)}
+                    onFeedbackNo={(idx) => handleFeedbackNo('historical', idx)}
+                    onFetchChatGPTSql={(idx, q) => void handleFetchChatGPTSql('historical', idx, q)}
+                    onUseSuggestedSql={(idx, sql, src, q) => void handleUseSuggestedSql('historical', idx, sql, src, q)}
+                    onUseManualSql={(idx, sql, q) => void handleUseSuggestedSql('historical', idx, sql, 'manual', q)}
+                    onUpdateManualSql={(idx, sql) => handleUpdateManualSql('historical', idx, sql)}
+                    onDismissFeedback={(idx) => handleDismissFeedback('historical', idx)}
                   />
                 </div>
               </div>

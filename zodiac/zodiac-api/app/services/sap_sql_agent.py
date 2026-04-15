@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import time
+import difflib
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -35,6 +36,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from ..config.config import OPENAI_API_KEY
+from .schema_index import build_canonical_schema_index
 
 logger = logging.getLogger("zodiac-api.sap_sql_agent")
 
@@ -2965,11 +2967,14 @@ def run_adaptive_sap_sql_agent(
         _ensure_having_for_aggregates(spec, question)
         _auto_enrich_spec(spec, question)
 
-        is_valid, validation_errors = validate_sql_spec(spec)
-        if not is_valid and validation_errors:
-            spec = refine_query_on_error(client, question, "; ".join(validation_errors), spec)
-            is_valid, _ = validate_sql_spec(spec)
+        spec, is_valid, validation_errors = _repair_json_spec_with_schema_hints(
+            client, question, spec, log_prefix="run_adaptive_sap_sql_agent"
+        )
         if not is_valid:
+            logger.warning(
+                "run_adaptive_sap_sql_agent: spec invalid after refinement — skipping: %s",
+                validation_errors,
+            )
             return None
 
         sql = _json_to_sql_postgres(spec, column_mappings)
@@ -2983,10 +2988,11 @@ def run_adaptive_sap_sql_agent(
         # Only broaden broad exploratory questions. If the user asked for a specific
         # year/date/entity, an empty result is a valid answer and should not be rewritten.
         if _should_refine_after_zero_rows(question, spec):
+            failure_category = _categorize_sql_failure("returned no rows")
             spec = refine_query_on_error(
                 client,
                 question,
-                "Query returned no rows. Simplify joins or remove strict filters; use all periods if needed.",
+                f"[failure_category={failure_category}] Query returned no rows. Simplify joins or remove strict filters; use all periods if needed.",
                 spec,
             )
             if spec:
@@ -3908,18 +3914,36 @@ def _json_to_sql_postgres(json_spec: Dict[str, Any], column_mappings: Dict[str, 
     return "\n".join(sql_lines) + ";"
 
 
-def _run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
+def _run_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, Any]]:
     """Execute SQL and return rows. Raises exception on failure so the retry loop
     receives the REAL Postgres error (e.g. 'column X does not exist') instead of
-    a misleading 'no rows' message that causes the LLM to generate a wrong refinement."""
+    a misleading 'no rows' message that causes the LLM to generate a wrong refinement.
+
+    Applies full SQL sanitization before execution:
+    - Converts SAP numeric TEXT columns (hsl, dmbtr, wrbtr, etc.) to CAST(NULLIF(TRIM(...)) AS NUMERIC)
+      when used in aggregate functions — prevents 'function sum(text) does not exist'.
+    - Expands HAVING alias references (PostgreSQL rejects SELECT aliases in HAVING).
+    - Converts :: casts to ANSI CAST() for SQLAlchemy compatibility.
+    """
     if not sql or not sql.strip():
         return []
-    # Intentionally NOT catching exceptions here.  Callers (run_sap_sql_agent) have a
-    # try/except that captures the real error message and passes it to refine_query_on_error.
-    #
-    from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution
+    # Intentionally NOT catching exceptions here — callers have a try/except.
+    from .sql_generation_sanitizers import (
+        sanitize_generated_sap_sql,
+        prepare_sql_for_sqlalchemy_text_execution,
+    )
 
-    safe_sql = prepare_sql_for_sqlalchemy_text_execution(sql)
+    # Apply all semantic sanitizers (gjahr, netwr, hsl/dmbtr/all numeric cols, HAVING alias fix)
+    sanitized = sanitize_generated_sap_sql(sql, question or None)
+    # Then handle SQLAlchemy-specific :: → CAST conversion and :limit placeholders
+    safe_sql = prepare_sql_for_sqlalchemy_text_execution(sanitized)
+
+    # Recover from any aborted transaction before executing
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
     result = db.execute(text(safe_sql))
     rows = result.fetchall()
     keys = result.keys()
@@ -4037,7 +4061,7 @@ def validate_sql_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
     Returns:
         Tuple of (is_valid, list_of_errors)
     """
-    errors = []
+    errors: List[str] = []
     
     # Check basic structure
     if not spec:
@@ -4056,11 +4080,49 @@ def validate_sql_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
     # Validate columns reference existing tables (case-insensitive: LLM may mix VBRK/vbrk)
     table_names = {t.get("name") for t in tables if isinstance(t, dict) and t.get("name")}
     table_names_lower = {(n or "").lower() for n in table_names}
+    canonical_index = build_canonical_schema_index(include_non_sap=True)
+    schema_cols = canonical_index.get_table_columns_map()
+
+    def _suggest_table(name: str) -> str:
+        if not name:
+            return ""
+        candidates = list(schema_cols.keys())
+        close = difflib.get_close_matches(name, candidates, n=1, cutoff=0.72)
+        if close:
+            return f" Did you mean '{close[0]}'?"
+        return ""
+
+    def _table_cols(table_name: str) -> List[str]:
+        resolved = canonical_index.resolve_table_name(table_name) or table_name
+        return schema_cols.get(resolved, [])
+
+    def _suggest_column(table_name: str, col_name: str) -> str:
+        close = canonical_index.suggest_similar_columns(table_name, str(col_name), n=3)
+        if close:
+            return f" Did you mean: {', '.join(close)}?"
+        return ""
+
+    normalized_table_names = set()
+    for n in table_names:
+        if not n:
+            continue
+        resolved = canonical_index.resolve_table_name(str(n))
+        normalized_table_names.add(resolved or str(n))
+
     for col in columns:
         if isinstance(col, dict):
             col_table = col.get("table")
+            col_name = str(col.get("name") or "").strip()
             if col_table and (col_table not in table_names) and (col_table.lower() not in table_names_lower):
-                errors.append(f"Column references unknown table: {col_table}")
+                errors.append(f"Column references unknown table: {col_table}.{_suggest_table(str(col_table))}")
+                continue
+            if col_table and col_name:
+                resolved_table = canonical_index.resolve_table_name(str(col_table)) or str(col_table)
+                valid_cols = _table_cols(resolved_table)
+                if valid_cols and col_name not in valid_cols and col_name.lower() not in {c.lower() for c in valid_cols}:
+                    errors.append(
+                        f"Unknown column '{col_name}' in table '{resolved_table}'.{_suggest_column(resolved_table, col_name)}"
+                    )
 
     # Validate joins reference existing tables (case-insensitive)
     joins = spec.get("joins", [])
@@ -4068,13 +4130,120 @@ def validate_sql_spec(spec: Dict[str, Any]) -> Tuple[bool, List[str]]:
         if isinstance(j, dict):
             left = j.get("left")
             right = j.get("right")
+            on_expr = str(j.get("on") or "")
             if left and (left not in table_names) and (left.lower() not in table_names_lower):
-                errors.append(f"Join references unknown left table: {left}")
+                errors.append(f"Join references unknown left table: {left}.{_suggest_table(str(left))}")
             if right and (right not in table_names) and (right.lower() not in table_names_lower):
-                errors.append(f"Join references unknown right table: {right}")
+                errors.append(f"Join references unknown right table: {right}.{_suggest_table(str(right))}")
+            # Validate table.column references inside join condition
+            for jt, jc in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b", on_expr):
+                resolved = canonical_index.resolve_table_name(jt) or jt
+                cols = _table_cols(resolved)
+                if cols and jc not in cols and jc.lower() not in {x.lower() for x in cols}:
+                    errors.append(f"join uses unknown column '{resolved}.{jc}'.{_suggest_column(resolved, jc)}")
+
+    # Validate group_by/order_by/filter references
+    for gb in spec.get("group_by", []) or []:
+        if not isinstance(gb, dict):
+            continue
+        t = str(gb.get("table") or "").strip()
+        c = str(gb.get("column") or "").strip()
+        if not t or not c:
+            continue
+        resolved = canonical_index.resolve_table_name(t) or t
+        cols = _table_cols(resolved)
+        if cols and c not in cols and c.lower() not in {x.lower() for x in cols}:
+            errors.append(f"group_by uses unknown column '{resolved}.{c}'.{_suggest_column(resolved, c)}")
+
+    for ob in spec.get("order_by", []) or []:
+        if not isinstance(ob, dict):
+            continue
+        t = str(ob.get("table") or "").strip()
+        c = str(ob.get("column") or "").strip()
+        if not t or not c:
+            continue
+        resolved = canonical_index.resolve_table_name(t) or t
+        cols = _table_cols(resolved)
+        if cols and c not in cols and c.lower() not in {x.lower() for x in cols}:
+            errors.append(f"order_by uses unknown column '{resolved}.{c}'.{_suggest_column(resolved, c)}")
+
+    for f in spec.get("filters", []) or []:
+        if not isinstance(f, dict):
+            continue
+        lhs = str(f.get("lhs") or "").strip()
+        if "." not in lhs:
+            continue
+        t, c = lhs.split(".", 1)
+        resolved = canonical_index.resolve_table_name(t) or t
+        cols = _table_cols(resolved)
+        c_clean = c.strip().strip('"')
+        if cols and c_clean not in cols and c_clean.lower() not in {x.lower() for x in cols}:
+            errors.append(f"filter uses unknown column '{resolved}.{c_clean}'.{_suggest_column(resolved, c_clean)}")
     
     is_valid = len(errors) == 0
     return is_valid, errors
+
+
+def _categorize_sql_failure(error_text: str) -> str:
+    txt = (error_text or "").lower()
+    if "column" in txt and "does not exist" in txt:
+        return "unknown_column"
+    if "relation" in txt and "does not exist" in txt:
+        return "unknown_table"
+    if "join" in txt or "ambiguous" in txt:
+        return "join_missing"
+    if "timeout" in txt or "canceling statement due to statement timeout" in txt:
+        return "timeout"
+    if "no rows" in txt or "returned no rows" in txt:
+        return "empty_result"
+    return "generic_sql_error"
+
+
+def _repair_json_spec_with_schema_hints(
+    client: Any,
+    question: str,
+    spec: Dict[str, Any],
+    *,
+    log_prefix: str = "sap_sql_agent",
+) -> Tuple[Dict[str, Any], bool, List[str]]:
+    """
+    validate_sql_spec → up to two LLM repairs; second repair injects the same
+    tables_columns.csv–backed ``build_schema_context`` excerpt used for NL prompts.
+    """
+    is_valid, validation_errors = validate_sql_spec(spec)
+    if is_valid:
+        return spec, True, []
+    if not validation_errors:
+        return spec, False, validation_errors
+    logger.warning("%s: invalid SQL spec: %s", log_prefix, validation_errors)
+    if len(validation_errors) < 12:
+        logger.info("%s: attempting first spec refinement...", log_prefix)
+        spec = refine_query_on_error(client, question, ", ".join(validation_errors), spec)
+        is_valid, validation_errors = validate_sql_spec(spec)
+    if not is_valid and validation_errors:
+        try:
+            from .schema_context_builder import build_schema_context
+
+            hint_block = build_schema_context(
+                question=question,
+                max_tables=14,
+                max_cols_per_table=28,
+            )
+        except Exception as _hint_err:
+            logger.debug("%s: schema hint block failed: %s", log_prefix, _hint_err)
+            hint_block = ""
+        err_blob = "\n".join(str(e) for e in validation_errors[:14])
+        refine_msg = (
+            "The JSON specification is still INVALID after the first fix. "
+            "Repair every error below. Use ONLY table and column names that appear in the catalog excerpt.\n\n"
+            f"Validation errors:\n{err_blob}"
+        )
+        if hint_block:
+            refine_msg += "\n\nCatalog excerpt (authoritative for identifiers):\n" + hint_block[:7500]
+        logger.info("%s: second refinement pass with schema catalog excerpt...", log_prefix)
+        spec = refine_query_on_error(client, question, refine_msg, spec)
+        is_valid, validation_errors = validate_sql_spec(spec)
+    return spec, is_valid, validation_errors
 
 
 def refine_query_on_error(
@@ -4472,16 +4641,16 @@ def run_sap_sql_agent(
         _ensure_having_for_aggregates(spec, question)
         _auto_enrich_spec(spec, question)  # enforce: currency, date/period, material name
 
-        # Validate specification
-        is_valid, validation_errors = validate_sql_spec(spec)
+        spec, is_valid, validation_errors = _repair_json_spec_with_schema_hints(
+            client, question, spec, log_prefix="sap_sql_agent"
+        )
         if not is_valid:
-            logger.warning(f"Invalid SQL spec: {validation_errors}")
-            # Try to auto-fix common issues
-            if validation_errors and len(validation_errors) < 5:
-                logger.info("Attempting to refine specification...")
-                spec = refine_query_on_error(client, question, ", ".join(validation_errors), spec)
-                is_valid, validation_errors = validate_sql_spec(spec)
-        
+            logger.warning(
+                "sap_sql_agent: spec still invalid after refinement — skipping execution: %s",
+                validation_errors,
+            )
+            return None
+
         # Retry loop for SQL execution
         rows: List[Dict[str, Any]] = []
         sql = ""
@@ -4489,7 +4658,7 @@ def run_sap_sql_agent(
             try:
                 sql = _json_to_sql_postgres(spec, column_mappings)
                 logger.info(f"📝 Generated SQL:\n{sql}")
-                rows = _run_sql(db, sql)
+                rows = _run_sql(db, sql, question=question)
 
                 if rows:
                     logger.info(f"✅ SQL returned {len(rows)} rows")
@@ -4517,6 +4686,7 @@ def run_sap_sql_agent(
 
             except Exception as sql_err:
                 last_error = str(sql_err)
+                failure_category = _categorize_sql_failure(last_error)
                 logger.warning(f"SQL execution failed (attempt {attempt + 1}/{max_retries + 1}): {last_error}")
                 
                 if attempt < max_retries:
@@ -4525,7 +4695,12 @@ def run_sap_sql_agent(
                     except Exception:
                         pass
                     logger.info("Refining query specification...")
-                    spec = refine_query_on_error(client, question, last_error, spec)
+                    spec = refine_query_on_error(
+                        client,
+                        question,
+                        f"[failure_category={failure_category}] {last_error}",
+                        spec,
+                    )
                     attempt += 1
                 else:
                     # Max retries reached

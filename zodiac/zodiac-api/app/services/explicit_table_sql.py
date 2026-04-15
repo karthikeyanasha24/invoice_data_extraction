@@ -33,6 +33,10 @@ _TABLE_STOPWORDS: Set[str] = {
     "between", "having", "group", "order", "limit", "case", "null", "true",
     "false", "like", "ilike", "inner", "left", "right", "full", "outer", "cross",
     "select", "distinct", "count", "avg", "min", "max", "asc", "desc",
+    # Generic catalog-language words used in natural questions (not actual table identifiers)
+    "invoice", "invoices", "vendor", "vendors", "customer", "customers",
+    "material", "materials", "currency", "amount", "amounts", "tax",
+    "app", "table", "tables",
 }
 
 # Uppercase tokens that look like SAP names but are SQL keywords / common English.

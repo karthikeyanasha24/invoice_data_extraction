@@ -14,6 +14,23 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _SEMANTIC_DICT: Optional[Dict[str, Any]] = None
+_TERM_SYNONYMS: Dict[str, List[str]] = {
+    "profit_center": ["profit center", "prctr", "profit centre"],
+    "invoice_amount": ["invoice amount", "billing amount", "net value", "netwr", "value in document currency"],
+    "customer": ["customer", "client", "buyer", "sold to", "kunnr"],
+    "vendor": ["vendor", "supplier", "payee", "lifnr"],
+    "material": ["material", "product", "item", "sku", "matnr"],
+    "country": ["country", "land", "land1", "nation"],
+    "delivery": ["delivery", "shipment", "goods issue", "lips", "likp"],
+    "industry": ["industry", "sector", "brsch", "business sector"],
+    "year_trend": ["year", "trend", "yearly", "annual", "per year", "gjahr"],
+    "plant": ["plant", "werks", "site"],
+    "currency": ["currency", "waers", "waerk", "monetary"],
+    "vendor_invoice": ["vendor invoice", "miro", "logistics invoice", "rbkp", "rseg"],
+    "goods_movement": ["goods movement", "goods issue", "material document", "mkpf"],
+    "ledger_actuals": ["ledger", "gl actual", "universal journal", "acfina", "faglflexa"],
+    "payment_terms": ["payment terms", "zterm", "terms of payment"],
+}
 
 
 def load_semantic_dictionary() -> Dict[str, Any]:
@@ -43,15 +60,20 @@ def resolve_metric(question: str) -> Optional[Tuple[str, str, str, str]]:
         return None
     data = load_semantic_dictionary()
     metrics = data.get("metrics") or {}
+    q_expanded = q
+    for terms in _TERM_SYNONYMS.values():
+        for term in terms:
+            if term in q:
+                q_expanded += f" {term}"
     for key, m in metrics.items():
         table = (m.get("table") or "").strip()
         column = (m.get("column") or "").strip()
         agg = (m.get("aggregation") or "SUM").strip().upper()
         aliases = m.get("aliases") or []
         for alias in aliases:
-            if alias.lower() in q or q in alias.lower():
+            if alias.lower() in q_expanded or q_expanded in alias.lower():
                 return (key, table, column, agg)
-        if key.replace("_", " ").lower() in q:
+        if key.replace("_", " ").lower() in q_expanded:
             return (key, table, column, agg)
     return None
 

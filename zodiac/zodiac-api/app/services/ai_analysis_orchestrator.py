@@ -76,6 +76,7 @@ class OrchestratorResult:
     # Andy's training loop: when LLM fails, ChatGPT proposes SQL → user approves → store
     needs_approval: bool = False
     proposed_sql: Optional[str] = None
+    query_telemetry: Optional[Dict[str, Any]] = None
 
 
 def _get_client(api_key: str) -> OpenAI:
@@ -3172,4 +3173,11 @@ def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
         logger.info("orchestrator_payload: sql_path_reason=%s", spr)
     elif payload.get("performance"):
         logger.debug("Performance data: %s", payload["performance"])
+    if not payload.get("query_telemetry"):
+        payload["query_telemetry"] = {
+            "latency_ms": (payload.get("performance") or {}).get("total_ms"),
+            "sql_path_reason": spr,
+            "action": payload.get("action"),
+            "status": "ok" if payload.get("action") != "error" else "error",
+        }
     return payload

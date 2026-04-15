@@ -1814,6 +1814,7 @@ export const dashboardApi = {
             previousSQL?: string;
             data?: any[];
         } | null;
+        overrideSql?: string | null;
     }) => {
         try {
             const response = await api.post('/api/query/adaptive', body);

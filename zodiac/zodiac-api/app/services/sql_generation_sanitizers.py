@@ -422,11 +422,325 @@ def sanitize_netwr_sql(sql: str) -> str:
     return sql
 
 
-def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
-    """Apply gjahr then netwr rewrites (order matters: gjahr first), then optional FKDAT year inject."""
+# ── SAP amount columns stored as TEXT that need CAST for aggregate functions ──
+# These are the known SAP columns in this PostgreSQL database that are stored as
+# TEXT but represent numeric amounts and fail with SUM()/AVG() without a cast.
+_SAP_NUMERIC_TEXT_COLUMNS: frozenset = frozenset({
+    # GL / Finance (FAGLFLEXA, BSEG, BSAD, etc.)
+    "hsl", "ksl", "msl", "wsl", "hsl0", "ksl0", "msl0", "wsl0",
+    "dmbtr", "wrbtr", "dmbe2", "hwbe2", "pswbt", "pswsl",
+    "shkzg",  # debit/credit indicator — sometimes summed as signed
+    # Billing / Sales (VBRK, VBRP, KONV)
+    "netwr", "mwsbp", "wavwr", "stawn", "kwert", "kbetr",
+    "kzwi1", "kzwi2", "kzwi3", "kzwi4", "kzwi5", "kzwi6",
+    "kursk", "kursk_m", "menge", "fklmg", "kwmeng",
+    # Purchasing / Invoice (RBKP, RSEG, EKKO, EKPO)
+    "rmwwr", "rmwsk", "netpr", "netwr_p", "brtwr",
+    # Controlling / Costing (COEP, CKIS, KEPH, CKMLPR)
+    "wkg001", "wkg002", "wkg003", "wkg004", "wkg005",
+    "wkg006", "wkg007", "wkg008", "wkg009", "wkg010",
+    "wkg011", "wkg012",
+    "objnr", "lstar", "kstar",  # sometimes used in SUM-adjacent context
+    # Material / Valuation (MBEW, CKMLCR, CKMLPP)
+    "stprs", "verpr", "salk3", "salkv", "lbkum", "pvprs",
+    "lfgja", "bklas",
+    # Customer / Vendor balance
+    "umskz",
+})
+
+# Aggregate functions that need CAST when applied to TEXT columns
+_AGGREGATE_FUNCS = re.compile(r'\b(SUM|AVG|MIN|MAX)\s*\(', re.IGNORECASE)
+
+
+def _wrap_text_column_in_cast(alias: str, col: str, func: str) -> str:
+    """Return: FUNC(CAST(NULLIF(TRIM(CAST(alias."col" AS TEXT)), '') AS NUMERIC))"""
+    inner = f'CAST({alias}."{col}" AS TEXT)' if alias else f'CAST("{col}" AS TEXT)'
+    nullif = f'CAST(NULLIF(TRIM({inner}), \'\') AS NUMERIC)'
+    return f'{func.upper()}({nullif})'
+
+
+def sanitize_sap_amount_columns_sql(sql: str) -> str:
+    """
+    Wrap all known SAP numeric-text amount columns in CAST(NULLIF(TRIM(...)) AS NUMERIC)
+    when they appear inside aggregate functions (SUM, AVG, MIN, MAX).
+
+    This is needed because SAP columns like hsl, dmbtr, wrbtr etc. are stored as
+    TEXT in this PostgreSQL instance, so bare SUM(alias."hsl") raises:
+        function sum(text) does not exist
+
+    Also fixes HAVING clause alias references:
+        HAVING SUM(f."hsl") > 0  — which would fail after wrapping — to use the inline cast.
+    """
     if not sql:
         return sql
-    s = sanitize_netwr_sql(sanitize_gjahr_sql(sql))
+
+    def _already_cast(expr: str) -> bool:
+        low = expr.lower()
+        return "cast(" in low or "nullif(" in low or "trim(" in low
+
+    def _replace_aggregate(m: re.Match) -> str:
+        """Called for each FUNC( occurrence; peeks ahead to find the argument."""
+        func = m.group(1)
+        pos_after_paren = m.end()
+        # Find the content of the aggregate call: track nesting depth
+        depth = 1
+        i = pos_after_paren
+        while i < len(sql) and depth > 0:
+            c = sql[i]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        # i is at the closing ')'
+        arg = sql[pos_after_paren:i].strip()
+        closing = i  # index of ')'
+
+        if _already_cast(arg):
+            return m.group(0)  # already handled
+
+        # Match patterns: alias."col", alias.col, "col", col (bare)
+        # Pattern: optional alias + optional dot + optional quote + col + optional quote
+        col_match = re.fullmatch(
+            r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"?([a-zA-Z_][a-zA-Z0-9_]*)"?'  # alias.col
+            r'|"([a-zA-Z_][a-zA-Z0-9_]*)"'   # "col"
+            r'|([a-zA-Z_][a-zA-Z0-9_]*)',     # bare col
+            arg,
+        )
+        if not col_match:
+            return m.group(0)
+
+        if col_match.group(1) and col_match.group(2):
+            alias_name, col_name = col_match.group(1), col_match.group(2)
+        elif col_match.group(3):
+            alias_name, col_name = '', col_match.group(3)
+        elif col_match.group(4):
+            alias_name, col_name = '', col_match.group(4)
+        else:
+            return m.group(0)
+
+        if col_name.lower() not in _SAP_NUMERIC_TEXT_COLUMNS:
+            return m.group(0)
+
+        return _wrap_text_column_in_cast(alias_name, col_name, func)
+
+    # We can't use re.sub with a function that peeks at the full string easily,
+    # so use a position-tracking loop instead.
+    result_parts: List[str] = []
+    last_end = 0
+
+    for agg_match in _AGGREGATE_FUNCS.finditer(sql):
+        func = agg_match.group(1)
+        pos_after_paren = agg_match.end()
+        # Find closing ')' of this aggregate call using depth tracking
+        depth = 1
+        i = pos_after_paren
+        while i < len(sql) and depth > 0:
+            c = sql[i]
+            if c == '(':
+                depth += 1
+                i += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    # i is at the closing ')' — do NOT increment yet
+                    break
+                i += 1
+            elif c == "'":
+                # Skip string literals
+                i += 1
+                while i < len(sql) and sql[i] != "'":
+                    i += 1
+                if i < len(sql):
+                    i += 1  # skip closing quote
+            elif c == '"':
+                # Skip quoted identifiers
+                i += 1
+                while i < len(sql) and sql[i] != '"':
+                    i += 1
+                if i < len(sql):
+                    i += 1  # skip closing quote
+            else:
+                i += 1
+
+        # i is at the closing ')' of the aggregate call
+        # arg is everything between the opening '(' and this ')'
+        arg = sql[pos_after_paren:i].strip()
+        # end_of_call is the position AFTER the closing ')'
+        end_of_call = i + 1
+
+        if _already_cast(arg):
+            # Already has a cast — copy unchanged up to end_of_call
+            result_parts.append(sql[last_end:end_of_call])
+            last_end = end_of_call
+            continue
+
+        col_match = re.fullmatch(
+            r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"?([a-zA-Z_][a-zA-Z0-9_]*)"?'
+            r'|"([a-zA-Z_][a-zA-Z0-9_]*)"'
+            r'|([a-zA-Z_][a-zA-Z0-9_]*)',
+            arg,
+        )
+        if not col_match:
+            result_parts.append(sql[last_end:end_of_call])
+            last_end = end_of_call
+            continue
+
+        if col_match.group(1) and col_match.group(2):
+            alias_name, col_name = col_match.group(1), col_match.group(2)
+        elif col_match.group(3):
+            alias_name, col_name = '', col_match.group(3)
+        elif col_match.group(4):
+            alias_name, col_name = '', col_match.group(4)
+        else:
+            result_parts.append(sql[last_end:end_of_call])
+            last_end = end_of_call
+            continue
+
+        if col_name.lower() not in _SAP_NUMERIC_TEXT_COLUMNS:
+            result_parts.append(sql[last_end:end_of_call])
+            last_end = end_of_call
+            continue
+
+        # Replace the full aggregate call (from SUM start to closing ')' inclusive)
+        result_parts.append(sql[last_end:agg_match.start()])
+        result_parts.append(_wrap_text_column_in_cast(alias_name, col_name, func))
+        last_end = end_of_call  # skip past the original closing ')'
+
+    result_parts.append(sql[last_end:])
+    normalized = ''.join(result_parts)
+
+    # Final safety net: direct regex rewrite for plain aggregate calls that may
+    # slip through the parser when formatting is unusual.
+    col_alt = "|".join(sorted((re.escape(c) for c in _SAP_NUMERIC_TEXT_COLUMNS), key=len, reverse=True))
+    strict_agg = re.compile(
+        rf'\b(?P<func>SUM|AVG|MIN|MAX)\s*\(\s*(?:(?P<alias>[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*)?"?(?P<col>{col_alt})"?\s*\)',
+        re.IGNORECASE,
+    )
+
+    def _strict_replace(m: re.Match) -> str:
+        whole = m.group(0)
+        if _already_cast(whole):
+            return whole
+        func = m.group("func") or "SUM"
+        alias = (m.group("alias") or "").strip()
+        col = (m.group("col") or "").strip()
+        return _wrap_text_column_in_cast(alias, col, func)
+
+    normalized = strict_agg.sub(_strict_replace, normalized)
+    return normalized
+
+
+def _find_agg_aliases_in_select(sql: str) -> dict:
+    """
+    Scan the SELECT clause and build a mapping { alias_lower → aggregate_expression }.
+    Handles nested parentheses (e.g. SUM(CAST(NULLIF(...))) AS alias).
+    """
+    alias_to_expr: dict = {}
+    # Find SELECT ... FROM
+    select_match = re.search(r'\bSELECT\b([\s\S]*?)\bFROM\b', sql, re.IGNORECASE)
+    if not select_match:
+        return alias_to_expr
+    select_clause = select_match.group(1)
+
+    # Walk through looking for FUNC( ... ) AS alias patterns
+    agg_pat = re.compile(r'\b(SUM|AVG|MIN|MAX)\s*\(', re.IGNORECASE)
+    i = 0
+    while i < len(select_clause):
+        m = agg_pat.search(select_clause, i)
+        if not m:
+            break
+        func_start = m.start()
+        paren_start = m.end()  # right after '('
+        # Find matching closing ')'
+        depth = 1
+        j = paren_start
+        while j < len(select_clause) and depth > 0:
+            c = select_clause[j]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            elif c == "'":
+                j += 1
+                while j < len(select_clause) and select_clause[j] != "'":
+                    j += 1
+            elif c == '"':
+                j += 1
+                while j < len(select_clause) and select_clause[j] != '"':
+                    j += 1
+            j += 1
+        # j is at closing ')' of the aggregate
+        agg_expr = select_clause[func_start:j + 1]
+        rest = select_clause[j + 1:]
+        # Look for AS alias right after
+        alias_m = re.match(r'\s+AS\s+"?([a-zA-Z_][a-zA-Z0-9_]*)"?', rest, re.IGNORECASE)
+        if alias_m:
+            alias = alias_m.group(1)
+            alias_to_expr[alias.lower()] = agg_expr
+        i = j + 1
+
+    return alias_to_expr
+
+
+def sanitize_having_alias_references(sql: str) -> str:
+    """
+    Fix HAVING clauses that reference SELECT-level column aliases.
+    PostgreSQL does not allow SELECT aliases in HAVING (only in ORDER BY).
+
+    Strategy: scan SELECT clause for aliased aggregates, then replace bare alias
+    references in HAVING with the actual aggregate expression.
+    """
+    if not sql or "HAVING" not in sql.upper():
+        return sql
+
+    alias_to_expr = _find_agg_aliases_in_select(sql)
+    if not alias_to_expr:
+        return sql
+
+    def _replace_having_alias(having_match: re.Match) -> str:
+        having_clause = having_match.group(0)
+        for alias, expr in alias_to_expr.items():
+            # Replace quoted alias "alias_name" first
+            having_clause = having_clause.replace(f'"{alias}"', expr)
+            # Replace bare alias (not part of longer identifier)
+            having_clause = re.sub(
+                r'(?<![a-zA-Z0-9_"\'.`])' + re.escape(alias) + r'(?![a-zA-Z0-9_"\'.`])',
+                expr,
+                having_clause,
+                flags=re.IGNORECASE,
+            )
+        return having_clause
+
+    # Apply only to the HAVING clause
+    sql = re.sub(
+        r'\bHAVING\b[\s\S]*?(?=\s*(?:\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|;)\s|$)',
+        _replace_having_alias,
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
+def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
+    """
+    Apply all SQL sanitization in order:
+    1. gjahr → fkdat-based year
+    2. netwr CAST (kept for backward compat, now also covered by generic sanitizer)
+    3. ALL SAP numeric text columns → CAST(NULLIF(TRIM(...)) AS NUMERIC) in aggregates
+    4. Fix HAVING alias references
+    5. Optional FKDAT calendar year filter injection
+    """
+    if not sql:
+        return sql
+    s = sanitize_gjahr_sql(sql)
+    s = sanitize_netwr_sql(s)
+    s = sanitize_sap_amount_columns_sql(s)
+    s = sanitize_having_alias_references(s)
     if question:
         s, _notes = inject_fkdat_calendar_year_filter(s, question)
     return s

@@ -9,6 +9,7 @@ import re
 from typing import List, Set
 
 from openai import OpenAI
+from .schema_index import build_canonical_schema_index
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,25 @@ KNOWN_SAP_TABLES: Set[str] = {
     "KNA1", "KNVP", "KNVV", "KONV", "LFA1", "LFB1", "LFM1", "LIKP", "LIPS", "LSEG",
     "MARA", "MAKT", "MARC", "MARM", "MEAN", "MKPF", "MVKE", "RBKP", "RESB", "RSEG",
     "STKO", "STPO", "T016T", "VBAK", "VBAP", "VBEP", "VBFA", "VBRK", "VBRP",
+}
+
+TABLE_SYNONYMS = {
+    "profit center": ["FAGLFLEXA", "CEPC", "COEP", "CSKS"],
+    "invoice amount": ["VBRK", "VBRP", "RBKP", "RSEG"],
+    "customer": ["KNA1", "VBRK", "KNVV", "KNVP"],
+    "vendor": ["LFA1", "RBKP", "RSEG", "EKKO", "EKPO", "LFB1"],
+    "material": ["MAKT", "MARA", "VBRP", "EKPO", "MARC"],
+    "purchase": ["EKKO", "EKPO", "LFA1"],
+    "delivery": ["LIKP", "LIPS", "VBRP"],
+    "sales order": ["VBAK", "VBAP"],
+    "stock": ["MARD", "MCHB", "MBEW", "MARC"],
+    "inventory": ["MARD", "MCHB", "MBEW", "CKMLCR"],
+    "general ledger": ["BSEG", "FAGLFLEXA", "BKPF"],
+    "ledger": ["FAGLFLEXA", "BSEG"],
+    "posting": ["BSEG", "BKPF", "FAGLFLEXA"],
+    "pricing": ["KONV", "VBRK", "EKKO"],
+    "bom": ["STKO", "STPO", "MAKT"],
+    "cost estimate": ["CKHS", "CKIS", "KEKO"],
 }
 
 
@@ -36,6 +56,32 @@ def select_tables(
     if not question or not schema_text or not client:
         return []
 
+    q_low = (question or "").lower()
+    bootstrap_tables: List[str] = []
+    available_upper = {t.upper(): t for t in available_tables}
+    for phrase, candidates in TABLE_SYNONYMS.items():
+        if phrase in q_low:
+            for cand in candidates:
+                if cand in available_upper and available_upper[cand] not in bootstrap_tables:
+                    bootstrap_tables.append(available_upper[cand])
+    # Also use canonical schema aliases for mentions + NL relevance ranking (metadata overlap).
+    index = build_canonical_schema_index(include_non_sap=True)
+    for tok in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", question or ""):
+        resolved = index.resolve_table_name(tok)
+        if resolved and resolved.upper() in available_upper:
+            actual = available_upper[resolved.upper()]
+            if actual not in bootstrap_tables:
+                bootstrap_tables.append(actual)
+
+    priority_tables: List[str] = list(bootstrap_tables)
+    for tbl, sc in index.score_tables_for_natural_language(question, available_tables):
+        if sc < 0.95:
+            continue
+        actual = available_upper.get((tbl or "").strip().upper())
+        if actual and actual not in priority_tables:
+            priority_tables.append(actual)
+    priority_tables = priority_tables[:18]
+
     prompt = f"""You are a SAP data expert. Given a user question and the database schema, select the MINIMUM set of tables needed to answer the question.
 
 User question:
@@ -46,6 +92,7 @@ Database schema:
 
 Rules:
 - Select only tables that exist in the schema above.
+- If bootstrap candidates are relevant, include them first: {", ".join(priority_tables) if priority_tables else "none"}.
 - Prefer fewer tables when possible (e.g. for "cost by profit center" use FAGLFLEXA only; for "sales by product" use VBRK, VBRP, MAKT).
 - For profit center / cost / GL: use FAGLFLEXA (has prctr, hsl, racct).
 - For sales / revenue / billing: use VBRK, VBRP; add KNA1 for customer, MAKT for material name.
