@@ -586,14 +586,62 @@ CHART_COLORS = [
 
 
 def _col_role(col: str) -> str:
-    """Classify a column as 'date', 'label', 'numeric', or 'other'."""
+    """
+    Classify a column as 'date', 'label', 'numeric', or 'other'.
+    Uses word-part matching (split on underscore) to avoid substring false-positives
+    (e.g. 'material_id' must NOT match 'at' from DATE_KEYWORDS via substring).
+    """
     c = col.lower()
-    if any(k in c for k in _DATE_KEYWORDS):
+    # Split on underscores and non-alpha to get meaningful word parts
+    parts = set(re.split(r'[_\-\s]', c)) | {c}
+
+    # ── Date detection ── (highest priority)
+    sap_date_cols = {"budat","fkdat","erdat","audat","lfdat","bedat","cpudt",
+                     "aedat","bldat","prdat","agdat","kdatb","kdate","bwbdt"}
+    if (c in sap_date_cols
+            or c.endswith("_at") or c.endswith("_date") or c.endswith("_time")
+            or any(p in {"date","month","year","period","quarter","week","day","time",
+                         "budat","fkdat","erdat","audat","lfdat","bedat","cpudt"} for p in parts)):
         return "date"
-    if any(k in c for k in _NUMERIC_KEYWORDS):
+
+    label_parts = {"name","customer","vendor","material","product","country","region",
+                   "currency","code","id","type","group","category","status","plant","org",
+                   "center","description","text","desc","industry","supplier","format",
+                   "class","doc","item","line","number","phase","stage","rfc","folio","uuid",
+                   "lifnr","kunnr","matnr","prctr","kostl","hkont","waerk","waers",
+                   "key","ref","num","no","lang","spras","bukrs","werks","ekorg","ekgrp",
+                   "document","header","partner","channel","division","office","area"}
+
+    # Numeric suffixes that win even when a label keyword is also present
+    # e.g. vendor_count → "count" suffix → numeric (not label)
+    numeric_suffixes = {"count","amount","total","value","qty","quantity","price","cost",
+                        "sum","avg","average","net","gross","rate","pct","percent",
+                        "balance","revenue","sales","spend","spent","margin","profit",
+                        "weight","volume","stock","rows","hits","entries","records"}
+
+    # Split the column name to find the last meaningful word
+    word_parts = [p for p in re.split(r'[_\-\s]', c) if p]
+    last_part = word_parts[-1] if word_parts else ""
+    first_part = word_parts[0] if word_parts else ""
+
+    # ── Numeric: numeric suffix wins over any label prefix ─────────────────
+    if last_part in numeric_suffixes or first_part in {"total","avg","average","sum","max","min"}:
         return "numeric"
-    if any(k in c for k in _LABEL_KEYWORDS):
+
+    # ── Label: any label keyword in parts ──────────────────────────────────
+    if any(p in label_parts for p in parts):
         return "label"
+
+    # ── Numeric: any numeric keyword in parts ──────────────────────────────
+    numeric_parts = {"amount","value","total","cost","revenue","sales","qty","quantity",
+                     "count","price","weight","volume","stock","balance","rate","ratio",
+                     "pct","percent","avg","average","sum","net","gross","tax","billed",
+                     "paid","spent","profit","margin","netwr","dmbtr","wrbtr","hsl","rmwwr",
+                     "menge","brgew","ntgew","volum","salk3","stprs","labst","netpr",
+                     "rows","hits","matches","entries","records"}
+    if any(p in numeric_parts for p in parts):
+        return "numeric"
+
     return "other"
 
 
