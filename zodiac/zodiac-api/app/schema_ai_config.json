@@ -219,6 +219,30 @@
       "note": "Billing item to material text"
     },
     {
+      "left": "VBRP",
+      "right": "MARA",
+      "on": "VBRP.MATNR = MARA.MATNR",
+      "note": "Billing item (transaction line) to product material master"
+    },
+    {
+      "left": "MARA",
+      "right": "MARC",
+      "on": "MARA.MATNR = MARC.MATNR",
+      "note": "Material master to plant-specific product master"
+    },
+    {
+      "left": "MARA",
+      "right": "MVKE",
+      "on": "MARA.MATNR = MVKE.MATNR",
+      "note": "Material master to sales-area product master"
+    },
+    {
+      "left": "MARA",
+      "right": "MEAN",
+      "on": "MARA.MATNR = MEAN.MATNR",
+      "note": "Material master to product barcode/EAN mapping"
+    },
+    {
       "left": "EKKO",
       "right": "EKPO",
       "on": "EKKO.EBELN = EKPO.EBELN",

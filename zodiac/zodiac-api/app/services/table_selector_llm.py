@@ -93,9 +93,22 @@ Database schema:
 Rules:
 - Select only tables that exist in the schema above.
 - If bootstrap candidates are relevant, include them first: {", ".join(priority_tables) if priority_tables else "none"}.
+- Distinguish TRANSACTION tables from MASTER tables:
+  - Transaction/fact examples: VBRP, VBRK, EKPO, EKKO, RBKP, RSEG, BSEG, FAGLFLEXA.
+  - Master/text examples: MARA, MAKT, MARC, MVKE, MEAN, KNA1, LFA1, CEPC.
+  - Rule: start from transaction tables for measures (amount, qty, count), then add only the master tables needed for attributes.
 - Prefer fewer tables when possible (e.g. for "cost by profit center" use FAGLFLEXA only; for "sales by product" use VBRK, VBRP, MAKT).
 - For profit center / cost / GL: use FAGLFLEXA (has prctr, hsl, racct).
 - For sales / revenue / billing: use VBRK, VBRP; add KNA1 for customer, MAKT for material name.
+- For deep PRODUCT analysis on billing/sales data:
+  - Base transaction: VBRP (and VBRK when date/customer/currency filters are needed).
+  - Product master chain: MARA (base master), MAKT (description/text), MARC (plant attributes), MVKE (sales-area attributes), MEAN (barcode/EAN).
+  - Minimum set by intent:
+    - Product names only: VBRP + MAKT
+    - Product attributes: VBRP + MARA (+ MAKT when names needed)
+    - Plant product analysis: add MARC
+    - Sales-area product analysis: add MVKE
+    - Barcode/EAN analysis: add MEAN
 - For PURCHASING: use EKPO (purchase order items: matnr, menge, netpr), add MAKT for material name. Use EKKO only if question asks for order header. Keywords: "purchase order", "order totals", "PO totals", "vendor spend", "purchased", "procurement", "buy", "purchase".
 - For "purchase order totals by material" or "PO totals by material": you MUST return EKPO, MAKT.
 - For material description or product name filter: include MAKT (maktx = description).

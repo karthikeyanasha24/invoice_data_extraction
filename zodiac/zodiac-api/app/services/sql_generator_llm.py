@@ -59,8 +59,8 @@ def _build_entity_filter_block(question: str) -> str:
                 f"   You MUST include this exact clause: WHERE \"KNA1\".name1 ILIKE '%{safe}%'\n"
                 f"   NEVER use exact match (= '{safe}') — always use ILIKE for name comparisons.\n"
                 f"   The customer name in the DB may include extra words (e.g. 'Siemens AG', 'SIEMENS CORP').\n"
-                f"   If KNA1 is not yet joined, add: JOIN \"KNA1\" ON \"VBRK\".kunag = \"KNA1\".kunnr\n"
-                f"   and ensure VBRK is joined to VBRP via: JOIN \"VBRK\" ON \"VBRK\".vbeln = vbrp.vbeln\n"
+                f"   If KNA1 is not yet joined, add: JOIN \"KNA1\" ON LPAD(TRIM(\"VBRK\".kunag), 10, '0') = LPAD(TRIM(\"KNA1\".kunnr), 10, '0')\n"
+                f"   and ensure VBRK is joined to VBRP via: JOIN \"VBRK\" ON LPAD(TRIM(\"VBRK\".vbeln), 10, '0') = LPAD(TRIM(vbrp.vbeln), 10, '0')\n"
                 f"   FAILURE to include this filter makes the query WRONG — do not skip it.\n"
             )
         if entity_type == "vendor":
@@ -164,6 +164,12 @@ def generate_sql(
 ║  5. "Negative OR lowest for year YYYY" → LINE ITEMS in that year║
 ║     (ORDER BY netwr ASC). Do NOT return GROUP BY calendar year   ║
 ║     totals across all years — that answers a different question.║
+║                                                                  ║
+║  6. INVOICE TOTAL VALUE CHECK — validate invoice value on VBRK   ║
+║     header first (VBRK.NETWR). Do NOT infer invoice-level "zero" ║
+║     from VBRP line items alone (line rows can be zero while      ║
+║     header NETWR is non-zero). Use VBRP only for product/line    ║
+║     detail or explicit line-level analysis.                       ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 {semantic_block}{intent_block}{join_hint_block}{entity_filter_block}User question:
@@ -183,7 +189,21 @@ Rules:
 - ENTITY FILTER (CRITICAL): If the question names a specific customer (e.g. "for customer Siemens"), add WHERE KNA1.name1 ILIKE '%Siemens%' and JOIN KNA1 if needed. If it names a vendor (e.g. "vendor named Bosch"), add WHERE LFA1.name1 ILIKE '%Bosch%'. If it names a product (e.g. "Harley", "jacket"), add WHERE MAKT.maktx ILIKE '%Harley%'. NEVER return a broad unfiltered result when a specific entity is requested.
 - For "cost by profit center" or "postings by profit center": use FAGLFLEXA, group by prctr, SUM(hsl) as total_cost.
 - For "jacket" or product name filter: use MAKT.MAKTX ILIKE '%jacket%' and MAKT.SPRAS = 'E' when MAKT is in tables.
-- For sales/revenue: use VBRK (header), VBRP (items); join on VBELN with LPAD; NETWR must be cast (see box above); FKDAT is billing date (TEXT, format YYYYMMDD). For customer join: VBRK.kunag = KNA1.kunnr.
+- For sales/revenue: use VBRK (header), VBRP (items); join on VBELN with LPAD; NETWR must be cast (see box above); FKDAT is billing date (TEXT, format YYYYMMDD). For customer join use LPAD/TRIM: LPAD(TRIM(VBRK.kunag), 10, '0') = LPAD(TRIM(KNA1.kunnr), 10, '0').
+- For invoice-level totals/zero/negative checks: evaluate invoice amount from VBRK.NETWR first; only join VBRP when line-item/product columns are requested.
+- For invoice listing questions like "invoices for customer Siemens", prefer VBRK as the base table, LEFT JOIN KNA1 for customer name filter, and use VBRK.NETWR as invoice_amount. Only join VBRP if the user asked for product/line-item detail.
+- Distinguish transaction tables vs master tables:
+  - Transaction/fact tables (amounts/quantities/events): VBRP, VBRK, EKPO, EKKO, RBKP, RSEG, BSEG, FAGLFLEXA.
+  - Master/attribute/text tables: MARA, MAKT, MARC, MVKE, MEAN, KNA1, LFA1, CEPC.
+  - Rule: compute measures from transaction tables first, then LEFT JOIN master tables for attributes.
+- Deep product analysis join path (when requested):
+  - Start with VBRP as line-item fact table (and VBRK for date/customer/currency filters).
+  - Join VBRP.MATNR = MARA.MATNR (core product master).
+  - Join MAKT on MATNR for product text/name (prefer MAKT.SPRAS = 'E').
+  - Join MARC on MATNR for plant-level attributes.
+  - Join MVKE on MATNR for sales-area attributes.
+  - Join MEAN on MATNR for barcode/EAN attributes.
+  - Do not replace transaction tables with master tables for amount calculations.
 - Only use JOIN edges listed in the approved join paths block above. Do not invent ad hoc JOIN ... ON between tables without a listed graph path.
 - YEAR FILTERING: ALWAYS use FKDAT (see mandatory box above). NEVER use gjahr.
 - NEVER use SQLAlchemy bind parameters like %(year)s or :year in generated SQL — always inline literal values.

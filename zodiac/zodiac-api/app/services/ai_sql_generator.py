@@ -54,9 +54,22 @@ CRITICAL DATA QUALITY RULES (these are NOT optional — they reflect proven bugs
 4. JOIN RULE — always join with LPAD to handle leading-zero differences:
      ON LPAD(TRIM(v."vbeln"), 10, '0') = LPAD(TRIM(r."vbeln"), 10, '0')
 
+   For customer joins, also normalize IDs the same way:
+     ON LPAD(TRIM(r."kunag"), 10, '0') = LPAD(TRIM(k."kunnr"), 10, '0')
+
 5. TABLE CASING — uppercase SAP tables need double quotes in PostgreSQL:
      "VBRK"  "KNA1"  "MAKT"
    Exception: vbrp (lowercase, no quotes needed)
+
+6. INVOICE TOTAL VALUE LOGIC — for invoice-level totals and "zero/negative invoice value"
+   use VBRK.NETWR first (header value). Do NOT classify an invoice as zero by checking
+   only VBRP line values; VBRP is for product/line-item analysis and may contain zero lines
+   even when VBRK.NETWR is non-zero.
+
+7. CUSTOMER INVOICE LISTING — for questions like "invoices for customer Siemens",
+   use VBRK as the base table, LEFT JOIN KNA1 for customer name filtering, and use
+   VBRK.NETWR as invoice_amount. Do NOT aggregate VBRP unless the user explicitly asks
+   for line items, products, or item-level totals.
 
 Other rules:
 - Use ONLY the tables and columns listed in the schema.

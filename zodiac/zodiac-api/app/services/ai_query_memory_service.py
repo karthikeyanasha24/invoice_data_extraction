@@ -49,6 +49,11 @@ ENTITY_KEYWORDS = {
     "plant": {"plant", "plants", "werks"},
 }
 
+# These entities represent specific dimensional intent. Reusing a stored SQL that
+# introduces one of these dimensions when the new question does not ask for it
+# causes "industry/country/etc." drift and irrelevant answers.
+SCOPED_DIMENSION_ENTITIES = {"industry", "country", "profit_center", "plant"}
+
 METRIC_KEYWORDS = {
     "revenue": {"revenue", "sales", "turnover", "invoice value", "billing value"},
     "count": {"count", "counts", "number", "volume", "how many"},
@@ -171,6 +176,8 @@ def _signatures_are_compatible(
     target_entities = set(target_signature["entities"])
     candidate_entities = set(candidate_signature["entities"])
     if target_entities and candidate_entities and not (target_entities & candidate_entities):
+        return False
+    if not target_entities and (candidate_entities & SCOPED_DIMENSION_ENTITIES):
         return False
 
     actor_entities = {"customer", "vendor"}
@@ -311,7 +318,7 @@ def find_similar_stored_query(
             best_record = rec
 
     # Require stronger overlap so different filters (year, category, currency) rarely reuse wrong SQL.
-    if best_record is not None and best_score >= 17:
+    if best_record is not None and best_score >= 24:
         if mark_used:
             best_record.mark_used()
             db.commit()

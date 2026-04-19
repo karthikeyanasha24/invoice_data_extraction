@@ -143,6 +143,7 @@ def extract_user_constraints(question: str) -> UserConstraints:
     q = (question or "").lower()
     wants_negative_lines = bool(
         re.search(r"\bnegative\b", q)
+        or re.search(r"\bzero\b", q)
         or "credit memo" in q
         or "credit memos" in q
     )
@@ -187,7 +188,20 @@ def should_skip_sql_memory_reuse(question: str) -> bool:
     because similarity-based reuse can still ignore/override those filters.
     """
     c = extract_user_constraints(question)
-    return bool(c.years) or bool(c.billing_category or c.billing_type) or bool(c.currency_code) or c.wants_count
+    q = (question or "").lower()
+    has_lowest_or_zero_line_intent = bool(
+        re.search(r"\b(lowest|smallest|minimum)\b", q)
+        or re.search(r"\bzero\b", q)
+        or ("line item" in q or "line items" in q)
+    )
+    return (
+        bool(c.years)
+        or bool(c.billing_category or c.billing_type)
+        or bool(c.currency_code)
+        or c.wants_count
+        or c.wants_negative_lines
+        or has_lowest_or_zero_line_intent
+    )
 
 
 def _extract_fkdat_years_from_sql(sql: str) -> Set[str]:

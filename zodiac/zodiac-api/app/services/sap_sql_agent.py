@@ -378,6 +378,52 @@ def _is_entity_specific_question(question: str) -> bool:
     return False
 
 
+def _is_deep_product_analysis_question(question: str) -> bool:
+    """
+    Detect requests that need product master enrichment beyond a simple MAKT name join.
+    This is used to force a robust transaction->master table chain for analysis quality.
+    """
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    has_product_scope = any(
+        k in q
+        for k in (
+            "product",
+            "material",
+            "matnr",
+            "mara",
+            "makt",
+            "marc",
+            "mvke",
+            "mean",
+            "ean",
+            "barcode",
+        )
+    )
+    has_deep_intent = any(
+        k in q
+        for k in (
+            "deep analysis",
+            "deeper analysis",
+            "attribute",
+            "attributes",
+            "master data",
+            "plant",
+            "sales area",
+            "sales org",
+            "distribution channel",
+            "hierarchy",
+            "classification",
+        )
+    )
+    explicit_master_chain = bool(
+        re.search(r"\b(mara|makt|marc|mvke|mean)\b", q)
+        and len(re.findall(r"\b(mara|makt|marc|mvke|mean)\b", q)) >= 2
+    )
+    return bool(has_product_scope and (has_deep_intent or explicit_master_chain))
+
+
 def _question_has_explicit_time_constraint(question: str) -> bool:
     """Detect year/date/range wording where empty results should preserve the filter."""
     q = (question or "").strip().lower()
@@ -1436,9 +1482,9 @@ Available tables (use EXACT names):
    - Any question involving customers, buyers, sold-to parties → KNA1
    - Any question involving materials, products, items → MAKT
    - Any question involving vendors, suppliers → LFA1
-   - Any question explicitly about "industry" or "sector" → T016T (ONLY with KNA1)
-   - Do NOT include T016T unless the question explicitly mentions industry/sector —
-     T016T only has brsch and brtxt columns, no financial data.
+   - Any question explicitly about "industry", "sector", or "brsch" → T016T (ONLY with KNA1)
+   - Do NOT include T016T for generic words like "information", "details", "data", customers, or products alone —
+     T016T only has brsch and brtxt columns, no financial data; wrong picks pollute the query.
 
 3. COST-OF-PRODUCT rule:
    - "What is the cost / price of [product]?" or "unit cost" or "standard cost" →
@@ -3148,11 +3194,14 @@ Task:
   * Never add IS NOT NULL filter on KNA1 — that converts LEFT JOIN to INNER JOIN and kills results.
 - **IMPORTANT – Country queries**: VBRK has its own LAND1 column (country). Prefer VBRK.LAND1 directly
   instead of joining to KNA1.LAND1 — this avoids empty results when KNA1 data is incomplete.
-- **T016T (industry)**: ONLY include T016T when the question explicitly asks for "industry" or "by industry".
+- **T016T (industry)**: ONLY include T016T when the question explicitly asks for "industry", "sector", "by industry", or "brsch".
   * T016T has ONLY columns brsch and brtxt (no VBELN, no KUNNR).
   * Join: KNA1.brsch = T016T.brsch (NOT on VBELN).
   * SELECT T016T.brtxt for industry name (not KNA1.brsch which is just a code).
-  * Do NOT add T016T for questions about products, customers, or sales alone.
+  * Do NOT add T016T for products, customers, sales, "information", or "details" alone — unrelated industry joins confuse results.
+- **INVOICE / BILLING DOCUMENT total vs line (NETWR)**:
+  * Document zero/negative/**header** value: use **VBRK.NETWR** (cast TEXT→NUMERIC). Do not treat SUM(vbrp line netwr)=0 as a zero invoice if VBRK.NETWR is non-zero.
+  * Line-level amounts/credits: use **vbrp.NETWR** on rows.
 - **SIMILAR RULE**: For materials, use MAKT.MAKTX (description) not MATNR (code)
 - **Margin/profitability**: margin = (revenue - cost) / revenue. Revenue from VBRP.NETWR. Cost from MBEW.STPRS*VBRP.FKIMG (prefer), or EKPO.NETWR, or CKIS.wertn joined on material. For "average margin on low products" use AVG of margin per product, filter to low-margin products, group by product. If MBEW/EKPO/CKIS not available, use revenue-only analysis and note that true margin needs cost data.
 - **Profit margin by product / profit margin on certain products**: Use VBRP, VBRK, MAKT, CKIS. Revenue = SUM(VBRP.NETWR); cost = subquery from CKIS SUM(wertn) by matnr; margin = revenue - cost; margin_pct = 100*margin/revenue when revenue>0. Group by matnr, maktx; ORDER BY margin DESC; LIMIT 100. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS subquery on MATNR.
@@ -3213,11 +3262,13 @@ Rules:
     * filter out NULL dimension values where it makes sense (e.g., industry IS NOT NULL)
     * order by the metric's description (e.g., "total_sales DESC") and use a small limit (e.g. 50 or 100).
 - If the question is about "lowest", sort ASC instead of DESC.
-- **CRITICAL for lowest/highest/top/bottom by dimension**: Exclude zero/empty aggregates.
-  When grouping by customer, country, product, industry, etc. and showing SUM of sales/amounts,
-  add "having": [{{ "lhs": "<metric_description>", "operator": ">", "rhs": "0" }}]
-  so we only show entities that have actual activity. E.g. for "lowest sales by customer and country",
-  add having on total_sales > 0 — otherwise we get customers with $0 (no sales), which is wrong.
+- **CRITICAL for lowest/highest/top/bottom by dimension**: Exclude zero/empty aggregates **only when**
+  the user wants ranking of **active** business (e.g. "top customers by revenue", "best-selling products")
+  and does **not** ask to **include zeros, negatives, exceptions, audits, or billing documents with zero/negative value**.
+  When they explicitly want **zero-value invoices**, **negative amounts**, **credit memos**, or **exceptions**,
+  do **not** add HAVING metric > 0 on that metric — it would hide the rows they asked for.
+  For "lowest **non-zero**" or "bottom **with sales**", add having on total_sales > 0.
+  For **invoice document** value questions, base zero/negative logic on **VBRK.NETWR**, not only on line sums.
 
 - **MANDATORY: ALWAYS include currency** – whenever any monetary/amount column is selected
   (NETWR, WRBTR, DMBTR, HSL, WSL, KSL, KBETR, STPRS, WERTN, RMWWR, BRTWR, KBETR, etc.),
@@ -4446,6 +4497,24 @@ def run_schema_driven_sql_agent(
             logger.warning("schema_driven_agent: no tables selected for question: %s", (question or "")[:80])
             return None
 
+        # Deep product analysis hardening:
+        # enforce transaction + product-master chain so the model cannot answer with
+        # shallow joins when users ask for richer product attributes.
+        if not _ft and _is_deep_product_analysis_question(question):
+            available_upper = {t.upper(): t for t in available_tables}
+            required_chain = ("VBRP", "VBRK", "MARA", "MAKT", "MARC", "MVKE", "MEAN")
+            injected: List[str] = []
+            for t in required_chain:
+                orig = available_upper.get(t)
+                if orig and orig not in tables:
+                    tables.append(orig)
+                    injected.append(orig)
+            if injected:
+                logger.info(
+                    "schema_driven_agent: deep product analysis detected, injected table chain: %s",
+                    injected,
+                )
+
         # Entity table injection: ensure KNA1/LFA1/MAKT are in tables when a named entity is detected.
         # When the user explicitly listed tables (forced_tables), do not inject extra masters —
         # that previously caused unrelated tables (e.g. LFA1) to override the named target.
@@ -4490,6 +4559,14 @@ def run_schema_driven_sql_agent(
                 + ", ".join(tables)
                 + ". Use ONLY these tables in FROM/JOIN; do not substitute a different table. "
                 + "If the user asked for last/first/top N rows, add ORDER BY on a time or id column from the schema.]"
+            )
+        elif _is_deep_product_analysis_question(question):
+            _intent_ctx += (
+                "\n\n[MANDATORY — deep product analysis mode: "
+                "Use VBRP as fact base (and VBRK for billing date/customer/currency), "
+                "then enrich product attributes via MATNR chain with MARA, MAKT, MARC, MVKE, MEAN. "
+                "Compute amount/quantity metrics from transaction tables first; use master tables for attributes only. "
+                "Prefer LEFT JOIN for master enrichment to avoid dropping fact rows.]"
             )
         sql = schema_generate_sql(
             question,

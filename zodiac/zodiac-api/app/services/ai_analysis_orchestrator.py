@@ -42,6 +42,7 @@ from .intent_extractor import extract_intent
 from .intent_sql_planner import build_sql_plan, generate_sql
 from .result_validator_v2 import validate_result as validate_result_v2
 from .intent_summary import generate_summary as generate_intent_summary
+from .ai_followup_routing import follow_up_requires_fresh_sql
 from .intent_charting import generate_chart_config as generate_intent_charts
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,192 @@ def _is_small_chitchat(user_query: str) -> bool:
         if not any(k in q for k in data_keywords):
             return True
     return False
+
+
+def _follow_up_requires_fresh_sql(user_query: str) -> bool:
+    """
+    Follow-up mode normally answers from the last result snapshot only.
+    Return True when the user is clearly drilling into new granularity or time scope
+    (continuous analysis) so we re-run SAP SQL instead of hallucinating from a summary.
+    """
+    q = (user_query or "").strip().lower()
+    if not q:
+        return False
+
+    narrative_only = any(
+        p in q
+        for p in (
+            "why ",
+            "why?",
+            "what does",
+            "explain ",
+            "explain?",
+            "meaning",
+            "summarize",
+            "summary ",
+            "in short",
+            "can you clarify",
+            "does this",
+            "is this",
+            "what do you think",
+            "your opinion",
+        )
+    )
+
+    drill_phrases = (
+        "break down",
+        "breakdown",
+        "drill down",
+        "drill-down",
+        "split by",
+        "group by",
+        "deeper",
+        "granular",
+        "product level",
+        "line item",
+        "line items",
+        "item level",
+        "by product",
+        "by material",
+        "per product",
+        "per material",
+        "sku",
+        "matnr",
+        "material ",
+        "article",
+        "vbrp",
+        "mara",
+        "makt",
+        "marc",
+        "mvke",
+        "mean",
+        "each material",
+        "each product",
+        "for each invoice",
+        "per invoice",
+        "invoice line",
+        "billing line",
+    )
+    if any(p in q for p in drill_phrases):
+        return True
+
+    time_rescope = any(
+        p in q
+        for p in (
+            "different year",
+            "another year",
+            "change the period",
+            "extend to",
+            "include 20",
+            "last year",
+            "previous year",
+            "next year",
+            "ytd",
+            "year to date",
+        )
+    )
+    if time_rescope:
+        return True
+
+    if narrative_only:
+        return False
+
+    if q.startswith("show ") or q.startswith("list ") or q.startswith("give me "):
+        if any(k in q for k in ("invoice", "billing", "material", "product", "customer", "vendor")):
+            return True
+
+    return False
+
+
+def _should_bypass_explicit_follow_up_mode(user_query: str) -> bool:
+    """
+    Some UI turns are sent as follow-up even when the user is actually asking for a fresh
+    SAP data query. Example: "invoices for customer Siemens" should not be answered from
+    dashboard/app context or prior thread narrative; it needs fresh billing SQL.
+    """
+    q = (user_query or "").strip().lower()
+    if not q:
+        return False
+    try:
+        from .invoice_bot_helpers import get_specific_entity_request
+        entity = get_specific_entity_request(user_query)
+    except Exception:
+        entity = None
+    if entity and entity.get("entity") == "customer":
+        asks_for_invoice_data = any(
+            token in q
+            for token in (
+                "invoice",
+                "invoices",
+                "billing",
+                "billings",
+                "invoice amount",
+                "invoice value",
+                "billing value",
+                "list invoices",
+                "show invoices",
+            )
+        )
+        if asks_for_invoice_data:
+            return True
+
+    if follow_up_requires_fresh_sql(user_query):
+        return True
+    return False
+
+
+def _is_customer_invoice_listing_query(user_query: str) -> bool:
+    q = (user_query or "").strip().lower()
+    if not q:
+        return False
+    try:
+        from .invoice_bot_helpers import get_specific_entity_request
+        entity = get_specific_entity_request(user_query)
+    except Exception:
+        entity = None
+    if not (entity and entity.get("entity") == "customer" and entity.get("value")):
+        return False
+    return any(
+        token in q
+        for token in (
+            "invoice",
+            "invoices",
+            "billing",
+            "billing documents",
+            "invoice amount",
+            "invoice value",
+            "list invoices",
+            "show invoices",
+        )
+    )
+
+
+def _build_customer_invoice_listing_sql(user_query: str) -> Optional[str]:
+    try:
+        from .invoice_bot_helpers import get_specific_entity_request
+        entity = get_specific_entity_request(user_query)
+    except Exception:
+        entity = None
+    if not (entity and entity.get("entity") == "customer" and entity.get("value")):
+        return None
+    customer_name = str(entity.get("value") or "").replace("'", "''").strip()
+    if not customer_name:
+        return None
+    return (
+        "SELECT "
+        "k.\"vbeln\" AS invoice_doc, "
+        "k.\"kunag\" AS customer_id, "
+        "c.\"name1\" AS customer_name, "
+        "k.\"waerk\" AS currency, "
+        "k.\"fkdat\" AS billing_date, "
+        "CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) AS invoice_amount "
+        "FROM \"VBRK\" k "
+        "LEFT JOIN \"KNA1\" c "
+        "ON LPAD(TRIM(k.\"kunag\"), 10, '0') = LPAD(TRIM(c.\"kunnr\"), 10, '0') "
+        f"WHERE c.\"name1\" ILIKE '%{customer_name}%' "
+        "ORDER BY k.\"fkdat\" DESC NULLS LAST "
+        "LIMIT 200"
+    )
 
 
 def _rows_preview(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
@@ -874,10 +1061,10 @@ def run_ai_analysis_orchestrator(
     mem = load_memory(db, user_id)
 
     # ── FOLLOW-UP MODE ────────────────────────────────────────────────────────
-    # When the user explicitly selects "Follow-up" mode, answer from thread
-    # context (last result + metrics + warnings) without running new SQL.
-    # Only falls through to SQL if the data needed isn't in the stored thread.
-    if query_mode == "follow_up" and thread_id:
+    # Interpretive follow-ups answer from thread context (last SQL + rows + metrics).
+    # Drill-down / new granularity (product lines, materials, rescoped periods) falls
+    # through to the main SQL pipeline so analysis stays continuous without "New question".
+    if query_mode == "follow_up" and thread_id and not _should_bypass_explicit_follow_up_mode(user_query):
         try:
             from .chat_thread_store import (
                 load_thread, next_turn_index, save_turn,
@@ -893,47 +1080,84 @@ def run_ai_analysis_orchestrator(
 
             thread_turns = load_thread(db, user_id, thread_id, last_n=10)
 
-            # Build the grounded follow-up prompt and call the LLM
-            followup_prompt = build_followup_prompt(user_query, thread_turns)
-            _fu_resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": followup_prompt}],
-                temperature=0.3,
-                max_tokens=800,
-            )
-            _fu_reply = (_fu_resp.choices[0].message.content or "").strip()
+            if _follow_up_requires_fresh_sql(user_query):
+                logger.info(
+                    "follow_up: drill-down / fresh scope — continuing to SQL pipeline (thread=%s)",
+                    (thread_id or "")[:24],
+                )
+            else:
+                # Build the grounded follow-up prompt and call the LLM
+                followup_prompt = build_followup_prompt(user_query, thread_turns)
+                _fu_resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": followup_prompt}],
+                    temperature=0.3,
+                    max_tokens=800,
+                )
+                _fu_reply = (_fu_resp.choices[0].message.content or "").strip()
 
-            if not _fu_reply:
-                _fu_reply = "I could not generate a follow-up answer. Please try rephrasing."
+                if not _fu_reply:
+                    _fu_reply = "I could not generate a follow-up answer. Please try rephrasing."
 
-            # Save the assistant turn
-            save_turn(db, user_id=user_id, thread_id=thread_id,
-                      turn_index=_turn_idx + 1, role="assistant",
-                      content=_fu_reply, query_mode="follow_up",
-                      action="follow_up_thread")
+                # Save the assistant turn
+                save_turn(db, user_id=user_id, thread_id=thread_id,
+                          turn_index=_turn_idx + 1, role="assistant",
+                          content=_fu_reply, query_mode="follow_up",
+                          action="follow_up_thread")
 
-            # Update memory so next turn has correct context
-            mem.last_user_query = user_query
-            mem.last_reply = _fu_reply
-            save_memory(db, mem)
+                # Update memory so next turn has correct context
+                mem.last_user_query = user_query
+                mem.last_reply = _fu_reply
+                save_memory(db, mem)
 
-            timings["total_ms"] = int((time.time() - perf_start) * 1000)
-            return OrchestratorResult(
-                reply=_fu_reply,
-                action="follow_up",
-                reason="explicit_follow_up_mode",
-                sql=thread_turns[-1].get("sql_executed", "") if thread_turns else "",
-                rows_preview=None,
-                memory_updated=True,
-                time_scope=time_scope,
-                date_range=None,
-                period_info=None,
-                performance=timings,
-            )
+                timings["total_ms"] = int((time.time() - perf_start) * 1000)
+                return OrchestratorResult(
+                    reply=_fu_reply,
+                    action="follow_up",
+                    reason="explicit_follow_up_mode",
+                    sql=thread_turns[-1].get("sql_executed", "") if thread_turns else "",
+                    rows_preview=None,
+                    memory_updated=True,
+                    time_scope=time_scope,
+                    date_range=None,
+                    period_info=None,
+                    performance=timings,
+                )
         except Exception as _fu_err:
             logger.warning("follow_up mode failed, falling through to SQL: %s", _fu_err)
             # Graceful degradation: if thread store fails, process as a normal new query
+    elif query_mode == "follow_up" and thread_id:
+        logger.info(
+            "follow_up mode bypassed for fresh SAP/entity query: %r",
+            (user_query or "")[:120],
+        )
     # ── END FOLLOW-UP MODE ────────────────────────────────────────────────────
+
+    # Text passed into SQL generators; augmented on thread drill-down so joins/filters
+    # inherit the prior assistant query while the stored user message stays the short question.
+    _sql_pipeline_question = user_query
+    if query_mode == "follow_up" and thread_id and _follow_up_requires_fresh_sql(user_query):
+        try:
+            from .chat_thread_store import get_last_assistant_turn, ensure_chat_tables
+
+            ensure_chat_tables(db)
+            _la_turn = get_last_assistant_turn(db, user_id, thread_id)
+            _prior_sql = (_la_turn or {}).get("sql_executed") or (mem.last_sql or "")
+            if _prior_sql.strip():
+                _sql_pipeline_question = (
+                    f"{user_query}\n\n"
+                    "[Continuous drill-down from the same thread — keep the same business filters, "
+                    "date scope, and entities as the prior query. Add line/product detail with VBRP "
+                    "and product masters (MARA, MAKT, MARC, MVKE, MEAN) when the user asks for product "
+                    "breakdown; use VBRK.NETWR for document-level totals. Prior SQL:\n"
+                    f"{_prior_sql.strip()[:2800]}"
+                )
+                logger.info(
+                    "follow_up drill-down: augmented sql prompt (prior_sql_len=%d)",
+                    len(_prior_sql.strip()),
+                )
+        except Exception as _spq_err:
+            logger.debug("follow_up sql_pipeline_question augment failed: %s", _spq_err)
 
     # NOTE: ULTRA-FAST PATH (reuse-instant) intentionally removed.
     # Every query must run fresh SQL against the correct table — returning cached data for a
@@ -1532,8 +1756,8 @@ If result is empty, say so and suggest a refined question.
             from sqlalchemy import text as _sql_text
 
             intent_schema = _load_schema_fast(max_columns_per_table=None)
-            intent = extract_intent(user_query, intent_schema)
-            logger.info("🔥 USING INTENT PIPELINE (intent_sql) for: %s", (user_query or "")[:120])
+            intent = extract_intent(_sql_pipeline_question, intent_schema)
+            logger.info("🔥 USING INTENT PIPELINE (intent_sql) for: %s", (_sql_pipeline_question or "")[:120])
             logger.info("INTENT_JSON: %s", json.dumps(intent, default=str)[:1200])
 
             plan = build_sql_plan(intent, intent_schema)
@@ -1713,13 +1937,36 @@ If result is empty, say so and suggest a refined question.
     except Exception as _det_pre:
         logger.debug("orchestrator pre-memory deterministic: %s", _det_pre)
 
+    # Deterministic customer invoice listing by customer name.
+    # This avoids LLM drift to invoice_business_data / wrong VBRP aggregates for
+    # questions like "invoices for customer Siemens".
+    if result is None and not (app_tables_resolved or sap_forced_resolved) and _is_customer_invoice_listing_query(user_query):
+        try:
+            from .sap_sql_agent import SqlAgentResult, _quote_catalog_sql_tables, _run_sql
+            _cust_sql = _build_customer_invoice_listing_sql(user_query)
+            if _cust_sql:
+                _cust_qsql = _quote_catalog_sql_tables(_cust_sql)
+                _cust_rows = _run_sql(sql_db, _cust_qsql)
+                if _cust_rows:
+                    result = SqlAgentResult(sql=_cust_qsql, rows=_cust_rows)
+                    timings["sql_path_reason"] = "deterministic_customer_invoice_listing"
+                    logger.info(
+                        "orchestrator: deterministic customer invoice listing SQL, %d rows",
+                        len(_cust_rows or []),
+                    )
+        except Exception as _cust_det_err:
+            logger.debug("orchestrator customer invoice deterministic failed: %s", _cust_det_err)
+
     # Andy's training loop: check ai_query_memory first for user-approved queries
     if result is None:
         try:
             from .ai_analysis_constraint_validator import should_skip_sql_memory_reuse
             from .ai_query_memory_service import find_similar_stored_query
             from .explicit_table_sql import stored_sql_covers_explicit_tables
-            if should_skip_sql_memory_reuse(user_query):
+            _skip_mem = should_skip_sql_memory_reuse(user_query)
+            if query_mode == "follow_up" and _follow_up_requires_fresh_sql(user_query):
+                _skip_mem = True
+            if _skip_mem:
                 logger.info("ai_query_memory: skipping reuse due to explicit filters in question")
             else:
                 stored_sql = find_similar_stored_query(db, user_query, user_id)
@@ -1760,7 +2007,7 @@ If result is empty, say so and suggest a refined question.
     # invoice/industry/customer queries. The SQL catalog fast-path handles generic
     # aggregation queries before LLM is called, so examples now only guide complex joins.
     _few_shot = get_sql_examples_for_question(
-        user_query, additional_examples=get_few_shot_examples(db, 2)
+        _sql_pipeline_question, additional_examples=get_few_shot_examples(db, 2)
     )
 
     # Procurement-from-list: "from the list below which are procured internally/externally" → use prior result materials
@@ -1791,7 +2038,7 @@ If result is empty, say so and suggest a refined question.
 
     # _hint_query: when the user named SAP tables that the schema-driven agent couldn't use,
     # we append the table names so the adaptive/standard agents still know the user's intent.
-    _hint_query = user_query  # default — overridden below if explicit_sap_only fallthrough occurs
+    _hint_query = _sql_pipeline_question  # default — overridden below if explicit_sap_only fallthrough occurs
 
     if result is None:
         # 1) Schema-driven agent: LLM reads schema → selects tables → generates SQL (no keyword rules).
@@ -1800,11 +2047,11 @@ If result is empty, say so and suggest a refined question.
             try:
                 from .ai_intent_classifier import build_intent_sql_prompt_block
 
-                _intent_ctx = build_intent_sql_prompt_block(user_query)
+                _intent_ctx = build_intent_sql_prompt_block(_sql_pipeline_question)
             except Exception:
                 pass
             result = run_schema_driven_sql_agent(
-                user_query,
+                _sql_pipeline_question,
                 sql_db,
                 few_shot_examples=_few_shot,
                 intent_context=_intent_ctx,
@@ -1827,9 +2074,9 @@ If result is empty, say so and suggest a refined question.
                     sap_forced_resolved,
                 )
                 _hint_suffix = " (use tables: " + ", ".join(sap_forced_resolved) + ")" if sap_forced_resolved else ""
-                _hint_query = user_query + _hint_suffix
+                _hint_query = _sql_pipeline_question + _hint_suffix
             else:
-                _hint_query = user_query
+                _hint_query = _sql_pipeline_question
             result = run_adaptive_sap_sql_agent(
                 _hint_query,
                 sql_db,
@@ -1855,7 +2102,7 @@ If result is empty, say so and suggest a refined question.
         # NOTE: explicit_sap_only no longer hard-stops here — the LLM agents already tried with
         # table-name hints. Just continue to the purchase-order fallback like any other query.
         try:
-            po_result = run_purchase_order_fallback(sql_db, user_query)
+            po_result = run_purchase_order_fallback(sql_db, _sql_pipeline_question)
             if po_result and getattr(po_result, "rows", None):
                 result = po_result
                 timings["sql_path_reason"] = "purchase_order_fallback"
@@ -1870,7 +2117,7 @@ If result is empty, say so and suggest a refined question.
     #   2. SUM(netwr) bare → rewrite to safe NULLIF TEXT cast
     if result and getattr(result, "sql", None):
         _orig_sql = result.sql
-        _clean_sql = sanitize_generated_sap_sql(_orig_sql, user_query)
+        _clean_sql = sanitize_generated_sap_sql(_orig_sql, _sql_pipeline_question)
         if _clean_sql != _orig_sql:
             logger.info("SQL sanitizers applied (gjahr→fkdat and/or netwr), re-executing")
             try:
@@ -1922,14 +2169,14 @@ If result is empty, say so and suggest a refined question.
         try:
             from .invoice_bot_helpers import get_product_performance_fallback_sql
             from .sap_sql_agent import _run_sql
-            fallback_sql = get_product_performance_fallback_sql(user_query)
+            fallback_sql = get_product_performance_fallback_sql(_sql_pipeline_question)
             if fallback_sql:
                 fallback_rows = _run_sql(sql_db, fallback_sql)
                 if fallback_rows:
                     logger.info("Product performance fallback returned %d rows", len(fallback_rows))
                     result = type(result)(sql=fallback_sql, rows=fallback_rows)
                 else:
-                    fallback_sql_all = get_product_performance_fallback_sql(user_query, with_date_filter=False)
+                    fallback_sql_all = get_product_performance_fallback_sql(_sql_pipeline_question, with_date_filter=False)
                     if fallback_sql_all and fallback_sql_all != fallback_sql:
                         fallback_rows = _run_sql(sql_db, fallback_sql_all)
                         if fallback_rows:
@@ -1959,13 +2206,13 @@ If result is empty, say so and suggest a refined question.
         if not (result and result.rows):
             try:
                 from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables, _run_sql, SqlAgentResult
-                catalog_sql = _lookup_sql_catalog(user_query)
+                catalog_sql = _lookup_sql_catalog(_sql_pipeline_question)
                 if catalog_sql:
                     quoted_sql = _quote_catalog_sql_tables(catalog_sql)
                     catalog_rows = _run_sql(sql_db, quoted_sql)
                     if catalog_rows:
                         result = SqlAgentResult(sql=quoted_sql, rows=catalog_rows)
-                        logger.info("SQL catalog fallback returned %d rows for: %r", len(catalog_rows), user_query[:60])
+                        logger.info("SQL catalog fallback returned %d rows for: %r", len(catalog_rows), _sql_pipeline_question[:60])
             except Exception as catalog_err:
                 logger.debug("SQL catalog fallback failed: %s", catalog_err)
 
@@ -2134,7 +2381,7 @@ If result is empty, say so and suggest a refined question.
             try:
                 from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
                 from .ai_query_memory_service import validate_sql_for_safe_execution
-                catalog_sql = _lookup_sql_catalog(user_query)
+                catalog_sql = _lookup_sql_catalog(_sql_pipeline_question)
                 if catalog_sql:
                     quoted = _quote_catalog_sql_tables(catalog_sql)
                     is_valid, err = validate_sql_for_safe_execution(quoted)
@@ -2179,7 +2426,7 @@ If result is empty, say so and suggest a refined question.
                                 )
                     except Exception:
                         pass
-                    prompt = f"""You are an SAP SQL expert. The user asked: "{user_query}"
+                    prompt = f"""You are an SAP SQL expert. The user asked: "{_sql_pipeline_question}"
 
 Database schema (PostgreSQL, table names may need double quotes for uppercase):
 {schema_text[:6000]}
@@ -2230,12 +2477,12 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                         import google.generativeai as genai
 
                         schema_text = get_schema_text(sql_db, include_semantic_map=True)
-                        intent_block = build_intent_sql_prompt_block(user_query)
+                        intent_block = build_intent_sql_prompt_block(_sql_pipeline_question)
                         # Best-effort table extraction from schema header lines.
                         table_names = sorted(set(re.findall(r"^\s*[-*]?\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:(]", schema_text, flags=re.MULTILINE)))
                         join_hints = join_hints_for_tables(table_names[:40]) if table_names else ""
                         sec_prompt = (
-                            f"User question: {user_query}\n\n"
+                            f"User question: {_sql_pipeline_question}\n\n"
                             f"{intent_block}\n\n"
                             f"{join_hints}\n\n"
                             f"Schema excerpt:\n{schema_text[:6000]}\n\n"
@@ -2415,7 +2662,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                             )
 
                         augmented_q = (
-                            user_query
+                            _sql_pipeline_question
                             + "\n\n[MANDATORY SQL CONSTRAINTS (do not ignore):]\n"
                             + "\n".join(mandatory_parts)
                             + "\n"
@@ -2525,11 +2772,11 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
             try:
                 from .ai_intent_classifier import build_intent_sql_prompt_block
 
-                _retry_intent = build_intent_sql_prompt_block(user_query)
+                _retry_intent = build_intent_sql_prompt_block(_sql_pipeline_question)
             except Exception:
                 pass
             _retry = run_schema_driven_sql_agent(
-                user_query,
+                _sql_pipeline_question,
                 sql_db,
                 few_shot_examples=_few_shot,
                 intent_context=_retry_intent,
@@ -2645,7 +2892,7 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                 )
             else:
                 _filter_hint = f" [MANDATORY: Filter results to only include '{_entity_val}'.]"
-            _augmented_q = user_query + _filter_hint
+            _augmented_q = _sql_pipeline_question + _filter_hint
             logger.info(
                 "missing_focus retry: entity '%s' not in rows, retrying with explicit filter hint for %s",
                 _entity_val, _entity_type,

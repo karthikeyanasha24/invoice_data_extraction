@@ -31,6 +31,7 @@ from sqlalchemy import text
 from ..database import get_db
 from ..config.config import OPENAI_API_KEY, USE_SAP_DB_FOR_AI
 from ..database import get_sap_session
+from ..services.ai_followup_routing import follow_up_requires_fresh_sql
 
 logger = logging.getLogger("zodiac-api.adaptive_query")
 router = APIRouter(tags=["adaptive-query"])
@@ -140,7 +141,7 @@ _TABLE_CONTEXT: Dict[str, str] = {
     "BSAD":   "Customer cleared items (open item accounting). belnr=doc#, kunnr=customer, dmbtr=cleared amount(TEXT→CAST), wrbtr=doc currency amount(TEXT→CAST), shkzg=D/C, budat=clearing date(YYYYMMDD), augdt=clearing date",
     "FAGLFLEXA": "General ledger ACTUAL line items (new GL). prctr=profit center, rbukrs=company code, racct=GL account, docnr=doc#, ryear=fiscal year, poper=period('001'-'012'), hsl=local amount(TEXT→CAST), ksl=2nd currency amount(TEXT→CAST), msl=quantity(TEXT→CAST), rtcur=currency, rclnt=client",
     "DFKKOP":  "FI-CA document item (contract accounts). faedn=due date(YYYYMMDD), betrw=amount, waers=currency",
-    "T016T":   "Credit control area texts. kkber=credit control area, spras=language, name=description",
+    "T016T":   "Industry sector TEXTS (KNA1.brsch = T016T.brsch, spras=language). Use ONLY when the user explicitly asks for industry/sector; join via KNA1 — not for generic customer lists",
     # SAP Controlling
     "COEP":   "CO document line items (actual). kokrs=controlling area, belnr=doc#, buzei=item#, objnr=cost object, kstar=cost element, kostl=cost center, lstar=activity type, wkg001-wkg012=period amounts (need CAST if TEXT)",
     "COSP":   "Cost totals external postings. kokrs=controlling area, objnr=cost object, kstar=cost element, gjahr=fiscal year",
@@ -377,6 +378,20 @@ Material:
   "MARA" → "MARC":  m.matnr = c.matnr  (general → plant data)
   "MARC" → "MARD":  c.matnr = d.matnr AND c.werks = d.werks  (plant data → stock)
   "MARA" → "MBEW":  m.matnr = v.matnr  (material → valuation)
+  "MARA" → "MEAN":  m.matnr = e.matnr  (EAN / units of measure variants)
+  "MARA" → "MVKE":  m.matnr = v.matnr  (sales data for material — join v.vkorg = billing vbrp.vkorg when needed)
+
+Product drill-down from billing (join order — transaction first, then masters):
+  "vbrp" p → "MARA" m ON p.matnr = m.matnr
+  → "MAKT" t ON m.matnr = t.matnr AND t.spras = 'E'
+  → "MEAN" e ON m.matnr = e.matnr (optional; multiple rows per material possible)
+  → "MVKE" vk ON m.matnr = vk.matnr AND vk.vkorg = TRIM(p.vkorg) AND vk.vtweg = TRIM(p.vtweg) when those exist on line
+  → "MARC" mc ON m.matnr = mc.matnr AND mc.werks = TRIM(p.werks)  (plant-specific material)
+
+Master vs transaction:
+  Transaction / fact tables hold document numbers, dates, quantities, amounts (VBRK, vbrp, VBAK, VBAP, EKKO, EKPO, etc.).
+  Master tables hold attributes (KNA1 customer, MARA material, MAKT text, MARC plant params, MVKE sales views).
+  Always join facts → masters on business keys (VBELN, MATNR, KUNNR); never invent keys between unrelated masters.
 
 ══════════════════════════════════════════════════════
 SECTION 3: BUSINESS RULES & KEYWORD MAPPING
@@ -386,6 +401,24 @@ INVOICE COUNT (Andy's issue: count invoices NOT line items):
   ✓ GROUP BY "VBRK".vbeln  (one row per invoice document)
   ✗ GROUP BY "vbrp".vbeln, "vbrp".posnr  (this counts line items, not invoices)
   Multiple line items per invoice is NORMAL — always aggregate at header level for invoice counts
+
+INVOICE AMOUNT / ZERO OR NEGATIVE **BILLING DOCUMENT** (header vs line — critical):
+  - For "invoice value", "billing document total", "zero-value invoices", "negative invoices",
+    "non-zero invoice", or any question about the **document** total: use **"VBRK"."netwr"** first
+    (cast safely). A document is NOT "zero amount" just because some "vbrp" lines have netwr = 0;
+    line items are product-level; the header total is authoritative for the invoice.
+  - Use **"vbrp"."netwr"** only for line-item / product-level amounts, margins by material, etc.
+  - For "negative **sales** at line level" (credit memo lines): filter on **"vbrp"** rows.
+  - Do **not** add **T016T** (industry) unless the user explicitly says industry, sector, or brsch.
+
+TRANSACTION vs MASTER DATA:
+  - **Transaction / facts** (amounts, quantities, dates of business events): "VBRK", "vbrp", "EKKO", "EKPO",
+    "RBKP", "RSEG", "BKPF", "BSEG", "FAGLFLEXA", etc.
+  - **Master / attributes** (names, descriptions, plant params, EAN): "KNA1", "MARA", "MAKT", "MARC", "MVKE", "MEAN", etc.
+  - Rule: compute money from transaction tables; **LEFT JOIN** master tables for labels. For deep product
+    analysis: start from **"vbrp"** (+ "VBRK" for filters), join **MARA** on matnr, **MAKT** on matnr AND spras='E',
+    **MARC** on matnr and werks (use **"vbrp"."werks"** when present), **MVKE** on matnr + vkorg/vtweg/spart
+    (align with **"VBRK"** sales org fields when available), **MEAN** on matnr (and meinh if needed).
 
 CUSTOMER NUMBERS:
   "VBRK".kunag = payer/customer (use this for customer billing analysis)
@@ -936,6 +969,41 @@ def _universal_query(
     return None
 
 
+def _compose_drilldown_user_message(
+    question: str,
+    prev_q: str,
+    prev_sql: str,
+    rows: List[Dict],
+) -> str:
+    sample = rows[:12] if rows else []
+    prev_sql_clip = (prev_sql or "")[:1800]
+    prev_q_clip = (prev_q or "")[:800]
+    sample_json = json.dumps(sample, default=str)[:3500]
+
+    return f"""This is a CONTINUATION of an analysis session. The user already ran a query; now they want to go deeper (same business thread — keep filters, time range, and entities consistent unless they explicitly change them).
+
+Previous question:
+{prev_q_clip}
+
+Previous SQL (for context — you may REPLACE it entirely with a better query for the new request):
+```sql
+{prev_sql_clip}
+```
+
+Sample of prior result rows (for filter hints — do not assume all data is here):
+{sample_json}
+
+New request (generate ONE new PostgreSQL SELECT for this):
+{question.strip()}
+
+Rules:
+- Prefer preserving WHERE/GROUP intent from the previous question (years, customers, document lists).
+- For product / line detail: use "vbrp" with "VBRK", then LEFT JOIN MARA, MAKT (spras='E'), MARC, MVKE, MEAN as needed.
+- For invoice-level zero/negative: filter on cast "VBRK"."netwr", not only line sums.
+- Do NOT add T016T / industry unless the new request explicitly asks for industry or sector.
+"""
+
+
 def _followup_analysis(question: str, prev_q: str, prev_sql: str,
                        rows: List[Dict], api_key: str) -> str:
     from openai import OpenAI
@@ -1032,12 +1100,31 @@ async def post_query_adaptive(
         return {"sql": overrideSql, "rowCount": len(data), "data": data,
                 "summary": summary, "tableHint": tableHint}
 
-    # ── Path 2: Follow-up analysis ──────────────────────────────────────────
+    # ── Path 2: Follow-up — either fresh SQL (drill-down) or narrative analysis ──
     if contextData and isinstance(contextData, dict):
         prev_q   = str(contextData.get("previousQuestion") or "").strip()
         prev_sql = str(contextData.get("previousSQL") or "").strip()
         rows_raw = contextData.get("data")
         rows_list: List[Dict[str, Any]] = rows_raw if isinstance(rows_raw, list) else []
+
+        if follow_up_requires_fresh_sql(q):
+            augmented = _compose_drilldown_user_message(q, prev_q, prev_sql, rows_list)
+            logger.info("[universal] follow-up drill-down → fresh SQL (was analysis-only path)")
+            try:
+                use_sap = bool(USE_SAP_DB_FOR_AI)
+                result = _universal_query(augmented, api_key, db, use_sap, max_retries=3)
+                if result:
+                    result["follow_up_mode"] = "drill_down_sql"
+                    result["tableHint"] = tableHint
+                    return result
+            except Exception as drill_err:
+                logger.warning("[universal] drill-down SQL path failed: %s", drill_err)
+            try:
+                answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
+                return {"type": "analysis", "answer": answer}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
+
         try:
             answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
             return {"type": "analysis", "answer": answer}

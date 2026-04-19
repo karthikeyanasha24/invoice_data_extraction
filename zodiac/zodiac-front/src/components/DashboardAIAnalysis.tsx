@@ -1419,7 +1419,7 @@ function ChatPanel({
               <path fillRule="evenodd" d="M18 10c0 4.418-3.582 8-8 8S2 14.418 2 10 5.582 2 10 2s8 3.582 8 8zm-8-3a1 1 0 100 2 1 1 0 000-2zm-1 4a1 1 0 012 0v3a1 1 0 01-2 0v-3z" clipRule="evenodd" />
             </svg>
             <span>
-              <strong>Follow-up</strong> — answers from the last query in this session (server-side thread). For new data, switch to <button type="button" className="underline font-semibold" onClick={() => setQueryMode?.('new')}>New question</button>.
+              <strong>Follow-up</strong> — continues your last result: interpretations use the preview; <strong>drill-downs</strong> (e.g. by product, line items, extra joins) run a <strong>new SQL query</strong> with the same filters when possible. Use <button type="button" className="underline font-semibold" onClick={() => setQueryMode?.('new')}>New question</button> for an unrelated topic.
             </span>
           </div>
         )}
@@ -1992,9 +1992,10 @@ export default function DashboardAIAnalysis() {
       }
 
       const reply = (res?.summary ?? res?.answer ?? '') || 'No response received.';
+      const ranFreshSql = Boolean(res?.sql);
       const meta: AiAnalysisMeta = {
-        action: queryMode === 'follow_up' ? 'follow_up' : 'new',
-        reason: res?.retried ? 'auto_retry' : undefined,
+        action: ranFreshSql ? 'new' : queryMode === 'follow_up' ? 'follow_up' : 'new',
+        reason: res?.retried ? 'auto_retry' : (res?.follow_up_mode === 'drill_down_sql' ? 'drill_down_sql' : undefined),
         sql: res?.sql,
         rows_preview: Array.isArray(res?.data) ? res.data : undefined,
         charts: res?.charts,

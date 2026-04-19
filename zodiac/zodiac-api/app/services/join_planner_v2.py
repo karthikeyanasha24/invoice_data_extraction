@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
-from .join_graph import JoinEdge, load_join_graph
+from .join_graph import JoinEdge, preferred_join_graph
 
 
 @dataclass(frozen=True)
@@ -40,25 +40,26 @@ def find_join_path(start_table: str, target_table: str) -> Optional[List[JoinEdg
         return None
     if s == t:
         return []
-    edges = load_join_graph()
-    neigh = _neighbors(edges)
-    q = deque([(s, [])])
-    seen: Set[str] = set()
-    while q:
-        cur, path = q.popleft()
-        if cur in seen:
-            continue
-        seen.add(cur)
-        for nxt in neigh.get(cur, set()):
-            if nxt in seen:
+    for include_low in (False, True):
+        edges = preferred_join_graph(include_low_confidence=include_low)
+        neigh = _neighbors(edges)
+        q = deque([(s, [])])
+        seen: Set[str] = set()
+        while q:
+            cur, path = q.popleft()
+            if cur in seen:
                 continue
-            edge = _edge_between(edges, cur, nxt)
-            if edge is None:
-                continue
-            new_path = path + [edge]
-            if nxt == t:
-                return new_path
-            q.append((nxt, new_path))
+            seen.add(cur)
+            for nxt in neigh.get(cur, set()):
+                if nxt in seen:
+                    continue
+                edge = _edge_between(edges, cur, nxt)
+                if edge is None:
+                    continue
+                new_path = path + [edge]
+                if nxt == t:
+                    return new_path
+                q.append((nxt, new_path))
     return None
 
 
