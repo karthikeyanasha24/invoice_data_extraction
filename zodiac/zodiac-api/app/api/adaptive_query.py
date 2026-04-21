@@ -1497,7 +1497,10 @@ def _universal_query(
                         messages=[
                             {"role": "system", "content": (
                                 "You are a data analyst. Summarize database results in 2-4 clear, specific sentences. "
-                                "Include key numbers, top values, and actionable insights. Be specific and concise."
+                                "Include key numbers, top values, and actionable insights. Be specific and concise. "
+                                "CRITICAL NUMBER FORMATTING: never confuse scale (thousand/million/billion). "
+                                "When using M/B abbreviations, also include at least one exact value with separators "
+                                "(e.g., 1,245,678.90) and currency code/symbol to avoid decimal ambiguity."
                             )},
                             {"role": "user", "content": (
                                 f"Question: {question}\n"

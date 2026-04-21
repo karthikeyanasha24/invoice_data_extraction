@@ -3037,6 +3037,14 @@ STRICT RULES (do NOT break these):
 - Never claim "all rows in the dataset/table/year" unless RESULT_SCOPE.kind == "full".
 - If RESULT_SCOPE.kind == "limited", explicitly state that conclusions are based on the returned limited rows.
 
+DECIMAL PRECISION RULES (CRITICAL — client must be able to distinguish 1M from 10M from 100M):
+- ALWAYS write monetary/numeric values with full comma-formatted precision: e.g. "534,600,000" NOT "534.6M" or "534600000".
+- When you use an abbreviated form (M/B), you MUST ALSO show the full number: e.g. "534,600,000 INR (≈534.6 million)".
+- Negative amounts: write the minus sign explicitly, e.g. "-$6,772,120.76" NOT "$6.77M negative".
+- For totals and key figures cited in the Executive Summary and Key Metrics: always use the full comma-formatted number.
+- Never round a number in a way that could change the understood order of magnitude (e.g. never write "6.77M" if the true value is -6,772,120.76 — write "-6,772,120.76").
+- Decimal places: show at least 2 decimal places for monetary values (e.g. "534,600,000.00 INR"), or as many as are significant in the data.
+
 GLOBAL_NUMERIC_STATS (mandatory):
 {json.dumps(global_stats, default=str)}
 
@@ -3384,6 +3392,23 @@ Write a clear MARKDOWN answer:
             "wide_row_inspection": result_shape.get("wide_row_inspection"),
         },
     }
+
+    # ── Automatic drill-down analysis (Andy's requirement 2026-04-21) ─────────
+    # When the result contains negative/anomalous sales, automatically drill deeper:
+    # billing documents → products → industry → business reason → profit margin.
+    # This prevents the client from having to ask each follow-up manually.
+    try:
+        from .drill_down_analyzer import run_drill_down
+        _drill_db = sap_db or db
+        _drill = run_drill_down(_drill_db, user_query, result.rows)
+        if _drill.triggered and _drill.narrative:
+            reply = (reply or "") + _drill.narrative
+            logger.info("drill_down_analyzer: appended drill-down narrative")
+            if _drill.raw:
+                _ac_payload["drill_down"] = {k: v[:5] for k, v in _drill.raw.items()}
+    except Exception as _dd_err:
+        logger.debug("drill_down_analyzer: skipped (non-critical): %s", _dd_err)
+    # ── End drill-down ─────────────────────────────────────────────────────────
 
     return OrchestratorResult(
         reply=reply or "Query executed, but I couldn't generate a summary.",

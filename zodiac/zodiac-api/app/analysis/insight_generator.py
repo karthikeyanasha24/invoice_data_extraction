@@ -128,6 +128,12 @@ STRICT RULES:
 - If the user asked about specific years and those years appear in the result, state the numeric outcome for those periods using only values from GLOBAL_NUMERIC_STATS and the sample rows.
 - Avoid generic business filler (e.g. unrelated "focus on top customers") unless the question or result columns clearly support it.
 
+DECIMAL PRECISION RULES (MANDATORY — client must distinguish 1M from 10M from 100M):
+- ALL monetary/numeric values in key_metrics and executive_summary MUST use full comma-formatted numbers: e.g. "534,600,000" NOT "534.6M" or "534600000".
+- If you use an abbreviated form in insights/recommendations, also show the full number: e.g. "534,600,000 INR (≈534.6 million)".
+- For negative amounts always write the sign: e.g. "-$6,772,120.76" NOT "$6.77M negative".
+- Always include the currency code or symbol with every monetary figure (e.g. "534,600,000.00 INR", "-$6,772,120.76 USD").
+
 Write a JSON object with exactly these keys (no other text):
 - executive_summary: 1-2 sentences summarizing the main finding.
 - key_metrics: array of 2-5 short strings, each one key metric (e.g. "Total Revenue: $2.7B").

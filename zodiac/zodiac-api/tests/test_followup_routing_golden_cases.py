@@ -24,3 +24,8 @@ def test_followup_routes_master_join_request_to_fresh_sql() -> None:
 def test_followup_does_not_force_sql_for_plain_analysis_prompt() -> None:
     q = "Can you summarize what this result means for the business?"
     assert not follow_up_requires_fresh_sql(q)
+
+
+def test_followup_routes_industry_reason_margin_deep_dive_to_fresh_sql() -> None:
+    q = "Which industry are these products from and what is the profit margin and reason of this negative sales?"
+    assert follow_up_requires_fresh_sql(q)

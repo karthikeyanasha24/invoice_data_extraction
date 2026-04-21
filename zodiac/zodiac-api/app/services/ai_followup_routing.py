@@ -73,6 +73,18 @@ _EXTRA_DRILL_TOKENS = (
     "also include",
     "join to",
     "join with",
+    "which billing documents",
+    "billing documents",
+    "which products",
+    "products are showing",
+    "which industry",
+    "industry are these products",
+    "reason of negative sales",
+    "reason for negative sales",
+    "why negative sales",
+    "profit margin",
+    "margin of the products",
+    "deeper analysis",
 )
 
 _INV_DOC_HEADER_TOKENS = (
