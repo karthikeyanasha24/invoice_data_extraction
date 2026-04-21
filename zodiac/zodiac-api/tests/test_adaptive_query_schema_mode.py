@@ -3,6 +3,8 @@ from app.api.adaptive_query import (
     _build_schema_structure_answer,
     _extract_known_columns_from_question,
     _looks_like_schema_structure_question,
+    _schema_reference_violations,
+    _sql_guardrail_violations,
 )
 
 
@@ -68,4 +70,52 @@ def test_schema_structure_payload_sets_coverage_gap_and_clarification() -> None:
     payload = _build_schema_structure_payload("explain this business domain deeply")
     assert payload.get("schemaIntentType") == "coverage_gap"
     assert payload.get("clarifyingQuestion")
+
+
+def test_sql_guardrail_flags_invoice_header_logic_when_vbrk_netwr_missing() -> None:
+    question = "show zero and negative invoice values"
+    sql = """
+    SELECT p."vbeln", SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC)) AS total
+    FROM "vbrp" p
+    GROUP BY p."vbeln"
+    HAVING SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC)) > 0
+    """
+    violations = _sql_guardrail_violations(question, sql)
+    joined = " | ".join(violations).lower()
+    assert "vbrk.netwr" in joined
+    assert "having > 0" in joined
+
+
+def test_sql_guardrail_flags_irrelevant_industry_table() -> None:
+    question = "show invoices by customer"
+    sql = """
+    SELECT k."vbeln", c."name1"
+    FROM "VBRK" k
+    LEFT JOIN "KNA1" c ON k."kunag" = c."kunnr"
+    LEFT JOIN "T016T" t ON c."brsch" = t."brsch"
+    """
+    violations = _sql_guardrail_violations(question, sql)
+    assert any("t016t" in v.lower() for v in violations)
+
+
+def test_schema_reference_violations_detect_unknown_table_and_column() -> None:
+    sql = """
+    SELECT "VBRK"."not_a_real_column"
+    FROM "VBRK"
+    JOIN "NOT_A_TABLE" x ON 1=1
+    """
+    violations = _schema_reference_violations(sql)
+    joined = " | ".join(violations).lower()
+    assert "unknown table reference" in joined
+    assert "unknown column" in joined
+
+
+def test_schema_reference_violations_accept_valid_vbrk_vbrp_query() -> None:
+    sql = """
+    SELECT k."vbeln", k."fkdat", k."netwr", p."matnr", p."netwr"
+    FROM "VBRK" k
+    JOIN "vbrp" p ON k."vbeln" = p."vbeln"
+    """
+    violations = _schema_reference_violations(sql)
+    assert violations == []
 

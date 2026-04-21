@@ -473,6 +473,48 @@ KEYWORD → TABLES MAPPING:
   "AI query" / "chat history" → ai_chat_turns, ai_query_memory
 
 ══════════════════════════════════════════════════════
+SECTION 3b: ADDITIONAL SAP ACCURACY RULES (mandatory)
+══════════════════════════════════════════════════════
+
+FISCAL-YEAR COMPOUND KEYS (critical — belnr alone is NEVER unique across years):
+  RBKP + RSEG:    JOIN ON r."belnr" = s."belnr" AND r."gjahr" = s."gjahr"
+  BKPF + BSEG:    JOIN ON b."belnr" = s."belnr" AND b."bukrs" = s."bukrs" AND b."gjahr" = s."gjahr"
+  Missing gjahr or bukrs silently returns cross-year / cross-company matches — ALWAYS include all keys.
+
+TEXT/DESCRIPTION TABLE LANGUAGE FILTER (mandatory to prevent row multiplication):
+  MAKT: always join with AND t."spras" = 'E'   (English; one row per material per language)
+  T016T: always join with AND t."spras" = 'E'  (industry sector texts)
+  CSKT: always join with AND s."spras" = 'E'   (cost center texts)
+  Without spras the join returns N rows per key (one per language), inflating counts and corrupting SUM.
+
+ACTIVE / OPEN RECORD FILTERS (deletion/block flags):
+  Open POs:       TRIM(COALESCE(k."loekz",'')) = '' (EKKO) AND TRIM(COALESCE(p."loekz",'')) = '' (EKPO)
+  Open PO items:  TRIM(COALESCE(p."elikz",'')) = '' (delivery not complete)
+  Active vendors: TRIM(COALESCE(v."loevm",'')) = '' (LFA1)
+  Active customers: TRIM(COALESCE(c."sperr",'')) = '' (KNA1)
+  Active materials: TRIM(COALESCE(m."lvorm",'')) = '' (MARA)
+  Always apply these when the question says "active", "open", "outstanding", "current", or "not deleted".
+
+QUANTITY UNIT-OF-MEASURE CONSISTENCY:
+  SAP quantities (menge, fkimg, kwmeng, lfimg) are stored in the UOM set in meins/gmein.
+  NEVER SUM quantities without ensuring a single UOM scope:
+    ✓ GROUP BY p."meins"  (show totals per UOM)
+    ✓ WHERE p."meins" = 'EA'  (filter to one UOM)
+    ✗ SUM(menge) across mixed UOMs — this is mathematically meaningless
+
+SAP FISCAL PERIOD (FAGLFLEXA.poper):
+  poper '001'–'012' = regular posting periods (Jan–Dec for calendar-year companies)
+  poper '013'–'016' = period-end adjustment periods (balance sheet adjustments)
+  For operational cost/revenue queries, filter WHERE f."poper" BETWEEN '001' AND '012'
+  to exclude year-end adjustment postings unless explicitly asked.
+
+PURCHASING PRICE PER UNIT (EINE / EKPO):
+  EINE.netpr and EKPO.netpr are price per PEINH units, NOT per 1 unit.
+  True unit price = CAST(NULLIF(TRIM(CAST(netpr AS TEXT)),'') AS NUMERIC)
+                   / NULLIF(CAST(NULLIF(TRIM(CAST(peinh AS TEXT)),'') AS NUMERIC), 0)
+  Always divide by peinh when computing unit prices from purchasing info records.
+
+══════════════════════════════════════════════════════
 SECTION 4: PROVEN READY-TO-USE SQL PATTERNS
 ══════════════════════════════════════════════════════
 
@@ -548,6 +590,49 @@ SELECT id, vendor_rfc, vendor_name, fiscal_year, fiscal_period,
 FROM sat_simple_merged
 WHERE sent_to_sap = false
 ORDER BY created_at DESC LIMIT 100;
+
+-- Zero-value and negative billing documents (ALWAYS filter on VBRK.netwr — header is authoritative):
+-- RULE: An invoice is zero/negative ONLY when VBRK.netwr = 0 or < 0.
+-- Do NOT derive from vbrp: a single vbrp line item with netwr=0 does NOT mean the invoice is zero.
+SELECT k."vbeln" AS invoice_doc, k."kunag" AS customer_id, c."name1" AS customer_name,
+       k."fkdat" AS billing_date, k."waerk" AS currency, k."fkart" AS doc_type,
+       CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) AS invoice_total
+FROM "VBRK" k
+LEFT JOIN "KNA1" c ON LPAD(TRIM(k."kunag"), 10, '0') = LPAD(TRIM(c."kunnr"), 10, '0')
+WHERE TRIM(COALESCE(k."netwr", '')) <> ''
+  AND CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) <= 0
+ORDER BY invoice_total ASC, k."fkdat" DESC LIMIT 100;
+
+-- Product drill-down from billing — COMPLETE join hierarchy (vbrp → MARA → MAKT → MEAN → MVKE → MARC):
+-- Use this template whenever the question asks for product attributes, product name, description,
+-- material group, plant data, EAN/barcode, or sales unit alongside billing amounts.
+-- NOTE: MAKT needs spras='E'. MVKE needs vkorg+vtweg alignment. MEAN may have multiple rows per matnr.
+SELECT
+    p."vbeln" AS billing_doc,
+    p."posnr" AS item,
+    p."matnr" AS material_id,
+    t."maktx" AS material_description,
+    m."matkl" AS material_group,
+    m."mtart" AS material_type,
+    m."meins" AS base_uom,
+    CAST(NULLIF(TRIM(CAST(m."brgew" AS TEXT)), '') AS NUMERIC) AS gross_weight,
+    e."ean11" AS ean_barcode,
+    vk."dpppp" AS material_pricing_group,
+    mc."beskz" AS procurement_type,
+    mc."werks" AS plant,
+    p."waerk" AS currency,
+    CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC) AS line_net_value,
+    CAST(NULLIF(TRIM(CAST(p."fkimg" AS TEXT)), '') AS NUMERIC) AS billed_qty,
+    p."meins" AS sales_uom
+FROM "vbrp" p
+LEFT JOIN "MARA" m ON p."matnr" = m."matnr"
+LEFT JOIN "MAKT" t ON m."matnr" = t."matnr" AND t."spras" = 'E'
+LEFT JOIN "MEAN" e ON m."matnr" = e."matnr" AND e."meinh" = m."meins"
+LEFT JOIN "MVKE" vk ON m."matnr" = vk."matnr"
+    AND TRIM(vk."vkorg") = TRIM(p."vkorg")
+    AND TRIM(vk."vtweg") = TRIM(p."vtweg")
+LEFT JOIN "MARC" mc ON m."matnr" = mc."matnr" AND TRIM(mc."werks") = TRIM(p."werks")
+ORDER BY p."vbeln", p."posnr" LIMIT 200;
 
 ══════════════════════════════════════════════════════
 OUTPUT RULE: Return ONLY the SQL inside a ```sql block. NOTHING ELSE.
@@ -847,6 +932,464 @@ def _chart_title(question: str, fallback: str) -> str:
     return q[:50].strip() + "…"
 
 
+def _sql_guardrail_violations(question: str, sql: str) -> List[str]:
+    """
+    Hard business guardrails for known accuracy issues.
+    If any violation is returned, ask the model to regenerate SQL before executing.
+    """
+    q = (question or "").lower()
+    s = (sql or "")
+    s_lower = s.lower()
+    violations: List[str] = []
+
+    asks_line_level = any(tok in q for tok in ("line item", "line items", "item level", "product level", "by product"))
+    asks_invoice_doc_value = (
+        any(tok in q for tok in ("invoice", "billing document", "billing"))
+        and any(tok in q for tok in ("zero", "negative", "invoice value", "invoice total", "document total", "netwr"))
+        and not asks_line_level
+    )
+    if asks_invoice_doc_value:
+        has_vbrk = '"vbrk"' in s_lower
+        has_header_netwr = bool(re.search(r'"vbrk"\s*\.\s*"netwr"', s_lower))
+        if not (has_vbrk and has_header_netwr):
+            violations.append(
+                "Invoice/document zero-negative logic must use VBRK.NETWR (header) with cast; "
+                "do not rely only on vbrp line netwr. "
+                "A billing document is zero/negative ONLY when VBRK.netwr is zero/negative — "
+                "some invoices have individual vbrp line items with netwr=0 but the header total is non-zero. "
+                "Always filter: WHERE CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) <= 0 on VBRK."
+            )
+        if re.search(r"\bhaving\b[\s\S]{0,220}>\s*0", s_lower):
+            violations.append(
+                "Query is filtering positive-only with HAVING > 0; for zero/negative invoice checks "
+                "you must include zero and/or negative values."
+            )
+        # Prevent ambiguous netwr usage that commonly shifts logic to line items.
+        has_unqualified_netwr = bool(
+            re.search(r'(?<![\."a-zA-Z0-9_])netwr(?![\."a-zA-Z0-9_])', s_lower)
+        )
+        if has_unqualified_netwr and not has_header_netwr:
+            violations.append(
+                "Invoice-value logic uses ambiguous NETWR reference. Qualify with "
+                '"VBRK"."netwr" for document-level checks.'
+            )
+        # Critical: zero/negative must use WHERE on VBRK.netwr, not GROUP BY / HAVING on vbrp.
+        # Grouping vbrp by posnr and summing produces line-item totals, not invoice totals.
+        if '"vbrp"' in s_lower and has_header_netwr:
+            if re.search(r'\bgroup\s+by\b[\s\S]{0,200}\bposnr\b', s_lower):
+                violations.append(
+                    "Zero/negative invoice query groups by vbrp.posnr (item level). "
+                    "Use VBRK.netwr in the WHERE clause to identify zero/negative invoices at header level; "
+                    "do not derive the invoice total by aggregating vbrp rows."
+                )
+        # Ensure the WHERE clause actually filters zero/negative on VBRK, not just selects it.
+        has_vbrk_netwr_filter = bool(
+            re.search(
+                r'\bwhere\b[\s\S]{0,800}\bcast\s*\([\s\S]{0,120}vbrk[\s\S]{0,40}netwr[\s\S]{0,60}\)\s*(<=|=|<)\s*0',
+                s_lower,
+            )
+        )
+        has_vbrk_netwr_having = bool(
+            re.search(
+                r'\bhaving\b[\s\S]{0,300}\bcast\s*\([\s\S]{0,120}vbrk[\s\S]{0,40}netwr[\s\S]{0,60}\)\s*(<=|=|<)\s*0',
+                s_lower,
+            )
+        )
+        if has_vbrk and has_header_netwr and not (has_vbrk_netwr_filter or has_vbrk_netwr_having):
+            violations.append(
+                "Zero/negative invoice query references VBRK.netwr but does not filter on it in WHERE/HAVING. "
+                "Add: WHERE CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) <= 0 "
+                "to restrict the result set to actual zero/negative billing documents."
+            )
+
+    # Generic zero/negative intent safety: do not filter requested exception rows away.
+    asks_zero_or_negative = any(tok in q for tok in ("zero", "negative", "credit memo", "exception"))
+    if asks_zero_or_negative:
+        if re.search(
+            r"\b(where|having)\b[\s\S]{0,300}\b(netwr|dmbtr|wrbtr|rmwwr|hsl|ksl|wsl|kwert|kbetr)\b[\s\S]{0,40}>\s*0",
+            s_lower,
+        ):
+            violations.append(
+                "Question asks zero/negative/exception values, but SQL filters amounts with > 0 and hides requested rows."
+            )
+    # Monetary comparisons on SAP text amounts must cast safely before numeric operators.
+    if re.search(
+        r"\b(where|having)\b[\s\S]{0,400}\b(netwr|dmbtr|wrbtr|rmwwr|hsl|ksl|wsl|kwert|kbetr)\b[\s\S]{0,30}(=|>=|<=|>|<)\s*-?\d",
+        s_lower,
+    ):
+        if "cast(nullif(trim(cast(" not in s_lower:
+            violations.append(
+                "Monetary comparison appears to use raw text amount; cast to NUMERIC with "
+                "CAST(NULLIF(TRIM(CAST(col AS TEXT)), '') AS NUMERIC) before filtering."
+            )
+
+    # Accuracy critical: VBRK.GJAHR is unreliable in this dataset (often '0000').
+    asks_year_billing = any(tok in q for tok in ("year", "fiscal year", "in 20", "in 19")) and any(
+        tok in q for tok in ("invoice", "billing", "sales", "vbrk")
+    )
+    if asks_year_billing and (
+        re.search(r'"vbrk"\s*\.\s*"gjahr"', s_lower)
+        or re.search(r'\b[a-zA-Z_][a-zA-Z0-9_]*\s*\.\s*"gjahr"', s_lower)
+        or re.search(r'(?<![a-zA-Z0-9_])gjahr(?![a-zA-Z0-9_])', s_lower)
+    ):
+        violations.append(
+            'Do not use "VBRK"."gjahr" for billing-year filtering. Use SUBSTRING(TRIM("VBRK"."fkdat"), 1, 4).'
+        )
+
+    # Accuracy critical: never SUM(vbrp.netwr) without explicit TEXT->NUMERIC cast.
+    if re.search(r"sum\s*\(\s*(?:p\.)?\"?netwr\"?\s*\)", s_lower):
+        if "cast(nullif(trim(cast(" not in s_lower:
+            violations.append(
+                'SUM on NETWR must cast TEXT to NUMERIC using CAST(NULLIF(TRIM(CAST(... AS TEXT)), \'\') AS NUMERIC).'
+            )
+
+    asks_industry = any(tok in q for tok in ("industry", "sector", "brsch"))
+    if ('"t016t"' in s_lower) and not asks_industry:
+        violations.append(
+            "T016T is industry-only; do not include industry table unless user explicitly asks industry/sector."
+        )
+
+    # Structured result quality: avoid wildcard output for business-facing analysis tables.
+    if re.search(r"\bselect\s+\*", s_lower):
+        violations.append(
+            "Avoid SELECT * for analysis queries. Select explicit business columns for stable, structured output."
+        )
+
+    # Listing/ranking style questions should be deterministic.
+    asks_list_or_rank = any(
+        tok in q
+        for tok in (
+            "top ", "highest", "lowest", "best", "worst", "list", "show", "display",
+            "descending", "ascending", "rank", "order",
+        )
+    )
+    if asks_list_or_rank and ("order by" not in s_lower):
+        violations.append(
+            "Listing/ranking query should include ORDER BY for deterministic output."
+        )
+    # Row-level listing safety: require LIMIT for non-aggregated list/show queries.
+    has_list_word = any(tok in q for tok in ("list", "show", "display"))
+    has_agg_func = bool(re.search(r"\b(sum|avg|min|max|count)\s*\(", s_lower))
+    if has_list_word and not has_agg_func and "limit" not in s_lower:
+        violations.append(
+            "Row-level listing query should include LIMIT to keep results stable and interpretable."
+        )
+    # Invoice listing queries that join line-item tables can duplicate invoice rows.
+    asks_invoice_listing = has_list_word and "invoice" in q and "count" not in q
+    joins_item_table = '"vbrp"' in s_lower or re.search(r'\bjoin\b[\s\S]{0,40}"?vbrp"?', s_lower)
+    has_select_distinct = bool(re.search(r"\bselect\s+distinct\b", s_lower))
+    if asks_invoice_listing and joins_item_table and not has_agg_func and not has_select_distinct:
+        violations.append(
+            "Invoice listing joins item-level data and may duplicate invoices; use SELECT DISTINCT "
+            'on invoice keys (e.g., "VBRK"."vbeln").'
+        )
+
+    # Amount queries should carry currency context to avoid misleading numbers.
+    asks_amount_context = any(
+        tok in q for tok in ("amount", "value", "revenue", "sales", "cost", "netwr", "total")
+    )
+    has_amount_column_ref = bool(
+        re.search(r'\b(netwr|rmwwr|dmbtr|wrbtr|hsl|ksl|wsl|stprs|wertn|kwert|kbetr)\b', s_lower)
+    )
+    has_currency_ref = bool(
+        re.search(r'\b(waerk|waers|rtcur|hwaer|currency)\b', s_lower)
+    )
+    if asks_amount_context and has_amount_column_ref and not has_currency_ref:
+        violations.append(
+            "Monetary query is missing currency column/context (e.g., WAERK/WAERS/RTCUR/HWAER)."
+        )
+    # Prevent incorrect totals from mixed currencies in aggregated monetary outputs.
+    has_aggregate = bool(re.search(r"\b(sum|avg|min|max)\s*\(", s_lower))
+    has_group_by = "group by" in s_lower
+    if has_amount_column_ref and has_aggregate:
+        mentions_currency_grouping = bool(
+            re.search(r"\bgroup\s+by\b[\s\S]{0,400}\b(waerk|waers|rtcur|hwaer|currency)\b", s_lower)
+        )
+        if not (has_currency_ref and (mentions_currency_grouping or not has_group_by)):
+            violations.append(
+                "Aggregated monetary query must include currency and group by currency "
+                "(or otherwise ensure single-currency scope) to avoid mixed-currency totals."
+            )
+        # If GROUP BY exists, currency must participate in grouping when monetary aggregates are present.
+        if has_group_by and has_currency_ref and not mentions_currency_grouping:
+            violations.append(
+                "Aggregated monetary query selects currency but does not group by currency, "
+                "which can still mix currencies in totals."
+            )
+        # Ensure aggregate expressions on monetary fields are safely cast from text.
+        unsafe_money_agg = re.search(
+            r'\b(sum|avg|min|max)\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*\s*\.\s*)?"?(netwr|rmwwr|dmbtr|wrbtr|hsl|ksl|wsl|kwert|kbetr)"?\s*\)',
+            s_lower,
+        )
+        if unsafe_money_agg and "cast(nullif(trim(cast(" not in s_lower:
+            violations.append(
+                "Monetary aggregate uses raw text amount. Use CAST(NULLIF(TRIM(CAST(col AS TEXT)), '') AS NUMERIC)."
+            )
+
+    # Prevent accidental Cartesian joins that inflate/warp business numbers.
+    if " join " in s_lower and " on " not in s_lower and " cross join " not in s_lower:
+        violations.append(
+            "JOIN is missing ON condition; this can produce incorrect Cartesian results."
+        )
+    if re.search(r"\bon\s+(?:1\s*=\s*1|true)\b", s_lower):
+        violations.append(
+            "JOIN uses tautological ON condition (ON 1=1/ON TRUE), which is not allowed for accurate analytics."
+        )
+
+    # Join-integrity checks for high-impact SAP relationships.
+    has_vbrk = '"vbrk"' in s_lower
+    has_vbrp = '"vbrp"' in s_lower
+    has_kna1 = '"kna1"' in s_lower
+    if has_vbrk and has_vbrp:
+        # Expect billing header-item join on VBELN.
+        if "vbeln" not in s_lower:
+            violations.append(
+                'VBRK + vbrp query is missing VBELN join key. Join billing header/items on "vbeln".'
+            )
+        if " on " in s_lower and "lpad" not in s_lower:
+            violations.append(
+                'VBRK↔vbrp joins should normalize keys with LPAD(TRIM(...),10,\'0\') to avoid leading-zero mismatches.'
+            )
+    if has_vbrk and has_kna1:
+        # Customer-name usage with KNA1 should join on customer key.
+        uses_customer_name = "name1" in s_lower
+        if uses_customer_name and ("kunag" not in s_lower and "kunnr" not in s_lower):
+            violations.append(
+                'VBRK + KNA1 customer query appears to miss customer key join. Use VBRK.KUNAG = KNA1.KUNNR (normalized if needed).'
+            )
+        if uses_customer_name and " on " in s_lower and "lpad" not in s_lower:
+            violations.append(
+                'VBRK↔KNA1 customer joins should normalize keys with LPAD(TRIM(...),10,\'0\') for accurate matching.'
+            )
+
+    # SAP date safety: these fields are text YYYYMMDD and should not be CAST to DATE.
+    sap_date_fields = ("fkdat", "budat", "audat", "erdat", "lfdat", "bedat", "agdat")
+    if any(f in s_lower for f in sap_date_fields):
+        if re.search(r"cast\s*\([\s\S]{0,80}\b(" + "|".join(sap_date_fields) + r")\b[\s\S]{0,40}\bas\s+date\s*\)", s_lower):
+            violations.append(
+                "SAP date fields (YYYYMMDD text) must not be CAST to DATE; use TRIM/SUBSTRING string comparisons."
+            )
+        # Direct comparisons on SAP text dates should be TRIM-normalized.
+        sap_date_cmp_pattern = (
+            r'(?:(?:"?[a-zA-Z_][a-zA-Z0-9_]*"?\s*\.\s*)?)'
+            r'"?(?:' + "|".join(sap_date_fields) + r')"?\s*(=|>=|<=|>|<)\s*\'\d{4,8}\''
+        )
+        if re.search(sap_date_cmp_pattern, s_lower) and "trim(" not in s_lower:
+            violations.append(
+                "SAP date comparisons should use TRIM(date_col) and exclude empty values for accurate filtering."
+            )
+        has_sap_date_literal_compare = re.search(sap_date_cmp_pattern, s_lower) or (
+            any(f in s_lower for f in sap_date_fields)
+            and bool(re.search(r"(=|>=|<=|>|<)\s*'\d{4,8}'", s_lower))
+        )
+        if has_sap_date_literal_compare:
+            has_non_empty_guard = ("trim(" in s_lower) and ("<> ''" in s_lower or "!= ''" in s_lower)
+            if not has_non_empty_guard:
+                violations.append(
+                    "SAP date filter should explicitly exclude empty values (e.g., TRIM(date_col) <> '')."
+                )
+
+    asks_product_drilldown = any(
+        tok in q
+        for tok in (
+            "product level", "line item", "line items", "item level", "by product",
+            "by material", "matnr", "deeper", "breakdown", "drill down",
+        )
+    )
+    if asks_product_drilldown and '"vbrp"' in s_lower:
+        if not any(t in s_lower for t in ('"makt"', '"mara"', '"marc"', '"mvke"', '"mean"')):
+            violations.append(
+                "Product drill-down should join billing items to material/product masters "
+                "(at least MAKT/MARA; optionally MARC/MVKE/MEAN) for meaningful attributes."
+            )
+
+    # Invoice count must be header-level (one row per invoice), not item-level.
+    asks_invoice_count = "invoice count" in q or ("count" in q and "invoice" in q)
+    if asks_invoice_count and (
+        ('"vbrp"' in s_lower and re.search(r'"vbrp"\s*\.\s*"posnr"', s_lower))
+        or re.search(r'\b[a-zA-Z_][a-zA-Z0-9_]*\s*\.\s*"posnr"', s_lower)
+    ):
+        violations.append(
+            'Invoice count query is item-level (VBRP.POSNR). Use header-level counting/grouping on "VBRK"."vbeln".'
+        )
+    if asks_invoice_count and "count(" in s_lower:
+        uses_distinct_vbeln = bool(re.search(r'count\s*\(\s*distinct[\s\S]{0,60}vbeln', s_lower))
+        if not uses_distinct_vbeln:
+            violations.append(
+                'Invoice count should use COUNT(DISTINCT "VBRK"."vbeln") to avoid line-item inflation.'
+            )
+
+    # ── NEW GUARDRAIL 1: RBKP+RSEG join must include GJAHR ───────────────────
+    # SAP document numbers (belnr) are reused across fiscal years. A join on
+    # belnr alone can silently pull wrong-year items and corrupt invoice totals.
+    has_rbkp = '"rbkp"' in s_lower
+    has_rseg = '"rseg"' in s_lower
+    if has_rbkp and has_rseg and re.search(r'\bjoin\b', s_lower):
+        if 'gjahr' not in s_lower:
+            violations.append(
+                'RBKP+RSEG join is missing GJAHR: use '
+                'JOIN ON r."belnr" = s."belnr" AND r."gjahr" = s."gjahr". '
+                'SAP document numbers repeat across fiscal years — omitting GJAHR silently returns '
+                'wrong cross-year document matches and corrupts invoice receipt totals.'
+            )
+
+    # ── NEW GUARDRAIL 2: BKPF+BSEG must join on BELNR + BUKRS + GJAHR ───────
+    # All three keys are mandatory for the FI accounting document relationship.
+    # Missing any one causes cross-company-code or cross-year row leakage.
+    has_bkpf = '"bkpf"' in s_lower
+    has_bseg = '"bseg"' in s_lower
+    if has_bkpf and has_bseg and re.search(r'\bjoin\b', s_lower):
+        missing_keys = []
+        if 'belnr' not in s_lower:
+            missing_keys.append('belnr')
+        if 'bukrs' not in s_lower:
+            missing_keys.append('bukrs')
+        if 'gjahr' not in s_lower:
+            missing_keys.append('gjahr')
+        if missing_keys:
+            violations.append(
+                f'BKPF+BSEG join is missing key(s): {", ".join(missing_keys)}. '
+                'The correct join is: b."belnr" = s."belnr" AND b."bukrs" = s."bukrs" AND b."gjahr" = s."gjahr". '
+                'Omitting bukrs or gjahr returns wrong cross-company or cross-year accounting line matches.'
+            )
+
+    # ── NEW GUARDRAIL 3: Text/description table joins must filter language ────
+    # MAKT, T016T, CSKT etc. store one row per language. Without spras='E' the
+    # LEFT JOIN multiplies every matched row N times (one per language loaded),
+    # inflating row counts and corrupting all SUM/COUNT aggregates.
+    _text_tables_with_lang = ('"makt"', '"t016t"', '"cskt"', '"t005t"', '"lfa1t"', '"t001t"')
+    if any(t in s_lower for t in _text_tables_with_lang) and re.search(r'\bjoin\b', s_lower):
+        if 'spras' not in s_lower:
+            table_hit = next(t.strip('"') for t in _text_tables_with_lang if t in s_lower)
+            violations.append(
+                f'Text/description table join ({table_hit.upper()}) is missing language filter '
+                "(spras = 'E'). Without it each joined row is duplicated once per language loaded "
+                'in SAP, inflating row counts and corrupting SUM/COUNT results.'
+            )
+
+    # ── NEW GUARDRAIL 4: Active/open PO queries must check deletion flags ─────
+    # EKKO.loekz = 'L' means the PO header is cancelled; EKPO.loekz = 'L' means
+    # the item is deleted. Queries for "active", "open", or "outstanding" POs
+    # must exclude these or results include cancelled documents.
+    asks_active_items = any(
+        tok in q for tok in ('active', 'open', 'outstanding', 'pending', 'not deleted', 'current')
+    )
+    asks_po = any(tok in q for tok in ('purchase order', 'po ', ' po', 'procurement', 'purchasing'))
+    if asks_active_items and asks_po and ('"ekko"' in s_lower or '"ekpo"' in s_lower):
+        if 'loekz' not in s_lower:
+            violations.append(
+                'Active/open PO query is missing deletion-flag filter (loekz). '
+                "Add TRIM(COALESCE(k.\"loekz\",'')) = '' for EKKO and "
+                "TRIM(COALESCE(p.\"loekz\",'')) = '' for EKPO "
+                'to exclude cancelled/deleted purchase orders from the results.'
+            )
+
+    # ── NEW GUARDRAIL 5: Quantity aggregation must reference unit-of-measure ──
+    # SAP quantities (menge, fkimg, kwmeng, lfimg) are stored in the UOM given
+    # in meins/gmein. Aggregating across different UOMs (EA, KG, M, L, …) is
+    # mathematically meaningless and produces silently wrong totals.
+    qty_agg_match = re.search(
+        r'\b(sum|avg)\s*\(\s*(?:cast\s*\([\s\S]{0,80}?)?\b'
+        r'(menge|fkimg|kwmeng|zmeng|abmng|lfimg|lsmng)\b',
+        s_lower,
+    )
+    if qty_agg_match:
+        has_uom_ref = bool(re.search(r'\b(meins|gmein|lmein|vrkme|meinh)\b', s_lower))
+        if not has_uom_ref:
+            col_hit = qty_agg_match.group(2).upper()
+            violations.append(
+                f'Quantity aggregation on {col_hit} is missing unit-of-measure reference '
+                '(meins/gmein). SAP stores quantities in mixed UOMs (EA, KG, M, …). '
+                'Add meins to GROUP BY or filter to a single UOM to avoid meaningless cross-UOM totals.'
+            )
+
+    return violations
+
+
+def _schema_reference_violations(sql: str) -> List[str]:
+    """
+    Validate explicit SQL references against tables_columns.csv-derived schema.
+    We only validate explicit/quoted SAP-style references and schema-qualified refs.
+    """
+    schema = _load_schema()
+    schema_tables_ci = {t.lower(): t for t in schema.keys()}
+    violations: List[str] = []
+
+    # FROM/JOIN table refs + aliases: FROM "VBRK" k / JOIN vbrp p
+    table_with_alias: List[tuple[str, str]] = []
+    # Quoted table refs: FROM "VBRK" k
+    for t, a in re.findall(
+        r'\b(?:from|join)\s+"([^"]+)"(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?',
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        table_with_alias.append((t, a or ""))
+    # Unquoted table refs: FROM vbrp p
+    for t, a in re.findall(
+        r'\b(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_]*)'
+        r'(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?',
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        table_with_alias.append((t, a or ""))
+    seen_tables: set[str] = set()
+    alias_to_table: Dict[str, str] = {}
+    for raw_tbl, alias in table_with_alias:
+        tbl = raw_tbl.strip('"')
+        tbl_ci = tbl.lower()
+        if tbl_ci not in schema_tables_ci:
+            violations.append(f'Unknown table reference: "{tbl}" is not in schema.')
+            continue
+        resolved_tbl = schema_tables_ci[tbl_ci]
+        seen_tables.add(resolved_tbl)
+        if alias:
+            alias_to_table[alias.lower()] = resolved_tbl
+
+    # "TABLE"."column" refs
+    qrefs = re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*\.\s*"([A-Za-z_][A-Za-z0-9_]*)"', sql)
+    for tbl, col in qrefs:
+        tbl_ci = tbl.lower()
+        resolved_tbl = schema_tables_ci.get(tbl_ci)
+        if not resolved_tbl:
+            violations.append(f'Unknown table in quoted reference: "{tbl}"."{col}".')
+            continue
+        cols = {c["col"].lower() for c in schema.get(resolved_tbl, [])}
+        if col.lower() not in cols:
+            violations.append(
+                f'Unknown column "{col}" on table "{resolved_tbl}" (from "{tbl}"."{col}").'
+            )
+
+    # alias.column and alias."column" refs
+    alias_col_refs = re.findall(
+        r'(?<!")\b([a-zA-Z_][a-zA-Z0-9_]*)\b\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?',
+        sql,
+    )
+    for alias, col in alias_col_refs:
+        a = alias.lower()
+        if a in {"public", "dbo"}:
+            continue
+        resolved_tbl = alias_to_table.get(a)
+        if not resolved_tbl:
+            # alias may actually be a table name written unquoted in ref
+            resolved_tbl = schema_tables_ci.get(a)
+        if not resolved_tbl:
+            continue
+        cols = {c["col"].lower() for c in schema.get(resolved_tbl, [])}
+        if col.lower() not in cols:
+            violations.append(
+                f'Unknown column "{col}" on table "{resolved_tbl}" (from alias/table "{alias}.{col}").'
+            )
+
+    # de-duplicate while preserving order
+    out: List[str] = []
+    seen: set[str] = set()
+    for v in violations:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 def _universal_query(
     question: str,
     api_key: str,
@@ -885,6 +1428,41 @@ def _universal_query(
                 continue
 
             logger.info(f"[universal] attempt {attempt+1}: {sql[:200]}")
+            guardrail_violations = _sql_guardrail_violations(question, sql)
+            if guardrail_violations:
+                logger.warning(
+                    "[universal] guardrail rejected SQL attempt %d: %s",
+                    attempt + 1,
+                    " | ".join(guardrail_violations),
+                )
+                messages.append({"role": "assistant", "content": f"```sql\n{sql}\n```"})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your SQL violated mandatory business guardrails:\n- "
+                        + "\n- ".join(guardrail_violations)
+                        + "\nReturn ONLY corrected SQL in a ```sql block."
+                    ),
+                })
+                continue
+            schema_violations = _schema_reference_violations(sql)
+            if schema_violations:
+                logger.warning(
+                    "[universal] schema validation rejected SQL attempt %d: %s",
+                    attempt + 1,
+                    " | ".join(schema_violations[:5]),
+                )
+                messages.append({"role": "assistant", "content": f"```sql\n{sql}\n```"})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your SQL references schema elements that do not exist:\n- "
+                        + "\n- ".join(schema_violations[:12])
+                        + "\nUse only real table/column names from the provided schema. "
+                        "Return ONLY corrected SQL in a ```sql block."
+                    ),
+                })
+                continue
 
             sess = None
             try:
@@ -980,12 +1558,35 @@ def _compose_drilldown_user_message(
     prev_q_clip = (prev_q or "")[:800]
     sample_json = json.dumps(sample, default=str)[:3500]
 
-    return f"""This is a CONTINUATION of an analysis session. The user already ran a query; now they want to go deeper (same business thread — keep filters, time range, and entities consistent unless they explicitly change them).
+    # Detect scope changes between previous and new question to avoid table bleed
+    prev_has_t016t = 't016t' in (prev_sql_clip or "").lower()
+    new_q_lower = question.lower()
+    new_asks_industry = any(tok in new_q_lower for tok in ("industry", "sector", "brsch"))
+    scope_notes: List[str] = []
+    if prev_has_t016t and not new_asks_industry:
+        scope_notes.append(
+            "SCOPE CHANGE: Previous query used T016T (industry). "
+            "New question does NOT ask for industry — do NOT include T016T. "
+            "Write SQL only for what is asked now."
+        )
+    new_asks_product = any(tok in new_q_lower for tok in (
+        "product", "material", "matnr", "line item", "product level", "item level",
+        "description", "breakdown", "drill", "by product", "by material",
+    ))
+    if new_asks_product:
+        scope_notes.append(
+            "PRODUCT DRILL-DOWN: Join vbrp → MARA (matnr) → MAKT (matnr + spras='E') → "
+            "MEAN (matnr, optional) → MVKE (matnr+vkorg+vtweg, optional) → MARC (matnr+werks, optional). "
+            "vbrp.netwr = line item value. VBRK.netwr = invoice header total. Never confuse them."
+        )
+    scope_block = ("\n".join(f"⚠ {n}" for n in scope_notes) + "\n") if scope_notes else ""
 
+    return f"""This is a CONTINUATION of an analysis session. The user already ran a query; now they want to go deeper (same business thread — keep filters, time range, and entities consistent unless they explicitly change them).
+{scope_block}
 Previous question:
 {prev_q_clip}
 
-Previous SQL (for context — you may REPLACE it entirely with a better query for the new request):
+Previous SQL (for context — you may REPLACE it entirely if the new question is on a different topic):
 ```sql
 {prev_sql_clip}
 ```
@@ -997,10 +1598,13 @@ New request (generate ONE new PostgreSQL SELECT for this):
 {question.strip()}
 
 Rules:
-- Prefer preserving WHERE/GROUP intent from the previous question (years, customers, document lists).
-- For product / line detail: use "vbrp" with "VBRK", then LEFT JOIN MARA, MAKT (spras='E'), MARC, MVKE, MEAN as needed.
-- For invoice-level zero/negative: filter on cast "VBRK"."netwr", not only line sums.
-- Do NOT add T016T / industry unless the new request explicitly asks for industry or sector.
+- Preserve year/customer/document filters from the previous question ONLY if still relevant to this new question.
+- If the new question changes topic, write a FRESH SQL — do NOT inherit tables just because they were in the previous query.
+- NEVER include T016T (industry) unless the user explicitly says "industry" or "sector" in THIS new question.
+- For product/line detail: "vbrp" → LEFT JOIN "MARA", "MAKT" (spras='E'), "MARC", "MVKE", "MEAN" as needed.
+- For invoice zero/negative: WHERE CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)),'') AS NUMERIC) <= 0 on "VBRK" — not vbrp.
+- For invoice counts: COUNT(DISTINCT k."vbeln") on "VBRK" — never GROUP BY vbrp.posnr.
+- Monetary queries MUST include currency column (waerk/waers) and GROUP BY it.
 """
 
 

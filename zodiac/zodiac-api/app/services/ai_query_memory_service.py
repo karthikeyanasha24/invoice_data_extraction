@@ -257,6 +257,71 @@ def _validate_sql_safe(sql: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _sql_is_poisoned_for_question(question: str, sql: str) -> bool:
+    """
+    Return True if this cached SQL contains patterns incompatible with the current question.
+    Used as a gate before any cached SQL is reused, preventing "query contamination" where
+    an old approved query leaks irrelevant tables/logic into a new, unrelated question.
+
+    Checks (all are definite wrong-answer sources):
+    1. T016T (industry table) in SQL when question does not mention industry/sector.
+    2. VBRK.gjahr used for billing-year filter (always unreliable — should use fkdat).
+    3. vbrp.posnr in GROUP BY when question asks for invoice count (item-level inflation).
+    4. Hardcoded year in SQL that conflicts with a different year in the question.
+    5. SQL has vbrp.netwr in WHERE for zero/negative invoice intent (header-level bug).
+    """
+    if not sql or not question:
+        return False
+    q = question.lower()
+    s = sql.lower()
+
+    # 1. Industry table leakage
+    asks_industry = any(tok in q for tok in ("industry", "sector", "brsch"))
+    if '"t016t"' in s and not asks_industry:
+        logger.info("Cache poison: T016T in SQL but question does not ask for industry. Rejecting.")
+        return True
+
+    # 2. VBRK.gjahr used as billing-year filter (data is often '0000' — always unreliable)
+    if ('"vbrk"' in s or 'vbrk' in s) and '"gjahr"' in s:
+        if 'fkdat' not in s:
+            logger.info("Cache poison: VBRK.gjahr without fkdat — unreliable year logic. Rejecting.")
+            return True
+
+    # 3. Item-level invoice count via vbrp.posnr grouping
+    asks_invoice_count = "invoice count" in q or ("count" in q and "invoice" in q)
+    if asks_invoice_count and '"posnr"' in s:
+        logger.info("Cache poison: vbrp.posnr in SQL for invoice-count question. Rejecting.")
+        return True
+
+    # 4. Hardcoded year in SQL conflicts with a different year in the question
+    sql_years = _extract_years_from_sql(sql)
+    q_years = _extract_years_from_text(question)
+    if q_years and sql_years and not q_years.intersection(sql_years):
+        logger.info(
+            "Cache poison: SQL has years %s but question asks for years %s. Rejecting.",
+            sql_years, q_years,
+        )
+        return True
+
+    # 5. Zero/negative invoice: SQL filters on vbrp.netwr instead of VBRK.netwr
+    asks_zero_negative = any(tok in q for tok in ("zero", "negative")) and any(
+        tok in q for tok in ("invoice", "billing")
+    )
+    if asks_zero_negative:
+        # SQL should have WHERE on VBRK.netwr, not group/aggregate on vbrp
+        if '"vbrp"' in s and '"vbrk"' not in s:
+            logger.info("Cache poison: zero/negative invoice query uses vbrp without VBRK. Rejecting.")
+            return True
+        has_vbrk_where_filter = bool(
+            re.search(r'\bwhere\b[\s\S]{0,800}vbrk[\s\S]{0,60}netwr', s)
+        )
+        if not has_vbrk_where_filter and '"vbrk"' in s:
+            logger.info("Cache poison: zero/negative query missing VBRK.netwr WHERE filter. Rejecting.")
+            return True
+
+    return False
+
+
 def find_similar_stored_query(
     db: Session,
     question: str,
@@ -269,6 +334,7 @@ def find_similar_stored_query(
     - Exact normalized match first
     - Otherwise require compatible years, time scope, entities, and metrics
     - Then score candidates using token overlap plus usage/source preference
+    - Poison-check: cached SQL that has business logic incompatible with this question is rejected
     """
     try:
         from ..models.ai_query_memory import AiQueryMemory
@@ -290,10 +356,18 @@ def find_similar_stored_query(
 
     if records:
         rec = records[0]
-        if mark_used:
-            rec.mark_used()
-            db.commit()
-        return rec.sql_query
+        candidate_sql = rec.sql_query or ""
+        # Poison-check: even exact-match cached SQL is rejected if it contains wrong logic
+        # for this question (e.g. T016T industry table when not asked, wrong year).
+        if _sql_is_poisoned_for_question(question, candidate_sql):
+            logger.warning(
+                "Exact-match cache hit rejected by poison-check for question: %r", q_norm[:80]
+            )
+        else:
+            if mark_used:
+                rec.mark_used()
+                db.commit()
+            return candidate_sql
 
     # 2) Conservative semantic-ish match: only reuse when the business shape aligns.
     all_records = db.query(AiQueryMemory).order_by(
@@ -306,10 +380,14 @@ def find_similar_stored_query(
     best_score = -1
     for rec in all_records:
         record_question = rec.original_question or rec.question_pattern or ""
+        candidate_sql = rec.sql_query or ""
+        # Skip poisoned entries before scoring — don't waste cycles on wrong SQL
+        if _sql_is_poisoned_for_question(question, candidate_sql):
+            continue
         score = _similarity_score(
             question=question,
             record_question=record_question,
-            record_sql=rec.sql_query or "",
+            record_sql=candidate_sql,
             source=rec.source or "",
             use_count=int(rec.use_count or 0),
         )

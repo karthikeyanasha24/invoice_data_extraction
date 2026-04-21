@@ -1,0 +1,194 @@
+[
+  {
+    "name": "invoice_header_zero_negative_requires_vbrk_netwr",
+    "question": "show zero and negative invoice values",
+    "sql": "SELECT p.\"vbeln\", SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total FROM \"vbrp\" p GROUP BY p.\"vbeln\" HAVING SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) > 0",
+    "expect_violations_contains": ["VBRK.NETWR", "HAVING > 0"]
+  },
+  {
+    "name": "industry_table_forbidden_when_not_asked",
+    "question": "show invoices by customer",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\" FROM \"VBRK\" k LEFT JOIN \"KNA1\" c ON k.\"kunag\" = c.\"kunnr\" LEFT JOIN \"T016T\" t ON c.\"brsch\" = t.\"brsch\"",
+    "expect_violations_contains": ["T016T"]
+  },
+  {
+    "name": "row_level_listing_requires_limit",
+    "question": "show invoices with customer names",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\" FROM \"VBRK\" k LEFT JOIN \"KNA1\" c ON LPAD(TRIM(k.\"kunag\"),10,'0') = LPAD(TRIM(c.\"kunnr\"),10,'0') ORDER BY k.\"fkdat\" DESC",
+    "expect_violations_contains": ["include LIMIT"]
+  },
+  {
+    "name": "invoice_listing_with_vbrp_join_should_be_distinct",
+    "question": "show invoices with customer names and product lines",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\", p.\"matnr\" FROM \"VBRK\" k JOIN \"vbrp\" p ON LPAD(TRIM(k.\"vbeln\"),10,'0') = LPAD(TRIM(p.\"vbeln\"),10,'0') LEFT JOIN \"KNA1\" c ON LPAD(TRIM(k.\"kunag\"),10,'0') = LPAD(TRIM(c.\"kunnr\"),10,'0') ORDER BY k.\"fkdat\" DESC LIMIT 200",
+    "expect_violations_contains": ["duplicate invoices"]
+  },
+  {
+    "name": "ambiguous_netwr_for_invoice_value_forbidden",
+    "question": "invoice total value with zero and negative invoices",
+    "sql": "SELECT vbeln, netwr FROM \"VBRK\" WHERE CAST(NULLIF(TRIM(CAST(netwr AS TEXT)), '') AS NUMERIC) <= 0",
+    "expect_violations_contains": ["ambiguous NETWR"]
+  },
+  {
+    "name": "select_star_forbidden_for_structured_output",
+    "question": "show invoices by customer",
+    "sql": "SELECT * FROM \"VBRK\"",
+    "expect_violations_contains": ["SELECT *"]
+  },
+  {
+    "name": "ranking_requires_order_by",
+    "question": "top customers by invoice amount",
+    "sql": "SELECT k.\"kunag\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_amount FROM \"VBRK\" k GROUP BY k.\"kunag\"",
+    "expect_violations_contains": ["ORDER BY"]
+  },
+  {
+    "name": "billing_year_must_not_use_vbrk_gjahr",
+    "question": "billing invoices in year 2001",
+    "sql": "SELECT k.\"vbeln\", k.\"gjahr\", k.\"netwr\" FROM \"VBRK\" k WHERE k.\"gjahr\" = '2001' ORDER BY k.\"vbeln\" DESC",
+    "expect_violations_contains": ["VBRK\".\"gjahr", "fkdat"]
+  },
+  {
+    "name": "sum_netwr_requires_text_numeric_cast",
+    "question": "top customers by invoice amount",
+    "sql": "SELECT p.\"vbeln\", SUM(p.\"netwr\") AS total_amount FROM \"vbrp\" p GROUP BY p.\"vbeln\" ORDER BY total_amount DESC",
+    "expect_violations_contains": ["SUM on NETWR"]
+  },
+  {
+    "name": "avg_money_requires_text_numeric_cast",
+    "question": "average invoice amount by customer",
+    "sql": "SELECT k.\"kunag\", AVG(k.\"netwr\") AS avg_amount FROM \"VBRK\" k GROUP BY k.\"kunag\" ORDER BY avg_amount DESC",
+    "expect_violations_contains": ["raw text amount"]
+  },
+  {
+    "name": "invoice_count_must_not_group_by_posnr",
+    "question": "invoice count by customer",
+    "sql": "SELECT p.\"vbeln\", p.\"posnr\", COUNT(*) AS invoice_count FROM \"vbrp\" p GROUP BY p.\"vbeln\", p.\"posnr\" ORDER BY invoice_count DESC",
+    "expect_violations_contains": ["item-level", "VBRK"]
+  },
+  {
+    "name": "invoice_count_should_use_count_distinct_vbeln",
+    "question": "invoice count by customer",
+    "sql": "SELECT k.\"kunag\", COUNT(*) AS invoice_count FROM \"VBRK\" k JOIN \"vbrp\" p ON LPAD(TRIM(k.\"vbeln\"),10,'0') = LPAD(TRIM(p.\"vbeln\"),10,'0') GROUP BY k.\"kunag\" ORDER BY invoice_count DESC",
+    "expect_violations_contains": ["COUNT(DISTINCT"]
+  },
+  {
+    "name": "monetary_query_requires_currency_context",
+    "question": "top customers by invoice amount",
+    "sql": "SELECT k.\"kunag\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_amount FROM \"VBRK\" k GROUP BY k.\"kunag\" ORDER BY total_amount DESC",
+    "expect_violations_contains": ["currency"]
+  },
+  {
+    "name": "join_must_have_on_condition",
+    "question": "show invoices with customer names",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\" FROM \"VBRK\" k JOIN \"KNA1\" c",
+    "expect_violations_contains": ["missing ON condition"]
+  },
+  {
+    "name": "join_must_not_use_on_1_equals_1",
+    "question": "show invoices with customer names",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\" FROM \"VBRK\" k JOIN \"KNA1\" c ON 1=1",
+    "expect_violations_contains": ["ON 1=1"]
+  },
+  {
+    "name": "aggregated_amount_must_not_mix_currencies",
+    "question": "total invoice amount by customer",
+    "sql": "SELECT k.\"kunag\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_amount FROM \"VBRK\" k GROUP BY k.\"kunag\" ORDER BY total_amount DESC",
+    "expect_violations_contains": ["mixed-currency"]
+  },
+  {
+    "name": "aggregate_with_currency_selected_must_group_by_currency",
+    "question": "total invoice amount by customer and currency",
+    "sql": "SELECT k.\"kunag\", k.\"waerk\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_amount FROM \"VBRK\" k GROUP BY k.\"kunag\" ORDER BY total_amount DESC",
+    "expect_violations_contains": ["does not group by currency"]
+  },
+  {
+    "name": "vbrk_vbrp_requires_vbeln_join_key",
+    "question": "show billing header and item values",
+    "sql": "SELECT k.\"vbeln\", p.\"matnr\", p.\"netwr\" FROM \"VBRK\" k JOIN \"vbrp\" p ON 1=1",
+    "expect_violations_contains": ["ON 1=1"]
+  },
+  {
+    "name": "vbrk_vbrp_join_should_use_lpad_normalization",
+    "question": "show billing header and item values",
+    "sql": "SELECT k.\"vbeln\", p.\"matnr\", p.\"netwr\" FROM \"VBRK\" k JOIN \"vbrp\" p ON k.\"vbeln\" = p.\"vbeln\"",
+    "expect_violations_contains": ["leading-zero mismatches"]
+  },
+  {
+    "name": "vbrk_kna1_requires_customer_key_join",
+    "question": "show invoices with customer name",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\" FROM \"VBRK\" k JOIN \"KNA1\" c ON k.\"fkdat\" = c.\"erdat\"",
+    "expect_violations_contains": ["customer key join"]
+  },
+  {
+    "name": "vbrk_kna1_join_should_use_lpad_normalization",
+    "question": "show invoices with customer name",
+    "sql": "SELECT k.\"vbeln\", c.\"name1\" FROM \"VBRK\" k JOIN \"KNA1\" c ON k.\"kunag\" = c.\"kunnr\"",
+    "expect_violations_contains": ["accurate matching"]
+  },
+  {
+    "name": "sap_text_dates_must_not_be_cast_to_date",
+    "question": "show billing invoices for year 2001",
+    "sql": "SELECT k.\"vbeln\" FROM \"VBRK\" k WHERE CAST(k.\"fkdat\" AS DATE) >= DATE '2001-01-01'",
+    "expect_violations_contains": ["must not be CAST to DATE"]
+  },
+  {
+    "name": "sap_text_date_comparison_should_use_trim",
+    "question": "show billing invoices in year 2001",
+    "sql": "SELECT k.\"vbeln\" FROM \"VBRK\" k WHERE k.\"fkdat\" >= '20010101'",
+    "expect_violations_contains": ["date comparisons should use TRIM"]
+  },
+  {
+    "name": "sap_text_date_filter_should_exclude_empty_values",
+    "question": "show billing invoices in year 2001",
+    "sql": "SELECT k.\"vbeln\" FROM \"VBRK\" k WHERE TRIM(k.\"fkdat\") >= '20010101'",
+    "expect_violations_contains": ["exclude empty values"]
+  },
+  {
+    "name": "zero_negative_question_must_not_filter_positive_only",
+    "question": "show zero and negative invoice values",
+    "sql": "SELECT k.\"vbeln\", CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) AS invoice_amount FROM \"VBRK\" k WHERE CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) > 0 ORDER BY k.\"vbeln\" DESC",
+    "expect_violations_contains": ["hides requested rows"]
+  },
+  {
+    "name": "money_comparison_requires_numeric_cast",
+    "question": "show negative sales lines",
+    "sql": "SELECT p.\"vbeln\", p.\"matnr\", p.\"netwr\" FROM \"vbrp\" p WHERE p.\"netwr\" < 0 ORDER BY p.\"vbeln\" DESC LIMIT 100",
+    "expect_violations_contains": ["raw text amount"]
+  },
+  {
+    "name": "schema_unknown_table_and_column",
+    "question": "sanity schema check",
+    "sql": "SELECT \"VBRK\".\"not_a_real_column\" FROM \"VBRK\" JOIN \"__THIS_TABLE_DOES_NOT_EXIST__\" x ON 1=1",
+    "expect_schema_violations_contains": ["Unknown column"]
+  },
+  {
+    "name": "rbkp_rseg_join_missing_gjahr",
+    "question": "show vendor invoice receipts with amounts",
+    "sql": "SELECT r.\"belnr\", r.\"lifnr\", SUM(CAST(NULLIF(TRIM(CAST(s.\"wrbtr\" AS TEXT)), '') AS NUMERIC)) AS total FROM \"RBKP\" r JOIN \"RSEG\" s ON r.\"belnr\" = s.\"belnr\" GROUP BY r.\"belnr\", r.\"lifnr\" ORDER BY total DESC",
+    "expect_violations_contains": ["GJAHR"]
+  },
+  {
+    "name": "bkpf_bseg_join_missing_gjahr_and_bukrs",
+    "question": "show accounting document line items with amounts",
+    "sql": "SELECT b.\"belnr\", s.\"hkont\", SUM(CAST(NULLIF(TRIM(CAST(s.\"dmbtr\" AS TEXT)), '') AS NUMERIC)) AS total FROM \"BKPF\" b JOIN \"BSEG\" s ON b.\"belnr\" = s.\"belnr\" GROUP BY b.\"belnr\", s.\"hkont\" ORDER BY total DESC",
+    "expect_violations_contains": ["bukrs", "gjahr"]
+  },
+  {
+    "name": "makt_join_missing_language_filter",
+    "question": "show top materials by billed amount with description",
+    "sql": "SELECT p.\"matnr\", t.\"maktx\", SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total FROM \"vbrp\" p LEFT JOIN \"MAKT\" t ON p.\"matnr\" = t.\"matnr\" GROUP BY p.\"matnr\", t.\"maktx\" ORDER BY total DESC LIMIT 20",
+    "expect_violations_contains": ["spras"]
+  },
+  {
+    "name": "ekko_ekpo_active_query_missing_deletion_flag",
+    "question": "show open purchase orders for active vendors",
+    "sql": "SELECT k.\"ebeln\", k.\"lifnr\", p.\"matnr\", CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC) AS value FROM \"EKKO\" k JOIN \"EKPO\" p ON k.\"ebeln\" = p.\"ebeln\" ORDER BY k.\"bedat\" DESC LIMIT 100",
+    "expect_violations_contains": ["loekz"]
+  },
+  {
+    "name": "quantity_aggregation_without_uom",
+    "question": "total ordered quantity by vendor",
+    "sql": "SELECT k.\"lifnr\", SUM(CAST(NULLIF(TRIM(CAST(p.\"menge\" AS TEXT)), '') AS NUMERIC)) AS total_qty FROM \"EKKO\" k JOIN \"EKPO\" p ON k.\"ebeln\" = p.\"ebeln\" GROUP BY k.\"lifnr\" ORDER BY total_qty DESC LIMIT 50",
+    "expect_violations_contains": ["meins"]
+  }
+]

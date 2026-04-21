@@ -86,6 +86,20 @@ _INV_DOC_HEADER_TOKENS = (
 )
 
 
+def _has_token(text: str, token: str) -> bool:
+    """
+    Safer token check than plain substring:
+    - single-word tokens use word boundaries (avoid false positives like "means" -> "mean")
+    - multi-word tokens keep phrase matching
+    """
+    t = (token or "").strip().lower()
+    if not t:
+        return False
+    if " " in t:
+        return t in text
+    return re.search(rf"\b{re.escape(t)}\b", text) is not None
+
+
 def follow_up_requires_fresh_sql(question: str) -> bool:
     """True when the user is asking for data the prior result set cannot answer without a new SELECT."""
     q = (question or "").strip()
@@ -94,9 +108,9 @@ def follow_up_requires_fresh_sql(question: str) -> bool:
     ql = q.lower()
     if _DRILL_DOWN_OR_FRESH_SQL.search(q):
         return True
-    if any(t in ql for t in _EXTRA_DRILL_TOKENS):
+    if any(_has_token(ql, t) for t in _EXTRA_DRILL_TOKENS):
         return True
-    if any(t in ql for t in _INV_DOC_HEADER_TOKENS):
+    if any(_has_token(ql, t) for t in _INV_DOC_HEADER_TOKENS):
         return True
     if re.search(r"\b(select|from)\b.+\bwhere\b", q, re.I):
         return True
