@@ -419,13 +419,30 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 outerRadius={128}
                 paddingAngle={3}
                 animationDuration={800}
-                label={({ cx, cy, midAngle, outerRadius, value, payload }) => {
+                label={(props: {
+                  cx?: number;
+                  cy?: number;
+                  midAngle?: number;
+                  outerRadius?: number;
+                  value?: number;
+                  payload?: Record<string, unknown>;
+                }) => {
+                  const { cx, cy, midAngle, outerRadius, value } = props;
+                  if (
+                    cx == null ||
+                    cy == null ||
+                    midAngle == null ||
+                    outerRadius == null ||
+                    value == null
+                  ) {
+                    return null;
+                  }
                   const RADIAN = Math.PI / 180;
                   const r = outerRadius + 32;
                   const x = cx + r * Math.cos(-midAngle * RADIAN);
                   const y = cy + r * Math.sin(-midAngle * RADIAN);
                   const p = (Number(value) / total) * 100;
-                  if (p < 4) return null;
+                  if (p < 4 || !Number.isFinite(p)) return null;
                   return (
                     <text x={x} y={y} fill="#1e293b"
                       textAnchor={x > cx ? 'start' : 'end'}
