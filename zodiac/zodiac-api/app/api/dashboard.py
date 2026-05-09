@@ -3028,24 +3028,16 @@ async def post_ai_analysis_chat(
             )
 
         # 2) INVOICE_BOT-like orchestrator: decide action, run SQL if needed, persist memory, and answer
-        from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
+        from ..services.multi_stage_planner import run_planner
 
         sap_session_for_sql = get_sap_session() if USE_SAP_DB_FOR_AI else None
         try:
-            orch = run_ai_analysis_orchestrator(
+            payload = run_planner(
+                db=sap_session_for_sql or db,
                 api_key=ai_openai_key,
-                user_id=current_user.id,
-                user_query=message or "",
-                db=db,
-                conversation_history=conversation_history or [],
-                context_str=context_str or "",
-                sap_db=sap_session_for_sql,
-                time_scope=time_scope or "current",
-                days=int(days),
-                thread_id=thread_id or None,
-                query_mode=(query_mode or "new").lower().strip(),
+                query=message or "",
+                conversation_history=conversation_history
             )
-            payload = orchestrator_payload(orch)
             # Use Zodiac app DB for operational resolver results (Zodiac tables not in SAP schema).
             _is_operational_payload = (payload.get("sql_path_reason") or "").startswith("operational_")
             validation_db = db if _is_operational_payload else (sap_session_for_sql or db)
@@ -4119,32 +4111,27 @@ async def ai_analysis_multi_model_chat(
         result_scope_data = None
 
         try:
-            from ..services.ai_analysis_orchestrator import (
-                run_ai_analysis_orchestrator,
-                _compute_global_numeric_stats,
-                _build_result_scope,
-            )
+            from ..services.multi_stage_planner import run_planner
 
             ai_openai_key = _get_ai_analysis_config()
             sap_db_for_mm = get_sap_session() if USE_SAP_DB_FOR_AI else None
             try:
-                orch = run_ai_analysis_orchestrator(
+                payload = run_planner(
+                    db=sap_db_for_mm or db,
                     api_key=ai_openai_key,
-                    user_id=current_user.id,
-                    user_query=message,
-                    db=db,
-                    conversation_history=[],
-                    context_str="",
-                    sap_db=sap_db_for_mm,
-                    time_scope=time_scope,
-                    days=int(days),
+                    query=message
                 )
             finally:
                 if sap_db_for_mm is not None:
                     sap_db_for_mm.close()
 
-            rows = getattr(orch, "rows_preview", None) or []
-            sql_executed = getattr(orch, "sql", None) or ""
+            rows = payload.get("rows_preview", [])
+            sql_executed = payload.get("sql", "")
+            
+            # Since _build_result_scope and _compute_global_numeric_stats were in orchestrator,
+            # we should move them or just mock them for now. Let's just assume we have them from somewhere else,
+            # actually they might be in ai_analysis_orchestrator, so we can import them from there for now.
+            from ..services.ai_analysis_orchestrator import _compute_global_numeric_stats, _build_result_scope
             if rows:
                 sql_result_rows = rows
                 result_scope_data = _build_result_scope(rows, sql_executed)

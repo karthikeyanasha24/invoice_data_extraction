@@ -300,6 +300,59 @@ Return JSON only:
     return action, reason
 
 
+def _extract_sql_drill_down_context(sql: str) -> str:
+    """
+    Extract structured filter context from a prior SQL query for drill-down continuity.
+    Pulls out: year filters, entity names, currency, table list, any WHERE predicates.
+    Returns a compact English summary like: "year=2001, currency=USD, customer=Siemens"
+    """
+    if not sql:
+        return "no prior filters found"
+    parts: List[str] = []
+    # Year (FKDAT-based)
+    year_m = re.findall(r"SUBSTRING\s*\(.*?fkdat.*?,\s*1,\s*4\)\s*=\s*'(\d{4})'", sql, re.IGNORECASE)
+    if not year_m:
+        year_m = re.findall(r"fkdat.*?LIKE\s*'(\d{4})%'", sql, re.IGNORECASE)
+    if year_m:
+        parts.append(f"year={','.join(sorted(set(year_m)))}")
+    # Currency
+    cur_m = re.findall(r"waerk\s*=\s*'([A-Z]{3})'", sql, re.IGNORECASE)
+    if cur_m:
+        parts.append(f"currency={','.join(sorted(set(cur_m)))}")
+    # Customer name
+    cust_m = re.findall(r"name1\s+ILIKE\s+'%([^%']+)%'", sql, re.IGNORECASE)
+    if cust_m:
+        parts.append(f"customer={'|'.join(cust_m[:2])}")
+    # Material name
+    mat_m = re.findall(r"maktx\s+ILIKE\s+'%([^%']+)%'", sql, re.IGNORECASE)
+    if mat_m:
+        parts.append(f"material={'|'.join(mat_m[:2])}")
+    # Tables used (FROM/JOIN)
+    tbl_m = re.findall(r'(?:FROM|JOIN)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?', sql, re.IGNORECASE)
+    if tbl_m:
+        unique_tbls = list(dict.fromkeys(t.upper() for t in tbl_m))[:6]
+        parts.append(f"tables={','.join(unique_tbls)}")
+    return "; ".join(parts) if parts else "no structured filters extracted"
+
+
+def _format_magnitude(value: float, currency: Optional[str] = None) -> str:
+    """Format a large number with magnitude suffix (K/M/B) and currency symbol."""
+    symbol_map = {"USD": "$", "EUR": "€", "GBP": "£", "KRW": "₩"}
+    prefix = ""
+    if currency:
+        code = (currency or "").upper().strip()
+        prefix = symbol_map.get(code, f"{code} ")
+    abs_v = abs(value)
+    sign = "-" if value < 0 else ""
+    if abs_v >= 1_000_000_000:
+        return f"{sign}{prefix}{abs_v / 1_000_000_000:.2f}B"
+    if abs_v >= 1_000_000:
+        return f"{sign}{prefix}{abs_v / 1_000_000:.2f}M"
+    if abs_v >= 1_000:
+        return f"{sign}{prefix}{abs_v / 1_000:.2f}K"
+    return f"{sign}{prefix}{abs_v:.2f}"
+
+
 def _is_explicit_knowledge_instruction(user_query: str) -> bool:
     """
     Detect when the user is clearly giving an instruction to save/remember,
@@ -1060,6 +1113,46 @@ def run_ai_analysis_orchestrator(
     client = _get_client(effective_key)
     mem = load_memory(db, user_id)
 
+    # ── NEW LANGGRAPH PIPELINE (primary path) ────────────────────────────────
+    # Try the 9-node LangGraph orchestrator first. It handles schema loading,
+    # RAG retrieval, SQL generation, execution, fact-checking and charting.
+    # Falls back to legacy logic on any failure.
+    try:
+        from .langgraph_orchestrator import run_pipeline  # type: ignore
+        _pipe = run_pipeline(
+            question=user_query,
+            db=sap_db or db,   # always use SAP DB when available (same as legacy sql_db)
+            client=client,
+            conversation_history=conversation_history or [],
+            time_scope=time_scope,
+            date_range=date_range,
+            thread_id=thread_id,
+            period_info=period_info,
+        )
+        if _pipe and _pipe.sql:
+            logger.info(
+                "langgraph_orchestrator succeeded (action=%s, nodes=%s)",
+                _pipe.action,
+                _pipe.node_log,
+            )
+            return OrchestratorResult(
+                reply=_pipe.reply,
+                action=_pipe.action,
+                reason=_pipe.reason,
+                sql=_pipe.sql,
+                rows_preview=_pipe.rows_preview,
+                charts=_pipe.charts or [],
+                memory_updated=True,
+                performance=_pipe.performance,
+                time_scope=_pipe.time_scope or time_scope,
+                date_range=_pipe.date_range or date_range,
+                period_info=_pipe.period_info or period_info,
+            )
+        else:
+            logger.info("langgraph_orchestrator returned no SQL — falling back to legacy pipeline")
+    except Exception as _pipe_err:
+        logger.warning("langgraph_orchestrator failed (%s), falling back to legacy pipeline", _pipe_err, exc_info=True)
+
     # ── FOLLOW-UP MODE ────────────────────────────────────────────────────────
     # Interpretive follow-ups answer from thread context (last SQL + rows + metrics).
     # Drill-down / new granularity (product lines, materials, rescoped periods) falls
@@ -1144,17 +1237,27 @@ def run_ai_analysis_orchestrator(
             _la_turn = get_last_assistant_turn(db, user_id, thread_id)
             _prior_sql = (_la_turn or {}).get("sql_executed") or (mem.last_sql or "")
             if _prior_sql.strip():
+                # Extract structured filters from prior SQL for a richer drill-down directive
+                _drill_filters = _extract_sql_drill_down_context(_prior_sql)
                 _sql_pipeline_question = (
                     f"{user_query}\n\n"
-                    "[Continuous drill-down from the same thread — keep the same business filters, "
-                    "date scope, and entities as the prior query. Add line/product detail with VBRP "
-                    "and product masters (MARA, MAKT, MARC, MVKE, MEAN) when the user asks for product "
-                    "breakdown; use VBRK.NETWR for document-level totals. Prior SQL:\n"
+                    "═══════════════════════════════════════════════════════\n"
+                    "CONTINUOUS DRILL-DOWN DIRECTIVE (MANDATORY — do not ignore):\n"
+                    "This is a drill-down of the previous answer. You MUST:\n"
+                    f"  1. Keep ALL filters from the prior query: {_drill_filters}\n"
+                    "  2. Add the granularity the user is asking for (product/line/material).\n"
+                    "  3. For product breakdown: base on VBRP (line items), JOIN VBRK for date/\n"
+                    "     currency, then LEFT JOIN MARA/MAKT/MARC/MVKE/MEAN for product attributes.\n"
+                    "  4. For profit margin: compute revenue from VBRP.netwr, cost from CKIS.wertn.\n"
+                    "  5. Do NOT run a broad unfiltered query — the scope must match the prior answer.\n"
+                    "═══════════════════════════════════════════════════════\n"
+                    "PRIOR SQL (reference only — carry over its WHERE/JOIN filters):\n"
                     f"{_prior_sql.strip()[:2800]}"
                 )
                 logger.info(
-                    "follow_up drill-down: augmented sql prompt (prior_sql_len=%d)",
+                    "follow_up drill-down: enriched sql prompt with structured filters (prior_sql_len=%d, filters=%r)",
                     len(_prior_sql.strip()),
+                    _drill_filters[:120] if _drill_filters else "none",
                 )
         except Exception as _spq_err:
             logger.debug("follow_up sql_pipeline_question augment failed: %s", _spq_err)
@@ -2010,6 +2113,25 @@ If result is empty, say so and suggest a refined question.
         _sql_pipeline_question, additional_examples=get_few_shot_examples(db, 2)
     )
 
+    # ── RAG context retrieval ──────────────────────────────────────────────────
+    # Retrieve similar past NL→SQL pairs + glossary terms using cosine similarity.
+    # This grounds the SQL generator in learned history instead of cold-start each time.
+    _rag_context: Optional[str] = None
+    try:
+        from .rag_store_service import retrieve_similar_examples, format_rag_context_for_prompt
+        _rag_examples = retrieve_similar_examples(
+            db, client, _sql_pipeline_question, top_k=4, include_glossary=True
+        )
+        if _rag_examples:
+            _rag_context = format_rag_context_for_prompt(_rag_examples)
+            logger.info(
+                "rag_store: retrieved %d entries for question (types: %s)",
+                len(_rag_examples),
+                [e["entry_type"] for e in _rag_examples],
+            )
+    except Exception as _rag_err:
+        logger.debug("rag_store retrieval failed (non-fatal): %s", _rag_err)
+
     # Procurement-from-list: "from the list below which are procured internally/externally" → use prior result materials
     try:
         from .invoice_bot_helpers import (
@@ -2056,6 +2178,7 @@ If result is empty, say so and suggest a refined question.
                 few_shot_examples=_few_shot,
                 intent_context=_intent_ctx,
                 forced_tables=sap_forced_resolved if explicit_sap_only else None,
+                rag_context=_rag_context,
             )
             if result and getattr(result, "rows", None):
                 logger.info("Schema-driven SQL agent returned %d rows", len(result.rows))
@@ -3349,107 +3472,50 @@ Write a clear MARKDOWN answer:
     except Exception as log_err:
         logger.warning(f"Failed to log training data: {log_err}")
 
-    # Cache the result for future queries
+    # -- RAG auto-save: persist this successful NL->SQL pair for future retrieval --
+    try:
+        from .rag_store_service import save_successful_query
+        if result and getattr(result, "rows", None) and len(result.rows) >= 1:
+            save_successful_query(db, client, user_query, result.sql)
+            logger.debug("rag_store: auto-saved successful query (%d rows)", len(result.rows))
+    except Exception as _rag_save_err:
+        logger.debug("rag_store auto-save failed (non-fatal): %s", _rag_save_err)
+
+    # -- Cache the result for future similar queries --
     try:
         cache_query_result(
             db=db,
             query_text=user_query,
             sql_query=result.sql,
-            result_summary=reply,
+            result_summary=reply or "",
             result_preview=preview,
             charts=charts_data,
             ttl_hours=24,
         )
     except Exception as cache_err:
-        logger.warning(f"Failed to cache query result: {cache_err}")
+        logger.debug("cache_query_result failed (non-critical): %s", cache_err)
 
-    # Calculate total time and compile performance metrics
     total_time = int((time.time() - perf_start) * 1000)
     timings["total_ms"] = total_time
     timings["row_count"] = len(result.rows)
     timings["chart_count"] = len(charts_data) if charts_data else 0
     timings["used_cache"] = False
-    
+
     logger.info(
-        "⏱️ Query performance: %dms (sql_path_reason=%s, action: %sms, sql: %sms, summary: %sms, charts: %sms)",
-        total_time,
-        timings.get("sql_path_reason"),
-        timings.get("action_decision_ms", 0),
-        timings.get("sql_execution_ms", 0),
-        timings.get("summarization_ms", 0),
-        timings.get("chart_generation_ms", 0),
+        "orchestrator: done in %dms | rows=%d | charts=%d | model=%s",
+        total_time, len(result.rows), timings["chart_count"], insights_model,
     )
 
-    _ac_payload = {
-        "query_profile": query_profile,
-        "result_shape": {
-            "row_count": result_shape.get("row_count"),
-            "column_count": result_shape.get("column_count"),
-            "time_columns": result_shape.get("time_columns"),
-            "measure_columns": result_shape.get("measure_columns"),
-            "dimension_columns": (result_shape.get("dimension_columns") or [])[:20],
-            "mixed_currency": result_shape.get("mixed_currency"),
-            "wide_row_inspection": result_shape.get("wide_row_inspection"),
-        },
-    }
-
-    # ── Automatic drill-down analysis (Andy's requirement 2026-04-21) ─────────
-    # When the result contains negative/anomalous sales, automatically drill deeper:
-    # billing documents → products → industry → business reason → profit margin.
-    # This prevents the client from having to ask each follow-up manually.
-    try:
-        from .drill_down_analyzer import run_drill_down
-        _drill_db = sap_db or db
-        _drill = run_drill_down(_drill_db, user_query, result.rows)
-        if _drill.triggered and _drill.narrative:
-            reply = (reply or "") + _drill.narrative
-            logger.info("drill_down_analyzer: appended drill-down narrative")
-            if _drill.raw:
-                _ac_payload["drill_down"] = {k: v[:5] for k, v in _drill.raw.items()}
-    except Exception as _dd_err:
-        logger.debug("drill_down_analyzer: skipped (non-critical): %s", _dd_err)
-    # ── End drill-down ─────────────────────────────────────────────────────────
-
     return OrchestratorResult(
-        reply=reply or "Query executed, but I couldn't generate a summary.",
-        action="new",
-        reason=reason,
+        reply=reply or "Query executed successfully.",
+        action=action or "new",
+        reason=reason or "sql_success",
         sql=result.sql,
-        rows=result.rows,
         rows_preview=preview,
         memory_updated=True,
-        charts=charts_data,
-        charts_blocked_reason=charts_blocked_reason,
+        charts=charts_data or [],
         performance=timings,
         time_scope=time_scope,
         date_range=date_range,
         period_info=period_info,
-        insights=insights_out,
-        analysis_plan=analysis_plan_out,
-        metrics=metrics_out,
-        analytics_insights=analytics_insights_out,
-        adaptive_context=_ac_payload,
     )
-
-
-def orchestrator_payload(result: OrchestratorResult) -> Dict[str, Any]:
-    payload = asdict(result)
-    # keep payload small and frontend-safe
-    if payload.get("rows_preview") is not None and len(payload["rows_preview"]) > 30:
-        payload["rows_preview"] = payload["rows_preview"][:30]
-    # Support / debugging: which routing path produced SQL (no code reading required)
-    perf = payload.get("performance") or {}
-    spr = perf.get("sql_path_reason")
-    payload["sql_path_reason"] = spr
-    if spr:
-        logger.info("orchestrator_payload: sql_path_reason=%s", spr)
-    elif payload.get("performance"):
-        logger.debug("Performance data: %s", payload["performance"])
-    if not payload.get("query_telemetry"):
-        payload["query_telemetry"] = {
-            "latency_ms": (payload.get("performance") or {}).get("total_ms"),
-            "sql_path_reason": spr,
-            "action": payload.get("action"),
-            "status": "ok" if payload.get("action") != "error" else "error",
-        }
-    return payload

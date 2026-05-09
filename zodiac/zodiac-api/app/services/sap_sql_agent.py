@@ -4367,6 +4367,7 @@ def run_schema_driven_sql_agent(
     few_shot_examples: Optional[List[Dict[str, str]]] = None,
     intent_context: Optional[str] = None,
     forced_tables: Optional[List[str]] = None,
+    rag_context: Optional[str] = None,
 ) -> SqlAgentResult | None:
     """
     Schema-driven SQL agent: no keyword rules. Flow is:
@@ -4575,6 +4576,7 @@ def run_schema_driven_sql_agent(
             client,
             similar_examples=similar,
             intent_context=_intent_ctx,
+            rag_context=rag_context,
         )
         if not sql:
             logger.warning("schema_driven_agent: no SQL generated for question: %s", (question or "")[:80])

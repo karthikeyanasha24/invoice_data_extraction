@@ -1,0 +1,769 @@
+"""
+langgraph_orchestrator.py
+
+9-node deterministic state machine — Python port of the reference project's
+LangGraph StateGraph pattern (ai-langchain-query.js).
+
+Flow:
+  load_schema → retrieve_context → generate_sql → check_sql
+      → execute_sql → [error_recovery (×3)] → generate_answer → verify_answer → END
+                   → [zero_rows_recovery (×1)]
+
+Does NOT require the `langgraph` package — implemented as a plain Python
+directed graph executed by a run-loop, which is equivalent for our use-case.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+from openai import OpenAI
+
+logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+_OPENAI_FAST_MODEL = "gpt-4o-mini"
+_OPENAI_INSIGHTS_MODEL = "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# STATE OBJECT
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GraphState:
+    """Mutable state threaded through every node."""
+    # ── inputs ──────────────────────────────────────────────────────────────
+    question: str = ""
+    db: Any = None                          # SQLAlchemy Session
+    client: Any = None                      # OpenAI client
+    conversation_history: List[Dict] = field(default_factory=list)
+    time_scope: Optional[str] = None
+    date_range: Optional[Dict[str, str]] = None
+    thread_id: Optional[str] = None
+    period_info: Optional[str] = None
+
+    # ── schema discovery ────────────────────────────────────────────────────
+    schema: Optional[Dict[str, Any]] = None
+    schema_text: Optional[str] = None
+
+    # ── RAG ─────────────────────────────────────────────────────────────────
+    rag_context: Optional[str] = None
+
+    # ── SQL lifecycle ────────────────────────────────────────────────────────
+    generated_sql: Optional[str] = None
+    checked_sql: Optional[str] = None
+    execution_result: Any = None            # SqlAgentResult | None
+    retry_count: int = 0
+    retry_errors: List[str] = field(default_factory=list)
+    zero_rows_retried: bool = False
+
+    # ── outputs ──────────────────────────────────────────────────────────────
+    final_answer: Optional[str] = None
+    final_data: Optional[List[Dict[str, Any]]] = None
+    final_sql: Optional[str] = None
+    confidence: str = "medium"              # "high" | "medium" | "low"
+    charts: Optional[List[Dict[str, Any]]] = None
+
+    # ── trace ─────────────────────────────────────────────────────────────────
+    node_log: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# RESULT WRAPPER (mirrors OrchestratorResult shape)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PipelineResult:
+    reply: str
+    action: str = "new"
+    reason: str = "sql_success"
+    sql: str = ""
+    rows_preview: Optional[List[Dict[str, Any]]] = None
+    charts: Optional[List[Dict[str, Any]]] = None
+    memory_updated: bool = True
+    performance: Optional[Dict[str, Any]] = None
+    time_scope: Optional[str] = None
+    date_range: Optional[Dict[str, str]] = None
+    period_info: Optional[str] = None
+    confidence: str = "medium"
+    node_log: Optional[List[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# NODE: load_schema
+# ---------------------------------------------------------------------------
+
+def _node_load_schema(state: GraphState) -> str:
+    """Load SAP schema from DB and build a text representation."""
+    state.node_log.append("load_schema")
+    try:
+        from .schema_loader import get_schema_dict  # type: ignore
+        schema = get_schema_dict(state.db)
+        if not schema:
+            state.error = "Schema unavailable"
+            return "error"
+        state.schema = schema
+
+        # Build a compact text block: TABLE (N cols): col1, col2, ...
+        lines = []
+        for table, cols in list(schema.items())[:40]:
+            if isinstance(cols, list):
+                col_names = [c.get("column", c) if isinstance(c, dict) else str(c) for c in cols[:20]]
+                lines.append(f"{table} ({len(cols)} cols): {', '.join(col_names[:12])}" +
+                             ("..." if len(cols) > 12 else ""))
+        state.schema_text = "\n".join(lines)
+        logger.debug("load_schema: %d tables loaded", len(schema))
+        return "retrieve_context"
+    except Exception as exc:
+        logger.warning("load_schema failed: %s", exc)
+        state.schema_text = ""
+        return "retrieve_context"  # proceed without schema
+
+
+# ---------------------------------------------------------------------------
+# NODE: retrieve_context
+# ---------------------------------------------------------------------------
+
+def _node_retrieve_context(state: GraphState) -> str:
+    """RAG: fetch similar past queries + glossary for grounding."""
+    state.node_log.append("retrieve_context")
+    try:
+        from .rag_store_service import retrieve_similar_examples, format_rag_context_for_prompt
+        results = retrieve_similar_examples(state.db, state.client, state.question)
+        state.rag_context = format_rag_context_for_prompt(results) if results else None
+        logger.debug("retrieve_context: %d RAG hits", len(results) if results else 0)
+    except Exception as exc:
+        logger.debug("retrieve_context: RAG skip (%s)", exc)
+        state.rag_context = None
+    return "generate_sql"
+
+
+# ---------------------------------------------------------------------------
+# NODE: generate_sql
+# ---------------------------------------------------------------------------
+
+def _node_generate_sql(state: GraphState) -> str:
+    """Use LLM to generate SQL from question + schema + RAG context."""
+    state.node_log.append("generate_sql")
+    try:
+        from .sap_sql_agent import run_schema_driven_sql_agent  # type: ignore
+
+        # On retries, append previous errors to question context
+        question_with_context = state.question
+        if state.retry_errors:
+            error_ctx = "\n".join(f"- Attempt {i+1} failed: {e}"
+                                    for i, e in enumerate(state.retry_errors[-3:]))
+            question_with_context = (
+                f"{state.question}\n\n[PREVIOUS ATTEMPTS FAILED — DO NOT REPEAT:\n{error_ctx}]"
+            )
+
+        result = run_schema_driven_sql_agent(
+            question=question_with_context,
+            db=state.db,
+            rag_context=state.rag_context,
+        )
+        if result and result.sql:
+            state.generated_sql = result.sql.strip()
+            logger.debug("generate_sql: got SQL (%d chars)", len(state.generated_sql))
+            return "check_sql"
+
+        # LLM returned nothing useful — escalate to error recovery
+        state.error = "SQL generation returned no query"
+        return "error_recovery"
+    except Exception as exc:
+        logger.warning("generate_sql failed: %s", exc)
+        state.error = str(exc)
+        return "error_recovery"
+
+
+# ---------------------------------------------------------------------------
+# NODE: check_sql
+# ---------------------------------------------------------------------------
+
+_CHECK_SQL_PROMPT = """You are a PostgreSQL + SAP data expert reviewing a generated SQL query for correctness before execution.
+
+Check the following 15 points:
+1. Only SELECT (no DML — no UPDATE/DELETE/INSERT/DROP/ALTER/TRUNCATE/EXEC)
+2. All table names exist in the provided schema
+3. All column names exist in the specified tables
+4. JOIN conditions reference matching column types
+5. LPAD joins for SAP document keys (VBELN, BELNR) use correct 10-char padding
+6. SAP date columns (FKDAT, BUDAT) stored as CHAR(8) — use SUBSTRING(TRIM(col),1,4) for year extraction, NOT EXTRACT(YEAR FROM col)
+7. NETWR / KWMENG stored as TEXT — must CAST(col AS NUMERIC) before arithmetic
+8. GJAHR column is unreliable (often '0000') — use fkdat/budat year extraction instead
+9. No cartesian product (every JOIN has an ON clause)
+10. GROUP BY includes all non-aggregate SELECT columns
+11. HAVING used for aggregate filters (not WHERE)
+12. Decimal precision — values may be in SAP scale (divide by 100 or 1000 if values seem huge)
+13. Result size: non-aggregate queries have TOP/LIMIT; aggregate queries have a sensible LIMIT
+14. Currency filters use WAERK column when needed
+15. NULL-safe aggregation: use COALESCE(col, 0) for SUM/AVG
+
+Return JSON only:
+{
+  "is_valid": true/false,
+  "issues": ["issue1", "issue2"],
+  "corrected_sql": "...(only if is_valid=false and you can fix it, else omit)..."
+}
+
+Schema (selected tables):
+{schema}
+
+SQL to check:
+{sql}"""
+
+
+def _node_check_sql(state: GraphState) -> str:
+    """LLM pre-validates the SQL before hitting the DB."""
+    state.node_log.append("check_sql")
+    sql = state.generated_sql or ""
+    if not sql:
+        state.error = "Empty SQL from generator"
+        return "error_recovery"
+
+    try:
+        # Build concise schema excerpt for the tables actually used
+        schema_excerpt = _extract_used_schema(sql, state.schema or {})
+
+        prompt = _CHECK_SQL_PROMPT.format(schema=schema_excerpt[:3000], sql=sql[:2000])
+        response = state.client.chat.completions.create(
+            model=_OPENAI_FAST_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a SQL validator. Output JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=600,
+            response_format={"type": "json_object"},
+        )
+        raw = (response.choices[0].message.content or "{}").strip()
+        result = json.loads(raw)
+
+        if result.get("is_valid", True):
+            state.checked_sql = sql
+            logger.debug("check_sql: valid ✅")
+        else:
+            issues = result.get("issues", [])
+            corrected = result.get("corrected_sql", "")
+            logger.info("check_sql: issues found: %s", issues)
+            if corrected and len(corrected) > 20:
+                state.checked_sql = corrected.strip()
+                logger.info("check_sql: using corrected SQL")
+            else:
+                # Can't auto-fix — record issue and re-generate
+                state.retry_errors.append("check_sql issues: " + "; ".join(issues[:3]))
+                state.retry_count += 1
+                if state.retry_count >= MAX_RETRIES:
+                    state.checked_sql = sql  # best effort
+                else:
+                    return "generate_sql"
+
+        return "execute_sql"
+
+    except Exception as exc:
+        logger.warning("check_sql failed (%s) — skipping to execute", exc)
+        state.checked_sql = sql
+        return "execute_sql"
+
+
+def _extract_used_schema(sql: str, schema: Dict[str, Any]) -> str:
+    """Extract schema only for tables referenced in the SQL."""
+    sql_upper = sql.upper()
+    lines = []
+    for table, cols in schema.items():
+        if table.upper() in sql_upper:
+            if isinstance(cols, list):
+                col_names = [c.get("column", c) if isinstance(c, dict) else str(c) for c in cols[:30]]
+                lines.append(f"{table}: {', '.join(col_names)}")
+    return "\n".join(lines) if lines else "(schema not available)"
+
+
+# ---------------------------------------------------------------------------
+# NODE: execute_sql
+# ---------------------------------------------------------------------------
+
+def _node_execute_sql(state: GraphState) -> str:
+    """Execute the validated SQL against the database."""
+    state.node_log.append("execute_sql")
+    sql = state.checked_sql or state.generated_sql or ""
+    if not sql:
+        state.error = "No SQL to execute"
+        return "error_recovery"
+
+    try:
+        from .sap_sql_agent import _run_sql  # type: ignore
+        rows = _run_sql(state.db, sql)
+        state.final_sql = sql
+
+        if rows is None:
+            state.error = "SQL execution returned None"
+            state.retry_errors.append(state.error)
+            state.retry_count += 1
+            return "error_recovery" if state.retry_count < MAX_RETRIES else "generate_answer"
+
+        if len(rows) == 0 and not state.zero_rows_retried:
+            logger.info("execute_sql: zero rows — trying zero_rows_recovery")
+            return "zero_rows_recovery"
+
+        state.execution_result = rows
+        logger.info("execute_sql: %d rows ✅", len(rows))
+        return "generate_answer"
+
+    except Exception as exc:
+        err_msg = str(exc)
+        logger.warning("execute_sql error: %s", err_msg)
+        state.error = err_msg
+        state.retry_errors.append(err_msg)
+        state.retry_count += 1
+        if state.retry_count < MAX_RETRIES:
+            return "error_recovery"
+        # Final attempt failed — proceed to answer with what we have
+        state.execution_result = []
+        return "generate_answer"
+
+
+# ---------------------------------------------------------------------------
+# NODE: error_recovery
+# ---------------------------------------------------------------------------
+
+_ERROR_RECOVERY_PROMPT = """The following SQL query failed to execute against a SAP PostgreSQL database.
+
+Error: {error}
+
+Failed SQL:
+{sql}
+
+Schema context (tables used):
+{schema}
+
+SAP rules to follow when rewriting:
+- fkdat / budat columns are CHAR(8) strings — use SUBSTRING(TRIM(col),1,4) = 'YYYY' for year, NOT EXTRACT
+- NETWR / KWMENG are TEXT, must CAST(col AS NUMERIC)
+- VBELN joins: use LPAD(TRIM(a.vbeln),10,'0') = LPAD(TRIM(b.vbeln),10,'0')
+- GJAHR is unreliable, avoid it
+- Never use INNER as an alias (it is a SQL keyword)
+- Use COALESCE(col, 0) in numeric aggregations
+
+Write ONLY the corrected SQL query, no explanation, no markdown fencing."""
+
+
+def _node_error_recovery(state: GraphState) -> str:
+    """Ask LLM to rewrite the SQL given the error message."""
+    state.node_log.append("error_recovery")
+
+    if state.retry_count >= MAX_RETRIES:
+        logger.warning("error_recovery: max retries reached")
+        state.execution_result = []
+        return "generate_answer"
+
+    sql = state.checked_sql or state.generated_sql or ""
+    error = state.error or "Unknown error"
+    schema_ctx = _extract_used_schema(sql, state.schema or {})
+
+    try:
+        prompt = _ERROR_RECOVERY_PROMPT.format(
+            error=error[:500],
+            sql=sql[:2000],
+            schema=schema_ctx[:2000],
+        )
+        response = state.client.chat.completions.create(
+            model=_OPENAI_FAST_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a SQL repair expert. Output SQL only, no explanation."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=800,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        # Strip markdown fences if present
+        raw = re.sub(r"^```(?:sql)?\s*", "", raw, flags=re.I)
+        raw = re.sub(r"\s*```$", "", raw).strip()
+
+        if raw and len(raw) > 20:
+            state.generated_sql = raw
+            state.checked_sql = None  # force re-check
+            logger.info("error_recovery: generated new SQL (attempt %d)", state.retry_count + 1)
+            return "check_sql"
+
+    except Exception as exc:
+        logger.warning("error_recovery LLM call failed: %s", exc)
+
+    state.retry_count += 1
+    if state.retry_count >= MAX_RETRIES:
+        state.execution_result = []
+        return "generate_answer"
+    return "generate_sql"  # try fresh generation
+
+
+# ---------------------------------------------------------------------------
+# NODE: zero_rows_recovery
+# ---------------------------------------------------------------------------
+
+def _node_zero_rows_recovery(state: GraphState) -> str:
+    """
+    When SQL executes successfully but returns 0 rows, widen the date filter
+    and retry once.  Strategy: drop or broaden WHERE year/date constraints.
+    """
+    state.node_log.append("zero_rows_recovery")
+    state.zero_rows_retried = True
+    sql = state.checked_sql or state.generated_sql or ""
+    if not sql:
+        state.execution_result = []
+        return "generate_answer"
+
+    try:
+        widened = _widen_date_filter(sql)
+        if widened and widened != sql:
+            logger.info("zero_rows_recovery: widened date filter, retrying")
+            state.checked_sql = widened
+            state.final_sql = widened
+            from .sap_sql_agent import _run_sql  # type: ignore
+            rows = _run_sql(state.db, widened) or []
+            if rows:
+                state.execution_result = rows
+                state.node_log.append("zero_rows_recovery:found_rows")
+                return "generate_answer"
+
+        # Widen didn't help — ask LLM to try a broader query
+        prompt = (
+            f"The following SAP SQL returned 0 rows.\n\n"
+            f"SQL:\n{sql[:1500]}\n\n"
+            f"Rewrite it to return SOMETHING relevant by:\n"
+            f"1. Broadening or removing date filters\n"
+            f"2. If filtered to a specific year, try without year filter\n"
+            f"3. If still nothing, return the top 20 rows without date filter\n"
+            f"Output only the SQL, no explanation."
+        )
+        response = state.client.chat.completions.create(
+            model=_OPENAI_FAST_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=600,
+        )
+        new_sql = (response.choices[0].message.content or "").strip()
+        new_sql = re.sub(r"^```(?:sql)?\s*", "", new_sql, flags=re.I)
+        new_sql = re.sub(r"\s*```$", "", new_sql).strip()
+        if new_sql and len(new_sql) > 20:
+            from .sap_sql_agent import _run_sql  # type: ignore
+            rows2 = _run_sql(state.db, new_sql) or []
+            state.execution_result = rows2
+            if rows2:
+                state.final_sql = new_sql
+                state.checked_sql = new_sql
+                state.node_log.append(f"zero_rows_recovery:llm_widened({len(rows2)} rows)")
+        else:
+            state.execution_result = []
+
+    except Exception as exc:
+        logger.warning("zero_rows_recovery error: %s", exc)
+        state.execution_result = []
+
+    return "generate_answer"
+
+
+def _widen_date_filter(sql: str) -> str:
+    """
+    Heuristic: remove the most restrictive date year filter from a SAP SQL.
+    e.g. SUBSTRING(TRIM(fkdat),1,4) = '2009'  →  removed
+    """
+    # Remove SAP-style year equality: SUBSTRING(TRIM(col),1,4) = 'YYYY'
+    widened = re.sub(
+        r"AND\s+SUBSTRING\s*\(\s*TRIM\s*\([^)]*(?:fkdat|budat|bldat|erdat)[^)]*\)\s*,\s*1\s*,\s*4\s*\)\s*=\s*'\d{4}'",
+        "",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    # Remove year columns in WHERE: col = 'YYYY'
+    widened = re.sub(
+        r'AND\s+"?(?:fkdat|budat|gjahr|bldat)"?\s*=\s*\'\d{4}\'',
+        "",
+        widened,
+        flags=re.IGNORECASE,
+    )
+    # Remove BETWEEN date literals
+    widened = re.sub(
+        r'AND\s+"?(?:fkdat|budat|bldat)"?\s+BETWEEN\s+\'[\d\-]+\'\s+AND\s+\'[\d\-]+\'',
+        "",
+        widened,
+        flags=re.IGNORECASE,
+    )
+    return widened.strip() if widened.strip() != sql.strip() else sql
+
+
+# ---------------------------------------------------------------------------
+# NODE: generate_answer
+# ---------------------------------------------------------------------------
+
+_ANSWER_PROMPT = """You are a business intelligence assistant analyzing SAP ERP data.
+
+Question: {question}
+
+SQL executed:
+{sql}
+
+Data returned ({row_count} rows):
+{data_sample}
+
+{rag_note}
+
+Write a concise, accurate business answer (2-4 sentences). Rules:
+- State specific numbers from the data (no vague phrases like "various amounts")
+- Use Indian number formatting: values ≥ 10,00,000 → "X.XX Cr", ≥ 1,00,000 → "X.XX L"
+  (1 Crore = 100 Lakhs = 10,000,000; 1 Lakh = 100,000)
+- For USD/EUR values > 1,000,000, use "X.XX M"
+- If 0 rows: explain what was searched and suggest possible reasons
+- Do not mention SQL, tables, or column names
+- Do not say "based on the data" — just state the facts"""
+
+
+def _node_generate_answer(state: GraphState) -> str:
+    """LLM turns raw rows into a plain-English business answer."""
+    state.node_log.append("generate_answer")
+
+    rows = state.execution_result or []
+    sql = state.final_sql or state.checked_sql or state.generated_sql or ""
+
+    if not rows:
+        state.final_answer = (
+            f"The query returned no results. This could mean no transactions match "
+            f"the specified criteria, or the data may be in a different time period."
+        )
+        state.final_data = []
+        state.confidence = "low"
+        return "verify_answer"
+
+    # Build data sample (max 10 rows for prompt)
+    try:
+        data_sample = json.dumps(rows[:10], default=str, indent=2)[:2000]
+    except Exception:
+        data_sample = str(rows[:5])[:1000]
+
+    rag_note = ""
+    if state.rag_context:
+        rag_note = "Context from similar past queries:\n" + state.rag_context[:500]
+
+    prompt = _ANSWER_PROMPT.format(
+        question=state.question,
+        sql=sql[:600],
+        row_count=len(rows),
+        data_sample=data_sample,
+        rag_note=rag_note,
+    )
+
+    try:
+        model = _OPENAI_INSIGHTS_MODEL
+        try:
+            from ..config.config import AI_INSIGHTS_MODEL  # type: ignore
+            model = AI_INSIGHTS_MODEL or model
+        except ImportError:
+            pass
+
+        response = state.client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a concise BI analyst. Answer factually using only the data provided."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=400,
+        )
+        state.final_answer = (response.choices[0].message.content or "").strip()
+        state.final_data = rows
+        state.confidence = "high" if len(rows) >= 1 else "low"
+
+    except Exception as exc:
+        logger.warning("generate_answer LLM failed: %s", exc)
+        state.final_answer = f"Query returned {len(rows)} row(s). Top result: {json.dumps(rows[0], default=str)[:200] if rows else 'No data'}"
+        state.final_data = rows
+        state.confidence = "medium"
+
+    return "verify_answer"
+
+
+# ---------------------------------------------------------------------------
+# NODE: verify_answer
+# ---------------------------------------------------------------------------
+
+_VERIFY_PROMPT = """You are a fact-checker for a BI assistant. Verify that the answer is numerically accurate against the raw data.
+
+Question: {question}
+Answer to verify: {answer}
+Raw data (first 5 rows):
+{data}
+
+Rules:
+1. Check every number mentioned in the answer against the data
+2. If a number is WRONG, silently correct it (do not say "I corrected" — just state the right number)
+3. If the answer is already correct, return it unchanged
+4. If the answer mentions a total that differs from the sum in the data, fix the total
+5. Keep the same tone and length — just fix wrong numbers
+
+Return only the (possibly corrected) answer text."""
+
+
+def _node_verify_answer(state: GraphState) -> str:
+    """Cross-check the generated answer against actual row data."""
+    state.node_log.append("verify_answer")
+
+    answer = state.final_answer or ""
+    rows = state.final_data or []
+
+    if not answer or not rows:
+        return "END"
+
+    # Only verify if there are numbers in the answer worth checking
+    if not re.search(r"\d", answer):
+        return "END"
+
+    try:
+        data_sample = json.dumps(rows[:5], default=str, indent=2)[:1500]
+        prompt = _VERIFY_PROMPT.format(
+            question=state.question,
+            answer=answer,
+            data=data_sample,
+        )
+        response = state.client.chat.completions.create(
+            model=_OPENAI_FAST_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a fact-checker. Output only the corrected answer text, nothing else."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=350,
+        )
+        verified = (response.choices[0].message.content or "").strip()
+        if verified and len(verified) > 10:
+            state.final_answer = verified
+            logger.debug("verify_answer: answer updated")
+
+    except Exception as exc:
+        logger.debug("verify_answer LLM failed (non-fatal): %s", exc)
+
+    return "END"
+
+
+# ---------------------------------------------------------------------------
+# GRAPH RUNNER
+# ---------------------------------------------------------------------------
+
+_NODES = {
+    "load_schema":          _node_load_schema,
+    "retrieve_context":     _node_retrieve_context,
+    "generate_sql":         _node_generate_sql,
+    "check_sql":            _node_check_sql,
+    "execute_sql":          _node_execute_sql,
+    "error_recovery":       _node_error_recovery,
+    "zero_rows_recovery":   _node_zero_rows_recovery,
+    "generate_answer":      _node_generate_answer,
+    "verify_answer":        _node_verify_answer,
+}
+
+_START_NODE = "load_schema"
+_MAX_STEPS = 30   # safety limit to prevent infinite loops
+
+
+def run_pipeline(
+    question: str,
+    db: Any,
+    client: Any,
+    *,
+    conversation_history: Optional[List[Dict]] = None,
+    time_scope: Optional[str] = None,
+    date_range: Optional[Dict[str, str]] = None,
+    thread_id: Optional[str] = None,
+    period_info: Optional[str] = None,
+) -> PipelineResult:
+    """
+    Execute the 9-node AI pipeline and return a PipelineResult.
+
+    This is the main entry point called from ai_analysis_orchestrator.py.
+    """
+    t0 = time.time()
+
+    state = GraphState(
+        question=question,
+        db=db,
+        client=client,
+        conversation_history=conversation_history or [],
+        time_scope=time_scope,
+        date_range=date_range,
+        thread_id=thread_id,
+        period_info=period_info,
+    )
+
+    # Build chart specs after the pipeline completes (chart engine is pure — no DB calls)
+    def _build_charts(rows: List[Dict]) -> List[Dict]:
+        try:
+            from .chart_decision_engine import build_chart_specs_for_rows
+            return build_chart_specs_for_rows(rows, question) or []
+        except Exception as ce:
+            logger.debug("chart build failed: %s", ce)
+            return []
+
+    current_node = _START_NODE
+    steps = 0
+
+    while current_node != "END" and steps < _MAX_STEPS:
+        steps += 1
+        node_fn = _NODES.get(current_node)
+        if node_fn is None:
+            logger.error("Unknown node: %s", current_node)
+            break
+        try:
+            logger.debug("→ node: %s (step %d)", current_node, steps)
+            next_node = node_fn(state)
+            current_node = next_node
+        except Exception as exc:
+            logger.error("Node %s raised: %s", current_node, exc, exc_info=True)
+            state.error = str(exc)
+            # Emergency exit
+            if current_node in ("generate_answer", "verify_answer"):
+                break
+            current_node = "generate_answer"
+
+    elapsed_ms = int((time.time() - t0) * 1000)
+    logger.info(
+        "pipeline done: %d steps, %dms | sql=%s | rows=%d | confidence=%s",
+        steps, elapsed_ms,
+        "✅" if state.final_sql else "❌",
+        len(state.final_data or []),
+        state.confidence,
+    )
+
+    # Build charts from the final data
+    charts = _build_charts(state.final_data or [])
+
+    # RAG auto-save: persist successful NL→SQL pairs
+    if (state.final_sql and state.final_data and len(state.final_data) >= 1
+            and not state.zero_rows_retried and state.retry_count == 0):
+        try:
+            from .rag_store_service import save_successful_query
+            save_successful_query(db, client, question, state.final_sql)
+        except Exception:
+            pass
+
+    preview = (state.final_data or [])[:50]
+
+    return PipelineResult(
+        reply=state.final_answer or "The query completed but produced no summary.",
+        action="new",
+        reason="sql_success" if state.final_sql else "no_sql",
+        sql=state.final_sql or state.generated_sql or "",
+        rows_preview=preview,
+        charts=charts,
+        memory_updated=True,
+        performance={"total_ms": elapsed_ms, "steps": steps, "retries": state.retry_count},
+        time_scope=state.time_scope,
+        date_range=state.date_range,
+        period_info=state.period_info,
+        confidence=state.confidence,
+        node_log=state.node_log,
+
+    )

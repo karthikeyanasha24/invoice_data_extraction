@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # Common English / query noise — not table names (length-3+ tokens only are blocked).
 _TABLE_STOPWORDS: Set[str] = {
     "the", "and", "for", "are", "not", "has", "any", "all", "new", "old", "get",
+    "question",
+    # Client routing preamble / NLP noise (never catalog tables)
+    "transactional", "transaction", "master", "guidelines", "bucket", "buckets",
+    "routing", "analysis", "panel", "mode", "scope", "continuous", "grain",
     "set", "sum", "top", "last", "first", "rows", "row", "list", "show", "from",
     "join", "where", "when", "what", "with", "that", "this", "your", "user",
     "data", "sales", "year", "month", "week", "day", "how", "why", "did", "can",
@@ -52,6 +56,8 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     # Zodiac operational domain words — not table names in SAP or app schema
     "SAT", "CFDI", "RFC", "MXN", "XML", "EDI", "API", "PDF", "CSV", "ERP",
     "SAP",  # SAP is an app/system name, not a table identifier
+    # Frontend preamble tag (underscore token); not a SAP table even if stripping fails
+    "ZODIAC_GENERATIVE_CLIENT_ROUTING",
     # Business / reporting English often typed in ALL CAPS — not SAP identifiers (KNA1, VBRK, …)
     "CUSTOMERS", "CUSTOMER", "REVENUE", "INVOICES", "INVOICE", "PRODUCTS", "PRODUCT",
     "SUPPLIERS", "SUPPLIER", "PAYMENTS", "PAYMENT", "AMOUNTS", "AMOUNT", "QUANTITIES",
@@ -83,11 +89,43 @@ _SAP_UPPER_STOPWORDS: Set[str] = {
     "ZTERM", "VALDT", "PRSDT", "ERDAT", "ERZET", "ERNAM", "AEDAT", "AENAM",
     "STGRD", "ABGRU", "LIFSK", "FAKSK", "VKAUS", "VRKME", "NETPR", "KPEIN",
     "KMEIN", "SHKZG", "KOART", "GSBER", "RBKPV", "RBKPZ",
+    # More SD / FI field tokens often pasted in UI routing hints or user text
+    "KUNRG", "MWSBK", "BTGEW", "ARKTX", "AUBEL", "KWMENG", "KDGRP", "AKONT",
+    "NAME1", "EAN11", "EANTP", "DISPO", "BESKZ", "BSTNK", "KALKA", "KADKY",
 }
 
 # ISO 4217 currency codes — must not be treated as SAP table names.
 # E.g. "show sales in EUR" or "top customers with currency CAD" must NOT
 # classify EUR/CAD as SAP table identifiers.
+def strip_generative_client_routing_block(text: str) -> str:
+    """
+    Remove frontend-injected [...] routing preamble so tokens like VBELN, KUNRG,
+    or ZODIAC_GENERATIVE_CLIENT_ROUTING inside hints are not treated as explicit
+    SAP table identifiers.
+    """
+    if not (text or "").strip():
+        return text or ""
+
+    lowered = text.lower()
+    tag_open = "[zodiac_generative_client_routing"
+    tag_close = "[/zodiac_generative_client_routing]"
+    idx = lowered.find(tag_open)
+    if idx == -1:
+        return text.strip()
+
+    end = lowered.find(tag_close, idx)
+    if end == -1:
+        uq_m = re.search(r"(?im)User\s+question:\s*\n?", text)
+        return text[uq_m.end() :].strip() if uq_m else text.strip()
+
+    after = text[end + len(tag_close) :].strip()
+    uq_m = re.match(r"(?i)User\s+question:\s*\n*", after)
+    if uq_m:
+        after = after[uq_m.end() :].lstrip()
+    return after.strip()
+
+
+# ISO 4217 currency codes — must not be treated as SAP table names.
 _KNOWN_CURRENCY_CODES: Set[str] = {
     # Major world currencies
     "EUR", "USD", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY", "HKD", "NZD",
@@ -110,6 +148,7 @@ def extract_explicit_table_identifiers(question: str) -> List[str]:
     Extract table-like identifiers the user explicitly referenced.
     Order is stable; duplicates removed (case-insensitive).
     """
+    question = strip_generative_client_routing_block(question.strip()) if question else ""
     if not question:
         return []
     found: List[str] = []
@@ -243,7 +282,7 @@ def should_clarify_app_table_ordering(db: Session, table_name: str, question: st
     True when the user asked for last/first/top N rows but the table has no
     suitable ORDER BY column (updated_at, created_at, id).
     """
-    q = (question or "").lower()
+    q = strip_generative_client_routing_block(question or "").lower()
     if not (
         re.search(r"\b(?:last|first|top)\s+\d+", q)
         or re.search(r"\b\d+\s+rows?\b", q)
@@ -293,14 +332,15 @@ def try_execute_explicit_app_table_sql(
     qident = lambda s: '"' + s.replace('"', '""') + '"'
     qtable = qident(actual_table)
 
+    question_clean = strip_generative_client_routing_block(question or "")
     order_col, order_note = _pick_order_column(columns)
-    limit = _parse_row_limit(question)
+    limit = _parse_row_limit(question_clean)
     if limit is None:
         limit = 50
 
     where_parts: List[str] = []
     params: Dict[str, Any] = {}
-    if _wants_user_scope(question):
+    if _wants_user_scope(question_clean):
         col_lower = {c.lower(): c for c in columns}
         if "user_id" in col_lower:
             where_parts.append(f"{qident(col_lower['user_id'])} = :uid")
@@ -308,8 +348,8 @@ def try_execute_explicit_app_table_sql(
 
     if not order_col:
         # "Last N" without a time/id column — caller should ask for clarification
-        if re.search(r"\b(?:last|first|top)\s+\d+", (question or "").lower()) or re.search(
-            r"\b\d+\s+rows?\b", (question or "").lower()
+        if re.search(r"\b(?:last|first|top)\s+\d+", question_clean.lower()) or re.search(
+            r"\b\d+\s+rows?\b", question_clean.lower()
         ):
             return None
 

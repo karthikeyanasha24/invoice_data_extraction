@@ -318,6 +318,20 @@ def test_extract_explicit_table_identifiers_ignores_generic_invoice_words() -> N
     assert "tables" not in ids
 
 
+def test_explicit_table_extractor_strips_generative_ai_routing_preamble() -> None:
+    """Dashboard prepends [...]ROUTING hints; column tokens must not become table names."""
+    q = """[ZODIAC_GENERATIVE_CLIENT_ROUTING v=1]
+query_mode: new
+table_hints:
+  - VBRK: { role: transaction_header, columns: [VBELN, FKDAT, KUNRG] }
+[/ZODIAC_GENERATIVE_CLIENT_ROUTING]
+
+User question:
+Show invoices for the top customer in the last 30 days"""
+    ids = extract_explicit_table_identifiers(q)
+    assert not ids
+
+
 def test_operational_resolver_fast_path_invoice_amount_tax_by_currency() -> None:
     q = "Show average total amount and tax amount by currency from invoice app tables"
     out = resolve_operational_query(q, time_scope="current", api_key=None)

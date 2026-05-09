@@ -96,6 +96,7 @@ def generate_sql(
     similar_examples: Optional[List[tuple]] = None,
     model: str = "gpt-4o-mini",
     intent_context: Optional[str] = None,
+    rag_context: Optional[str] = None,
 ) -> Optional[str]:
     """
     Ask the LLM to write a PostgreSQL SQL query for the question using only the given tables.
@@ -129,6 +130,11 @@ def generate_sql(
             join_hint_block = join_hint_block + "\n\n"
     except Exception:
         join_hint_block = ""
+
+    # RAG context block (learned examples + glossary terms from embedding store)
+    rag_block = ""
+    if rag_context and rag_context.strip():
+        rag_block = rag_context.strip() + "\n\n"
 
     # Restrict schema to selected tables only (subset of full schema)
     prompt = f"""You are a PostgreSQL SAP expert. Write a single SQL query to answer the user's question.
@@ -170,9 +176,23 @@ def generate_sql(
 ║     from VBRP line items alone (line rows can be zero while      ║
 ║     header NETWR is non-zero). Use VBRP only for product/line    ║
 ║     detail or explicit line-level analysis.                       ║
+║                                                                  ║
+║  7. MASTER vs TRANSACTION TABLE LAYERS (always respect this):    ║
+║     Transaction/fact tables (compute measures from these):        ║
+║       VBRP, VBRK, EKPO, EKKO, RBKP, RSEG, BSEG, FAGLFLEXA,      ║
+║       COEP, COSP, COSS, AFPO, RESB                               ║
+║     Master/attribute tables (join for names/attributes only):    ║
+║       MARA, MAKT, MARC, MVKE, MEAN, KNA1, LFA1, CEPC, CSKS      ║
+║     Rule: always start the query from a transaction table,        ║
+║     then LEFT JOIN master tables for enrichment.                  ║
+║     NEVER compute SUM/COUNT from master tables alone.             ║
+║                                                                  ║
+║  8. DRILL-DOWN CONTINUITY: If a prior SQL is provided in the     ║
+║     context, carry over ALL its filters (year, entity, currency, ║
+║     company code). Only ADD new GROUP BY / JOIN columns.          ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-{semantic_block}{intent_block}{join_hint_block}{entity_filter_block}User question:
+{semantic_block}{intent_block}{join_hint_block}{rag_block}{entity_filter_block}User question:
 {question}
 
 Relevant tables (use ONLY these):
@@ -186,6 +206,7 @@ Rules:
 - Return ONLY the SQL query, no explanation.
 - Use PostgreSQL syntax (e.g. LIMIT not TOP, :: for cast, ILIKE for case-insensitive like).
 - Always add LIMIT 100 (or a reasonable limit).
+- DECIMAL PRECISION: Output numeric columns with full precision. Never round to integers. Use ROUND(value, 2) for monetary amounts so the caller can display "1,234,567.89" not "1234568". The narrative layer will format magnitudes (1.2M, 15.3K) — your job is to return precise raw numbers.
 - ENTITY FILTER (CRITICAL): If the question names a specific customer (e.g. "for customer Siemens"), add WHERE KNA1.name1 ILIKE '%Siemens%' and JOIN KNA1 if needed. If it names a vendor (e.g. "vendor named Bosch"), add WHERE LFA1.name1 ILIKE '%Bosch%'. If it names a product (e.g. "Harley", "jacket"), add WHERE MAKT.maktx ILIKE '%Harley%'. NEVER return a broad unfiltered result when a specific entity is requested.
 - For "cost by profit center" or "postings by profit center": use FAGLFLEXA, group by prctr, SUM(hsl) as total_cost.
 - For "jacket" or product name filter: use MAKT.MAKTX ILIKE '%jacket%' and MAKT.SPRAS = 'E' when MAKT is in tables.

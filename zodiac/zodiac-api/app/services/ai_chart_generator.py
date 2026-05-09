@@ -650,13 +650,10 @@ def analyze_visualization_needs(
 ) -> List[ChartSpec]:
     """
     Analyze query results and determine appropriate visualizations.
-    
-    Args:
-        rows: Query result rows
-        user_query: Original user question
-        action: Action type from orchestrator (new, compare, reuse, etc.)
-        sql: SQL query that was executed
-    
+
+    Primary path: chart_decision_engine (value-based, deterministic — reference project port).
+    Fallback: adaptive heuristics then LLM.
+
     Returns:
         List of ChartSpec objects describing recommended visualizations
     """
@@ -664,6 +661,37 @@ def analyze_visualization_needs(
         logger.info("❌ No rows to visualize (rows is empty or None)")
         return []
 
+    # ── Primary: value-based chart decision engine (reference project pattern) ──
+    try:
+        from .chart_decision_engine import build_chart_specs_for_rows as _cde_build
+        cde_specs = _cde_build(rows, user_query, sql)
+        if cde_specs:
+            # Convert plain dicts → ChartSpec dataclass objects
+            result_specs: List[ChartSpec] = []
+            for s in cde_specs:
+                result_specs.append(ChartSpec(
+                    chart_type=s.get("chart_type", "table"),
+                    title=s.get("title", "Results"),
+                    description=s.get("description", ""),
+                    data=s.get("data", []),
+                    x_key=s.get("x_key"),
+                    y_keys=s.get("y_keys"),
+                    name_key=s.get("name_key"),
+                    value_key=s.get("value_key"),
+                    colors=s.get("colors"),
+                    show_legend=s.get("show_legend", True),
+                    show_grid=s.get("show_grid", True),
+                    stacked=s.get("stacked", False),
+                    period_info=s.get("period_info"),
+                ))
+            _apply_sql_filter_context(result_specs, sql)
+            _apply_mixed_currency_note(result_specs, rows, sql)
+            logger.info("📊 chart_decision_engine: %s", [c.chart_type for c in result_specs])
+            return result_specs
+    except Exception as _cde_err:
+        logger.warning("chart_decision_engine failed (%s), falling back", _cde_err)
+
+    # ── Fallback: existing adaptive + LLM path ──────────────────────────────────
     adaptive = plan_adaptive_chart_specs(
         rows,
         user_query,
@@ -1170,39 +1198,38 @@ def generate_chart_data(
             actual_value_key = _find_matching_key(value_key, available_keys)
             
             if not actual_name_key or not actual_value_key:
-                logger.warning(f"❌ Could not match pie keys. name_key='{name_key}' -> {actual_name_key}, value_key='{value_key}' -> {actual_value_key}")
+                logger.warning(
+                    f"Could not match pie keys. name_key='{name_key}' -> {actual_name_key}, value_key='{value_key}' -> {actual_value_key}"
+                )
                 return []
-            
-            logger.info(f"✅ Using name_key={actual_name_key}, value_key={actual_value_key}")
-            
-            # Build pie data - ALWAYS uses "name" and "value" keys
+
+            logger.info(f"Using name_key={actual_name_key}, value_key={actual_value_key}")
+
+            # Build pie data - ALWAYS uses 'name' and 'value' keys
             pie_data = []
             for row in limited_rows:
                 if actual_name_key in row and actual_value_key in row:
+                    raw_val = row[actual_value_key]
+                    try:
+                        num_val = float(str(raw_val).replace(',', '').replace(' ', '')) if raw_val is not None else 0
+                    except (ValueError, TypeError):
+                        num_val = 0
                     pie_data.append({
-                        "name": str(row[actual_name_key]),
-                        "value": float(row[actual_value_key]) if row[actual_value_key] is not None else 0
+                        'name': str(row[actual_name_key]),
+                        'value': round(num_val, 2)
                     })
-            
-            # CRITICAL: Update config to reflect the ACTUAL keys in pie_data
-            # Since we transform to {"name": ..., "value": ...}, these are the keys
-            config["name_key"] = "name"
-            config["value_key"] = "value"
-            
-            logger.info(f"✅ Generated {len(pie_data)} pie chart segments")
+
+            if not pie_data:
+                logger.warning('No valid pie data built')
+                return []
+
+            logger.info(f'Built pie chart with {len(pie_data)} segments')
             return pie_data
-        
-        elif chart_type == "table":
-            # Return formatted rows as-is
-            return _format_chart_data(rows, max_items=100)
-        
-        return []
-    
+
+        else:
+            logger.warning(f"generate_chart_data: unsupported chart_type={chart_type}")
+            return []
+
     except Exception as e:
-        logger.error(f"Failed to generate {chart_type} chart data: {e}")
+        logger.error(f"generate_chart_data failed: {e}", exc_info=True)
         return []
-
-
-def chart_specs_to_json(charts: List[ChartSpec]) -> List[Dict[str, Any]]:
-    """Convert ChartSpec objects to JSON-serializable dictionaries."""
-    return [asdict(chart) for chart in charts]

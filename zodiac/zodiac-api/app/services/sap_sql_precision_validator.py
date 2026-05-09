@@ -92,7 +92,21 @@ def _clean_identifier(value: str) -> str:
     return (value or "").strip().strip('"')
 
 
+_SQL_KEYWORDS: Set[str] = {
+    "SELECT", "FROM", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER",
+    "CROSS", "NATURAL", "ON", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT",
+    "OFFSET", "UNION", "INTERSECT", "EXCEPT", "WITH", "AS", "BY", "DISTINCT",
+    "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "IS", "NULL",
+    "CASE", "WHEN", "THEN", "ELSE", "END", "ALL", "ANY", "SOME",
+}
+
+
 def _extract_alias_map(sql: str) -> Dict[str, str]:
+    """
+    Build a map of {alias_upper -> table_name} from all FROM/JOIN clauses.
+    Correctly rejects SQL keywords (INNER, LEFT, ON, etc.) as aliases so that
+    patterns like 'FROM VBRK\\nINNER JOIN VBRP' do not register INNER as an alias.
+    """
     alias_map: Dict[str, str] = {}
     pattern = re.compile(
         r"\b(?:FROM|JOIN)\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"?)"
@@ -102,7 +116,11 @@ def _extract_alias_map(sql: str) -> Dict[str, str]:
     )
     for match in pattern.finditer(sql or ""):
         table_name = _clean_identifier(match.group(1))
-        alias = _clean_identifier(match.group(2) or table_name)
+        raw_alias = _clean_identifier(match.group(2) or "")
+        # Reject SQL keywords captured as aliases (e.g. "INNER" from "FROM VBRK\nINNER JOIN")
+        if raw_alias and raw_alias.upper() in _SQL_KEYWORDS:
+            raw_alias = ""
+        alias = raw_alias or table_name
         if not table_name:
             continue
         alias_map[alias.upper()] = table_name
@@ -129,6 +147,34 @@ def _extract_expression_column_refs(expr: str) -> List[Tuple[str, str]]:
 
 def _extract_join_column_pairs(sql: str, alias_map: Dict[str, str]) -> Dict[frozenset[str], Set[frozenset[str]]]:
     pairs: Dict[frozenset[str], Set[frozenset[str]]] = {}
+
+    # --- Pass 1: LPAD/TRIM-wrapped joins ---
+    # Handles SAP document-key joins like:
+    #   LPAD(TRIM(a.vbeln), 10, '0') = LPAD(TRIM(b.vbeln), 10, '0')
+    # The outer eq_pattern cannot parse these because of comma-separated extra args.
+    lpad_pat = re.compile(
+        r'LPAD\s*\(\s*(?:TRIM\s*\(\s*)?'
+        r'(?P<lq>"?[A-Za-z_][A-Za-z0-9_]*"?)\.(?P<lc>"?[A-Za-z_][A-Za-z0-9_]*"?)'
+        r'(?:\s*\))?[^)]*\)'          # close TRIM) + any LPAD extra args + close LPAD)
+        r'\s*=\s*'
+        r'LPAD\s*\(\s*(?:TRIM\s*\(\s*)?'
+        r'(?P<rq>"?[A-Za-z_][A-Za-z0-9_]*"?)\.(?P<rc>"?[A-Za-z_][A-Za-z0-9_]*"?)',
+        re.IGNORECASE,
+    )
+    for m in lpad_pat.finditer(sql or ""):
+        left_alias = _clean_identifier(m.group("lq"))
+        left_col = _clean_identifier(m.group("lc"))
+        right_alias = _clean_identifier(m.group("rq"))
+        right_col = _clean_identifier(m.group("rc"))
+        left_table = alias_map.get(left_alias.upper())
+        right_table = alias_map.get(right_alias.upper())
+        if not left_table or not right_table or left_table.upper() == right_table.upper():
+            continue
+        pair_key = frozenset({left_table.upper(), right_table.upper()})
+        col_key = frozenset({left_col.upper(), right_col.upper()})
+        pairs.setdefault(pair_key, set()).add(col_key)
+
+    # --- Pass 2: General function-wrapped / plain equality ---
     eq_pattern = re.compile(
         r'(?P<left>(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*)*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\))*)'
         r'\s*=\s*'
@@ -155,11 +201,13 @@ def _extract_join_column_pairs(sql: str, alias_map: Dict[str, str]) -> Dict[froz
 def _extract_join_table_pairs_from_clauses(sql: str, alias_map: Dict[str, str]) -> Set[frozenset[str]]:
     """
     Fallback connectivity extraction from JOIN ... ON clauses.
-    Helps when ON expressions are wrapped in functions and column parser is conservative.
+    Handles LPAD/TRIM-wrapped ON expressions where column-level parsing cannot find pairs.
+    Also tolerates 'JOIN table\\nON ...' (ON on the next line) and no-alias forms.
     """
     pairs: Set[frozenset[str]] = set()
     if not sql:
         return pairs
+    # Allow optional alias that is NOT a SQL keyword (avoids capturing INNER/LEFT as alias)
     join_pat = re.compile(
         r"\bJOIN\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"?)"
         r"(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?\s+ON\s+"
@@ -168,7 +216,11 @@ def _extract_join_table_pairs_from_clauses(sql: str, alias_map: Dict[str, str]) 
     )
     for m in join_pat.finditer(sql):
         table_name = _clean_identifier(m.group(1))
-        alias = _clean_identifier(m.group(2) or table_name)
+        raw_alias = _clean_identifier(m.group(2) or "")
+        # Reject SQL keywords as aliases
+        if raw_alias and raw_alias.upper() in _SQL_KEYWORDS:
+            raw_alias = ""
+        alias = raw_alias or table_name
         joined_table = alias_map.get(alias.upper()) or table_name
         on_clause = m.group("on") or ""
         aliases_in_on = {
@@ -176,6 +228,7 @@ def _extract_join_table_pairs_from_clauses(sql: str, alias_map: Dict[str, str]) 
             for a in re.findall(r'("?([A-Za-z_][A-Za-z0-9_]*)"?\.)', on_clause)
             for a in [a[1]]
         }
+        # Also add joined_table itself to alias_map lookup so its table name resolves
         for aup in aliases_in_on:
             other = alias_map.get(aup)
             if not other or not joined_table:

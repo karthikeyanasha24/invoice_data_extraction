@@ -12,6 +12,11 @@ import {
   ThumbsUp, ThumbsDown, X, Check, Code2, Pencil, ChevronDown,
 } from 'lucide-react';
 import AIChartRenderer from './ai/AIChartRenderer';
+import {
+  buildAugmentedGenerativeQuestion,
+  GENERATIVE_ROUTING_OPTIONS,
+  type GenerativeRoutingFocus,
+} from './sapGenerativeAIRouting';
 import { useVoiceRecording } from '../hooks/useVoiceRecording';
 import { useAuth } from '@/contexts/AuthContext';
 import ReactMarkdown from 'react-markdown';
@@ -1065,6 +1070,9 @@ function ChatPanel({
   setUseContext,
   queryMode = 'new',
   setQueryMode,
+  onRotateThreadForNewQuestion,
+  generativeRoutingFocus,
+  setGenerativeRoutingFocus,
   timeScope,
   setTimeScope,
   fullWidth = false,
@@ -1088,6 +1096,10 @@ function ChatPanel({
   setUseContext: (v: boolean) => void;
   queryMode?: 'new' | 'follow_up';
   setQueryMode?: (m: 'new' | 'follow_up') => void;
+  /** Rotates server thread id when user explicitly starts a new question */
+  onRotateThreadForNewQuestion?: () => void;
+  generativeRoutingFocus: GenerativeRoutingFocus;
+  setGenerativeRoutingFocus: (r: GenerativeRoutingFocus) => void;
   timeScope: 'current' | 'historical' | 'both';
   setTimeScope: (s: 'current' | 'historical' | 'both') => void;
   fullWidth?: boolean;
@@ -1371,7 +1383,10 @@ function ChatPanel({
             <div className="flex items-center gap-0.5 bg-slate-100 rounded-full p-0.5 text-[11px] font-medium select-none">
               <button
                 type="button"
-                onClick={() => setQueryMode('new')}
+                onClick={() => {
+                  setQueryMode('new');
+                  onRotateThreadForNewQuestion?.();
+                }}
                 title="Run a fresh SQL query on the database"
                 className={`px-2.5 py-0.5 rounded-full transition-all ${
                   queryMode === 'new'
@@ -1413,6 +1428,25 @@ function ChatPanel({
             </select>
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-1 mb-1.5 max-h-[5.25rem] overflow-y-auto overscroll-y-contain">
+          <span className="text-[10px] text-slate-400 font-medium mr-0.5">Schema focus</span>
+          {GENERATIVE_ROUTING_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setGenerativeRoutingFocus(opt.id)}
+              title={opt.id === 'auto' ? 'Infer domain from wording' : `Bias tables toward: ${opt.short}`}
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+                generativeRoutingFocus === opt.id
+                  ? 'bg-slate-800 text-white border-slate-800'
+                  : 'border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-700'
+              }`}
+            >
+              {opt.short}
+            </button>
+          ))}
+        </div>
+
         {queryMode === 'follow_up' && (
           <div className="flex items-center gap-1.5 mb-1.5 px-2.5 py-1 bg-indigo-50 border border-indigo-100 rounded-lg text-[11px] text-indigo-600">
             <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -1898,6 +1932,12 @@ export default function DashboardAIAnalysis() {
   const [loadingStep, setLoadingStep] = useState(0);
 
   const [useContext, setUseContext] = useState(true);
+  /** Bias orchestrator toward SAP domains (billing, orders, …) — frontend “router” akin to classify node */
+  const [generativeRoutingFocus, setGenerativeRoutingFocus] = useState<GenerativeRoutingFocus>('auto');
+
+  const rotateThreadForNewQuestion = useCallback(() => {
+    threadIdRef.current = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }, []);
 
   const [outboundData, setOutboundData] = useState<OutboundData | null>(null);
   const [inboundData, setInboundData] = useState<InboundData | null>(null);
@@ -1963,42 +2003,55 @@ export default function DashboardAIAnalysis() {
     setLoading(true);
 
     try {
-      const lastAssistant = currentMsgs.slice().reverse().find((m) => m.role === 'assistant' && m.meta?.sql);
-      const res = await dashboardApi.postAdaptiveQuery({
-        question: text,
-        tableHint: null,
-        contextData: queryMode === 'follow_up' ? {
-          previousQuestion: currentMsgs.slice().reverse().find((m) => m.role === 'user')?.content,
-          previousSQL: lastAssistant?.meta?.sql,
-          data: (lastAssistant?.meta?.rows_preview as any[]) || [],
-        } : null,
+      // ── Route ALL queries through the full orchestrator (postAIAnalysisChat) ──
+      // This ensures follow-up drill-downs carry thread context instead of throwing rubbish.
+      // The orchestrator detects query_mode='follow_up' and re-uses the stored SQL result
+      // from the thread; it only re-runs SQL when the follow-up needs new data (e.g. drill-down).
+      const conversationHistory = currentMsgs
+        .slice(-12) // last 6 turns (user + assistant pairs)
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+
+      const augmentedMessage = buildAugmentedGenerativeQuestion(text, {
+        queryMode,
+        section,
+        routingFocus: generativeRoutingFocus,
       });
+      const contextKeys = useContext ? [...AI_CONTEXT_KEYS] : [];
 
-      // Reference-style follow-up response (no SQL)
-      if (res?.type === 'analysis' && typeof res?.answer === 'string') {
-        setMsgs((prev) => [...prev, {
-          role: 'assistant',
-          content: res.answer,
-          meta: { action: 'follow_up', reason: 'contextData_analysis' },
-          section,
-          ts: Date.now(),
-        }]);
-        return;
-      }
+      const res = await dashboardApi.postAIAnalysisChat(
+        augmentedMessage,
+        conversationHistory,
+        contextKeys,
+        d,
+        section === 'realtime' ? 'current' : 'historical',
+        threadIdRef.current,
+        queryMode,
+      );
 
-      // New query response
-      if (res?.sql && queryMode === 'new') {
+      // After the first successful SQL query, switch to follow_up mode so subsequent
+      // questions use thread context instead of running full SQL pipelines each time.
+      // The orchestrator itself decides whether follow_up needs fresh SQL (drill-down).
+      const hasFreshSql = Boolean(res?.sql);
+      if (hasFreshSql && queryMode === 'new') {
         setQueryMode('follow_up');
       }
 
-      const reply = (res?.summary ?? res?.answer ?? '') || 'No response received.';
-      const ranFreshSql = Boolean(res?.sql);
+      // Orchestrator payload: { reply, sql, rows_preview, charts, action, reason, ... }
+      // (Legacy adaptive endpoint used { summary/answer, data, sql, charts })
+      const reply = (res?.reply ?? res?.summary ?? res?.answer ?? '') || 'No response received.';
+      const resAction = res?.action ?? (hasFreshSql ? 'new' : queryMode);
       const meta: AiAnalysisMeta = {
-        action: ranFreshSql ? 'new' : queryMode === 'follow_up' ? 'follow_up' : 'new',
-        reason: res?.retried ? 'auto_retry' : (res?.follow_up_mode === 'drill_down_sql' ? 'drill_down_sql' : undefined),
+        action: resAction as AiAnalysisMeta['action'],
+        reason: res?.reason,
         sql: res?.sql,
-        rows_preview: Array.isArray(res?.data) ? res.data : undefined,
+        // Orchestrator returns rows_preview; legacy endpoint returned data
+        rows_preview: Array.isArray(res?.rows_preview)
+          ? res.rows_preview
+          : Array.isArray(res?.data) ? res.data : undefined,
         charts: res?.charts,
+        time_scope: res?.time_scope,
+        date_range: res?.date_range,
+        period_info: res?.period_info,
       };
 
       const hasMeta = Boolean(
@@ -2159,11 +2212,13 @@ export default function DashboardAIAnalysis() {
           contextData: null,
         });
 
-        const reply = res?.summary || `Executed custom SQL. Returned ${res?.rowCount ?? 0} row(s).`;
+        // Handle both orchestrator payload (reply, rows_preview) and adaptive payload (summary, data)
+        const reply = res?.reply ?? res?.summary ?? `Executed custom SQL. Returned ${res?.rowCount ?? 0} row(s).`;
         const meta: AiAnalysisMeta = {
           action: 'custom_sql',
           sql: res?.sql ?? sql,
-          rows_preview: Array.isArray(res?.data) ? res.data : undefined,
+          rows_preview: Array.isArray(res?.rows_preview) ? res.rows_preview
+            : Array.isArray(res?.data) ? res.data : undefined,
           charts: res?.charts,
         };
 
@@ -2518,6 +2573,9 @@ export default function DashboardAIAnalysis() {
                   setUseContext={setUseContext}
                   queryMode={queryMode}
                   setQueryMode={setQueryMode}
+                  onRotateThreadForNewQuestion={rotateThreadForNewQuestion}
+                  generativeRoutingFocus={generativeRoutingFocus}
+                  setGenerativeRoutingFocus={setGenerativeRoutingFocus}
                   timeScope={timeScope}
                   setTimeScope={setTimeScope}
                   fullWidth
@@ -2701,6 +2759,9 @@ export default function DashboardAIAnalysis() {
                     setUseContext={setUseContext}
                     queryMode={queryMode}
                     setQueryMode={setQueryMode}
+                    onRotateThreadForNewQuestion={rotateThreadForNewQuestion}
+                    generativeRoutingFocus={generativeRoutingFocus}
+                    setGenerativeRoutingFocus={setGenerativeRoutingFocus}
                     timeScope={timeScope}
                     setTimeScope={setTimeScope}
                     onFeedbackYes={(idx) => void handleFeedbackYes('historical', idx)}
