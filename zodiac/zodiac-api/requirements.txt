@@ -35,10 +35,7 @@ openai>=1.12.0
 google-generativeai>=0.8.0
 anthropic>=0.18.0
 
-# Optional: Langchain (if needed)
-# Uncomment if you're using langchain features
-# langchain-core==0.3.72
-# langchain==0.3.27
-# langchain-community==0.3.29
-# langchain-experimental==0.3.4
-
+# LangGraph + LangChain — required by multi_stage_planner.py (imports langchain_openai, langgraph)
+langchain-core>=1.3.3
+langchain-openai>=0.3.0
+langgraph>=0.2.76
