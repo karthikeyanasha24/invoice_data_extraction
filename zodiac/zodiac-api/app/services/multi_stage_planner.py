@@ -46,7 +46,12 @@ ERP_SQL_RULES = """
    - When asked for "Top N vendors/customers/products" or similar ranking, you MUST group by the entity ID/Name and aggregate the metric (e.g., SUM(netwr) AS TotalAmount). DO NOT select all columns and just append LIMIT.
    - Example for Top 5 Vendors by Purchase Order Value:
      SELECT "EKKO".lifnr AS Vendor, SUM("EKPO".netwr) AS TotalOrderValue FROM "EKKO" INNER JOIN "EKPO" ON "EKKO".ebeln = "EKPO".ebeln GROUP BY "EKKO".lifnr ORDER BY TotalOrderValue DESC LIMIT 5
-8. NEVER generate DROP, DELETE, UPDATE, INSERT, ALTER statements. READ ONLY.
+8. MASTER DATA FOR READABLE RESULTS (when user asks customers, vendors, materials, products, or industry context)
+   - Include BOTH technical key AND description/name in SELECT when schema lists those columns.
+   - Customers (sold-to / payer): JOIN "KNA1" ON "KNA1".kunnr = <customer key from fact table>; SELECT kunnr plus name1 (and brsch for industry if needed).
+   - Materials: JOIN "MAKT" ON "MAKT".matnr = <material from lines> AND spras = 'E' (or appropriate language); SELECT matnr plus maktx.
+   - Vendors: JOIN "LFA1" ON "LFA1".lifnr = <vendor from PO/header>.
+9. NEVER generate DROP, DELETE, UPDATE, INSERT, ALTER statements. READ ONLY.
 """
 
 def _extract_sql(text: str) -> str:

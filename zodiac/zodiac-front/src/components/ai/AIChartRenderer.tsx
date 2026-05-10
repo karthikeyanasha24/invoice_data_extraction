@@ -57,20 +57,41 @@ const PALETTE = [
 /* ─────────────────────────────────────────────────────────────────
    NUMBER HELPERS
 ───────────────────────────────────────────────────────────────── */
-/** Indian compact formatting: 1Cr = 10_000_000; 1L = 100_000 */
-function fmtIndian(v: number, ccy?: string): string {
-  const sym = ccy ? (CCY_SYMBOL[ccy.toUpperCase()] ?? ccy + ' ') : '';
-  const abs = Math.abs(v);
-  let s: string;
-  if (abs >= 1e7)       s = (v / 1e7).toFixed(2).replace(/\.?0+$/, '') + ' Cr';
-  else if (abs >= 1e5)  s = (v / 1e5).toFixed(2).replace(/\.?0+$/, '') + ' L';
-  else if (abs >= 1000) s = Math.round(v).toLocaleString('en-IN');
-  else                  s = v.toFixed(2);
-  return sym + s;
+/** Locale for currency + grouped numerals (standard grouping, per-row SAP currency). */
+const NUM_LOCALE = 'en-US';
+
+const CCY_SYMBOL: Record<string, string> = {
+  USD: '$', EUR: '€', GBP: '£', INR: '₹', JPY: '¥', CNY: '¥',
+  KRW: '₩', AUD: 'A$', CAD: 'CA$', SGD: 'S$', HKD: 'HK$',
+  BRL: 'R$', MXN: 'MX$', ZAR: 'R ', TRY: '₺',
+  DEM: 'DEM ', PTE: 'PTE ', CHF: 'CHF ',
+};
+
+/**
+ * Format money using ISO currency when possible (WAERS/WAERK on each row), not Cr/L abbreviations.
+ */
+function fmtMoney(v: number, ccy?: string): string {
+  if (!Number.isFinite(v)) return '—';
+  const code = (ccy || '').trim().toUpperCase();
+  if (code && /^[A-Z]{3}$/.test(code)) {
+    try {
+      return new Intl.NumberFormat(NUM_LOCALE, {
+        style: 'currency',
+        currency: code,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }).format(v);
+    } catch {
+      /* obsolete or unknown ISO code — fall through */
+    }
+  }
+  const sym = code ? (CCY_SYMBOL[code] ?? `${code} `) : '';
+  const n = v.toLocaleString(NUM_LOCALE, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  return sym ? `${sym}${n}` : n;
 }
 
 function fmtAxis(v: number, isMoney: boolean, ccy?: string): string {
-  if (isMoney) return fmtIndian(v, ccy);
+  if (isMoney) return fmtMoney(v, ccy);
   const abs = Math.abs(v);
   if (abs >= 1e9) return (v / 1e9).toFixed(1) + 'B';
   if (abs >= 1e6) return (v / 1e6).toFixed(1) + 'M';
@@ -78,16 +99,56 @@ function fmtAxis(v: number, isMoney: boolean, ccy?: string): string {
   return String(Number.isInteger(v) ? v : v.toFixed(2));
 }
 
-const CCY_SYMBOL: Record<string, string> = {
-  USD: '$', EUR: '€', GBP: '£', INR: '₹', JPY: '¥', CNY: '¥',
-  KRW: '₩', AUD: 'A$', CAD: 'CA$', SGD: 'S$', HKD: 'HK$',
-  BRL: 'R$', MXN: 'MX$', ZAR: 'R ', TRY: '₺',
-};
+/** SAP-style column is a percentage / ratio (do NOT plot on same axis as money without dual axis). */
+function isPercentCol(k: string): boolean {
+  const lk = k.toLowerCase();
+  if (/qty|quantity|count|invoice_count|^cnt|^rn$|rank|row_number|sortorder/.test(lk)) return false;
+  return (
+    /percent|pct|marginpercent|margin_pct|_pct|profitmarginpercent|profit.?margin.?%/i.test(k) ||
+    (/\bmargin\b/.test(lk) && /percent|pct|ratio/.test(lk)) ||
+    /\bratio\b/.test(lk)
+  );
+}
 
 function isMoneycol(k: string): boolean {
   const lk = k.toLowerCase();
+  if (isPercentCol(k)) return false;
   if (/qty|quantity|count|invoice_count|^cnt/.test(lk)) return false;
-  return /sales|revenue|amount|total|value|price|cost|spend|balance|netwr|rmwwr|kwert|fkwrt|wert|betrag/.test(lk);
+  return /\b(sales|revenue|amount|total|value|price|cost|profit|spend|balance|netwr|rmwwr|kwert|fkwrt|wert|betrag)\b/.test(lk);
+}
+
+/** Exclude window-function noise from chart series */
+function isChartMeasureKey(k: string): boolean {
+  const lk = k.toLowerCase();
+  return !/^rn$|^row_num|sortorder|sort_key|rank_num/.test(lk);
+}
+
+function splitMeasureKeys(keys: string[]): { money: string[]; percent: string[]; other: string[] } {
+  const money: string[] = [];
+  const percent: string[] = [];
+  const other: string[] = [];
+  for (const k of keys) {
+    if (!isChartMeasureKey(k)) continue;
+    if (isPercentCol(k)) percent.push(k);
+    else if (isMoneycol(k)) money.push(k);
+    else other.push(k);
+  }
+  return { money, percent, other };
+}
+
+/** Full presentation: thousands separators + decimals (same locale as currency). */
+function fmtNumberPlain(v: number, maxFrac = 2): string {
+  if (!Number.isFinite(v)) return '—';
+  return v.toLocaleString(NUM_LOCALE, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFrac,
+  });
+}
+
+function fmtCell(key: string, v: number, rowCcy?: string): string {
+  if (isPercentCol(key)) return `${fmtNumberPlain(v, 2)}%`;
+  if (isMoneycol(key)) return fmtMoney(v, rowCcy);
+  return fmtNumberPlain(v, 4);
 }
 
 function getCcy(row: any): string | undefined {
@@ -159,10 +220,11 @@ function resolveKeys(chart: ChartData): { xKey: string; yKeys: string[] } {
   const allKeys = Object.keys(first);
 
   let xKey = chart.x_key || chart.name_key || dims[0] || allKeys[0];
-  let yKeys = chart.y_keys?.length ? chart.y_keys
+  const usableMeasures = measures.filter(isChartMeasureKey);
+  let yKeys = chart.y_keys?.length ? chart.y_keys.filter(isChartMeasureKey)
     : chart.value_key ? [chart.value_key]
-    : measures.length ? measures.slice(0, 4)
-    : allKeys.filter(k => k !== xKey).slice(0, 4);
+    : usableMeasures.length ? usableMeasures.slice(0, 6)
+    : allKeys.filter(k => k !== xKey && isChartMeasureKey(k)).slice(0, 6);
 
   return { xKey: xKey || allKeys[0], yKeys };
 }
@@ -242,8 +304,15 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     const { xKey, yKeys } = resolveKeys(chart);
     const colors = chart.colors?.length ? chart.colors : PALETTE;
     const currency = chart.currency || domCcy(chart.data);
-    const hasMoney = yKeys.some(isMoneycol);
     const mixedC = multiCcy(chart.data);
+    const { money: moneyKeys, percent: percentKeys, other: otherKeys } = splitMeasureKeys(yKeys);
+    const leftAxisKeys = [...moneyKeys, ...otherKeys];
+    /** Money amounts vs % share one canvas — must use two Y scales or bars look wrong */
+    const useDualPercentAxis =
+      percentKeys.length > 0 &&
+      leftAxisKeys.length > 0 &&
+      !(activeType === 'stacked_bar' || chart.stacked) &&
+      activeType !== 'bar_horizontal';
 
     // sort time-series data
     const sorted = [...chart.data].sort((a, b) => {
@@ -252,14 +321,28 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       return 0;
     });
 
-    const axFmt = (v: number) => fmtAxis(v, hasMoney, mixedC ? undefined : currency);
+    const maxPercentVal = percentKeys.length
+      ? Math.max(
+          100,
+          ...sorted.flatMap((r) => percentKeys.map((k) => Math.abs(Number(r[k]) || 0))),
+        )
+      : 100;
+
+    const hasMoneyOnLeft = leftAxisKeys.some(isMoneycol);
+    const leftAxisFmt = (v: number) =>
+      hasMoneyOnLeft ? fmtAxis(v, true, mixedC ? undefined : currency) : fmtNumberPlain(v, 2);
+
+    const singleAxisHasMoney = yKeys.some(isMoneycol);
+    const axFmt = (v: number) =>
+      percentKeys.length && !leftAxisKeys.length
+        ? `${fmtNumberPlain(v, 2)}%`
+        : fmtAxis(v, singleAxisHasMoney, mixedC ? undefined : currency);
+
     const tipFmt = (value: any, name?: string, props?: any) => {
-      const lbl = String(name ?? '').replace(/_/g, ' ');
+      const key = String(name ?? '');
+      const lbl = key.replace(/_/g, ' ');
       const rc = getCcy(props?.payload) ?? currency;
-      const fv = isMoneycol(String(name ?? ''))
-        ? fmtIndian(Number(value), rc)
-        : Number(value).toLocaleString('en-IN');
-      return [fv, lbl];
+      return [fmtCell(key, Number(value), rc), lbl];
     };
 
     const grid = <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.15} vertical={false} />;
@@ -277,6 +360,29 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
         tickFormatter={axFmt} width={72}
       />
     );
+    const yLeft = (
+      <YAxis
+        yAxisId="left"
+        orientation="left"
+        tick={{ fill: '#64748b', fontSize: 11 }}
+        tickLine={false}
+        axisLine={false}
+        tickFormatter={leftAxisFmt}
+        width={80}
+      />
+    );
+    const yRight = (
+      <YAxis
+        yAxisId="right"
+        orientation="right"
+        tick={{ fill: '#64748b', fontSize: 11 }}
+        tickLine={false}
+        axisLine={false}
+        tickFormatter={(v) => `${fmtNumberPlain(v)}%`}
+        domain={[0, Math.ceil(maxPercentVal * 1.08)]}
+        width={46}
+      />
+    );
     const tip = (
       <Tooltip
         contentStyle={TOOLTIP_STYLE}
@@ -292,13 +398,27 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       const isHoriz = activeType === 'bar_horizontal';
       const isStack = activeType === 'stacked_bar' || chart.stacked;
       const barH = isHoriz ? Math.max(280, sorted.length * 34 + 60) : 340;
+      const dualVertical = useDualPercentAxis && !isHoriz;
+      const seriesKeys = dualVertical ? [...leftAxisKeys, ...percentKeys] : yKeys;
+      const legendCount = dualVertical ? seriesKeys.length : yKeys.length;
 
       return (
-        <ResponsiveContainer width="100%" height={barH}>
+        <div>
+          {dualVertical && (
+            <p className="text-[10px] text-slate-500 mb-2 px-0.5">
+              Left axis: amounts using each row currency code (WAERS/WAERK). Right axis: % values — separate scales so bars match the table.
+            </p>
+          )}
+          <ResponsiveContainer width="100%" height={barH}>
           <BarChart
             data={sorted}
             layout={isHoriz ? 'vertical' : 'horizontal'}
-            margin={{ top: 20, right: isHoriz ? 60 : 20, bottom: 10, left: 0 }}
+            margin={{
+              top: 20,
+              right: isHoriz ? 60 : dualVertical ? 54 : 20,
+              bottom: 10,
+              left: 0,
+            }}
           >
             {grid}
             {isHoriz ? (
@@ -309,60 +429,152 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                   tick={{ fill: '#475569', fontSize: 11, fontWeight: 500 }}
                   width={140} tickLine={false} axisLine={false} />
               </>
-            ) : <>{xA}{yA}</>}
+            ) : dualVertical ? (
+              <>
+                {xA}
+                {yLeft}
+                {yRight}
+              </>
+            ) : (
+              <>
+                {xA}
+                {yA}
+              </>
+            )}
             {tip}
-            {(chart.show_legend !== false && yKeys.length > 1) && (
+            {(chart.show_legend !== false && legendCount > 1) && (
               <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" />
             )}
-            {yKeys.map((key, ki) => (
-              <Bar
-                key={key} dataKey={key}
-                fill={colors[ki % colors.length]}
-                radius={isHoriz ? [0, 4, 4, 0] : [4, 4, 0, 0]}
-                stackId={isStack ? 'stack' : undefined}
-                animationDuration={600}
-                maxBarSize={isHoriz ? 22 : 52}
-              >
-                {/* Per-bar colour on single-metric charts */}
-                {yKeys.length === 1 && sorted.map((_: any, ci: number) => (
-                  <Cell key={ci} fill={colors[ci % colors.length]} />
-                ))}
-                {/* Inline value labels */}
-                {!isStack && (
-                  <LabelList
+            {dualVertical ? (
+              <>
+                {leftAxisKeys.map((key, ki) => (
+                  <Bar
+                    key={key}
+                    yAxisId="left"
                     dataKey={key}
-                    position={isHoriz ? 'right' : 'top'}
-                    style={{ fontSize: '10px', fontWeight: 700, fill: '#374151' }}
-                    formatter={(v: any) => hasMoney
-                      ? fmtIndian(Number(v), mixedC ? undefined : currency)
-                      : Number(v).toLocaleString('en-IN')}
-                  />
-                )}
-              </Bar>
-            ))}
+                    fill={colors[ki % colors.length]}
+                    radius={[4, 4, 0, 0]}
+                    animationDuration={600}
+                    maxBarSize={52}
+                  >
+                    {!isStack && (
+                      <LabelList
+                        dataKey={key}
+                        position="top"
+                        style={{ fontSize: '10px', fontWeight: 700, fill: '#374151' }}
+                        formatter={(v: any) =>
+                          fmtCell(key, Number(v), mixedC ? undefined : currency)}
+                      />
+                    )}
+                  </Bar>
+                ))}
+                {percentKeys.map((key, ki) => (
+                  <Bar
+                    key={key}
+                    yAxisId="right"
+                    dataKey={key}
+                    fill={colors[(leftAxisKeys.length + ki) % colors.length]}
+                    radius={[4, 4, 0, 0]}
+                    animationDuration={600}
+                    maxBarSize={40}
+                  >
+                    {!isStack && (
+                      <LabelList
+                        dataKey={key}
+                        position="top"
+                        style={{ fontSize: '10px', fontWeight: 700, fill: '#7c3aed' }}
+                        formatter={(v: any) => fmtCell(key, Number(v))}
+                      />
+                    )}
+                  </Bar>
+                ))}
+              </>
+            ) : (
+              yKeys.map((key, ki) => (
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  fill={colors[ki % colors.length]}
+                  radius={isHoriz ? [0, 4, 4, 0] : [4, 4, 0, 0]}
+                  stackId={isStack ? 'stack' : undefined}
+                  animationDuration={600}
+                  maxBarSize={isHoriz ? 22 : 52}
+                >
+                  {yKeys.length === 1 &&
+                    sorted.map((_: any, ci: number) => (
+                      <Cell key={ci} fill={colors[ci % colors.length]} />
+                    ))}
+                  {!isStack && (
+                    <LabelList
+                      dataKey={key}
+                      position={isHoriz ? 'right' : 'top'}
+                      style={{ fontSize: '10px', fontWeight: 700, fill: '#374151' }}
+                      formatter={(v: any) =>
+                        fmtCell(key, Number(v), mixedC ? undefined : currency)}
+                    />
+                  )}
+                </Bar>
+              ))
+            )}
           </BarChart>
         </ResponsiveContainer>
+        </div>
       );
     }
 
     /* ── LINE ───────────────────────────────────────────────── */
     if (activeType === 'line') {
+      const dualLine = useDualPercentAxis;
       return (
         <ResponsiveContainer width="100%" height={340}>
-          <LineChart data={sorted} margin={{ top: 20, right: 20, bottom: 10, left: 0 }}>
-            {grid}{xA}{yA}{tip}
+          <LineChart data={sorted} margin={{ top: 20, right: dualLine ? 52 : 20, bottom: 10, left: 0 }}>
+            {grid}
+            {xA}
+            {dualLine ? <>{yLeft}{yRight}</> : yA}
+            {tip}
             {(chart.show_legend !== false && yKeys.length > 1) && (
               <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" />
             )}
-            {yKeys.map((key, ki) => (
-              <Line key={key} type="monotone" dataKey={key}
-                stroke={colors[ki % colors.length]}
-                strokeWidth={2.5}
-                dot={{ fill: colors[ki % colors.length], r: 4, stroke: '#fff', strokeWidth: 2 }}
-                activeDot={{ r: 7, stroke: '#fff', strokeWidth: 2 }}
-                animationDuration={700}
-              />
-            ))}
+            {dualLine ? (
+              <>
+                {leftAxisKeys.map((key, ki) => (
+                  <Line
+                    key={key}
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey={key}
+                    stroke={colors[ki % colors.length]}
+                    strokeWidth={2.5}
+                    dot={{ fill: colors[ki % colors.length], r: 4, stroke: '#fff', strokeWidth: 2 }}
+                    activeDot={{ r: 7, stroke: '#fff', strokeWidth: 2 }}
+                    animationDuration={700}
+                  />
+                ))}
+                {percentKeys.map((key, ki) => (
+                  <Line
+                    key={key}
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey={key}
+                    stroke={colors[(leftAxisKeys.length + ki) % colors.length]}
+                    strokeWidth={2.5}
+                    strokeDasharray="6 3"
+                    dot={{ fill: colors[(leftAxisKeys.length + ki) % colors.length], r: 4, stroke: '#fff', strokeWidth: 2 }}
+                    animationDuration={700}
+                  />
+                ))}
+              </>
+            ) : (
+              yKeys.map((key, ki) => (
+                <Line key={key} type="monotone" dataKey={key}
+                  stroke={colors[ki % colors.length]}
+                  strokeWidth={2.5}
+                  dot={{ fill: colors[ki % colors.length], r: 4, stroke: '#fff', strokeWidth: 2 }}
+                  activeDot={{ r: 7, stroke: '#fff', strokeWidth: 2 }}
+                  animationDuration={700}
+                />
+              ))
+            )}
           </LineChart>
         </ResponsiveContainer>
       );
@@ -371,24 +583,62 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     /* ── AREA ───────────────────────────────────────────────── */
     if (activeType === 'area' || activeType === 'stacked_area') {
       const isStack = activeType === 'stacked_area';
+      const dualArea = useDualPercentAxis && !isStack;
       return (
         <ResponsiveContainer width="100%" height={340}>
-          <AreaChart data={sorted} margin={{ top: 20, right: 20, bottom: 10, left: 0 }}>
-            {grid}{xA}{yA}{tip}
+          <AreaChart data={sorted} margin={{ top: 20, right: dualArea ? 52 : 20, bottom: 10, left: 0 }}>
+            {grid}
+            {xA}
+            {dualArea ? <>{yLeft}{yRight}</> : yA}
+            {tip}
             {(chart.show_legend !== false && yKeys.length > 1) && (
               <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" />
             )}
-            {yKeys.map((key, ki) => (
-              <Area key={key} type="monotone" dataKey={key}
-                stroke={colors[ki % colors.length]}
-                fill={colors[ki % colors.length]}
-                fillOpacity={0.18}
-                strokeWidth={2.5}
-                dot={{ fill: colors[ki % colors.length], r: 3, stroke: '#fff', strokeWidth: 1.5 }}
-                stackId={isStack ? 'stack' : undefined}
-                animationDuration={700}
-              />
-            ))}
+            {dualArea ? (
+              <>
+                {leftAxisKeys.map((key, ki) => (
+                  <Area
+                    key={key}
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey={key}
+                    stroke={colors[ki % colors.length]}
+                    fill={colors[ki % colors.length]}
+                    fillOpacity={0.18}
+                    strokeWidth={2.5}
+                    dot={{ fill: colors[ki % colors.length], r: 3, stroke: '#fff', strokeWidth: 1.5 }}
+                    animationDuration={700}
+                  />
+                ))}
+                {percentKeys.map((key, ki) => (
+                  <Area
+                    key={key}
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey={key}
+                    stroke={colors[(leftAxisKeys.length + ki) % colors.length]}
+                    fill={colors[(leftAxisKeys.length + ki) % colors.length]}
+                    fillOpacity={0.12}
+                    strokeWidth={2}
+                    strokeDasharray="5 4"
+                    dot={{ fill: colors[(leftAxisKeys.length + ki) % colors.length], r: 3, stroke: '#fff', strokeWidth: 1.5 }}
+                    animationDuration={700}
+                  />
+                ))}
+              </>
+            ) : (
+              yKeys.map((key, ki) => (
+                <Area key={key} type="monotone" dataKey={key}
+                  stroke={colors[ki % colors.length]}
+                  fill={colors[ki % colors.length]}
+                  fillOpacity={0.18}
+                  strokeWidth={2.5}
+                  dot={{ fill: colors[ki % colors.length], r: 3, stroke: '#fff', strokeWidth: 1.5 }}
+                  stackId={isStack ? 'stack' : undefined}
+                  animationDuration={700}
+                />
+              ))
+            )}
           </AreaChart>
         </ResponsiveContainer>
       );
@@ -462,7 +712,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
               <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central">
                 <tspan x="50%" dy="-0.4em" style={{ fontSize: '11px', fill: '#64748b', fontWeight: 500 }}>Total</tspan>
                 <tspan x="50%" dy="1.4em" style={{ fontSize: '14px', fill: '#0f172a', fontWeight: 700 }}>
-                  {fmtIndian(total, currency)}
+                  {fmtMoney(total, currency)}
                 </tspan>
               </text>
               <Tooltip
@@ -471,7 +721,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 itemStyle={{ color: '#f8fafc' }}
                 formatter={(v: any, _n: any, props: any) => {
                   const rc = getCcy(props?.payload) ?? currency;
-                  return [`${fmtIndian(Number(v), rc)}  (${pct(Number(v))})`, String(props?.payload?.[nameKey] ?? '')];
+                  return [`${fmtMoney(Number(v), rc)}  (${pct(Number(v))})`, String(props?.payload?.[nameKey] ?? '')];
                 }}
               />
             </PieChart>
@@ -514,9 +764,19 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                   const num = typeof v === 'number' || (typeof v === 'string' && v !== '' && !isNaN(Number(v)) && !isDimension(k, v));
                   const rc = getCcy(row) ?? currency;
                   const display = v == null ? '—'
-                    : num ? (isMoneycol(k) ? (
-                      <span className="font-bold text-emerald-700">{fmtIndian(Number(v), rc)}</span>
-                    ) : Number(v).toLocaleString('en-IN'))
+                    : num ? (
+                      <span
+                        className={
+                          isMoneycol(k)
+                            ? 'font-bold text-emerald-700'
+                            : isPercentCol(k)
+                              ? 'font-semibold text-violet-700'
+                              : 'text-slate-800'
+                        }
+                      >
+                        {fmtCell(k, Number(v), rc)}
+                      </span>
+                    )
                     : String(v);
                   return (
                     <td key={ci} className={`px-4 py-2 text-slate-800 ${num ? 'text-right tabular-nums' : ''} ${ci === 0 ? 'font-semibold text-slate-900' : ''}`}>
