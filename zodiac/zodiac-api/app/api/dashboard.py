@@ -3036,7 +3036,10 @@ async def post_ai_analysis_chat(
                 db=sap_session_for_sql or db,
                 api_key=ai_openai_key,
                 query=message or "",
-                conversation_history=conversation_history
+                conversation_history=conversation_history,
+                dashboard_context=context_str or "",
+                days=int(days),
+                time_scope=time_scope or "current",
             )
             # Use Zodiac app DB for operational resolver results (Zodiac tables not in SAP schema).
             _is_operational_payload = (payload.get("sql_path_reason") or "").startswith("operational_")
@@ -4115,11 +4118,31 @@ async def ai_analysis_multi_model_chat(
 
             ai_openai_key = _get_ai_analysis_config()
             sap_db_for_mm = get_sap_session() if USE_SAP_DB_FOR_AI else None
+            ck_mm = context_keys if isinstance(context_keys, list) else []
+            ddays_mm = max(1, min(365, int(days)))
+            if USE_SAP_DB_FOR_AI:
+                from ..services.sap_ai_context import build_ai_context_from_sap
+
+                sap_session_mm_ctx = get_sap_session()
+                ctx_mm = ""
+                if sap_session_mm_ctx is not None:
+                    try:
+                        ctx_mm = build_ai_context_from_sap(ck_mm, sap_session_mm_ctx, days=ddays_mm)
+                    except Exception as mm_ctx_e:
+                        logger.warning("multi-model SAP AI context failed: %s", mm_ctx_e)
+                    finally:
+                        sap_session_mm_ctx.close()
+            else:
+                ctx_mm = _build_ai_analysis_context(ck_mm, current_user, db, days=ddays_mm)
+
             try:
                 payload = run_planner(
                     db=sap_db_for_mm or db,
                     api_key=ai_openai_key,
-                    query=message
+                    query=message,
+                    dashboard_context=ctx_mm,
+                    days=ddays_mm,
+                    time_scope=time_scope or "current",
                 )
             finally:
                 if sap_db_for_mm is not None:

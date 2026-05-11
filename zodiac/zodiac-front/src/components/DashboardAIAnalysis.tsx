@@ -333,6 +333,12 @@ type AiAnalysisMeta = {
   query_origin?: string;
   suggestion_source?: string;
   action?: string; reason?: string; sql?: string;
+  confidence?: string;
+  confidence_note?: string;
+  /** Tables whose columns were included in the SQL planner schema prompt */
+  schema_tables?: string[];
+  /** Server pipeline notices (e.g. row cap / truncation) */
+  warnings?: string[];
   rows_preview?: Record<string, unknown>[];
   compare?: unknown; charts?: any[]; multiModel?: any;
   /** Server-side intent + result-shape summary (adaptive pipeline) */
@@ -1230,10 +1236,20 @@ function ChatPanel({
                           </div>
                         )}
                         <div>
+                          {m.meta.confidence && (
+                            <span className="mr-1">
+                              Confidence: <span className="font-semibold text-slate-600">{m.meta.confidence}</span>
+                            </span>
+                          )}
                           {m.meta.action && <span>Action: {m.meta.action}</span>}
                           {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
                           {m.meta.adaptive_context?.query_profile?.kind && (
                             <span> • Intent: {String(m.meta.adaptive_context.query_profile.kind)}</span>
+                          )}
+                          {m.meta.schema_tables && m.meta.schema_tables.length > 0 && (
+                            <span> • Schema: {m.meta.schema_tables.slice(0, 8).join(', ')}
+                              {m.meta.schema_tables.length > 8 ? '…' : ''}
+                            </span>
                           )}
                           {m.meta.sql && <span> • SQL executed</span>}
                           {m.meta.rows_preview && <span> • {m.meta.rows_preview.length} preview rows</span>}
@@ -1250,6 +1266,21 @@ function ChatPanel({
                           </details>
                         )}
                         <ValidationNotes validation={m.meta.validation} />
+                        {m.meta.confidence_note && (
+                          <div className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 px-2 py-1 rounded-md mt-1">
+                            {m.meta.confidence_note}
+                          </div>
+                        )}
+                        {m.meta.warnings && m.meta.warnings.length > 0 && (
+                          <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1.5 rounded-md mt-1 space-y-0.5">
+                            {m.meta.warnings.map((w, i) => (
+                              <div key={`pipe-warn-${i}`} className="flex gap-1">
+                                <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5 text-amber-600" />
+                                <span>{w}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {m.meta.charts_blocked_reason && (
                           <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
                             Charts suppressed: {m.meta.charts_blocked_reason}
@@ -2007,9 +2038,13 @@ export default function DashboardAIAnalysis() {
       // This ensures follow-up drill-downs carry thread context instead of throwing rubbish.
       // The orchestrator detects query_mode='follow_up' and re-uses the stored SQL result
       // from the thread; it only re-runs SQL when the follow-up needs new data (e.g. drill-down).
-      const conversationHistory = currentMsgs
-        .slice(-12) // last 6 turns (user + assistant pairs)
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+      const conversationHistory = currentMsgs.slice(-12).map((m) => {
+        const base = { role: m.role as 'user' | 'assistant', content: m.content };
+        if (m.role === 'assistant' && m.meta?.sql && String(m.meta.sql).trim()) {
+          return { ...base, sql: String(m.meta.sql).trim() };
+        }
+        return base;
+      });
 
       const augmentedMessage = buildAugmentedGenerativeQuestion(text, {
         queryMode,
@@ -2044,6 +2079,10 @@ export default function DashboardAIAnalysis() {
         action: resAction as AiAnalysisMeta['action'],
         reason: res?.reason,
         sql: res?.sql,
+        confidence: typeof res?.confidence === 'string' ? res.confidence : undefined,
+        confidence_note: typeof res?.confidence_note === 'string' ? res.confidence_note : undefined,
+        schema_tables: Array.isArray(res?.schema_tables) ? res.schema_tables as string[] : undefined,
+        warnings: Array.isArray(res?.warnings) ? res.warnings : undefined,
         // Orchestrator returns rows_preview; legacy endpoint returned data
         rows_preview: Array.isArray(res?.rows_preview)
           ? res.rows_preview
@@ -2056,7 +2095,10 @@ export default function DashboardAIAnalysis() {
 
       const hasMeta = Boolean(
         meta.action || meta.sql || meta.validation || (meta.rows_preview?.length)
-        || (meta.charts?.length) || meta.period_info || meta.adaptive_context,
+        || (meta.charts?.length) || meta.period_info || meta.adaptive_context
+        || (meta.warnings?.length)
+        || meta.confidence_note
+        || (meta.schema_tables?.length),
       );
       setMsgs((prev) => [...prev, {
         role: 'assistant', content: reply,

@@ -188,22 +188,25 @@ def _node_generate_sql(state: GraphState) -> str:
 
 _CHECK_SQL_PROMPT = """You are a PostgreSQL + SAP data expert reviewing a generated SQL query for correctness before execution.
 
-Check the following 15 points:
+Check the following 18 points:
 1. Only SELECT (no DML — no UPDATE/DELETE/INSERT/DROP/ALTER/TRUNCATE/EXEC)
 2. All table names exist in the provided schema
 3. All column names exist in the specified tables
 4. JOIN conditions reference matching column types
-5. LPAD joins for SAP document keys (VBELN, BELNR) use correct 10-char padding
-6. SAP date columns (FKDAT, BUDAT) stored as CHAR(8) — use SUBSTRING(TRIM(col),1,4) for year extraction, NOT EXTRACT(YEAR FROM col)
-7. NETWR / KWMENG stored as TEXT — must CAST(col AS NUMERIC) before arithmetic
-8. GJAHR column is unreliable (often '0000') — use fkdat/budat year extraction instead
+5. LPAD joins for SAP document keys (VBELN, BELNR, KUNAG, KUNRG, KUNNR, LIFNR, MATNR) — all SAP key fields are stored as zero-padded strings; joins MUST use LPAD(TRIM(col), N, '0') on BOTH sides (VBELN/BELNR → 10 chars; customer/vendor numbers → 10 chars; MATNR → 18 chars)
+6. SAP date columns (FKDAT, BUDAT) stored as CHAR(8) YYYYMMDD — use SUBSTRING(TRIM(col),1,4) for year extraction, NOT EXTRACT(YEAR FROM col)
+7. NETWR / KWMENG / FKIMG stored as TEXT — must CAST(TRIM(col) AS NUMERIC) before arithmetic
+8. GJAHR column is unreliable (often '0000') — use FKDAT/BUDAT year extraction instead
 9. No cartesian product (every JOIN has an ON clause)
 10. GROUP BY includes all non-aggregate SELECT columns
 11. HAVING used for aggregate filters (not WHERE)
-12. Decimal precision — values may be in SAP scale (divide by 100 or 1000 if values seem huge)
+12. Decimal precision — NETWR values are in the document currency as stored (no division needed unless values are clearly 100× too large)
 13. Result size: non-aggregate queries have TOP/LIMIT; aggregate queries have a sensible LIMIT
 14. Currency filters use WAERK column when needed
-15. NULL-safe aggregation: use COALESCE(col, 0) for SUM/AVG
+15. NULL-safe aggregation: use COALESCE(CAST(TRIM(col) AS NUMERIC), 0) for SUM/AVG on TEXT money columns
+16. CRITICAL — Customer field selection in VBRK: use VBRK.KUNAG (sold-to party, the actual purchasing customer) when the question asks about customer sales/revenue. NEVER use VBRK.KUNRG (payer) for customer ranking — KUNRG is the paying party (often a bank or parent company) and will collapse many customers into one entity, producing wrong results. Only use KUNRG when the user explicitly asks about "payer".
+17. CRITICAL — KNA1 join: JOIN KNA1 ON LPAD(TRIM(VBRK.kunag),10,'0') = LPAD(TRIM(KNA1.kunnr),10,'0'). Without LPAD on both sides, rows with different leading-zero counts silently fail to match.
+18. VBRP join: always join VBRP ON LPAD(TRIM(VBRK.vbeln),10,'0') = LPAD(TRIM(VBRP.vbeln),10,'0') and also match VBRK.mandt = VBRP.mandt when mandt column exists.
 
 Return JSON only:
 {

@@ -1772,7 +1772,7 @@ export const dashboardApi = {
     },
     postAIAnalysisChat: async (
         message: string,
-        conversationHistory: { role: string; content: string }[] = [],
+        conversationHistory: { role: string; content: string; sql?: string }[] = [],
         contextKeys: string[] = [],
         days: number = 30,
         timeScope?: 'current' | 'historical' | 'both',

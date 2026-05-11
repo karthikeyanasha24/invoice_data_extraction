@@ -1800,6 +1800,7 @@ Task:
 - **Compare 2023 vs 2024 sales (or two years)**: use VBRK, VBRP; filter using FKDAT: WHERE SUBSTRING(TRIM(r."fkdat"),1,4) IN ('2023','2024'); group by SUBSTRING(TRIM(r."fkdat"),1,4) as year; SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC) per year. NEVER use GJAHR — it is '0000' for all rows.
 - **Revenue last 30 days / Sales for a specific year**: use VBRK, VBRP; filter on FKDAT: recent = FKDAT >= TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYYMMDD'); for a year use SUBSTRING(TRIM(fkdat),1,4) = '2024'. Cast NETWR: SUM(NULLIF(TRIM(v."netwr"::text),'')::NUMERIC).
 - **Materials in sales but not in purchasing (or vice versa)**: use VBRP and EKPO (and MARA, MAKT) to compare material lists; LEFT JOIN and WHERE NULL for "not in" logic.
+- **CRITICAL — Customer sales join (highest sales / top customers / revenue by customer)**: ALWAYS use VBRK.KUNAG (sold-to party) — NOT VBRK.KUNRG (payer). KUNRG is the paying party (often a single bank or parent company representing hundreds of customers) and produces completely wrong rankings. Join: LPAD(TRIM(VBRK.kunag),10,'0') = LPAD(TRIM(KNA1.kunnr),10,'0'). VBELN join: LPAD(TRIM(VBRK.vbeln),10,'0') = LPAD(TRIM(VBRP.vbeln),10,'0'). Both sides of every SAP key join MUST use LPAD+TRIM to handle leading zeros.
 - When in doubt, prefer including tables that might be relevant (e.g. VBRK+VBRP+KNA1 for anything about sales/customers/revenue) so the next step can refine the query. Prefer a reasonable answer over returning no tables.
 - Only return JSON in this format:
 

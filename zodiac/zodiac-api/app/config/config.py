@@ -29,6 +29,27 @@ ENABLE_SECONDARY_LLM_SQL = os.getenv("ENABLE_SECONDARY_LLM_SQL", "true").lower()
 #   "openrouter/anthropic/claude-3.5-sonnet" - Via OpenRouter
 AI_INSIGHTS_MODEL = os.getenv("AI_INSIGHTS_MODEL", "gpt-4o-mini")
 AI_FAST_MODEL = os.getenv("AI_FAST_MODEL", "gpt-4o-mini")  # For fast ops (action classification, table selection)
+
+# LangGraph generative SQL + summaries (/dashboard/ai-analysis/chat → multi_stage_planner)
+# Prefer GPT-5; override per deploy: LANGGRAPH_OPENAI_MODEL=gpt-5-mini
+LANGGRAPH_OPENAI_MODEL = os.getenv(
+    "LANGGRAPH_OPENAI_MODEL",
+    os.getenv("OPENAI_MODEL", "gpt-5"),
+)
+# Stronger model for SQL generation/repair vs. summarization (defaults to same as LANGGRAPH_OPENAI_MODEL)
+LANGGRAPH_SQL_MODEL = os.getenv("LANGGRAPH_SQL_MODEL", LANGGRAPH_OPENAI_MODEL)
+LANGGRAPH_ANSWER_MODEL = os.getenv("LANGGRAPH_ANSWER_MODEL", LANGGRAPH_OPENAI_MODEL)
+# Cap unbounded SELECT rows returned from SAP (avoids accidental full scans)
+LANGGRAPH_SELECT_ROW_CAP = int(os.getenv("LANGGRAPH_SELECT_ROW_CAP", "500"))
+# Max tables included in the prompt schema block (breadth vs. token limit)
+LANGGRAPH_MAX_SCHEMA_TABLES = int(os.getenv("LANGGRAPH_MAX_SCHEMA_TABLES", "12"))
+# When the question implies multi-table logic, temporarily add this many extra tables (capped below).
+LANGGRAPH_SCHEMA_JOIN_BOOST = int(os.getenv("LANGGRAPH_SCHEMA_JOIN_BOOST", "4"))
+LANGGRAPH_MAX_SCHEMA_TABLES_HARD_CAP = int(os.getenv("LANGGRAPH_MAX_SCHEMA_TABLES_HARD_CAP", "20"))
+# Per-table column lines in the prompt (prioritizes keys, amounts, dates, names)
+LANGGRAPH_MAX_COLUMNS_PER_TABLE = int(os.getenv("LANGGRAPH_MAX_COLUMNS_PER_TABLE", "48"))
+LANGGRAPH_SQL_MAX_TOKENS = int(os.getenv("LANGGRAPH_SQL_MAX_TOKENS", "4096"))
+LANGGRAPH_ANSWER_MAX_TOKENS = int(os.getenv("LANGGRAPH_ANSWER_MAX_TOKENS", "1536"))
 # Import Vercel Blob for production file storage
 try:
     import vercel_blob

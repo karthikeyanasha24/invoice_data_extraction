@@ -128,6 +128,19 @@ class SchemaIntelligenceService:
                 elif cu in {"MANDT", "VBELN", "MATNR", "KUNNR", "LIFNR", "BUKRS", "GJAHR", "BELNR"}:
                     col.semantic_role = "key"
 
+    def _resolve_column_key(self, table: str, col: str) -> Optional[str]:
+        """SAP exports use lowercase column keys; edge definitions may be uppercase."""
+        cols = self.tables[table].columns
+        if col in cols:
+            return col
+        low = col.lower()
+        if low in cols:
+            return low
+        up = col.upper()
+        if up in cols:
+            return up
+        return None
+
     def _infer_join_edges(self) -> None:
         """Automatically detect relationships based on common SAP keys."""
         # This is a naive implementation; the enterprise version will be much more sophisticated
@@ -139,39 +152,173 @@ class SchemaIntelligenceService:
             ("BKPF", "BELNR", "BSEG", "BELNR"),
             ("BKPF", "BUKRS", "BSEG", "BUKRS"),
             ("BKPF", "GJAHR", "BSEG", "GJAHR"),
+            # Master-data joins (added when both tables appear in schema prompt → retrieve_context hints)
+            ("VBRK", "KUNAG", "KNA1", "KUNNR"),
+            ("VBRK", "KUNRG", "KNA1", "KUNNR"),
+            ("VBAK", "KUNNR", "KNA1", "KUNNR"),
+            ("LIKP", "KUNNR", "KNA1", "KUNNR"),
+            ("VBRP", "MATNR", "MAKT", "MATNR"),
+            ("VBAP", "MATNR", "MAKT", "MATNR"),
+            ("EKPO", "MATNR", "MAKT", "MATNR"),
+            ("LIPS", "MATNR", "MAKT", "MATNR"),
+            ("EKKO", "LIFNR", "LFA1", "LIFNR"),
+            ("MARD", "MATNR", "MARA", "MATNR"),
+            ("MARD", "MATNR", "MAKT", "MATNR"),
+            ("MBEW", "MATNR", "MARA", "MATNR"),
+            ("MBEW", "MATNR", "MAKT", "MATNR"),
+            # Pricing (header knumv → condition records)
+            ("VBRK", "KNUMV", "KONV", "KNUMV"),
+            ("VBAK", "KNUMV", "KONV", "KNUMV"),
+            # Schedule lines
+            ("VBAP", "VBELN", "VBEP", "VBELN"),
+            # Document flow (preceding ↔ subsequent document numbers)
+            ("VBAK", "VBELN", "VBFA", "VBELV"),
+            ("VBRK", "VBELN", "VBFA", "VBELN"),
+            ("LIKP", "VBELN", "VBFA", "VBELN"),
+            ("BSAD", "KUNNR", "KNA1", "KUNNR"),
+            ("BSAD", "BELNR", "BSEG", "BELNR"),
         ]
         
         for src, scol, tgt, tcol in known_relations:
-            if src in self.tables and tgt in self.tables:
-                if scol in self.tables[src].columns and tcol in self.tables[tgt].columns:
-                    self.join_graph.append(JoinEdge(src, scol, tgt, tcol))
+            if src not in self.tables or tgt not in self.tables:
+                continue
+            sk = self._resolve_column_key(src, scol)
+            tk = self._resolve_column_key(tgt, tcol)
+            if sk and tk:
+                self.join_graph.append(JoinEdge(src, sk, tgt, tk))
 
     def resolve_entities(self, query: str) -> List[TableProfile]:
-        """Return candidate tables based on explicit mentions in the text."""
+        """Explicit SAP table tokens plus domain keywords (always merged, deduped)."""
         import re
+
         # Strip generative routing block if present
-        text = re.sub(r'\[ZODIAC_GENERATIVE_CLIENT_ROUTING\].*?\[/ZODIAC_GENERATIVE_CLIENT_ROUTING\]', '', query, flags=re.DOTALL)
-        
-        words = re.findall(r'\b[A-Za-z0-9_]+\b', text.upper())
-        candidates = []
+        text = re.sub(
+            r"\[ZODIAC_GENERATIVE_CLIENT_ROUTING\].*?\[/ZODIAC_GENERATIVE_CLIENT_ROUTING\]",
+            "",
+            query,
+            flags=re.DOTALL,
+        )
+
+        words = re.findall(r"\b[A-Za-z0-9_]+\b", text.upper())
+        candidates: List[TableProfile] = []
         for word in words:
             if word in self.tables and self.tables[word] not in candidates:
                 candidates.append(self.tables[word])
-                
-        # If no explicit tables found, maybe try to match keywords
-        if not candidates:
-            # naive fallback
-            lower_text = text.lower()
-            if "sales" in lower_text or "billing" in lower_text:
-                if "VBRK" in self.tables: candidates.append(self.tables["VBRK"])
-                if "vbrp" in self.tables: candidates.append(self.tables["vbrp"])
-            if "purchase" in lower_text or "po" in lower_text:
-                if "EKKO" in self.tables: candidates.append(self.tables["EKKO"])
-                if "EKPO" in self.tables: candidates.append(self.tables["EKPO"])
-            if "finance" in lower_text or "accounting" in lower_text:
-                if "BKPF" in self.tables: candidates.append(self.tables["BKPF"])
-                if "BSEG" in self.tables: candidates.append(self.tables["BSEG"])
-                
+
+        def _append_table(name: str) -> None:
+            u = name.upper()
+            if u in self.tables and self.tables[u] not in candidates:
+                candidates.append(self.tables[u])
+
+        # Keyword domains always augment explicit table mentions (deduped; planner caps breadth).
+        lower_text = text.lower()
+        if any(k in lower_text for k in ("billing", "invoice", "revenue", "sales")):
+            for t in ("VBRK", "VBRP", "KNA1"):
+                _append_table(t)
+        if "delivery" in lower_text or "shipment" in lower_text:
+            for t in ("LIKP", "LIPS"):
+                _append_table(t)
+        if "purchase" in lower_text or "procurement" in lower_text or re.search(r"\bpo\b", lower_text):
+            for t in ("EKKO", "EKPO", "LFA1"):
+                _append_table(t)
+        if "customer" in lower_text or "payer" in lower_text or "sold-to" in lower_text:
+            _append_table("KNA1")
+        if "vendor" in lower_text or "supplier" in lower_text:
+            _append_table("LFA1")
+        if "material" in lower_text or "product" in lower_text:
+            for t in ("MARA", "MAKT"):
+                _append_table(t)
+        if any(
+            k in lower_text
+            for k in ("finance", "accounting", "gl ", "ledger", "posting", "journal")
+        ):
+            for t in ("BKPF", "BSEG"):
+                _append_table(t)
+        if any(
+            k in lower_text
+            for k in (
+                "inventory",
+                "stock",
+                "warehouse",
+                "plant stock",
+                "bin",
+                "storage location",
+                "goods movement",
+                "mm ",
+                "moving average",
+                "valuation",
+            )
+        ):
+            for t in ("MARD", "MBEW", "MARA", "MAKT"):
+                _append_table(t)
+            _append_table("MKPF")
+        if (
+            "plant" in lower_text
+            or "factory" in lower_text
+            or re.search(r"\bwerk\b", lower_text)
+            or "storage location" in lower_text
+            or re.search(r"\bsloc\b", lower_text)
+        ):
+            for t in ("MARD", "LIKP", "LIPS", "EKPO", "VBRP"):
+                _append_table(t)
+        if any(
+            k in lower_text
+            for k in (
+                "pricing",
+                "condition record",
+                "condition type",
+                "discount",
+                "net price",
+                "rebate",
+            )
+        ) or re.search(r"\bkschl\b", lower_text):
+            for t in ("KONV", "VBRK", "VBRP", "VBAK", "VBAP"):
+                _append_table(t)
+        if any(
+            k in lower_text
+            for k in (
+                "schedule line",
+                "schedule lines",
+                "confirmed quantity",
+                "delivery schedule",
+                "requested delivery",
+            )
+        ) or re.search(r"\bvbep\b", lower_text):
+            for t in ("VBEP", "VBAP", "VBAK"):
+                _append_table(t)
+        if any(
+            k in lower_text
+            for k in (
+                "document flow",
+                "preceding document",
+                "subsequent document",
+                "flow between",
+            )
+        ) or re.search(r"\bvbfa\b", lower_text):
+            for t in ("VBFA", "VBAK", "VBRK", "LIKP", "VBRP"):
+                _append_table(t)
+        if any(
+            k in lower_text
+            for k in (
+                "accounts receivable",
+                "open item",
+                "open items",
+                "customer balance",
+                "clearing document",
+                "ar aging",
+                "outstanding balance",
+            )
+        ) or re.search(r"\bdunning\b", lower_text):
+            for t in ("BSAD", "BSEG", "BKPF", "KNA1"):
+                _append_table(t)
+        if any(k in lower_text for k in ("cost center", "cost centre")):
+            _append_table("CSKS")
+        if any(
+            k in lower_text
+            for k in ("purchase requisition", "requisition", "pr line")
+        ) or re.search(r"\beban\b", lower_text):
+            _append_table("EBAN")
+
         return candidates
 
     def suggest_join_paths(self, tables: List[str]) -> List[JoinEdge]:
