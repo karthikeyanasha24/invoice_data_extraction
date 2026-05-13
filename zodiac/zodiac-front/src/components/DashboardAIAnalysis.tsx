@@ -2088,7 +2088,15 @@ export default function DashboardAIAnalysis() {
 
       // Orchestrator payload: { reply, sql, rows_preview, charts, action, reason, ... }
       // (Legacy adaptive endpoint used { summary/answer, data, sql, charts })
-      const reply = (res?.reply ?? res?.summary ?? res?.answer ?? '') || 'No response received.';
+      const rowsPreview = Array.isArray(res?.rows_preview)
+        ? res.rows_preview
+        : Array.isArray(res?.data) ? res.data : undefined;
+      const replyRaw = (res?.reply ?? res?.summary ?? res?.answer ?? '').trim();
+      const reply =
+        replyRaw ||
+        (rowsPreview?.length
+          ? 'Results are in the table and chart below (no text summary was returned).'
+          : 'No response received.');
       const resAction = res?.action ?? (hasFreshSql ? 'new' : queryMode);
       const meta: AiAnalysisMeta = {
         action: resAction as AiAnalysisMeta['action'],
@@ -2098,10 +2106,7 @@ export default function DashboardAIAnalysis() {
         confidence_note: typeof res?.confidence_note === 'string' ? res.confidence_note : undefined,
         schema_tables: Array.isArray(res?.schema_tables) ? res.schema_tables as string[] : undefined,
         warnings: Array.isArray(res?.warnings) ? res.warnings : undefined,
-        // Orchestrator returns rows_preview; legacy endpoint returned data
-        rows_preview: Array.isArray(res?.rows_preview)
-          ? res.rows_preview
-          : Array.isArray(res?.data) ? res.data : undefined,
+        rows_preview: rowsPreview,
         charts: res?.charts,
         time_scope: res?.time_scope,
         date_range: res?.date_range,

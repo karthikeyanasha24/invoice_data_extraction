@@ -855,11 +855,18 @@ Rules:
 
         response = self.llm_answer.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ])
-        
+
+        body = (response.content or "").strip()
+        if not body and rows:
+            body = (
+                "Here are the results for your question. "
+                f"The table shows **{len(rows)}** row(s); see the preview below for figures."
+            )
+
         return {
-            "final_answer": response.content,
+            "final_answer": body,
             "confidence": "medium" if exec_ws else "high",
             "confidence_note": (
                 "Figures reflect returned rows only; see warnings for any row cap."
@@ -903,10 +910,15 @@ Respond ONLY with the (possibly corrected) answer text."""
             ),
             HumanMessage(content=user_prompt),
         ])
-        
+
+        verified = (response.content or "").strip()
+        if not verified:
+            # Do not wipe a good summary if the verifier returns nothing (common on slow/mobile timeouts).
+            return {"node_log": ["verify_answer_empty_kept_prior"]}
+
         return {
-            "final_answer": response.content.strip(),
-            "node_log": ["verify_answer"]
+            "final_answer": verified,
+            "node_log": ["verify_answer"],
         }
         
     def visualize(self, state: AgentState) -> Dict[str, Any]:
@@ -1115,8 +1127,18 @@ def run_planner(
     if exec_warnings and not cn:
         cn = "See warnings — results may be subject to row or sampling limits."
 
+    final_rows = result.get("final_data") or []
+    reply_text = (result.get("final_answer") or "").strip()
+    if not reply_text:
+        reply_text = (
+            "The model did not return a written summary. "
+            "Use the **table and chart** below for the query results."
+            if final_rows
+            else "Analysis complete."
+        )
+
     payload = {
-        "reply": result.get("final_answer", "Analysis complete."),
+        "reply": reply_text,
         "action": "new",
         "reason": "langgraph_pipeline",
         "schema_tables": result.get("top_views") or [],
