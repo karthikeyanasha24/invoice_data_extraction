@@ -586,10 +586,13 @@ def _node_generate_answer(state: GraphState) -> str:
     )
 
     try:
+        # Resolve model — guard against "auto" or blank (would cause API 404)
         model = _OPENAI_INSIGHTS_MODEL
         try:
             from ..config.config import AI_INSIGHTS_MODEL  # type: ignore
-            model = AI_INSIGHTS_MODEL or model
+            _cfg_model = (AI_INSIGHTS_MODEL or "").strip().lower()
+            if _cfg_model and _cfg_model not in ("auto", "none", ""):
+                model = AI_INSIGHTS_MODEL
         except ImportError:
             pass
 
@@ -599,18 +602,28 @@ def _node_generate_answer(state: GraphState) -> str:
                 {"role": "system", "content": "You are a concise BI analyst. Answer factually using only the data provided."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.2,
-            max_tokens=400,
+            **openai_chat_temperature_kwargs(model, 0.2),
+            **openai_completion_limit_kwargs(model, 400),
         )
-        state.final_answer = (response.choices[0].message.content or "").strip()
+        generated = (response.choices[0].message.content or "").strip()
+        # Only accept non-empty responses; fall through to data-driven fallback otherwise
+        if generated:
+            state.final_answer = generated
         state.final_data = rows
         state.confidence = "high" if len(rows) >= 1 else "low"
 
     except Exception as exc:
         logger.warning("generate_answer LLM failed: %s", exc)
-        state.final_answer = f"Query returned {len(rows)} row(s). Top result: {json.dumps(rows[0], default=str)[:200] if rows else 'No data'}"
         state.final_data = rows
         state.confidence = "medium"
+
+    # Guarantee a non-empty answer when rows are present
+    if not state.final_answer and rows:
+        top = rows[0]
+        state.final_answer = (
+            f"Query returned {len(rows)} row(s). "
+            f"Top result: {', '.join(f'{k}={v}' for k, v in list(top.items())[:4])}."
+        )
 
     return "verify_answer"
 
@@ -640,6 +653,11 @@ def _node_verify_answer(state: GraphState) -> str:
     """Cross-check the generated answer against actual row data."""
     state.node_log.append("verify_answer")
 
+    # Allow ops teams to skip this hop for faster responses
+    import os as _os
+    if _os.getenv("LANGGRAPH_SKIP_VERIFY_ANSWER", "").strip().lower() in ("1", "true", "yes"):
+        return "END"
+
     answer = state.final_answer or ""
     rows = state.final_data or []
 
@@ -663,13 +681,17 @@ def _node_verify_answer(state: GraphState) -> str:
                 {"role": "system", "content": "You are a fact-checker. Output only the corrected answer text, nothing else."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.0,
-            max_tokens=350,
+            **openai_chat_temperature_kwargs(_OPENAI_FAST_MODEL, 0.0),
+            **openai_completion_limit_kwargs(_OPENAI_FAST_MODEL, 350),
         )
         verified = (response.choices[0].message.content or "").strip()
-        if verified and len(verified) > 10:
+        # SAFETY: only replace if verified is meaningfully long and not shorter
+        # than the original — prevents overwriting a good answer with LLM garbage
+        if verified and len(verified) >= max(10, len(answer) // 2):
             state.final_answer = verified
-            logger.debug("verify_answer: answer updated")
+            logger.debug("verify_answer: answer updated (%d→%d chars)", len(answer), len(verified))
+        else:
+            logger.debug("verify_answer: keeping original (verified too short or empty)")
 
     except Exception as exc:
         logger.debug("verify_answer LLM failed (non-fatal): %s", exc)
@@ -779,10 +801,20 @@ def run_pipeline(
 
     preview = (state.final_data or [])[:50]
 
+    # Build a data-driven fallback if LLM never produced prose
+    _reply = state.final_answer or ""
+    if not _reply and (state.final_data or []):
+        top = (state.final_data or [])[0]
+        _reply = (
+            f"Query returned {len(state.final_data or [])} row(s). "
+            f"Top result: {', '.join(f'{k}={v}' for k, v in list(top.items())[:4])}."
+        )
+    _reply = _reply or "The query completed but no summary could be generated."
+
     return PipelineResult(
-        reply=state.final_answer or "The query completed but produced no summary.",
+        reply=_reply,
         action="new",
-        reason="sql_success" if state.final_sql else "no_sql",
+        reason="langgraph_pipeline" if state.final_sql else "no_sql",
         sql=state.final_sql or state.generated_sql or "",
         rows_preview=preview,
         charts=charts,
