@@ -13,6 +13,10 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 
 from .schema_intelligence import ColumnProfile, schema_intelligence, TableProfile
+from ..utils.openai_chat_params import (
+    langchain_openai_limit_kwargs,
+    langchain_openai_temperature_kwargs,
+)
 from ..config.config import (
     LANGGRAPH_ANSWER_MAX_TOKENS,
     LANGGRAPH_ANSWER_MODEL,
@@ -456,18 +460,18 @@ class LangGraphPlanner:
         sql_model = LANGGRAPH_SQL_MODEL
         ans_model = LANGGRAPH_ANSWER_MODEL
         logger.info("[langgraph] SQL model: %s | answer model: %s", sql_model, ans_model)
-        # temperature=0 for SQL determinism
+        # GPT-5 / o-series: use max_completion_tokens (not max_tokens) and API-safe temperature via helpers.
         self.llm_sql = ChatOpenAI(
             api_key=api_key,
             model=sql_model,
-            temperature=0,
-            max_tokens=max(512, LANGGRAPH_SQL_MAX_TOKENS),
+            **langchain_openai_temperature_kwargs(sql_model, 0.0),
+            **langchain_openai_limit_kwargs(sql_model, max(512, LANGGRAPH_SQL_MAX_TOKENS)),
         )
         self.llm_answer = ChatOpenAI(
             api_key=api_key,
             model=ans_model,
-            temperature=0.2,
-            max_tokens=max(256, LANGGRAPH_ANSWER_MAX_TOKENS),
+            **langchain_openai_temperature_kwargs(ans_model, 0.2),
+            **langchain_openai_limit_kwargs(ans_model, max(256, LANGGRAPH_ANSWER_MAX_TOKENS)),
         )
 
     def load_schema(self, state: AgentState) -> Dict[str, Any]:
