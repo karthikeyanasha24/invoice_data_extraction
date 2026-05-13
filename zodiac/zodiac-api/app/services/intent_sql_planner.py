@@ -331,9 +331,11 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
     vbrp_actual = next((t for t in (schema or {}) if t.upper() == "VBRP"), "VBRP")
     vbrk_actual = next((t for t in (schema or {}) if t.upper() == "VBRK"), "VBRK")
     makt_actual = next((t for t in (schema or {}) if t.upper() == "MAKT"), "MAKT")
+    kna1_actual = next((t for t in (schema or {}) if t.upper() == "KNA1"), "KNA1")
     vbrp_ref = _quote_table(vbrp_actual)
     vbrk_ref = _quote_table(vbrk_actual)
     makt_ref = _quote_table(makt_actual)
+    kna1_ref = _quote_table(kna1_actual)
 
     metric_alias = str(metric.get("alias") or "total_sales")
 
@@ -428,6 +430,7 @@ WHERE p."netwr" IS NOT NULL""".strip()
             if single_logical == "customer":
                 dim_expr = 'TRIM(v."kunag")'
                 dim_alias = "customer"
+                # will add name join below
             elif single_logical == "country":
                 dim_expr = 'TRIM(v."land1")'
                 dim_alias = "country"
@@ -462,7 +465,22 @@ WHERE p."netwr" IS NOT NULL""".strip()
             elif single_logical in ("country", "currency"):
                 dim_notnull_guard = f"\n  AND {dim_expr} IS NOT NULL AND {dim_expr} <> ''"
 
-            sql = f"""
+            if single_logical == "customer":
+                sql = f"""
+SELECT
+    {dim_expr} AS {dim_alias},
+    COALESCE(NULLIF(TRIM(k."name1"), ''), {dim_expr}) AS customer_name,
+    {metric_sql}
+FROM {vbrp_ref} p
+JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")
+LEFT JOIN {kna1_ref} k ON TRIM(k."kunnr") = {dim_expr}
+WHERE v."fkdat" IS NOT NULL
+  AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''{dim_notnull_guard}{year_where}
+GROUP BY {dim_expr}, COALESCE(NULLIF(TRIM(k."name1"), ''), {dim_expr})
+{order_clause}
+{limit_clause}""".strip()
+            else:
+                sql = f"""
 SELECT
     {dim_expr} AS {dim_alias},
     {metric_sql}

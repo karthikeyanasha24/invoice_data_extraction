@@ -94,9 +94,36 @@ def generate_summary(intent: Dict[str, Any], rows: List[Dict[str, Any]], validat
         top = rows[0]
         top_dim_key = _resolve_dim_key(dim_logical, top)
         top_val = top.get(top_dim_key)
+
+        # Prefer a human-readable name column over a raw ID (e.g. customer_name > customer number)
+        name_key = None
+        for candidate in (f"{dim_logical}_name", "name", "name1", "customer_name", "product_name"):
+            if candidate in top and candidate != top_dim_key:
+                raw = top.get(candidate)
+                if raw and str(raw).strip() and str(raw).strip() != str(top_val).strip():
+                    name_key = candidate
+                    break
+        display_val = f"{top.get(name_key)} ({top_val})" if name_key else top_val
+
+        metric_label = metric.get("logical", metric_alias)
+        total_shown = len(rows)
+
+        if total_shown > 1:
+            lines = []
+            for i, r in enumerate(rows[:total_shown], 1):
+                r_dim_key = _resolve_dim_key(dim_logical, r)
+                r_id = r.get(r_dim_key)
+                r_name = r.get(name_key) if name_key else None
+                r_label = f"{r_name} ({r_id})" if (r_name and str(r_name).strip() and str(r_name).strip() != str(r_id).strip()) else str(r_id)
+                lines.append(f"{i}. **{r_label}** — **{_fmt(r.get(metric_alias))}**")
+            return (
+                f"Top **{total_shown}** by **{metric_label}**:\n\n"
+                + "\n".join(lines)
+            )
+
         return (
-            f"Top **{dim_logical}** is **{top_val}** with **{_fmt(top.get(metric_alias))}** "
-            f"{metric.get('logical', metric_alias)}."
+            f"Top **{dim_logical}** is **{display_val}** with **{_fmt(top.get(metric_alias))}** "
+            f"{metric_label}."
         )
 
     # Comparison (assumes year/period dimension)
