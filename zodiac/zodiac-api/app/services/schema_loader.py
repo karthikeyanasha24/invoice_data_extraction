@@ -369,6 +369,11 @@ def get_schema_text(
     return text
 
 
+_schema_cache: Dict[str, Any] = {}
+_schema_cache_ts: float = 0.0
+_SCHEMA_CACHE_TTL_SECONDS: float = 120.0  # re-read after 2 minutes
+
+
 def get_schema_dict(db: Session) -> Dict[str, List[str]]:
     """Return raw schema dict (table -> columns). Used for validation.
 
@@ -376,7 +381,17 @@ def get_schema_dict(db: Session) -> Dict[str, List[str]]:
     present in the mapping file (e.g. ``vbrp`` stored lowercase) are included
     in validation even when the live DB session cannot see them directly.
     The live DB takes precedence for any table that appears in both sources.
+
+    Result is cached in-process for ``_SCHEMA_CACHE_TTL_SECONDS`` seconds so
+    repeated AI chat requests don't each pay the cost of querying
+    information_schema + reading two static files.
     """
+    import time as _time
+    global _schema_cache, _schema_cache_ts
+    now = _time.monotonic()
+    if _schema_cache and (now - _schema_cache_ts) < _SCHEMA_CACHE_TTL_SECONDS:
+        return _schema_cache  # type: ignore[return-value]
+
     schema = load_schema(db)
     mapping_schema = load_schema_from_mapping_file()
     csv_schema = load_schema_from_tables_columns_csv()
@@ -388,4 +403,7 @@ def get_schema_dict(db: Session) -> Dict[str, List[str]]:
     for table, cols in csv_schema.items():
         if table not in schema:
             schema[table] = cols
+
+    _schema_cache = schema
+    _schema_cache_ts = now
     return schema
