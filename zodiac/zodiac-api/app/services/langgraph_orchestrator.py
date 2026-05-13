@@ -169,7 +169,7 @@ def _node_generate_sql(state: GraphState) -> str:
             rag_context=state.rag_context,
         )
         if result and result.sql:
-            state.generated_sql = result.sql.strip()
+            state.generated_sql = _normalize_table_case(result.sql.strip(), state.schema or {})
             logger.debug("generate_sql: got SQL (%d chars)", len(state.generated_sql))
             return "check_sql"
 
@@ -207,6 +207,7 @@ Check the following 18 points:
 16. CRITICAL — Customer field selection in VBRK: use VBRK.KUNAG (sold-to party, the actual purchasing customer) when the question asks about customer sales/revenue. NEVER use VBRK.KUNRG (payer) for customer ranking — KUNRG is the paying party (often a bank or parent company) and will collapse many customers into one entity, producing wrong results. Only use KUNRG when the user explicitly asks about "payer".
 17. CRITICAL — KNA1 join: JOIN KNA1 ON LPAD(TRIM(VBRK.kunag),10,'0') = LPAD(TRIM(KNA1.kunnr),10,'0'). Without LPAD on both sides, rows with different leading-zero counts silently fail to match.
 18. VBRP join: always join VBRP ON LPAD(TRIM(VBRK.vbeln),10,'0') = LPAD(TRIM(VBRP.vbeln),10,'0') and also match VBRK.mandt = VBRP.mandt when mandt column exists.
+19. CRITICAL — Table name casing: PostgreSQL stores SAP tables under their EXACT UPPERCASE names (VBRK, VBRP, MAKT, KNA1, etc.) using quoted identifiers. Always write table names as double-quoted uppercase — "VBRK" not vbrk or VBRK. Unquoted identifiers (lowercase or uppercase) are folded to lowercase by PostgreSQL and cause "relation does not exist". If the SQL uses unquoted or lowercase table names, add double quotes and uppercase them in corrected_sql.
 
 Return JSON only:
 {
@@ -249,21 +250,21 @@ def _node_check_sql(state: GraphState) -> str:
         result = json.loads(raw)
 
         if result.get("is_valid", True):
-            state.checked_sql = sql
+            state.checked_sql = _normalize_table_case(sql, state.schema or {})
             logger.debug("check_sql: valid ✅")
         else:
             issues = result.get("issues", [])
             corrected = result.get("corrected_sql", "")
             logger.info("check_sql: issues found: %s", issues)
             if corrected and len(corrected) > 20:
-                state.checked_sql = corrected.strip()
+                state.checked_sql = _normalize_table_case(corrected.strip(), state.schema or {})
                 logger.info("check_sql: using corrected SQL")
             else:
                 # Can't auto-fix — record issue and re-generate
                 state.retry_errors.append("check_sql issues: " + "; ".join(issues[:3]))
                 state.retry_count += 1
                 if state.retry_count >= MAX_RETRIES:
-                    state.checked_sql = sql  # best effort
+                    state.checked_sql = _normalize_table_case(sql, state.schema or {})  # best effort
                 else:
                     return "generate_sql"
 
@@ -271,7 +272,7 @@ def _node_check_sql(state: GraphState) -> str:
 
     except Exception as exc:
         logger.warning("check_sql failed (%s) — skipping to execute", exc)
-        state.checked_sql = sql
+        state.checked_sql = _normalize_table_case(sql, state.schema or {})
         return "execute_sql"
 
 
@@ -285,6 +286,29 @@ def _extract_used_schema(sql: str, schema: Dict[str, Any]) -> str:
                 col_names = [c.get("column", c) if isinstance(c, dict) else str(c) for c in cols[:30]]
                 lines.append(f"{table}: {', '.join(col_names)}")
     return "\n".join(lines) if lines else "(schema not available)"
+
+
+def _normalize_table_case(sql: str, schema: Dict[str, Any]) -> str:
+    """
+    Ensure SAP table names are properly double-quoted uppercase in PostgreSQL SQL.
+
+    PostgreSQL stores SAP tables as quoted uppercase identifiers (e.g. ``"VBRK"``).
+    An unquoted identifier — whether written as ``vbrk``, ``VBRK``, or ``Vbrk`` —
+    is always folded to lowercase by PostgreSQL and causes
+    ``relation "vbrk" does not exist``.
+
+    Strategy: for every table name in the schema, replace any unquoted occurrence
+    (regardless of case) with the properly quoted form ``"TABLENAME"``.
+    Already-quoted occurrences (preceded by ``"``) are left untouched.
+    """
+    result = sql
+    for table in schema:
+        # Match unquoted occurrences only — negative lookbehind/lookahead for "
+        pattern = re.compile(r'(?<!")\b' + re.escape(table) + r'\b(?!")', re.IGNORECASE)
+        quoted = f'"{table}"'
+        if pattern.search(result):
+            result = pattern.sub(quoted, result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +370,7 @@ Schema context (tables used):
 {schema}
 
 SAP rules to follow when rewriting:
+- CRITICAL: Table names MUST be double-quoted uppercase — "VBRK", "VBRP", "MAKT", "KNA1", "EKKO", "EKPO", etc. PostgreSQL stores SAP tables with quoted uppercase names; writing vbrk or VBRK (unquoted) causes "relation does not exist". Fix ALL lowercase/unquoted table names.
 - fkdat / budat columns are CHAR(8) strings — use SUBSTRING(TRIM(col),1,4) = 'YYYY' for year, NOT EXTRACT
 - NETWR / KWMENG are TEXT, must CAST(col AS NUMERIC)
 - VBELN joins: use LPAD(TRIM(a.vbeln),10,'0') = LPAD(TRIM(b.vbeln),10,'0')
@@ -390,7 +415,7 @@ def _node_error_recovery(state: GraphState) -> str:
         raw = re.sub(r"\s*```$", "", raw).strip()
 
         if raw and len(raw) > 20:
-            state.generated_sql = raw
+            state.generated_sql = _normalize_table_case(raw, state.schema or {})
             state.checked_sql = None  # force re-check
             logger.info("error_recovery: generated new SQL (attempt %d)", state.retry_count + 1)
             return "check_sql"

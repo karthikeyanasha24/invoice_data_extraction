@@ -4583,6 +4583,11 @@ def run_schema_driven_sql_agent(
             logger.warning("schema_driven_agent: no SQL generated for question: %s", (question or "")[:80])
             return None
         logger.info("schema_driven_agent: generated_sql (first 300 chars): %s", (sql or "")[:300])
+        # Fix table name casing — LLM often writes lowercase (vbrk) but PostgreSQL
+        # stores SAP tables as quoted uppercase ("VBRK").  Apply before validation
+        # so schema_validate_sql sees the corrected form.
+        sql = _quote_catalog_sql_tables(sql)
+        logger.debug("schema_driven_agent: after table-case fix (first 300 chars): %s", (sql or "")[:300])
         is_valid, err = schema_validate_sql(sql, schema)
         if not is_valid or not _precision_schema_ok(sql):
             logger.warning("schema_driven_agent: SQL validation failed: %s", err)
