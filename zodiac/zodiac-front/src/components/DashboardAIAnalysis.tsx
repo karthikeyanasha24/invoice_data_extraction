@@ -2048,7 +2048,7 @@ export default function DashboardAIAnalysis() {
 
       /* Follow-up without any prior SQL thread confuses the model (bad SQL, nonsense rows). */
       const hasAssistantSqlContext = conversationHistory.some(
-        (m) => m.role === 'assistant' && m.sql && String(m.sql).trim().length > 0,
+        (m) => m.role === 'assistant' && 'sql' in m && (m as { sql?: string }).sql && String((m as { sql?: string }).sql).trim().length > 0,
       );
       const effectiveQueryMode: 'new' | 'follow_up' =
         queryMode === 'follow_up' && !hasAssistantSqlContext ? 'new' : queryMode;
