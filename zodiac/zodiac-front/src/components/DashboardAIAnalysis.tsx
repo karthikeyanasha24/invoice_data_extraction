@@ -2046,8 +2046,23 @@ export default function DashboardAIAnalysis() {
         return base;
       });
 
+      /* Follow-up without any prior SQL thread confuses the model (bad SQL, nonsense rows). */
+      const hasAssistantSqlContext = conversationHistory.some(
+        (m) => m.role === 'assistant' && m.sql && String(m.sql).trim().length > 0,
+      );
+      const effectiveQueryMode: 'new' | 'follow_up' =
+        queryMode === 'follow_up' && !hasAssistantSqlContext ? 'new' : queryMode;
+
+      /* Time scope: Historical tab → always SAP historical pool; Real-time tab → honor Scope dropdown. */
+      let apiTimeScope: 'current' | 'historical' | 'both' =
+        section === 'historical' ? 'historical' : timeScope;
+      /* Explicit calendar years (e.g. 2004) need historical SAP scope — "current" biases recent context. */
+      if (/\b(?:19|20)\d{2}\b/.test(text) && apiTimeScope === 'current') {
+        apiTimeScope = 'historical';
+      }
+
       const augmentedMessage = buildAugmentedGenerativeQuestion(text, {
-        queryMode,
+        queryMode: effectiveQueryMode,
         section,
         routingFocus: generativeRoutingFocus,
       });
@@ -2058,16 +2073,16 @@ export default function DashboardAIAnalysis() {
         conversationHistory,
         contextKeys,
         d,
-        section === 'realtime' ? 'current' : 'historical',
+        apiTimeScope,
         threadIdRef.current,
-        queryMode,
+        effectiveQueryMode,
       );
 
       // After the first successful SQL query, switch to follow_up mode so subsequent
       // questions use thread context instead of running full SQL pipelines each time.
       // The orchestrator itself decides whether follow_up needs fresh SQL (drill-down).
       const hasFreshSql = Boolean(res?.sql);
-      if (hasFreshSql && queryMode === 'new') {
+      if (hasFreshSql && effectiveQueryMode === 'new') {
         setQueryMode('follow_up');
       }
 

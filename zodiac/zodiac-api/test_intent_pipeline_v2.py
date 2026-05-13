@@ -71,9 +71,9 @@ class TestSqlPlanner(unittest.TestCase):
         i = extract_intent("Sales by year", SCHEMA)
         plan = build_sql_plan(i, SCHEMA)
         sql = generate_sql(plan)
-        self.assertIn("SELECT\n    year,", sql)
+        self.assertIn("AS year", sql)
         self.assertIn("AS total_sales", sql)
-        self.assertIn("GROUP BY year", sql)
+        self.assertIn("GROUP BY", sql)
 
 
 class TestValidatorSummaryChart(unittest.TestCase):

@@ -477,24 +477,13 @@ def extract_intent(question: str, schema: Optional[Dict[str, List[str]]] = None)
 
 def is_intent_pipeline_appropriate(question: str) -> bool:
     """
-    DISABLED: The rule-based intent pipeline is bypassed for all queries.
+    When True, billing/revenue-style questions use the strict intent pipeline
+    (deterministic SQL: correct FKDAT year, KUNAG-based customer, no LLM round-trip).
 
-    With 118 tables and unpredictable user questions, every query is routed
-    to the LLM SQL agent (GPT-4o → Claude → Gemini) which generates correct,
-    adaptive SQL without any hardcoded rules.
-
-    The LLM handles:
-      • "show sales for year 2000"  → correctly adds WHERE year filter
-      • "top 10 customers by revenue" → correct GROUP BY
-      • "cost trend for profit center X" → correct CO tables
-      • Any other natural-language question over 118 tables
-
-    Returns False always so every query goes to run_sap_sql_agent.
+    Returns False for CO/FI line detail, inventory, PO/delivery ops, EDI, etc., so those
+    still go to the schema-driven LLM SQL agent.
     """
-    return False  # all queries → LLM SQL agent (gpt-4o / claude / gemini)
-
-    # ── DEAD CODE BELOW — kept for reference only ─────────────────────────────
-    q = (question or "").lower()  # noqa: F841
+    q = (question or "").lower()
 
     # ── 0. Hard always-exclude: domains the intent pipeline has NO tables for ──
     # These win even over analytics signals because returning wrong data (e.g.

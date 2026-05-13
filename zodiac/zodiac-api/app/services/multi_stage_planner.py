@@ -25,6 +25,7 @@ from ..config.config import (
     LANGGRAPH_MAX_SCHEMA_TABLES_HARD_CAP,
     LANGGRAPH_SCHEMA_JOIN_BOOST,
     LANGGRAPH_SELECT_ROW_CAP,
+    LANGGRAPH_SKIP_VERIFY_ANSWER,
     LANGGRAPH_SQL_MAX_TOKENS,
     LANGGRAPH_SQL_MODEL,
 )
@@ -54,8 +55,9 @@ ERP_SQL_RULES = """
    - Always alias all aggregates: SUM(x) AS TotalX, COUNT(*) AS TxnCount.
    - Always include ORDER BY for trend/ranking queries.
    - Column aliases must not contain spaces (use CamelCase or underscore).
-   - PostgreSQL requires quotes for uppercase table names. You MUST quote tables like "EKKO", "EKPO" or PostgreSQL will convert them to lowercase and fail to find the table.
-   - VERY IMPORTANT: In PostgreSQL, all SAP column names are LOWERCASE. You MUST use lowercase for all column names (e.g. "EKKO"."ebeln", "EKPO"."netwr", "EKKO"."lifnr"). Do NOT use uppercase column names.
+   - **Table identifiers:** Match the SCHEMA exactly. Many SAP replicas use lowercase physical names (`vbrk`, `vbrp`, `makt`). Unquoted lowercase is correct there. `"VBRP"` is case-sensitive uppercase and **fails** if the real table is `vbrp` — never invent casing; copy from the schema list.
+   - When the schema snapshot shows uppercase quoted names only, quote those identifiers consistently with the snapshot.
+   - VERY IMPORTANT: SAP **columns** in PostgreSQL are almost always lowercase (e.g. vbrk.vbeln, vbrp.netwr, ekko.ebeln when using lowercase tables). Do NOT use uppercase column names.
 7. GROUPING AND AGGREGATION (CRITICAL)
    - Every non-aggregate SELECT column must appear in GROUP BY.
    - When asked for "Top N vendors/customers/products" or similar ranking, you MUST group by the entity ID/Name and aggregate the metric (e.g., SUM(netwr) AS TotalAmount). DO NOT select all columns and just append LIMIT.
@@ -672,6 +674,20 @@ Output ONLY the SQL — no explanation, no markdown fences."""
                 LANGGRAPH_SELECT_ROW_CAP,
             )
 
+        # Map LLM table ids to physical Postgres names (db_table_mapping.json: e.g. vbrp vs "VBRP").
+        try:
+            from .sap_sql_agent import _quote_catalog_sql_tables
+
+            sql = _quote_catalog_sql_tables(sql)
+        except Exception as _qct_err:
+            logger.debug("[langgraph] _quote_catalog_sql_tables skipped: %s", _qct_err)
+        try:
+            from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution as _prep_sql
+
+            sql = _prep_sql(sql)
+        except Exception as _prep_err:
+            logger.debug("[langgraph] prepare_sql skipped: %s", _prep_err)
+
         result_data: List[Dict[str, Any]] = []
         error_msg = ""
 
@@ -717,8 +733,9 @@ Output ONLY the SQL — no explanation, no markdown fences."""
         
         system_prompt = f"""You are a SQL debugger. A query failed with the error shown. Fix the SQL so it executes without error.
 Study the error carefully.
-PostgreSQL requires quotes for uppercase table names. You MUST quote tables like "EKKO", "EKPO" or PostgreSQL will convert them to lowercase and fail to find the table.
-VERY IMPORTANT: In PostgreSQL, all SAP column names are LOWERCASE. You MUST use lowercase for all column names (e.g. "EKKO"."ebeln", "EKPO"."netwr").
+IMPORTANT: Table name CASE must match the schema snapshot in [SCHEMA]. Many SAP replicas use lowercase physical names (vbrp, vbrk) while others use quoted uppercase ("VBRK"). Copy identifiers EXACTLY from the schema list — do not guess.
+PostgreSQL: unquoted identifiers fold to lowercase; double-quoted identifiers are case-sensitive.
+VERY IMPORTANT: SAP column names are almost always lowercase (e.g. vbeln, netwr, fkdat).
 {ERP_SQL_RULES}
 Output ONLY the corrected SQL — no explanation."""
 
@@ -854,6 +871,8 @@ Rules:
 
     def verify_answer(self, state: AgentState) -> Dict[str, Any]:
         logger.info("[langgraph] node: verify_answer")
+        if LANGGRAPH_SKIP_VERIFY_ANSWER:
+            return {"node_log": ["verify_answer_skipped"]}
         rows = state.get("final_data", [])
         if not state.get("final_answer") or not rows:
             return {"node_log": ["verify_answer"]}
@@ -1010,6 +1029,21 @@ def run_planner(
         days_int = int(days)
     except (TypeError, ValueError):
         days_int = 30
+
+    # Billing/revenue ranking & aggregates: deterministic SQL — avoids multi-minute LangGraph loops.
+    try:
+        from .intent_dashboard_fast_path import try_intent_dashboard_fast_path
+
+        fast = try_intent_dashboard_fast_path(
+            db,
+            query or "",
+            days=days_int,
+            time_scope=(time_scope or "current").strip(),
+        )
+        if fast is not None:
+            return fast
+    except Exception as _fast_err:
+        logger.debug("intent fast path skipped: %s", _fast_err)
 
     planner = LangGraphPlanner(db, api_key)
     app = build_graph(planner)

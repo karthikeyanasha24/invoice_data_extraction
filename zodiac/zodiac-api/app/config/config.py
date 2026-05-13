@@ -50,6 +50,12 @@ LANGGRAPH_MAX_SCHEMA_TABLES_HARD_CAP = int(os.getenv("LANGGRAPH_MAX_SCHEMA_TABLE
 LANGGRAPH_MAX_COLUMNS_PER_TABLE = int(os.getenv("LANGGRAPH_MAX_COLUMNS_PER_TABLE", "48"))
 LANGGRAPH_SQL_MAX_TOKENS = int(os.getenv("LANGGRAPH_SQL_MAX_TOKENS", "4096"))
 LANGGRAPH_ANSWER_MAX_TOKENS = int(os.getenv("LANGGRAPH_ANSWER_MAX_TOKENS", "1536"))
+# Skip the final fact-check LLM pass (saves one round-trip; slightly higher hallucination risk)
+LANGGRAPH_SKIP_VERIFY_ANSWER = os.getenv("LANGGRAPH_SKIP_VERIFY_ANSWER", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 # Import Vercel Blob for production file storage
 try:
     import vercel_blob

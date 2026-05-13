@@ -215,7 +215,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 GROUP BY k."name1", k."land1"
 ORDER BY revenue DESC
 LIMIT 10
@@ -233,7 +233,7 @@ SELECT
     COUNT(DISTINCT h."vbeln") AS invoice_count
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 GROUP BY k."land1"
 ORDER BY revenue DESC
 """,
@@ -365,7 +365,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 JOIN "T016T" AS t ON k."brsch" = t."brsch"
 GROUP BY k."land1", t."brtxt"
 ORDER BY country, revenue DESC
@@ -382,7 +382,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 JOIN "T016T" AS t ON k."brsch" = t."brsch"
 GROUP BY t."brtxt"
 ORDER BY revenue DESC
@@ -401,7 +401,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 GROUP BY k."name1", k."land1"
 HAVING SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) > 0
 ORDER BY revenue ASC
@@ -419,7 +419,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 GROUP BY k."name1"
 ORDER BY revenue DESC
 """,
@@ -437,7 +437,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 LEFT JOIN "MAKT" AS m ON p."matnr" = m."matnr"
 GROUP BY k."name1", k."land1", m."maktx"
 ORDER BY revenue DESC
@@ -546,7 +546,7 @@ SELECT
          ELSE NULL END AS avg_invoice_value
 FROM "vbrp" AS p
 JOIN "VBRK" AS v ON p."vbeln" = v."vbeln"
-JOIN "KNA1" AS k ON v."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON v."kunag" = k."kunnr"
 LEFT JOIN "T016T" AS t ON k."brsch" = t."brsch"
 GROUP BY k."name1", k."land1", t."brtxt"
 ORDER BY avg_invoice_value DESC NULLS LAST
@@ -618,7 +618,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS v ON p."vbeln" = v."vbeln"
-JOIN "KNA1" AS k ON v."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON v."kunag" = k."kunnr"
 LEFT JOIN "T016T" AS t ON k."brsch" = t."brsch"
 GROUP BY t."brtxt"
 ORDER BY revenue DESC
@@ -2681,7 +2681,7 @@ SELECT
     "vkorg" AS sales_org,
     "vtweg" AS dist_channel,
     "spart" AS division,
-    "kunrg" AS customer
+    "kunag" AS customer
 FROM "VBRK"
 ORDER BY "fkdat"::date DESC, "vbeln" DESC
 LIMIT 200
@@ -2699,7 +2699,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 GROUP BY k."name1", k."land1"
 ORDER BY revenue DESC
 LIMIT 100
@@ -2748,7 +2748,7 @@ SELECT
     SUM(NULLIF(TRIM(p."netwr"::text), '')::numeric) AS revenue
 FROM "vbrp" AS p
 JOIN "VBRK" AS h ON p."vbeln" = h."vbeln"
-JOIN "KNA1" AS k ON h."kunrg" = k."kunnr"
+JOIN "KNA1" AS k ON h."kunag" = k."kunnr"
 GROUP BY k."land1"
 ORDER BY revenue DESC
 """,
