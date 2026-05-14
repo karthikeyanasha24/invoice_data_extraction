@@ -746,6 +746,19 @@ function formatCellValue(v: unknown): string {
   return String(v);
 }
 
+const COLUMN_LABELS: Record<string, string> = {
+  total_sales: 'Total Sales', total_revenue: 'Total Revenue',
+  kunag: 'Customer No.', kunnr: 'Customer No.',
+  matnr: 'Material No.', maktx: 'Material Name',
+  customer: 'Customer No.', customer_name: 'Customer Name',
+  product: 'Product', product_name: 'Product Name',
+  fkdat: 'Invoice Date', budat: 'Posting Date',
+  netwr: 'Net Value', waerk: 'Currency',
+  vbeln: 'Document No.', auart: 'Order Type',
+  kwmeng: 'Qty', invoices: 'Invoice Count',
+  year: 'Year', month: 'Month', country: 'Country',
+};
+
 function DataPreviewTable({ rows, maxHeight = 280 }: { rows: Record<string, unknown>[]; maxHeight?: number }) {
   if (!rows?.length) return null;
   const keys = Array.from(
@@ -764,7 +777,7 @@ function DataPreviewTable({ rows, maxHeight = 280 }: { rows: Record<string, unkn
           <tr>
             {keys.map((k) => (
               <th key={k} className="text-left px-2 py-1.5 text-slate-600 font-semibold whitespace-nowrap">
-                {k}
+                {COLUMN_LABELS[k] ?? k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
               </th>
             ))}
           </tr>
@@ -1069,6 +1082,8 @@ function ChatPanel({
   loading,
   loadingStep = 0,
   loadingElapsed = 0,
+  answerLoading = false,
+  onAbort,
   prompts,
   onSend,
   placeholder,
@@ -1095,6 +1110,8 @@ function ChatPanel({
   loading: boolean;
   loadingStep?: number;
   loadingElapsed?: number;
+  answerLoading?: boolean;
+  onAbort?: () => void;
   prompts: { label: string; query: string }[];
   onSend: (text: string) => void;
   placeholder: string;
@@ -1236,11 +1253,20 @@ function ChatPanel({
                           </div>
                         )}
                         <div>
-                          {m.meta.confidence && (
-                            <span className="mr-1">
-                              Confidence: <span className="font-semibold text-slate-600">{m.meta.confidence}</span>
-                            </span>
-                          )}
+                          {m.meta.confidence && (() => {
+                            const CONFIDENCE_COLORS: Record<string, string> = {
+                              high: 'bg-green-100 text-green-800 border border-green-300',
+                              medium: 'bg-yellow-100 text-yellow-800 border border-yellow-300',
+                              low: 'bg-red-100 text-red-800 border border-red-300',
+                            };
+                            const CONFIDENCE_TOOLTIP = 'High = deterministic SQL (fast path). Medium = AI-generated SQL validated. Low = fallback or partial match.';
+                            const conf = m.meta.confidence.toLowerCase();
+                            return (
+                              <span className="mr-1 inline-flex items-center gap-1">
+                                Confidence: <span className={`px-2 py-0.5 rounded text-xs font-medium ${CONFIDENCE_COLORS[conf] ?? 'bg-gray-100 text-gray-600'}`} title={CONFIDENCE_TOOLTIP}>{m.meta.confidence}</span>
+                              </span>
+                            );
+                          })()}
                           {m.meta.action && <span>Action: {m.meta.action}</span>}
                           {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
                           {m.meta.adaptive_context?.query_profile?.kind && (
@@ -1359,6 +1385,13 @@ function ChatPanel({
                   elapsed={loadingElapsed}
                   isFollowUp={queryMode === 'follow_up'}
                 />
+              </div>
+            )}
+            {answerLoading && (
+              <div className="space-y-2 animate-pulse mt-2 px-2">
+                <div className="h-4 bg-gray-200 rounded w-3/4" />
+                <div className="h-4 bg-gray-200 rounded w-1/2" />
+                <div className="h-4 bg-gray-200 rounded w-5/6" />
               </div>
             )}
             <div ref={bottomRef} />
@@ -1508,6 +1541,16 @@ function ChatPanel({
               }`}
             >
               {isListening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          {loading && onAbort && (
+            <button
+              type="button"
+              onClick={onAbort}
+              className="flex-shrink-0 h-9 px-3.5 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl hover:from-orange-600 hover:to-red-700 transition-all flex items-center gap-1.5 text-sm font-medium shadow-sm"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline text-xs">Stop</span>
             </button>
           )}
           <button
@@ -1957,6 +2000,8 @@ export default function DashboardAIAnalysis() {
 
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [historicalLoading, setHistoricalLoading] = useState(false);
+  const [answerLoading, setAnswerLoading] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Progress tracking for loading state
   const [loadingElapsed, setLoadingElapsed] = useState(0);
@@ -2032,6 +2077,8 @@ export default function DashboardAIAnalysis() {
     setError(null);
     setMsgs((prev) => [...prev, { role: 'user', content: text, section, ts: Date.now() }]);
     setLoading(true);
+    setAnswerLoading(true);
+    abortControllerRef.current = new AbortController();
 
     try {
       // ── Route ALL queries through the full orchestrator (postAIAnalysisChat) ──
@@ -2076,6 +2123,7 @@ export default function DashboardAIAnalysis() {
         apiTimeScope,
         threadIdRef.current,
         effectiveQueryMode,
+        { signal: abortControllerRef.current.signal },
       );
 
       // After the first successful SQL query, switch to follow_up mode so subsequent
@@ -2125,11 +2173,20 @@ export default function DashboardAIAnalysis() {
         meta: hasMeta ? meta : undefined, section, ts: Date.now(),
       }]);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to get AI response.';
-      setError(msg);
-      setMsgs((prev) => [...prev, { role: 'assistant', content: `Error: ${msg}`, section, ts: Date.now() }]);
+      const isAborted =
+        (err as { code?: string })?.code === 'ERR_CANCELED' ||
+        (err as { name?: string })?.name === 'AbortError' ||
+        (typeof (err as { isAxiosError?: boolean })?.isAxiosError === 'boolean' && (err as { message?: string })?.message?.includes('canceled'));
+      if (isAborted) {
+        setMsgs((prev) => [...prev, { role: 'assistant', content: 'Query stopped — you can ask another question.', section, ts: Date.now() }]);
+      } else {
+        const msg = err instanceof Error ? err.message : 'Failed to get AI response.';
+        setError(msg);
+        setMsgs((prev) => [...prev, { role: 'assistant', content: `Error: ${msg}`, section, ts: Date.now() }]);
+      }
     } finally {
       setLoading(false);
+      setAnswerLoading(false);
     }
   };
 
@@ -2628,6 +2685,8 @@ export default function DashboardAIAnalysis() {
                   loading={realtimeLoading}
                   loadingStep={realtimeLoading ? loadingStep : 0}
                   loadingElapsed={realtimeLoading ? loadingElapsed : 0}
+                  answerLoading={realtimeLoading ? answerLoading : false}
+                  onAbort={() => abortControllerRef.current?.abort()}
                   prompts={REALTIME_PROMPTS}
                   onSend={(t) => void sendMessage('realtime', t)}
                   placeholder="e.g. Show failed invoices by customer, or list open purchase orders…"
@@ -2814,6 +2873,8 @@ export default function DashboardAIAnalysis() {
                     loading={historicalLoading}
                     loadingStep={historicalLoading ? loadingStep : 0}
                     loadingElapsed={historicalLoading ? loadingElapsed : 0}
+                    answerLoading={historicalLoading ? answerLoading : false}
+                    onAbort={() => abortControllerRef.current?.abort()}
                     prompts={HISTORICAL_PROMPTS}
                     onSend={(t) => void sendMessage('historical', t)}
                     placeholder="e.g. Compare periods, forecast revenue, or analyze historical SAP billing data…"

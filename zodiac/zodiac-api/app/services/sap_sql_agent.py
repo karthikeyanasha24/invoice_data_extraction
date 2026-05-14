@@ -360,6 +360,25 @@ def _quote_catalog_sql_tables(sql: str) -> str:
         replacement = f'"{tbl}"'
         sql = re.sub(pattern, replacement, sql)
 
+    # Fix column qualifiers: when FROM has "VBRK" but SELECT/WHERE uses vbrk.col,
+    # PostgreSQL raises "missing FROM-clause entry for table vbrk" because lowercase
+    # unquoted 'vbrk' is a different identifier from quoted '"VBRK"'.
+    # Replace vbrk.col  → "VBRK".col  and  "vbrk".col → "VBRK".col for all uppercase tables.
+    for tbl in sorted(uppercase_tables, key=len, reverse=True):
+        tbl_lower = tbl.lower()
+        # "vbrk".col → "VBRK".col  (lowercase quoted qualifier)
+        sql = re.sub(
+            r'"' + re.escape(tbl_lower) + r'"\.',
+            f'"{tbl}".',
+            sql,
+        )
+        # vbrk.col → "VBRK".col  (bare lowercase qualifier)
+        sql = re.sub(
+            r'(?<!["\w])' + re.escape(tbl_lower) + r'\.',
+            f'"{tbl}".',
+            sql,
+        )
+
     return sql
 
 

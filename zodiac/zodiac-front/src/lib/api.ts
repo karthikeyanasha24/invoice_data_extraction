@@ -1777,8 +1777,10 @@ export const dashboardApi = {
         days: number = 30,
         timeScope?: 'current' | 'historical' | 'both',
         threadId?: string,
-        queryMode?: 'new' | 'follow_up'
+        queryMode?: 'new' | 'follow_up',
+        options?: { signal?: AbortSignal }
     ) => {
+        const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
         try {
             const response = await api.post('/api/v1/dashboard/ai-analysis/chat', {
                 message,
@@ -1788,9 +1790,16 @@ export const dashboardApi = {
                 days: Math.max(1, Math.min(365, days)),
                 thread_id: threadId || '',
                 query_mode: queryMode || 'new',
+            }, {
+                signal: options?.signal,
+                headers: isMobile ? { 'X-Client-Platform': 'mobile' } : {},
             });
             return response.data;
         } catch (error: any) {
+            // Re-throw abort errors as-is so the caller can detect them
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'AbortError' || error?.name === 'CanceledError') {
+                throw error;
+            }
             console.error('AI analysis chat failed:', error);
             if (error.response?.status === 401) {
                 throw new Error('Session expired. Please log in again.');

@@ -682,8 +682,11 @@ Output ONLY the SQL — no explanation, no markdown fences."""
         except Exception as _qct_err:
             logger.debug("[langgraph] _quote_catalog_sql_tables skipped: %s", _qct_err)
         try:
-            from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution as _prep_sql
-
+            from .sql_generation_sanitizers import (
+                prepare_sql_for_sqlalchemy_text_execution as _prep_sql,
+                sanitize_generated_sap_sql as _sanitize_sap,
+            )
+            sql = _sanitize_sap(sql, state.get("question"))
             sql = _prep_sql(sql)
         except Exception as _prep_err:
             logger.debug("[langgraph] prepare_sql skipped: %s", _prep_err)

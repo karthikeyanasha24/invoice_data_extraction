@@ -222,3 +222,10 @@ async def check_backfill_status(
             detail=f"Failed to check status: {str(e)}"
         )
 
+
+@router.post("/refresh-schema-cache")
+async def refresh_schema_cache(current_user: ZodiacUser = Depends(get_current_user)):
+    """Bust the in-process schema cache so next request re-reads from DB."""
+    from ..services.schema_loader import invalidate_schema_cache
+    invalidate_schema_cache()
+    return {"status": "ok", "message": "Schema cache cleared. Next query will reload from DB."}

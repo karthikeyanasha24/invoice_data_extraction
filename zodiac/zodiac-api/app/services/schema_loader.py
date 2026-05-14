@@ -33,6 +33,18 @@ _schema_text_cache_ts: float = 0.0
 _mapping_file_cache: Optional[Dict[str, Any]] = None
 
 
+def invalidate_schema_cache() -> None:
+    """Bust all in-process schema caches so the next request re-loads from DB + files."""
+    global _schema_cache, _schema_cache_ts
+    _schema_cache = {}
+    _schema_cache_ts = 0.0
+    try:
+        load_schema_from_mapping_file.cache_clear()
+    except AttributeError:
+        pass
+    logger.info("schema_loader: all caches invalidated")
+
+
 @lru_cache(maxsize=1)
 def _tables_columns_csv_path() -> Path:
     # zodiac-api/tables_columns.csv

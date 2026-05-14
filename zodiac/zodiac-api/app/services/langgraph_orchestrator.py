@@ -22,10 +22,34 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
+import hashlib as _hashlib
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
+
+# ---------------------------------------------------------------------------
+# 30-second SQL result cache
+# ---------------------------------------------------------------------------
+_SQL_RESULT_CACHE: dict = {}
+_SQL_RESULT_CACHE_TTL = 30.0
+
+
+def _sql_cache_key(sql: str) -> str:
+    return _hashlib.sha256((sql or "").strip().lower().encode()).hexdigest()
+
+
+def _get_cached_result(sql: str):
+    import time as _t
+    entry = _SQL_RESULT_CACHE.get(_sql_cache_key(sql))
+    if entry and (_t.monotonic() - entry[1]) < _SQL_RESULT_CACHE_TTL:
+        return entry[0]
+    return None
+
+
+def _set_cached_result(sql: str, rows: list) -> None:
+    import time as _t
+    _SQL_RESULT_CACHE[_sql_cache_key(sql)] = (rows, _t.monotonic())
 _OPENAI_FAST_MODEL = "gpt-4o-mini"
 _OPENAI_INSIGHTS_MODEL = "gpt-4o"
 
@@ -46,6 +70,7 @@ class GraphState:
     date_range: Optional[Dict[str, str]] = None
     thread_id: Optional[str] = None
     period_info: Optional[str] = None
+    client_platform: str = ""
 
     # ── schema discovery ────────────────────────────────────────────────────
     schema: Optional[Dict[str, Any]] = None
@@ -61,6 +86,7 @@ class GraphState:
     retry_count: int = 0
     retry_errors: List[str] = field(default_factory=list)
     zero_rows_retried: bool = False
+    relax_attempted: bool = False
 
     # ── outputs ──────────────────────────────────────────────────────────────
     final_answer: Optional[str] = None
@@ -300,14 +326,39 @@ def _normalize_table_case(sql: str, schema: Dict[str, Any]) -> str:
     Strategy: for every table name in the schema, replace any unquoted occurrence
     (regardless of case) with the properly quoted form ``"TABLENAME"``.
     Already-quoted occurrences (preceded by ``"``) are left untouched.
+
+    Also fixes column qualifiers: when FROM has "VBRK" but SELECT/WHERE uses vbrk.col,
+    PostgreSQL raises "missing FROM-clause entry for table vbrk" because unquoted lowercase
+    'vbrk' is a different identifier from quoted '"VBRK"'.
     """
     result = sql
     for table in schema:
-        # Match unquoted occurrences only — negative lookbehind/lookahead for "
+        # Step 1: Fix unquoted table name occurrences (FROM/JOIN and other uses)
         pattern = re.compile(r'(?<!")\b' + re.escape(table) + r'\b(?!")', re.IGNORECASE)
         quoted = f'"{table}"'
         if pattern.search(result):
             result = pattern.sub(quoted, result)
+
+    # Step 2: Fix column qualifier casing — "vbrk".col → "VBRK".col and vbrk.col → "VBRK".col
+    # This is needed when the LLM uses lowercase table names as column qualifiers even though
+    # the physical table is uppercase-quoted (e.g. SELECT vbrk.waerk FROM "VBRK").
+    for table in schema:
+        if table != table.upper():
+            continue  # only fix uppercase tables
+        table_lower = table.lower()
+        # "vbrk".col → "VBRK".col (lowercase quoted qualifier)
+        result = re.sub(
+            r'"' + re.escape(table_lower) + r'"\.',
+            f'"{table}".',
+            result,
+        )
+        # vbrk.col → "VBRK".col (bare lowercase qualifier, not preceded by " to avoid double-fixing)
+        result = re.sub(
+            r'(?<!["\w])' + re.escape(table_lower) + r'\.',
+            f'"{table}".',
+            result,
+        )
+
     return result
 
 
@@ -323,6 +374,14 @@ def _node_execute_sql(state: GraphState) -> str:
         state.error = "No SQL to execute"
         return "error_recovery"
 
+    # Check 30-second result cache before hitting DB
+    cached = _get_cached_result(sql)
+    if cached is not None:
+        logger.info("execute_sql: cache hit (%d rows)", len(cached))
+        state.final_sql = sql
+        state.execution_result = cached
+        return "generate_answer"
+
     try:
         from .sap_sql_agent import _run_sql  # type: ignore
         rows = _run_sql(state.db, sql)
@@ -335,9 +394,13 @@ def _node_execute_sql(state: GraphState) -> str:
             return "error_recovery" if state.retry_count < MAX_RETRIES else "generate_answer"
 
         if len(rows) == 0 and not state.zero_rows_retried:
-            logger.info("execute_sql: zero rows — trying zero_rows_recovery")
+            if not state.relax_attempted:
+                logger.info("execute_sql: zero rows — trying relax_filters")
+                return "relax_filters"
+            logger.info("execute_sql: zero rows after relax — trying zero_rows_recovery")
             return "zero_rows_recovery"
 
+        _set_cached_result(sql, rows)
         state.execution_result = rows
         logger.info("execute_sql: %d rows ✅", len(rows))
         return "generate_answer"
@@ -353,6 +416,31 @@ def _node_execute_sql(state: GraphState) -> str:
         # Final attempt failed — proceed to answer with what we have
         state.execution_result = []
         return "generate_answer"
+
+
+# ---------------------------------------------------------------------------
+# NODE: relax_filters
+# ---------------------------------------------------------------------------
+
+def _node_relax_filters(state: GraphState) -> str:
+    """Remove the year filter from SQL and retry once when execute_sql returned 0 rows."""
+    import re as _re
+    state.node_log.append("relax_filters")
+    if state.relax_attempted:
+        return "zero_rows_recovery"
+    sql = state.checked_sql or state.generated_sql or ""
+    # Remove SUBSTRING-based year predicates (FKDAT year filter)
+    relaxed = _re.sub(
+        r"\s*AND\s+SUBSTRING\s*\(.*?fkdat.*?\)\s*IN\s*\([^)]+\)",
+        "", sql, flags=_re.IGNORECASE
+    )
+    state.relax_attempted = True
+    if relaxed.strip() == sql.strip():
+        # nothing was removed — nothing to relax
+        return "zero_rows_recovery"
+    state.checked_sql = relaxed.strip()
+    logger.info("relax_filters: removed year filter, retrying SQL")
+    return _node_execute_sql(state)
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +674,12 @@ def _node_generate_answer(state: GraphState) -> str:
     )
 
     try:
+        import os as _os
+        _is_mobile = (getattr(state, "client_platform", "") == "mobile") or \
+                     (_os.getenv("LANGGRAPH_FORCE_SHORT_ANSWERS", "").strip().lower() in ("1", "true", "yes"))
+        _token_limit = 400 if _is_mobile else 800
+        _system_prefix = "Reply in 2-3 sentences maximum. " if _is_mobile else ""
+
         # Resolve model — guard against "auto" or blank (would cause API 404)
         model = _OPENAI_INSIGHTS_MODEL
         try:
@@ -599,11 +693,11 @@ def _node_generate_answer(state: GraphState) -> str:
         response = state.client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a concise BI analyst. Answer factually using only the data provided."},
+                {"role": "system", "content": f"{_system_prefix}You are a concise BI analyst. Answer factually using only the data provided."},
                 {"role": "user", "content": prompt},
             ],
             **openai_chat_temperature_kwargs(model, 0.2),
-            **openai_completion_limit_kwargs(model, 400),
+            **openai_completion_limit_kwargs(model, _token_limit),
         )
         generated = (response.choices[0].message.content or "").strip()
         # Only accept non-empty responses; fall through to data-driven fallback otherwise
@@ -709,6 +803,7 @@ _NODES = {
     "generate_sql":         _node_generate_sql,
     "check_sql":            _node_check_sql,
     "execute_sql":          _node_execute_sql,
+    "relax_filters":        _node_relax_filters,
     "error_recovery":       _node_error_recovery,
     "zero_rows_recovery":   _node_zero_rows_recovery,
     "generate_answer":      _node_generate_answer,
@@ -729,6 +824,7 @@ def run_pipeline(
     date_range: Optional[Dict[str, str]] = None,
     thread_id: Optional[str] = None,
     period_info: Optional[str] = None,
+    client_platform: str = "",
 ) -> PipelineResult:
     """
     Execute the 9-node AI pipeline and return a PipelineResult.
@@ -746,6 +842,7 @@ def run_pipeline(
         date_range=date_range,
         thread_id=thread_id,
         period_info=period_info,
+        client_platform=client_platform or "",
     )
 
     # Build chart specs after the pipeline completes (chart engine is pure — no DB calls)

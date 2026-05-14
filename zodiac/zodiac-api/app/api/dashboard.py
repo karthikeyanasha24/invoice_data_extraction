@@ -2,7 +2,7 @@
 Dashboard API endpoints for statistics, analytics, and AI insights
 """
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Body, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, Numeric, inspect, text
 from datetime import datetime, timedelta
@@ -2980,6 +2980,7 @@ def _validate_sql_candidate(sql_db: Session, question: str, sql: str):
     
 @router.post("/ai-analysis/chat")
 async def post_ai_analysis_chat(
+    request: Request,
     message: str = Body(..., embed=True),
     conversation_history: list = Body(default=[], embed=True),
     context_keys: list = Body(default=[], embed=True),
@@ -2996,6 +2997,7 @@ async def post_ai_analysis_chat(
     days: period for context (default 30).
     time_scope: 'current' (recent data), 'historical' (1994-2010), or 'both' (compare periods).
     Uses same config env vars as invoice-bot (OPENAI_API_KEY)."""
+    client_platform = (request.headers.get("X-Client-Platform") or "").lower().strip()
     ai_openai_key = _get_ai_analysis_config()
     if not ai_openai_key or not openai_available:
         raise HTTPException(

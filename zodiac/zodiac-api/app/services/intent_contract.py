@@ -82,6 +82,7 @@ class Intent:
     explicit_tables: List[str] = field(default_factory=list)
     domain: DomainType = "sap"
     debug: Dict[str, Any] = field(default_factory=dict)
+    has_customer_names: bool = True
 
     def to_json(self) -> Dict[str, Any]:
         """Strict JSON (no dataclass objects)."""
