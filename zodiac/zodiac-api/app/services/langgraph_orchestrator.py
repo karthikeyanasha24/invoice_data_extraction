@@ -195,7 +195,7 @@ def _node_generate_sql(state: GraphState) -> str:
             rag_context=state.rag_context,
         )
         if result and result.sql:
-            state.generated_sql = _normalize_table_case(result.sql.strip(), state.schema or {})
+            state.generated_sql = _finalize_sap_sql(result.sql.strip(), state.schema or {})
             logger.debug("generate_sql: got SQL (%d chars)", len(state.generated_sql))
             return "check_sql"
 
@@ -276,21 +276,21 @@ def _node_check_sql(state: GraphState) -> str:
         result = json.loads(raw)
 
         if result.get("is_valid", True):
-            state.checked_sql = _normalize_table_case(sql, state.schema or {})
+            state.checked_sql = _finalize_sap_sql(sql, state.schema or {})
             logger.debug("check_sql: valid ✅")
         else:
             issues = result.get("issues", [])
             corrected = result.get("corrected_sql", "")
             logger.info("check_sql: issues found: %s", issues)
             if corrected and len(corrected) > 20:
-                state.checked_sql = _normalize_table_case(corrected.strip(), state.schema or {})
+                state.checked_sql = _finalize_sap_sql(corrected.strip(), state.schema or {})
                 logger.info("check_sql: using corrected SQL")
             else:
                 # Can't auto-fix — record issue and re-generate
                 state.retry_errors.append("check_sql issues: " + "; ".join(issues[:3]))
                 state.retry_count += 1
                 if state.retry_count >= MAX_RETRIES:
-                    state.checked_sql = _normalize_table_case(sql, state.schema or {})  # best effort
+                    state.checked_sql = _finalize_sap_sql(sql, state.schema or {})  # best effort
                 else:
                     return "generate_sql"
 
@@ -298,7 +298,7 @@ def _node_check_sql(state: GraphState) -> str:
 
     except Exception as exc:
         logger.warning("check_sql failed (%s) — skipping to execute", exc)
-        state.checked_sql = _normalize_table_case(sql, state.schema or {})
+        state.checked_sql = _finalize_sap_sql(sql, state.schema or {})
         return "execute_sql"
 
 
@@ -360,6 +360,28 @@ def _normalize_table_case(sql: str, schema: Dict[str, Any]) -> str:
         )
 
     return result
+
+
+def _finalize_sap_sql(sql: str, schema: Dict[str, Any]) -> str:
+    """
+    Normalize identifiers for PostgreSQL + SAP mixed casing.
+
+    ``_normalize_table_case`` only knows tables present in ``schema``; the LLM can
+    still emit ``JOIN "VBRK" ON vbrk.vbeln = ...`` when ``VBRK`` is absent from the
+    merged dict, which PostgreSQL rejects (``vbrk`` ≠ ``"VBRK"``). Chaining
+    ``_quote_catalog_sql_tables`` (db_table_mapping.json) fixes qualifiers for all
+    mapped SAP tables — same as multi_stage_planner.execute_sql.
+    """
+    if not (sql or "").strip():
+        return sql or ""
+    out = _normalize_table_case(sql.strip(), schema or {})
+    try:
+        from .sap_sql_agent import _quote_catalog_sql_tables
+
+        out = _quote_catalog_sql_tables(out)
+    except Exception as exc:
+        logger.debug("_finalize_sap_sql: _quote_catalog_sql_tables skipped (%s)", exc)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +460,7 @@ def _node_relax_filters(state: GraphState) -> str:
     if relaxed.strip() == sql.strip():
         # nothing was removed — nothing to relax
         return "zero_rows_recovery"
-    state.checked_sql = relaxed.strip()
+    state.checked_sql = _finalize_sap_sql(relaxed.strip(), state.schema or {})
     logger.info("relax_filters: removed year filter, retrying SQL")
     return _node_execute_sql(state)
 
@@ -503,7 +525,7 @@ def _node_error_recovery(state: GraphState) -> str:
         raw = re.sub(r"\s*```$", "", raw).strip()
 
         if raw and len(raw) > 20:
-            state.generated_sql = _normalize_table_case(raw, state.schema or {})
+            state.generated_sql = _finalize_sap_sql(raw, state.schema or {})
             state.checked_sql = None  # force re-check
             logger.info("error_recovery: generated new SQL (attempt %d)", state.retry_count + 1)
             return "check_sql"
@@ -538,8 +560,9 @@ def _node_zero_rows_recovery(state: GraphState) -> str:
         widened = _widen_date_filter(sql)
         if widened and widened != sql:
             logger.info("zero_rows_recovery: widened date filter, retrying")
-            state.checked_sql = widened
-            state.final_sql = widened
+            widened_f = _finalize_sap_sql(widened, state.schema or {})
+            state.checked_sql = widened_f
+            state.final_sql = widened_f
             from .sap_sql_agent import _run_sql  # type: ignore
             rows = _run_sql(state.db, widened) or []
             if rows:
@@ -568,11 +591,12 @@ def _node_zero_rows_recovery(state: GraphState) -> str:
         new_sql = re.sub(r"\s*```$", "", new_sql).strip()
         if new_sql and len(new_sql) > 20:
             from .sap_sql_agent import _run_sql  # type: ignore
-            rows2 = _run_sql(state.db, new_sql) or []
+            new_sql_f = _finalize_sap_sql(new_sql, state.schema or {})
+            rows2 = _run_sql(state.db, new_sql_f) or []
             state.execution_result = rows2
             if rows2:
-                state.final_sql = new_sql
-                state.checked_sql = new_sql
+                state.final_sql = new_sql_f
+                state.checked_sql = new_sql_f
                 state.node_log.append(f"zero_rows_recovery:llm_widened({len(rows2)} rows)")
         else:
             state.execution_result = []

@@ -627,7 +627,8 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
         # "by <dimension>" — the key analytics grouping signal
         r'\bby\s+(customers?|countr|products?|materials?|year|month|region|currency|vendor|supplier)\b',
         # superlatives on billing amounts ("sales" plural must match)
-        r'\b(highest|lowest|largest|biggest|maximum|peak|best|worst).{0,40}\b(sales?|revenue|amount|billing|invoice)',
+        # Wider window: users often say "highest … for the year 2004 … sales"
+        r'\b(highest|lowest|largest|biggest|maximum|peak|best|worst).{0,120}\b(sales?|revenue|amount|billing|invoice)',
         # totals / sums
         r'\btotal\s+(revenue|sales|billing|invoice|amount)',
         r'\bsum\s+of\s+(revenue|sales|netwr|amount)\b',
