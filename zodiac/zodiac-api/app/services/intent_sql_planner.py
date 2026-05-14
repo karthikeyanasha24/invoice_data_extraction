@@ -37,6 +37,7 @@ class SqlPlan:
 
 
 def build_sql_plan(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> SqlPlan:
+    intent.setdefault("has_customer_names", True)
     # Prefer analytics-safe layer for sales/revenue/count style questions.
     # This avoids SAP row multiplication from ad-hoc multi-joins.
     prebuilt = _build_sales_analytics_sql_if_possible(intent, schema)
@@ -209,7 +210,7 @@ def build_sql_plan(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> SqlP
             lim_i = int(lim)
         except Exception:
             lim_i = 5
-        lim_i = max(1, min(lim_i, 200))
+        lim_i = max(1, min(lim_i, 50))
         limit_sql = f"LIMIT {lim_i}"
 
     return SqlPlan(
@@ -278,6 +279,11 @@ def _quote_table(name: str) -> str:
     return f'"{name}"'
 
 
+def _schema_has_table(schema: Dict[str, List[str]], table: str) -> bool:
+    t = (table or "").upper()
+    return any((k or "").upper() == t for k in (schema or {}).keys())
+
+
 def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[str, List[str]]) -> str:
     """
     Canonical analytics-safe query layer:
@@ -332,17 +338,33 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
     vbrk_actual = next((t for t in (schema or {}) if t.upper() == "VBRK"), "VBRK")
     makt_actual = next((t for t in (schema or {}) if t.upper() == "MAKT"), "MAKT")
     kna1_actual = next((t for t in (schema or {}) if t.upper() == "KNA1"), "KNA1")
+    has_kna1_table = _schema_has_table(schema or {}, "KNA1")
     vbrp_ref = _quote_table(vbrp_actual)
     vbrk_ref = _quote_table(vbrk_actual)
     makt_ref = _quote_table(makt_actual)
-    kna1_ref = _quote_table(kna1_actual)
+    kna1_ref = _quote_table(kna1_actual) if has_kna1_table else ""
 
     metric_alias = str(metric.get("alias") or "total_sales")
 
-    # If ranking is requested but no dimension was specified, default to product breakdown.
+    # ── Year filters from intent (needed before default ranking grain) ─────────
+    year_filter_parts: List[str] = []
+    for f in filters:
+        op = str(f.get("operator") or "").upper()
+        val = f.get("value")
+        if op == "IN_YEAR":
+            yrs = [str(x) for x in (val or []) if str(x)]
+            if yrs:
+                year_filter_parts.append(yrs)
+
+    # Ranking with no dimension: with a calendar-year filter, default to customer
+    # ("who had the highest sales in 2004"); otherwise default to product.
     if ranking.get("enabled") and not dim_cols:
-        dim_cols = ["product_name"]
-        logical_dims = ["product"]
+        if year_filter_parts:
+            dim_cols = ["customer_id"]
+            logical_dims = ["customer"]
+        else:
+            dim_cols = ["product_name"]
+            logical_dims = ["product"]
 
     # ── Ranking / ORDER-BY parameters ──────────────────────────────────────────
     ord_dir = "DESC"
@@ -352,19 +374,9 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
         if ord_dir not in ("ASC", "DESC"):
             ord_dir = "DESC"
         try:
-            lim_i = max(1, min(int(ranking.get("limit") or 5), 200))
+            lim_i = max(1, min(int(ranking.get("limit") or 5), 50))
         except Exception:
             lim_i = 5
-
-    # ── Year filters from intent ────────────────────────────────────────────────
-    year_filter_parts: List[str] = []
-    for f in filters:
-        op = str(f.get("operator") or "").upper()
-        val = f.get("value")
-        if op == "IN_YEAR":
-            yrs = [str(x) for x in (val or []) if str(x)]
-            if yrs:
-                year_filter_parts.append(yrs)  # stored for later injection
 
     # ── FAST DIRECT PATH (0 or 1 dimension) ────────────────────────────────────
     # For simple ranking/aggregate with ≤1 dimension we skip the expensive
@@ -466,17 +478,33 @@ WHERE p."netwr" IS NOT NULL""".strip()
                 dim_notnull_guard = f"\n  AND {dim_expr} IS NOT NULL AND {dim_expr} <> ''"
 
             if single_logical == "customer":
+                if has_kna1_table and kna1_ref:
+                    intent["has_customer_names"] = True
+                    # KNA1: prefer NAME1, then NAME2, then sold-to number (KUNAG).
+                    cust_display = (
+                        "COALESCE(NULLIF(TRIM(k.\"name1\"), ''), NULLIF(TRIM(k.\"name2\"), ''), "
+                        f"{dim_expr}) AS customer_name"
+                    )
+                    cust_group = (
+                        "COALESCE(NULLIF(TRIM(k.\"name1\"), ''), NULLIF(TRIM(k.\"name2\"), ''), "
+                        f"{dim_expr})"
+                    )
+                    join_kna1 = f"\nLEFT JOIN {kna1_ref} k ON TRIM(k.\"kunnr\") = {dim_expr}"
+                else:
+                    intent["has_customer_names"] = False
+                    cust_display = f"{dim_expr} AS customer_name"
+                    cust_group = dim_expr
+                    join_kna1 = ""
                 sql = f"""
 SELECT
     {dim_expr} AS {dim_alias},
-    COALESCE(NULLIF(TRIM(k."name1"), ''), {dim_expr}) AS customer_name,
+    {cust_display},
     {metric_sql}
 FROM {vbrp_ref} p
-JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")
-LEFT JOIN {kna1_ref} k ON TRIM(k."kunnr") = {dim_expr}
+JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln"){join_kna1}
 WHERE v."fkdat" IS NOT NULL
   AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''{dim_notnull_guard}{year_where}
-GROUP BY {dim_expr}, COALESCE(NULLIF(TRIM(k."name1"), ''), {dim_expr})
+GROUP BY {dim_expr}, {cust_group}
 {order_clause}
 {limit_clause}""".strip()
             else:
@@ -514,6 +542,13 @@ GROUP BY {dim_expr}
             cte_group.append('SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)), 1, 6)')
         if "customer" in logical_dims:
             cte_select.append('TRIM(v."kunag") AS customer')
+            if has_kna1_table and kna1_ref:
+                cte_select.append(
+                    'MAX(COALESCE(NULLIF(TRIM(k_cust."name1"), \'\'), '
+                    'NULLIF(TRIM(k_cust."name2"), \'\'), TRIM(v."kunag"))) AS customer_name'
+                )
+            else:
+                cte_select.append('MAX(TRIM(v."kunag")) AS customer_name')
             cte_group.append('TRIM(v."kunag")')
         if "country" in logical_dims:
             cte_select.append('TRIM(v."land1") AS country')
@@ -529,8 +564,16 @@ GROUP BY {dim_expr}
         cte_select.append('SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS revenue')
         outer_metric = f"SUM(sc.revenue) AS {metric_alias}"
 
-    cte_join = f"""
-    JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")""" if needs_vbrk else ""
+    cte_join = ""
+    if needs_vbrk:
+        cte_join = f"""
+    JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")"""
+        if "customer" in logical_dims and has_kna1_table and kna1_ref:
+            intent["has_customer_names"] = True
+            cte_join += f"""
+    LEFT JOIN {kna1_ref} k_cust ON TRIM(k_cust."kunnr") = TRIM(v."kunag")"""
+        elif "customer" in logical_dims:
+            intent["has_customer_names"] = False
 
     cte_where_parts: List[str] = ['p."matnr" IS NOT NULL', "TRIM(p.\"matnr\") <> ''"]
     if needs_vbrk:
@@ -560,6 +603,7 @@ GROUP BY {dim_expr}
                 outer_group.append("sc.product_key")
         elif lg == "customer":
             outer_dims.append("sc.customer AS customer")
+            outer_dims.append("MAX(sc.customer_name) AS customer_name")
             outer_group.append("sc.customer")
         elif lg == "country":
             outer_dims.append("sc.country")

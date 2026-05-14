@@ -7,13 +7,16 @@ Produces strict JSON intent which downstream stages must follow exactly.
 from __future__ import annotations
 
 import json
+import os
 import re
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .explicit_table_sql import extract_explicit_table_identifiers
 from .schema_loader import load_schema_from_mapping_file
+from .prompt_sanitize import clean_user_input
 from .intent_contract import (
     ColumnRef,
     ComparisonSpec,
@@ -134,28 +137,78 @@ def _resolve_dim_semantically(
 
 
 def _extract_years(question: str) -> List[str]:
-    return list(dict.fromkeys(re.findall(r"\b((?:19|20)\d{2})\b", question or "")))
+    """
+    Calendar years mentioned or implied. Relative phrases resolve using the server
+    calendar year at extraction time (datetime.now().year).
+    """
+    cy = datetime.now().year
+    qraw = question or ""
+    q = qraw.lower()
 
+    years_int: List[int] = []
 
-def _extract_top_n(question: str, default: int = 5) -> int:
-    q = (question or "").lower()
-    m = re.search(r"\btop\s+(\d+)\b", q)
+    for lit in re.findall(r"\b((?:19|20)\d{2})\b", qraw):
+        try:
+            yi = int(lit)
+            if 1900 <= yi <= cy + 5:
+                years_int.append(yi)
+        except ValueError:
+            pass
+
+    if re.search(r"\b(last\s+year|previous\s+year)\b", q):
+        years_int.append(cy - 1)
+    if re.search(r"\b(this\s+year|current\s+year)\b", q):
+        years_int.append(cy)
+
+    m = re.search(r"\b(?:past|last)\s+(\d{1,2})\s+years?\b", q)
     if m:
         try:
-            v = int(m.group(1))
-            if 1 <= v <= 200:
-                return v
-        except Exception:
+            n = max(1, min(int(m.group(1)), 50))
+            for y in range(cy - n + 1, cy + 1):
+                years_int.append(y)
+        except ValueError:
             pass
-    m2 = re.search(r"\bfirst\s+(\d+)\b", q)
+
+    m2 = re.search(r"\bsince\s+((?:19|20)\d{2})\b", q)
     if m2:
         try:
-            v = int(m2.group(1))
-            if 1 <= v <= 200:
-                return v
-        except Exception:
+            start_y = int(m2.group(1))
+            if 1900 <= start_y <= cy + 1:
+                for y in range(start_y, cy + 1):
+                    years_int.append(y)
+        except ValueError:
             pass
-    return default
+
+    return [str(y) for y in sorted(set(years_int))]
+
+
+def _default_top_n_from_env() -> int:
+    try:
+        return max(1, min(int(os.getenv("TOP_N_DEFAULT", "5")), 200))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _extract_top_n(question: str, default: Optional[int] = None) -> int:
+    """Explicit top/best/first N from the question; otherwise TOP_N_DEFAULT env (default 5). Hard cap 50."""
+    cap = 50
+    d = _default_top_n_from_env() if default is None else default
+    d = max(1, min(d, cap))
+    q = (question or "").lower()
+    patterns = (
+        r"\b(?:top|first)\s+(\d+)\b",
+        r"\b(?:best|worst|bottom)\s+(\d+)\b",
+    )
+    for pat in patterns:
+        m = re.search(pat, q)
+        if m:
+            try:
+                v = int(m.group(1))
+                if v >= 1:
+                    return max(1, min(v, cap))
+            except (TypeError, ValueError):
+                pass
+    return d
 
 
 def _detect_intent_type(question: str) -> str:
@@ -188,7 +241,13 @@ def _detect_time_grain(question: str) -> str:
         return "month"
     if re.search(r"\b(quarter|quarterly|per\s+quarter|by\s+quarter)\b", q):
         return "quarter"
-    if re.search(r"\b(year|yearly|per\s+year|by\s+year)\b", q) or re.search(r"\b(?:19|20)\d{2}\b", q):
+    if re.search(r"\b(year|yearly|per\s+year|by\s+year)\b", q):
+        return "year"
+    if re.search(r"\b(?:19|20)\d{2}\b", q):
+        return "year"
+    if re.search(r"\b(last|this|past)\s+year\b", q) or re.search(r"\b(?:past|last)\s+\d{1,2}\s+years?\b", q):
+        return "year"
+    if re.search(r"\bsince\s+(?:19|20)\d{2}\b", q):
         return "year"
     return "none"
 
@@ -269,6 +328,11 @@ def _dimension_logicals_from_question(question: str, intent_type: str) -> List[s
     # ── If trend/comparison without explicit time dim but years mentioned ─────────
     if intent_type in ("trend", "comparison") and "year" not in dims and re.search(r"\b(?:19|20)\d{2}\b", q):
         dims.append("year")
+    if intent_type in ("trend", "comparison", "ranking", "aggregate") and "year" not in dims:
+        if re.search(r"\b(last|this|past)\s+year\b", q) or re.search(r"\b(?:past|last)\s+\d{1,2}\s+years?\b", q):
+            dims.append("year")
+        elif re.search(r"\bsince\s+(?:19|20)\d{2}\b", q):
+            dims.append("year")
 
     return list(dict.fromkeys(dims))  # deduplicate, preserve order
 
@@ -409,19 +473,28 @@ def extract_intent(question: str, schema: Optional[Dict[str, List[str]]] = None)
     Returns strict intent JSON (no free text).
     """
     schema = schema or load_schema_from_mapping_file()
-    q = question or ""
+    q = clean_user_input(strip_dashboard_routing_prefix(question or ""))
     intent_type = _detect_intent_type(q)
     metric_logical = _metric_from_question(q)
     metric = _map_metric(schema, metric_logical)
     metric_table = metric.column_ref.table if metric.column_ref else None
     dims_logical = _dimension_logicals_from_question(q, intent_type)
+    years_early = _extract_years(q)
+    # "Highest/top sales in 2004" without "by product" → default sold-to customer (common BI ask).
+    if (
+        intent_type == "ranking"
+        and not dims_logical
+        and years_early
+        and not re.search(r"\b(product|material|matnr|items?)\b", q.lower())
+    ):
+        dims_logical = ["customer"]
     dims: List[DimensionSpec] = []
     for dl in dims_logical:
         dspec = _map_logical_dimension_to_column(schema, dl, metric_table)
         if dspec:
             dims.append(dspec)
     # Filters: calendar years requested become FKDAT year filters when user specifies years
-    years = _extract_years(q)
+    years = years_early
     filters: List[FilterSpec] = []
     if years:
         date_dim = _map_logical_dimension_to_column(schema, "year", metric_table)
@@ -470,9 +543,26 @@ def extract_intent(question: str, schema: Optional[Dict[str, List[str]]] = None)
         explicit_tables=explicit_tables[:12],
         domain=domain,  # type: ignore[arg-type]
         debug={"years": years, "dimension_logicals": dims_logical, "metric_logical": metric_logical},
+        has_customer_names=True,
     )
     return intent.to_json()
 
+
+def strip_dashboard_routing_prefix(message: str) -> str:
+    """
+    Dashboard sends an augmented blob (routing YAML + 'User question:').
+    Intent gating and extract_intent must use the user tail only, otherwise
+    preset labels like 'Billing & revenue' falsely match analytics regexes.
+    """
+    s = (message or "").strip()
+    marker = "User question:"
+    if "[ZODIAC_GENERATIVE_CLIENT_ROUTING" in s and marker in s:
+        idx = s.rfind(marker)
+        if idx >= 0:
+            tail = s[idx + len(marker) :].strip()
+            if tail:
+                return tail
+    return s
 
 
 def is_intent_pipeline_appropriate(question: str) -> bool:
@@ -483,7 +573,7 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
     Returns False for CO/FI line detail, inventory, PO/delivery ops, EDI, etc., so those
     still go to the schema-driven LLM SQL agent.
     """
-    q = (question or "").lower()
+    q = strip_dashboard_routing_prefix(question or "").lower()
 
     # ── 0. Hard always-exclude: domains the intent pipeline has NO tables for ──
     # These win even over analytics signals because returning wrong data (e.g.
@@ -505,7 +595,26 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
     if any(re.search(p, q) for p in hard_exclusions):
         return False  # always route to sap_sql_agent regardless of analytics signals
 
-    # ── 1. Analytics patterns (checked first — these override soft exclusions) ──
+    # ── 0b. Zodiac / operational app metrics (not SAP billing cubes) ───────────
+    # These must NOT take the VBRK/VBRP fast path even if the question also says
+    # "top customers" or "number of invoices" (e.g. outbound EDI funnel).
+    operational_first = [
+        r"\boutbound\s+process\b",
+        r"\boutbound\s+funnel\b",
+        r"\binvoice\s+conversion\b",
+        r"\bconversion\s+(success\s+)?rate\b",
+        r"\bconversion\s+success\b",
+        r"\bpipeline\s+success\b",
+        r"\b(which|what)\s+(step|stage)\b",
+        r"\bstep\b.{0,50}\b(failure|failures|failed|errors?)\b",
+        r"\b(failure|failures|failed)\b.{0,50}\b(step|stage)\b",
+        r"\bzodiac\b",
+        r"\bedi\b",
+    ]
+    if any(re.search(p, q) for p in operational_first):
+        return False
+
+    # ── 1. Analytics patterns (billing / SD revenue style) ─────────────────────
     analytics_patterns = [
         r'\brevenue\b',
         r'\bsales\b',
@@ -517,8 +626,8 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
         r'\b(customers?|products?|materials?|countr|region|vendor|supplier).{0,30}\btop\b',
         # "by <dimension>" — the key analytics grouping signal
         r'\bby\s+(customers?|countr|products?|materials?|year|month|region|currency|vendor|supplier)\b',
-        # superlatives on billing amounts
-        r'\b(highest|lowest|best|worst).{0,25}\b(sale|revenue|amount|billing|invoice)',
+        # superlatives on billing amounts ("sales" plural must match)
+        r'\b(highest|lowest|largest|biggest|maximum|peak|best|worst).{0,40}\b(sales?|revenue|amount|billing|invoice)',
         # totals / sums
         r'\btotal\s+(revenue|sales|billing|invoice|amount)',
         r'\bsum\s+of\s+(revenue|sales|netwr|amount)\b',
@@ -536,7 +645,7 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
     ]
     analytics_match = any(re.search(p, q) for p in analytics_patterns)
     if analytics_match:
-        return True  # analytics intent overrides any exclusion keyword
+        return True
 
     # ── 2. Hard operational exclusions (only reached when NO analytics signal) ─
     exclusion_patterns = [
