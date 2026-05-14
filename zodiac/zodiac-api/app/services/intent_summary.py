@@ -155,6 +155,33 @@ def generate_summary(intent: Dict[str, Any], rows: List[Dict[str, Any]], validat
                 f"**{best.get(best_dim_key)}** at **{_fmt(best_v, cur)}**."
             )
 
+    # Ranking — largest single billing document (SAP-style) gets a dedicated headline
+    if (
+        it == "ranking"
+        and dim_logical == "billing_document"
+        and rows
+        and metric_alias in rows[0]
+    ):
+        top = rows[0]
+        amt = top.get(metric_alias)
+        year_bit = _years_phrase_from_intent(intent)
+        cur = _currency_from_row(top)
+        bdk = _resolve_dim_key("billing_document", top)
+        bd = top.get(bdk)
+        date_raw = top.get("billing_date") or top.get("billingdate")
+        date_note = ""
+        if date_raw is not None and str(date_raw).strip():
+            ds = str(date_raw).strip()
+            if len(ds) == 8 and ds.isdigit():
+                date_note = f", billed on **{ds[0:4]}-{ds[4:6]}-{ds[6:8]}**"
+            else:
+                date_note = f", billed on **{ds}**"
+        if len(rows) == 1:
+            return (
+                f"The highest single sale{year_bit} was **{_fmt(amt, cur)}**{date_note}. "
+                f"This comes from billing document **{bd}**."
+            )
+
     # Ranking
     if it == "ranking" and dim_logical:
         top = rows[0]
@@ -193,7 +220,8 @@ def generate_summary(intent: Dict[str, Any], rows: List[Dict[str, Any]], validat
                 )
                 cur = _currency_from_row(r)
                 lines.append(f"{i}. **{r_label}** — **{_fmt(r.get(metric_alias), cur)}**")
-            headline = f"Top **{total_shown}** **{dim_logical}**{year_bit} by **{metric_label}**{mixed_note}:\n\n"
+            dim_label = "billing documents (largest invoices)" if dim_logical == "billing_document" else dim_logical
+            headline = f"Top **{total_shown}** **{dim_label}**{year_bit} by **{metric_label}**{mixed_note}:\n\n"
             return headline + "\n".join(lines)
 
         cur0 = _currency_from_row(top)

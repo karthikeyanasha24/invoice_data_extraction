@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "top_customers_revenue_year",
+      "question": "Top 5 customers by revenue 1999",
+      "expect_intent_appropriate": true,
+      "expect_intent_type": "ranking",
+      "expect_year_filters": ["1999"],
+      "sql_checks": {
+        "must_contain_any": [["1999"], ["SUBSTRING", "FKDAT", "IN_YEAR", "YEAR"], ["KUNAG", "KNA1", "CUSTOMER"]],
+        "must_contain_all": ["GROUP BY"],
+        "must_not_contain": ["GJAHR = '1999'", "GJAHR IN ('1999'"]
+      }
+    },
+    {
+      "id": "highest_sales_2004_by_customer",
+      "question": "What is the highest sales for the year 2004 by customer",
+      "expect_intent_appropriate": true,
+      "expect_intent_type": "ranking",
+      "expect_year_filters": ["2004"],
+      "sql_checks": {
+        "must_contain_any": [["2004"], ["SUBSTRING", "FKDAT", "BETWEEN"], ["KUNAG", "KNA1", "CUSTOMER"]],
+        "must_contain_all": ["GROUP BY"],
+        "must_not_contain": ["GJAHR = '2004'", "GJAHR IN ('2004'"]
+      }
+    },
+    {
+      "id": "highest_sales_year_ambiguous_defaults_billing_document",
+      "question": "Highest sales for the year 2004",
+      "expect_intent_appropriate": true,
+      "expect_intent_type": "ranking",
+      "expect_year_filters": ["2004"],
+      "sql_checks": {
+        "must_contain_any": [["2004"], ["SUBSTRING", "FKDAT", "BETWEEN"], ["VBELN", "billing_document"]],
+        "must_contain_all": ["GROUP BY"],
+        "must_not_contain": ["GJAHR = '2004'"]
+      }
+    },
+    {
+      "id": "revenue_compare_years",
+      "question": "Compare 1998 vs 1999 total revenue",
+      "expect_intent_appropriate": true,
+      "expect_intent_type": "comparison",
+      "expect_year_filters": ["1998", "1999"],
+      "sql_checks": {
+        "must_contain_any": [["1998", "1999"], ["IN ('1998'", "IN ( '1998'"]],
+        "must_contain_all": ["GROUP BY"],
+        "must_not_contain": ["GJAHR = '1998'", "GJAHR = '1999'"]
+      }
+    },
+    {
+      "id": "profit_center_excluded",
+      "question": "Show me profit center costs last month",
+      "expect_intent_appropriate": false,
+      "expect_intent_type": null,
+      "expect_year_filters": [],
+      "sql_checks": null
+    }
+  ]
+}

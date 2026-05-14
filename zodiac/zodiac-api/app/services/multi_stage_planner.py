@@ -4,6 +4,7 @@ import logging
 import json
 import operator
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple, Annotated, TypedDict
 
 from sqlalchemy.orm import Session
@@ -1040,6 +1041,9 @@ def run_planner(
     days: int = 30,
     time_scope: str = "current",
 ) -> Dict[str, Any]:
+    t0 = time.time()
+    from .ai_query_accuracy import build_query_telemetry, log_query_telemetry
+
     try:
         days_int = int(days)
     except (TypeError, ValueError):
@@ -1056,6 +1060,21 @@ def run_planner(
             time_scope=(time_scope or "current").strip(),
         )
         if fast is not None:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            tel = build_query_telemetry(
+                question=query or "",
+                pipeline="intent_sql_fast",
+                reason=str(fast.get("reason") or "intent_sql_fast"),
+                sql=str(fast.get("sql") or ""),
+                preview_row_count=len(fast.get("rows_preview") or []),
+                total_ms=elapsed_ms,
+                sql_repair_count=0,
+                node_log_count=len(fast.get("node_log") or []),
+                execution_error=None,
+            )
+            fast["query_telemetry"] = tel
+            fast["sql_path_reason"] = "intent_sql_fast"
+            log_query_telemetry(tel, question_snip=query or "")
             return fast
     except Exception as _fast_err:
         logger.debug("intent fast path skipped: %s", _fast_err)
@@ -1157,5 +1176,22 @@ def run_planner(
         "confidence_note": cn.strip(),
         "node_log": result.get("node_log", []),
     }
-    
+
+    elapsed_ms = int((time.time() - t0) * 1000)
+    tel = build_query_telemetry(
+        question=query or "",
+        pipeline="langgraph_pipeline",
+        reason="langgraph_pipeline",
+        sql=str(payload.get("sql") or ""),
+        preview_row_count=len(payload.get("rows_preview") or []),
+        total_ms=elapsed_ms,
+        sql_repair_count=len(retries),
+        node_log_count=len(result.get("node_log") or []),
+        execution_error=(exec_meta.get("error") if isinstance(exec_meta, dict) else None),
+        extra={"confidence": conf, "zero_rows_retried": bool(result.get("zero_rows_retried"))},
+    )
+    payload["query_telemetry"] = tel
+    payload["sql_path_reason"] = "langgraph_pipeline"
+    log_query_telemetry(tel, question_snip=query or "")
+
     return payload

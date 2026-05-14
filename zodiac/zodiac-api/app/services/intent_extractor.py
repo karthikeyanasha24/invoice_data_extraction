@@ -189,6 +189,21 @@ def _default_top_n_from_env() -> int:
         return 5
 
 
+def _has_explicit_rank_count(question: str) -> bool:
+    """
+    True when the user specifies how many rows to return (top N, first N, 5 largest …).
+    Must stay in sync with patterns in _extract_top_n that consume a numeric N.
+    """
+    q = (question or "").lower()
+    patterns = (
+        r"\b(?:top|first)\s+(\d+)\b",
+        r"\b(?:best|worst|bottom)\s+(\d+)\b",
+        r"\b(\d+)\s+(?:largest|biggest|highest|top)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
+        r"\b(?:largest|biggest|highest|top)\s+(\d+)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
+    )
+    return any(re.search(p, q) for p in patterns)
+
+
 def _extract_top_n(question: str, default: Optional[int] = None) -> int:
     """Explicit top/best/first N from the question; otherwise TOP_N_DEFAULT env (default 5). Hard cap 50."""
     cap = 50
@@ -198,6 +213,9 @@ def _extract_top_n(question: str, default: Optional[int] = None) -> int:
     patterns = (
         r"\b(?:top|first)\s+(\d+)\b",
         r"\b(?:best|worst|bottom)\s+(\d+)\b",
+        # "5 largest invoices", "10 biggest billing documents in 2004"
+        r"\b(\d+)\s+(?:largest|biggest|highest|top)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
+        r"\b(?:largest|biggest|highest|top)\s+(\d+)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
     )
     for pat in patterns:
         m = re.search(pat, q)
@@ -225,6 +243,12 @@ def _detect_intent_type(question: str) -> str:
     if re.search(r"\b(compare|vs\.?|versus|difference|changed?\b|from\b.+?\bto\b)\b", q) or len(_extract_years(q)) >= 2:
         return "comparison"
     if re.search(r"\b(top|bottom|highest|lowest|largest|smallest|rank|best|worst)\b", q):
+        return "ranking"
+    # "Who bought the most", "customer with least revenue" — superlative without top/highest wording.
+    if re.search(r"\b(most|least)\b", q) and re.search(
+        r"\b(bought|spent|ordered|paid|sales|revenue|customer|customers|clients?)\b",
+        q,
+    ):
         return "ranking"
     if re.search(r"\b(trend|over\s+time|time\s*series|by\s+month|monthly|by\s+year|yearly)\b", q):
         return "trend"
@@ -288,7 +312,28 @@ def _dimension_logicals_from_question(question: str, intent_type: str) -> List[s
         dims.append("quarter")
 
     # ── SD / Billing dimensions ──────────────────────────────────────────────────
-    if re.search(r"\bcustomer(s)?\b|\bsold[-\s]to\b", q):
+    # Billing-document grain: explicit wording + common paraphrases (same intent, different words).
+    if re.search(
+        r"\b("
+        r"billing\s+documents?|billing\s+doc\b|invoice\s+numbers?|per\s+billing\s+document\b|\bvbeln\b|"
+        r"single\s+largest\s+(sale|invoice|billing)|"
+        r"one\s+(invoice|billing)|"
+        r"individual\s+(invoice|invoices|billing)|"
+        r"invoice-?level|per\s+invoice\b|per\s+billing\b|"
+        r"largest\s+(single\s+)?(invoice|invoices|billing\s+doc(ument)?s?)|"
+        r"biggest\s+(single\s+)?(invoice|invoices|billing\s+doc(ument)?s?)|"
+        r"highest\s+(single\s+)?(invoice|invoices|billing)|"
+        r"(show|find|get)\s+me\s+the\s+(largest|biggest|highest)\s+(invoice|billing)"
+        r")\b",
+        q,
+    ):
+        dims.append("billing_document")
+    if re.search(
+        r"\bcustomer(s)?\b|\bsold[-\s]to\b|"
+        r"\bwhich\s+customer\b|\bwho\s+(bought|ordered|had|has)\b|"
+        r"\bper\s+client\b|\beach\s+customer\b|\bby\s+account\b",
+        q,
+    ):
         dims.append("customer")
     if re.search(r"\bproduct(s)?\b|\bmaterial(s)?\b", q):
         dims.append("product")
@@ -387,6 +432,7 @@ def _map_logical_dimension_to_column(
     # Maps logical_name → ordered list of (preferred_table_order, [candidate_SAP_fields])
     # The first candidate found in the current schema wins.
     _SYNONYM_MAP: Dict[str, Tuple[List[str], List[str]]] = {
+        "billing_document": (["VBRK"],                          ["VBELN"]),
         "customer":          (["VBRK", "KNA1", "BSAD", "BSEG"],  ["KUNAG", "KUNNR"]),
         "sold_to":           (["VBRK", "KNA1"],                   ["KUNAG", "KUNNR"]),
         "product":           (["VBRP", "VBAP", "LIPS", "EKPO"],   ["MATNR"]),
@@ -480,14 +526,55 @@ def extract_intent(question: str, schema: Optional[Dict[str, List[str]]] = None)
     metric_table = metric.column_ref.table if metric.column_ref else None
     dims_logical = _dimension_logicals_from_question(q, intent_type)
     years_early = _extract_years(q)
-    # "Highest/top sales in 2004" without "by product" → default sold-to customer (common BI ask).
+    # Superlative + calendar year, no explicit dimension:
+    # Default to largest single billing document (SAP SE16 / VBRK net style) unless the
+    # user explicitly asks for customers or sold-to party.
     if (
         intent_type == "ranking"
         and not dims_logical
         and years_early
         and not re.search(r"\b(product|material|matnr|items?)\b", q.lower())
     ):
-        dims_logical = ["customer"]
+        ql = q.lower()
+        # Customer totals: many natural phrasings (language variety).
+        customer_cue = re.search(
+            r"\b("
+            r"customer|customers|clients?|accounts?|buyers?|sold[-\s]to|"
+            r"by\s+customer|per\s+customer|for\s+customer|"
+            r"which\s+customer|who\s+(bought|ordered|had|has)|"
+            r"per\s+client|each\s+customer|by\s+account|"
+            r"top\s+customer|best\s+customer|leading\s+customer"
+            r")\b",
+            ql,
+        )
+        # Single-document / invoice superlative (SAP SE16 style) — explicit cues beat default.
+        doc_cue = re.search(
+            r"\b("
+            r"single|one\s+invoice|individual\s+invoice|invoice-?level|per\s+invoice|"
+            r"largest\s+invoice|biggest\s+invoice|highest\s+invoice|"
+            r"billing\s+doc|billing\s+document|header\s+net|"
+            r"not\s+by\s+customer"
+            r")\b",
+            ql,
+        )
+        if customer_cue and not doc_cue:
+            dims_logical = ["customer"]
+        elif doc_cue and not customer_cue:
+            dims_logical = ["billing_document"]
+        elif customer_cue and doc_cue:
+            # Ambiguous: prefer customer when they name "customer" explicitly.
+            if re.search(r"\bcustomer|clients?|sold[-\s]to|by\s+customer|per\s+customer\b", ql):
+                dims_logical = ["customer"]
+            else:
+                dims_logical = ["billing_document"]
+        elif re.search(
+            r"\b(customer|customers|clients?|accounts?|buyers?|sold[-\s]to|by\s+customer|per\s+customer)\b",
+            ql,
+        ):
+            dims_logical = ["customer"]
+        else:
+            # Default for bare "highest sales in 2004": largest billing document (SAP-aligned).
+            dims_logical = ["billing_document"]
     dims: List[DimensionSpec] = []
     for dl in dims_logical:
         dspec = _map_logical_dimension_to_column(schema, dl, metric_table)
@@ -501,12 +588,16 @@ def extract_intent(question: str, schema: Optional[Dict[str, List[str]]] = None)
         if date_dim:
             filters.append(FilterSpec(column_ref=date_dim.column_ref, operator="IN_YEAR", value=years))
 
-    # Ranking spec
+    # Ranking spec (after dimensions: billing-document superlatives default to top 1)
     ranking = RankingSpec()
     if intent_type == "ranking":
-        ranking = RankingSpec(enabled=True, order="desc", limit=_extract_top_n(q))
+        rank_limit = _extract_top_n(q)
+        uses_billing_doc = any(d.logical == "billing_document" for d in dims)
+        if uses_billing_doc and not _has_explicit_rank_count(q):
+            rank_limit = 1
+        ranking = RankingSpec(enabled=True, order="desc", limit=rank_limit)
         if re.search(r"\b(bottom|lowest|smallest)\b", q.lower()):
-            ranking = RankingSpec(enabled=True, order="asc", limit=_extract_top_n(q))
+            ranking = RankingSpec(enabled=True, order="asc", limit=rank_limit)
 
     # Comparison spec
     comparison = ComparisonSpec(enabled=(intent_type == "comparison"), periods=years[:6])

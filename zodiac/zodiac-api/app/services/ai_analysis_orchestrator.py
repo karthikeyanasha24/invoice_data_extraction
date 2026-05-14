@@ -1135,6 +1135,22 @@ def run_ai_analysis_orchestrator(
                 _pipe.action,
                 _pipe.node_log,
             )
+            from .ai_query_accuracy import build_query_telemetry, log_query_telemetry
+
+            _perf = _pipe.performance or {}
+            _tel = build_query_telemetry(
+                question=user_query,
+                pipeline="langgraph_orchestrator",
+                reason=_pipe.reason,
+                sql=_pipe.sql or "",
+                preview_row_count=len(_pipe.rows_preview or []),
+                total_ms=_perf.get("total_ms"),
+                sql_repair_count=int(_perf.get("retries") or 0),
+                node_log_count=len(_pipe.node_log or []),
+                execution_error=None,
+                extra={"node_log": (_pipe.node_log or [])[:12]},
+            )
+            log_query_telemetry(_tel, question_snip=user_query)
             return OrchestratorResult(
                 reply=_pipe.reply,
                 action=_pipe.action,
@@ -1147,6 +1163,7 @@ def run_ai_analysis_orchestrator(
                 time_scope=_pipe.time_scope or time_scope,
                 date_range=_pipe.date_range or date_range,
                 period_info=_pipe.period_info or period_info,
+                query_telemetry=_tel,
             )
         else:
             logger.info("langgraph_orchestrator returned no SQL — falling back to legacy pipeline")
@@ -1942,6 +1959,21 @@ If result is empty, say so and suggest a refined question.
             timings["chart_count"] = len(charts_data or [])
             timings["used_cache"] = False
 
+            from .ai_query_accuracy import build_query_telemetry, log_query_telemetry
+
+            _tel_intent = build_query_telemetry(
+                question=user_query,
+                pipeline="intent_sql",
+                reason="intent_sql",
+                sql=sql or "",
+                preview_row_count=len(result_rows),
+                total_ms=timings.get("total_ms"),
+                sql_repair_count=0,
+                node_log_count=0,
+                execution_error=None,
+            )
+            log_query_telemetry(_tel_intent, question_snip=user_query)
+
             mem.last_user_query = user_query
             mem.last_sql = sql
             mem.last_rows_json = json.dumps(_rows_preview(result_rows, limit=80), default=str)
@@ -1962,6 +1994,7 @@ If result is empty, say so and suggest a refined question.
                 time_scope=time_scope,
                 date_range=date_range,
                 period_info=period_info,
+                query_telemetry=_tel_intent,
                 adaptive_context={
                     "intent": intent,
                     "validation": validation,
@@ -3519,3 +3552,36 @@ Write a clear MARKDOWN answer:
         date_range=date_range,
         period_info=period_info,
     )
+
+
+def orchestrator_payload(orch: OrchestratorResult) -> Dict[str, Any]:
+    """
+    Serialize OrchestratorResult for HTTP JSON (adaptive_query / dashboard helpers).
+    Includes optional query_telemetry for accuracy monitoring.
+    """
+    out: Dict[str, Any] = {
+        "reply": orch.reply,
+        "action": orch.action,
+        "reason": orch.reason or "",
+        "sql": orch.sql or "",
+        "rows_preview": orch.rows_preview,
+        "rows": orch.rows if orch.rows is not None else orch.rows_preview,
+        "compare": orch.compare,
+        "memory_updated": orch.memory_updated,
+        "charts": orch.charts or [],
+        "charts_blocked_reason": orch.charts_blocked_reason,
+        "performance": orch.performance,
+        "time_scope": orch.time_scope,
+        "date_range": orch.date_range,
+        "period_info": orch.period_info,
+        "insights": orch.insights,
+        "analysis_plan": orch.analysis_plan,
+        "metrics": orch.metrics,
+        "analytics_insights": orch.analytics_insights,
+        "adaptive_context": orch.adaptive_context,
+        "needs_approval": orch.needs_approval,
+        "proposed_sql": orch.proposed_sql,
+    }
+    if orch.query_telemetry:
+        out["query_telemetry"] = orch.query_telemetry
+    return out

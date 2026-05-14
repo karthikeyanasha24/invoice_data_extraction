@@ -325,7 +325,45 @@ const CHAT_STARTER_PROMPTS = [
   { label: 'EDI tables', query: 'Explain zodiac_invoice_failed_edi and zodiac_invoice_success_edi — what columns exist and how are they used?' },
 ];
 
+/**
+ * Superlative + sales/revenue without explicit "by …" — offer optional clarifying suffixes.
+ */
+function getSalesAmbiguityClarifiers(draft: string): { label: string; suffix: string }[] | null {
+  const t = (draft || '').trim();
+  if (t.length < 10) return null;
+  const low = t.toLowerCase();
+  const hasSuper = /\b(highest|lowest|top|best|worst|maximum|max|minimum|min|largest|biggest|peak)\b/i.test(t);
+  const hasMetric = /\b(sales?|revenue|turnover|billing)\b/i.test(low);
+  if (!hasSuper || !hasMetric) return null;
+  if (/\bby\s+(customer|client|material|product|vendor|supplier|country|region|year|month|quarter|plant)\b/i.test(low)) {
+    return null;
+  }
+  if (/\b(per|each)\s+(customer|client|material|product)\b/i.test(low)) return null;
+  if (/\b(show|list|get|display)\s+(all\s+)?(invoices?|billings?|documents?|rows?)\b/i.test(low)) return null;
+  return [
+    { label: 'Largest single invoice (billing doc)', suffix: ' — per billing document' },
+    { label: 'By customer (totals)', suffix: ' by customer' },
+    { label: 'By product (totals)', suffix: ' by product' },
+  ];
+}
+
 /* ─── Types ───────────────────────────────────────────────────── */
+
+/** Server `query_telemetry` from /ai-analysis/chat — accuracy QA (years vs SQL, pipeline, repairs). */
+type AiQueryTelemetry = {
+  pipeline?: string;
+  reason?: string;
+  preview_row_count?: number;
+  total_ms?: number | null;
+  sql_repair_count?: number;
+  node_log_count?: number;
+  sql_sha256_16?: string;
+  calendar_years_in_question?: string[];
+  sql_reflects_all_question_years?: boolean;
+  calendar_years_missing_in_sql?: string[];
+  execution_error?: string | null;
+  extra?: Record<string, unknown>;
+};
 
 type AiAnalysisMeta = {
   validation?: SqlValidationMeta;
@@ -354,6 +392,10 @@ type AiAnalysisMeta = {
   period_info?: string;
   needs_approval?: boolean;
   proposed_sql?: string;
+  /** intent_sql_fast | langgraph_pipeline — mirrors backend `sql_path_reason` */
+  sql_path_reason?: string;
+  /** Structured accuracy / latency blob from backend */
+  query_telemetry?: AiQueryTelemetry;
   performance?: {
     action_decision_ms?: number;
     pattern_matching_ms?: number;
@@ -1252,6 +1294,34 @@ function ChatPanel({
                             )}
                           </div>
                         )}
+                        {m.meta.query_telemetry &&
+                          Array.isArray(m.meta.query_telemetry.calendar_years_in_question) &&
+                          m.meta.query_telemetry.calendar_years_in_question.length > 0 &&
+                          m.meta.query_telemetry.sql_reflects_all_question_years === false && (
+                          <div className="text-[11px] text-rose-900 bg-rose-50 border border-rose-200 px-2 py-1.5 rounded-md mb-1 flex gap-1.5 items-start">
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-rose-600" />
+                            <div>
+                              <span className="font-semibold">Year coverage warning</span>
+                              <span className="block text-rose-800/90 mt-0.5">
+                                The question mentions {m.meta.query_telemetry.calendar_years_in_question.join(', ')}
+                                {m.meta.query_telemetry.calendar_years_missing_in_sql &&
+                                  m.meta.query_telemetry.calendar_years_missing_in_sql.length > 0 && (
+                                  <> but the executed SQL may omit: {m.meta.query_telemetry.calendar_years_missing_in_sql.join(', ')}</>
+                                )}
+                                . Treat figures as unverified until you confirm the SQL below.
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                        {m.meta.query_telemetry &&
+                          (m.meta.query_telemetry.sql_repair_count ?? 0) >= 2 && (
+                          <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md mb-1 flex gap-1.5 items-center">
+                            <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600" />
+                            <span>
+                              SQL needed {(m.meta.query_telemetry.sql_repair_count ?? 0)} repair attempt(s) — higher risk of mismatch; review generated SQL.
+                            </span>
+                          </div>
+                        )}
                         <div>
                           {m.meta.confidence && (() => {
                             const CONFIDENCE_COLORS: Record<string, string> = {
@@ -1269,6 +1339,9 @@ function ChatPanel({
                           })()}
                           {m.meta.action && <span>Action: {m.meta.action}</span>}
                           {m.meta.reason && <span> • Reason: {m.meta.reason}</span>}
+                          {m.meta.sql_path_reason && m.meta.sql_path_reason !== m.meta.reason && (
+                            <span> • Path: {m.meta.sql_path_reason}</span>
+                          )}
                           {m.meta.adaptive_context?.query_profile?.kind && (
                             <span> • Intent: {String(m.meta.adaptive_context.query_profile.kind)}</span>
                           )}
@@ -1310,6 +1383,25 @@ function ChatPanel({
                         {m.meta.charts_blocked_reason && (
                           <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
                             Charts suppressed: {m.meta.charts_blocked_reason}
+                          </div>
+                        )}
+                        {m.meta.query_telemetry && (
+                          <div className="text-slate-500 mt-0.5">
+                            {m.meta.query_telemetry.pipeline && (
+                              <span title="Server pipeline + latency for QA">
+                                Telemetry: {m.meta.query_telemetry.pipeline}
+                                {m.meta.query_telemetry.total_ms != null && m.meta.query_telemetry.total_ms !== undefined && (
+                                  <> · {(m.meta.query_telemetry.total_ms / 1000).toFixed(2)}s</>
+                                )}
+                                {typeof m.meta.query_telemetry.sql_repair_count === 'number' && (
+                                  <> · repairs: {m.meta.query_telemetry.sql_repair_count}</>
+                                )}
+                                {m.meta.query_telemetry.sql_reflects_all_question_years === true &&
+                                  (m.meta.query_telemetry.calendar_years_in_question?.length ?? 0) > 0 && (
+                                  <span className="text-emerald-700"> · years OK</span>
+                                )}
+                              </span>
+                            )}
                           </div>
                         )}
                         {m.meta.performance && (
@@ -1521,6 +1613,32 @@ function ChatPanel({
             </span>
           </div>
         )}
+        {queryMode === 'new' && (() => {
+          const clarify = getSalesAmbiguityClarifiers(input);
+          if (!clarify?.length) return null;
+          return (
+            <div className="mb-1.5 px-0.5">
+              <p className="text-[10px] text-slate-500 mb-1">
+                This question could mean different things — narrow it (optional):
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {clarify.map((c) => (
+                  <button
+                    key={c.label}
+                    type="button"
+                    disabled={loading}
+                    onClick={() => {
+                      setInput((prev) => `${(prev || '').trimEnd()}${c.suffix}`);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors disabled:opacity-50"
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         <div className="flex gap-1.5">
           <input
             type="text"
@@ -2146,6 +2264,10 @@ export default function DashboardAIAnalysis() {
           ? 'Results are in the table and chart below (no text summary was returned).'
           : 'No response received.');
       const resAction = res?.action ?? (hasFreshSql ? 'new' : queryMode);
+      const qt = res?.query_telemetry;
+      const queryTelemetry: AiQueryTelemetry | undefined =
+        qt && typeof qt === 'object' && !Array.isArray(qt) ? (qt as AiQueryTelemetry) : undefined;
+
       const meta: AiAnalysisMeta = {
         action: resAction as AiAnalysisMeta['action'],
         reason: res?.reason,
@@ -2159,6 +2281,8 @@ export default function DashboardAIAnalysis() {
         time_scope: res?.time_scope,
         date_range: res?.date_range,
         period_info: res?.period_info,
+        sql_path_reason: typeof res?.sql_path_reason === 'string' ? res.sql_path_reason : undefined,
+        query_telemetry: queryTelemetry,
       };
 
       const hasMeta = Boolean(
@@ -2166,7 +2290,9 @@ export default function DashboardAIAnalysis() {
         || (meta.charts?.length) || meta.period_info || meta.adaptive_context
         || (meta.warnings?.length)
         || meta.confidence_note
-        || (meta.schema_tables?.length),
+        || (meta.schema_tables?.length)
+        || meta.query_telemetry
+        || meta.sql_path_reason,
       );
       setMsgs((prev) => [...prev, {
         role: 'assistant', content: reply,

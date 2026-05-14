@@ -45,6 +45,25 @@ class TestIntentExtractor(unittest.TestCase):
         self.assertTrue(any(d.get("alias") == "year" for d in i.get("dimensions") or []))
         self.assertTrue(any(f.get("operator") == "IN_YEAR" for f in i.get("filters") or []))
 
+    def test_paraphrases_largest_invoice_top_n(self):
+        i = extract_intent("Give me the 5 largest invoices in 2004", SCHEMA)
+        self.assertEqual(i["ranking"]["limit"], 5)
+        self.assertTrue(any(d.get("logical") == "billing_document" for d in i.get("dimensions") or []))
+
+    def test_who_bought_defaults_customer(self):
+        i = extract_intent("Who bought the most in 2004", SCHEMA)
+        self.assertTrue(any(d.get("logical") == "customer" for d in i.get("dimensions") or []))
+
+    def test_highest_sales_year_defaults_to_billing_document(self):
+        i = extract_intent("Highest sales for the year 2004", SCHEMA)
+        self.assertEqual(i["intent_type"], "ranking")
+        self.assertTrue(any(d.get("logical") == "billing_document" for d in i.get("dimensions") or []))
+        self.assertEqual(i["ranking"]["limit"], 1)
+        plan = build_sql_plan(i, SCHEMA)
+        sql = generate_sql(plan)
+        self.assertIn("billing_document", sql.lower())
+        self.assertIn("VBELN", sql.upper())
+
     def test_top_customers_by_revenue_year(self):
         i = extract_intent("Top 5 customers by revenue 1999", SCHEMA)
         self.assertEqual(i["intent_type"], "ranking")

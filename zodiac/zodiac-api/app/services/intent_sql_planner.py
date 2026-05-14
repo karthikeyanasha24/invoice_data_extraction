@@ -323,6 +323,8 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
             dim_cols.append("product_name")
         elif logical == "customer":
             dim_cols.append("customer_id")
+        elif logical == "billing_document":
+            dim_cols.append("billing_document")
         elif logical == "country":
             dim_cols.append("country")
         elif logical == "currency":
@@ -356,12 +358,12 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
             if yrs:
                 year_filter_parts.append(yrs)
 
-    # Ranking with no dimension: with a calendar-year filter, default to customer
-    # ("who had the highest sales in 2004"); otherwise default to product.
+    # Ranking with no dimension: with a calendar-year filter, default to billing document
+    # (largest single invoice in SAP — VBRK/VBELN); otherwise default to product.
     if ranking.get("enabled") and not dim_cols:
         if year_filter_parts:
-            dim_cols = ["customer_id"]
-            logical_dims = ["customer"]
+            dim_cols = ["billing_document"]
+            logical_dims = ["billing_document"]
         else:
             dim_cols = ["product_name"]
             logical_dims = ["product"]
@@ -430,6 +432,37 @@ GROUP BY TRIM(p."matnr"), TRIM(m."maktx"), TRIM(v."waerk")
 SELECT {metric_sql}
 FROM {vbrp_ref} p
 WHERE p."netwr" IS NOT NULL""".strip()
+            return sql
+
+        # ── LARGEST SINGLE BILLING DOCUMENT (SAP SE16 / VBRK-VBELN grain) ───────────
+        if single_logical == "billing_document":
+            if metric_logical == "count":
+                metric_sql = f'COUNT(DISTINCT TRIM(v."vbeln")) AS {metric_alias}'
+            else:
+                metric_sql = (
+                    f'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
+                )
+            year_where_bd = ""
+            if year_filter_parts:
+                y_list = ", ".join("'" + y + "'" for y in year_filter_parts[0])
+                year_where_bd = f"\n  AND SUBSTRING(TRIM(CAST(v.\"fkdat\" AS TEXT)), 1, 4) IN ({y_list})"
+            order_clause_bd = f"ORDER BY {metric_alias} {ord_dir}" if ranking.get("enabled") else ""
+            limit_clause_bd = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
+            sql = f"""
+SELECT
+    TRIM(v."vbeln") AS billing_document,
+    TRIM(CAST(v."fkdat" AS TEXT)) AS billing_date,
+    TRIM(v."waerk") AS currency,
+    {metric_sql}
+FROM {vbrp_ref} p
+JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")
+WHERE v."fkdat" IS NOT NULL
+  AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''
+  AND v."vbeln" IS NOT NULL
+  AND TRIM(CAST(v."vbeln" AS TEXT)) <> ''{year_where_bd}
+GROUP BY TRIM(v."vbeln"), TRIM(CAST(v."fkdat" AS TEXT)), TRIM(v."waerk")
+{order_clause_bd}
+{limit_clause_bd}""".strip()
             return sql
 
         # ── CUSTOMER / COUNTRY / CURRENCY / DATE: vbrp + VBRK (simple TRIM join) ──
