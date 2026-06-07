@@ -1721,8 +1721,12 @@ export const dashboardApi = {
         }
     },
 
-    getV2Inbound: async (days: number = 30) => {
+    getV2Inbound: async (days: number = 0) => {
         const response = await api.get(`/api/v1/dashboard/v2/inbound?days=${days}`);
+        return response.data;
+    },
+    getV2InboundRecent: async (limit: number = 10) => {
+        const response = await api.get(`/api/v1/dashboard/v2/inbound/recent?limit=${limit}`);
         return response.data;
     },
     getV2Outbound: async (days: number = 30) => {

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { dashboardApi } from '@/lib/api';
-import { FileText, Merge, Send, Clock, Key, RefreshCw, Building2 } from 'lucide-react';
+import { FileText, Merge, Send, Clock, Key, RefreshCw, Building2, ArrowDownCircle } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
 import {
   BarChart,
@@ -20,9 +20,22 @@ import {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 
+const DOC_TYPE_COLORS: Record<string, string> = {
+  CREDIT_NOTE: 'bg-purple-100 text-purple-700',
+  INVOICE: 'bg-blue-100 text-blue-700',
+  PAYMENT: 'bg-green-100 text-green-700',
+};
+
+function formatDate(iso: string | null) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export default function DashboardV2Inbound() {
   const [days, setDays] = useState(0);
   const [data, setData] = useState<any>(null);
+  const [recentDocs, setRecentDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,8 +43,12 @@ export default function DashboardV2Inbound() {
     try {
       setLoading(true);
       setError(null);
-      const res = await dashboardApi.getV2Inbound(days);
+      const [res, recent] = await Promise.all([
+        dashboardApi.getV2Inbound(days),
+        dashboardApi.getV2InboundRecent(10),
+      ]);
       setData(res);
+      setRecentDocs(recent?.recent_documents ?? []);
     } catch (err: any) {
       setError(err.message || 'Failed to load inbound data');
     } finally {
@@ -250,6 +267,55 @@ export default function DashboardV2Inbound() {
             <p className="text-sm text-gray-400 mt-2">No supplier data in this period</p>
           )}
         </div>
+      </div>
+      {/* Recently Received Documents */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+          <ArrowDownCircle className="h-4 w-4 text-blue-500" />
+          Recently Received Documents
+          <span className="ml-auto text-xs text-gray-400 font-normal">Sorted by received date</span>
+        </h3>
+        {recentDocs.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-400 font-semibold uppercase tracking-wide border-b border-gray-100">
+                  <th className="text-left pb-2 pr-4">Type</th>
+                  <th className="text-left pb-2 pr-4">Supplier</th>
+                  <th className="text-left pb-2 pr-4">Amount</th>
+                  <th className="text-left pb-2 pr-4">Status</th>
+                  <th className="text-left pb-2">Received At</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {recentDocs.map((doc: any, i: number) => (
+                  <tr key={i} className="hover:bg-gray-50 transition-colors">
+                    <td className="py-2.5 pr-4">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${DOC_TYPE_COLORS[doc.doc_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {doc.doc_type?.replace('_', ' ')}
+                      </span>
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <p className="font-medium text-gray-800 truncate max-w-[160px]">{doc.supplier_name || doc.supplier_rfc}</p>
+                      <p className="text-xs text-gray-400">{doc.supplier_rfc}</p>
+                    </td>
+                    <td className="py-2.5 pr-4 font-medium text-gray-700">
+                      {doc.moneda} {doc.total ?? '0.00'}
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${doc.status === 'VALIDATED' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {doc.status}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-gray-500 text-xs">{formatDate(doc.received_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400">No documents received yet.</p>
+        )}
       </div>
     </div>
   );

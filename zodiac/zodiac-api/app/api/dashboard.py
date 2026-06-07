@@ -1003,6 +1003,40 @@ async def get_dashboard_v2_inbound(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+@router.get("/v2/inbound/recent")
+async def get_dashboard_v2_inbound_recent(
+    limit: int = Query(default=10, ge=1, le=50),
+    current_user: ZodiacUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return the most recently received SAT documents, sorted by received_at desc."""
+    try:
+        rows = db.query(SATDocument).filter(
+            SATDocument.user_id == current_user.id
+        ).order_by(SATDocument.received_at.desc()).limit(limit).all()
+
+        return {
+            "recent_documents": [
+                {
+                    "id": str(r.id),
+                    "doc_type": r.doc_type,
+                    "supplier_rfc": r.supplier_rfc,
+                    "supplier_name": r.supplier_name,
+                    "total": r.total,
+                    "moneda": r.moneda,
+                    "status": r.status,
+                    "source": r.source,
+                    "received_at": r.received_at.isoformat() if r.received_at else None,
+                    "fecha": r.fecha.isoformat() if r.fecha else None,
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        logger.error(f"❌ Dashboard recent docs: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 @router.get("/v2/outbound")
 async def get_dashboard_v2_outbound(
     days: int = Query(default=30, ge=1, le=365),
