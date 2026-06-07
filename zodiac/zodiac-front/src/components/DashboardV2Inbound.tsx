@@ -21,7 +21,7 @@ import {
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 
 export default function DashboardV2Inbound() {
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(0);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +81,7 @@ export default function DashboardV2Inbound() {
             onChange={(e) => setDays(Number(e.target.value))}
             className="rounded-md border border-gray-300 text-sm py-1.5 px-2"
           >
+            <option value={0}>All Time</option>
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>

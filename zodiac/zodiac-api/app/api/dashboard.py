@@ -886,47 +886,48 @@ async def get_operations_statistics(
 
 @router.get("/v2/inbound")
 async def get_dashboard_v2_inbound(
-    days: int = Query(default=30, ge=1, le=365),
+    days: int = Query(default=0, ge=0, le=3650),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Dashboard v2 - Inbound process stats (SAT documents, merges, suppliers by RFC, tokens)."""
+    """Dashboard v2 - Inbound process stats (SAT documents, merges, suppliers by RFC, tokens).
+    days=0 means all time (no date filter).
+    """
     try:
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        # days=0 means no date filter (show all time)
+        cutoff_date = None if days == 0 else datetime.utcnow() - timedelta(days=days)
+
+        base_filter = [SATDocument.user_id == current_user.id]
+        if cutoff_date:
+            base_filter.append(SATDocument.received_at >= cutoff_date)
 
         total_documents = db.query(func.count(SATDocument.id)).filter(
-            SATDocument.user_id == current_user.id,
-            SATDocument.received_at >= cutoff_date
+            *base_filter
         ).scalar() or 0
 
         doc_type_rows = db.query(
             SATDocument.doc_type,
             func.count(SATDocument.id).label("count")
-        ).filter(
-            SATDocument.user_id == current_user.id,
-            SATDocument.received_at >= cutoff_date
-        ).group_by(SATDocument.doc_type).all()
+        ).filter(*base_filter).group_by(SATDocument.doc_type).all()
         by_document_type = [{"doc_type": row.doc_type, "count": row.count} for row in doc_type_rows]
 
         source_rows = db.query(
             SATDocument.source,
             func.count(SATDocument.id).label("count")
-        ).filter(
-            SATDocument.user_id == current_user.id,
-            SATDocument.received_at >= cutoff_date
-        ).group_by(SATDocument.source).all()
+        ).filter(*base_filter).group_by(SATDocument.source).all()
         by_source = [{"source": row.source, "count": row.count} for row in source_rows]
 
+        period_filter = base_filter + [
+            SATDocument.fiscal_year.isnot(None),
+            SATDocument.fiscal_period.isnot(None)
+        ]
         period_rows = db.query(
             SATDocument.fiscal_year,
             SATDocument.fiscal_period,
             func.count(SATDocument.id).label("count")
-        ).filter(
-            SATDocument.user_id == current_user.id,
-            SATDocument.received_at >= cutoff_date,
-            SATDocument.fiscal_year.isnot(None),
-            SATDocument.fiscal_period.isnot(None)
-        ).group_by(SATDocument.fiscal_year, SATDocument.fiscal_period).order_by(
+        ).filter(*period_filter).group_by(
+            SATDocument.fiscal_year, SATDocument.fiscal_period
+        ).order_by(
             SATDocument.fiscal_year.desc(),
             SATDocument.fiscal_period.desc()
         ).limit(24).all()
@@ -943,12 +944,9 @@ async def get_dashboard_v2_inbound(
                 func.sum(cast(func.nullif(func.trim(SATDocument.total), ""), Numeric(15, 2))),
                 0
             ).label("total_amount")
-        ).filter(
-            SATDocument.user_id == current_user.id,
-            SATDocument.received_at >= cutoff_date
-        ).group_by(SATDocument.supplier_rfc, SATDocument.supplier_name).order_by(
-            func.count(SATDocument.id).desc()
-        ).limit(10).all()
+        ).filter(*base_filter).group_by(
+            SATDocument.supplier_rfc, SATDocument.supplier_name
+        ).order_by(func.count(SATDocument.id).desc()).limit(10).all()
         top_suppliers = [
             {
                 "supplier_rfc": r.supplier_rfc,
@@ -959,19 +957,16 @@ async def get_dashboard_v2_inbound(
             for r in supplier_rows
         ]
 
-        merges_total = db.query(func.count(SATSimpleMerged.id)).filter(
-            SATSimpleMerged.user_id == current_user.id,
-            SATSimpleMerged.created_at >= cutoff_date
-        ).scalar() or 0
+        merge_base = [SATSimpleMerged.user_id == current_user.id]
+        if cutoff_date:
+            merge_base.append(SATSimpleMerged.created_at >= cutoff_date)
+
+        merges_total = db.query(func.count(SATSimpleMerged.id)).filter(*merge_base).scalar() or 0
         merges_sent = db.query(func.count(SATSimpleMerged.id)).filter(
-            SATSimpleMerged.user_id == current_user.id,
-            SATSimpleMerged.created_at >= cutoff_date,
-            SATSimpleMerged.sent_to_sap == True
+            *merge_base, SATSimpleMerged.sent_to_sap == True
         ).scalar() or 0
         merges_pending = db.query(func.count(SATSimpleMerged.id)).filter(
-            SATSimpleMerged.user_id == current_user.id,
-            SATSimpleMerged.created_at >= cutoff_date,
-            SATSimpleMerged.sent_to_sap == False
+            *merge_base, SATSimpleMerged.sent_to_sap == False
         ).scalar() or 0
 
         token_total = db.query(func.count(SupplierToken.id)).scalar() or 0
