@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante
+  xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd"
+  Version="4.0"
+  Fecha="2026-06-07T03:53:29"
+  Total="1500.00"
+  SubTotal="1293.10"
+  Moneda="MXN"
+  LugarExpedicion="54720"
+  TipoDeComprobante="E"
+  Serie="CREDIT NOTE"
+  Folio="TEST-20260607035329"
+  Exportacion="01"
+  NoCertificado="30001000000500003433"
+  Certificado="TESTCERT"
+  Sello="TESTSELLO">
+  <cfdi:Emisor
+    Nombre="INDISTRIA ILUMINADORA DE ALMACENES SA DE CV"
+    Rfc="IIA040805DZ4"
+    RegimenFiscal="601"/>
+  <cfdi:Receptor
+    Rfc="EDI101020E99"
+    Nombre="EDIFACTMX"
+    UsoCFDI="G03"
+    DomicilioFiscalReceptor="97133"
+    RegimenFiscalReceptor="601"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto
+      ClaveProdServ="84111506"
+      Cantidad="1"
+      Descripcion="Nota de Credito de Prueba - Test Credit Note"
+      ClaveUnidad="E48"
+      Importe="1293.10"
+      ValorUnitario="1293.10"
+      ObjetoImp="02">
+      <cfdi:Impuestos>
+        <cfdi:Traslados>
+          <cfdi:Traslado
+            Base="1293.10"
+            Importe="206.90"
+            Impuesto="002"
+            TasaOCuota="0.160000"
+            TipoFactor="Tasa"/>
+        </cfdi:Traslados>
+      </cfdi:Impuestos>
+    </cfdi:Concepto>
+  </cfdi:Conceptos>
+  <cfdi:Impuestos TotalImpuestosTrasladados="206.90">
+    <cfdi:Traslados>
+      <cfdi:Traslado
+        Base="1293.10"
+        Importe="206.90"
+        Impuesto="002"
+        TasaOCuota="0.160000"
+        TipoFactor="Tasa"/>
+    </cfdi:Traslados>
+  </cfdi:Impuestos>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital
+      xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+      xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd"
+      Version="1.1"
+      UUID="2F306135-8F3F-48DB-81FE-E327B4D92ADF"
+      FechaTimbrado="2026-06-07T03:53:29"
+      RfcProvCertif="SAT970701NN3"
+      NoCertificadoSAT="30001000000500003456"
+      SelloCFD="TESTSELLCFD"
+      SelloSAT="TESTSELSAT"/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

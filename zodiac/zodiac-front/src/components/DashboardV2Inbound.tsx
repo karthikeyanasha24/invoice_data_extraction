@@ -185,27 +185,33 @@ export default function DashboardV2Inbound() {
         {sourceChart.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
             <h3 className="text-sm font-semibold text-gray-700 mb-4">By Source</h3>
-            <div className="h-52">
+            <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
+                <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                   <Pie
                     data={sourceChart}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
+                    cy="45%"
+                    innerRadius={45}
+                    outerRadius={72}
                     paddingAngle={3}
-                    label={({ name, value }) => `${name}: ${value}`}
-                    labelLine={false}
                   >
                     {sourceChart.map((_: any, i: number) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '12px' }} />
-                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '12px' }} />
+                  <Tooltip
+                    formatter={(value: any, name: any) => [`${value} docs`, name]}
+                    contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '12px' }}
+                  />
+                  <Legend
+                    iconType="circle"
+                    iconSize={10}
+                    wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }}
+                    formatter={(value, entry: any) => `${value}: ${entry.payload.value}`}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             </div>
