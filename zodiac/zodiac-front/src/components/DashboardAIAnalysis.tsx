@@ -158,10 +158,20 @@ const DOMAIN_QUERY_EXAMPLES: { category: string; icon: string; questions: string
     category: 'Zodiac / EDI',
     icon: '⚡',
     questions: [
-      'Which EDI invoices failed vs succeeded for each customer?',
-      'Show converted invoices and their business field details',
-      'What is in the AI query memory and training data for this workflow?',
-      'Show SAT canonical merged documents and supplier mappings',
+      'Show all inbound SAT documents ordered by received date',
+      'Which suppliers sent the most inbound documents? Show count and total amount',
+      'Show SAT document count by type: invoice, credit note, payment',
+      'Show SAT documents received today',
+    ],
+  },
+  {
+    category: 'Inbound Analysis',
+    icon: '📥',
+    questions: [
+      'Show inbound SAT documents by fiscal period and year',
+      'Which SAT documents have not been merged yet?',
+      'Show supplier token status — which tokens are active or expired?',
+      'Compare inbound credit notes vs invoices by supplier with total amounts',
     ],
   },
   {

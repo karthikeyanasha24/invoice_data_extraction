@@ -215,7 +215,7 @@ _TABLE_CONTEXT: Dict[str, str] = {
     "converted_invoices": "Conversion results. validated_invoice_id FK, customer_id, target_format (UBL/EDIFACT/X12/PEPPOL), conversion_status ('pending'/'success'/'failed'), conversion_notes TEXT, converted_at TIMESTAMP, validation_overridden BOOL",
     "zodiac_invoice_failed_edi": "Failed EDI invoice processing. tracking_id, user_id, invoice_number, uploaded_at, xml_validation_pass BOOL, xml_convert_message TEXT, edi_convert_pass BOOL, edi_convert_message TEXT, processing_steps_error TEXT, processing_steps JSONB, request_type, target_file_format",
     "zodiac_invoice_success_edi": "Successful EDI invoices. tracking_id, user_id, invoice_number, uploaded_at, xml_validation_pass BOOL, edi_convert_pass BOOL, external_status TEXT, external_message TEXT, processing_steps JSONB, target_file_format",
-    "sat_documents": "SAT/CFDI documents (Mexico tax). id, user_id, portal_ref_id, cfdi_uuid, doc_type, supplier_rfc, supplier_name, receiver_rfc, receiver_name, serie, folio, fecha DATE, subtotal NUMERIC, total NUMERIC, moneda=currency, tipo_cambio NUMERIC, forma_pago, metodo_pago, related_cfdi_uuid, status",
+    "sat_documents": "SAT/CFDI inbound documents (Mexico tax). id, user_id, portal_ref_id, cfdi_uuid, doc_type (INVOICE/CREDIT_NOTE/PAYMENT), supplier_rfc, supplier_name, receiver_rfc, receiver_name, serie, folio, fecha TIMESTAMP (invoice date from XML), subtotal NUMERIC, total NUMERIC, moneda (currency code), tipo_cambio NUMERIC, forma_pago, metodo_pago, related_cfdi_uuid, status (VALIDATED/FAILED), source (admin/supplier), received_at TIMESTAMP (when document arrived in the portal - USE THIS for 'this week/month/recent' queries), fiscal_year INT, fiscal_period INT. IMPORTANT: always use received_at for date-based filtering, NOT fecha.",
     "sat_simple_merged": "SAT documents merged for SAP posting. vendor_rfc, vendor_name, fiscal_year INT, fiscal_period INT, document_count INT, total_amount NUMERIC, currency, sent_to_sap BOOL, sap_document_number, sent_to_sap_at TIMESTAMP",
     "sat_canonical_merged": "Canonical SAT merges with GL accounts. company_code, vendor_rfc, vendor_name, total_invoices INT, total_credits INT, net_amount NUMERIC, currency, sap_gl_account, status, sap_document_number, sent_to_sap_at TIMESTAMP",
     "sat_duplicate_checks": "UUID/folio duplicate detection. cfdi_uuid, sat_document_id, user_id, supplier_id, document_type, first_received_at TIMESTAMP",
@@ -633,6 +633,92 @@ LEFT JOIN "MVKE" vk ON m."matnr" = vk."matnr"
     AND TRIM(vk."vtweg") = TRIM(p."vtweg")
 LEFT JOIN "MARC" mc ON m."matnr" = mc."matnr" AND TRIM(mc."werks") = TRIM(p."werks")
 ORDER BY p."vbeln", p."posnr" LIMIT 200;
+
+══════════════════════════════════════════════════════
+SECTION 5: VERIFIED SAT / ZODIAC INBOUND TEMPLATES
+══════════════════════════════════════════════════════
+CRITICAL: sat_documents is a PostgreSQL table (NOT SAP). Use standard PostgreSQL syntax.
+NEVER use TEXT-cast tricks (NULLIF/TRIM) on sat_documents — all columns use native types.
+Always filter by user_id when querying sat_documents (user_id = current user context).
+Use received_at (TIMESTAMP) for "received", "this week", "today", "recent" queries.
+Use fecha (TIMESTAMP) only for "invoice date" or "document date" questions.
+
+-- All inbound SAT documents (most recent first):
+SELECT doc_type, supplier_rfc, supplier_name, moneda AS currency,
+       CAST(total AS NUMERIC) AS total_amount, status, source,
+       received_at, fecha AS invoice_date
+FROM sat_documents
+ORDER BY received_at DESC LIMIT 50;
+
+-- SAT documents received this week:
+SELECT doc_type, supplier_rfc, supplier_name, moneda AS currency,
+       CAST(total AS NUMERIC) AS total_amount, status, received_at
+FROM sat_documents
+WHERE received_at >= DATE_TRUNC('week', NOW())
+ORDER BY received_at DESC LIMIT 50;
+
+-- SAT documents received today:
+SELECT doc_type, supplier_rfc, supplier_name, moneda AS currency,
+       CAST(total AS NUMERIC) AS total_amount, status, received_at
+FROM sat_documents
+WHERE received_at >= CURRENT_DATE
+ORDER BY received_at DESC LIMIT 50;
+
+-- SAT documents by type (count and total amount):
+SELECT doc_type,
+       COUNT(*) AS document_count,
+       SUM(CASE WHEN total ~ '^[0-9.]+$' THEN CAST(total AS NUMERIC) ELSE 0 END) AS total_amount,
+       moneda AS currency
+FROM sat_documents
+GROUP BY doc_type, moneda
+ORDER BY document_count DESC;
+
+-- Top suppliers by inbound document count:
+SELECT supplier_rfc, supplier_name,
+       COUNT(*) AS total_docs,
+       SUM(CASE WHEN total ~ '^[0-9.]+$' THEN CAST(total AS NUMERIC) ELSE 0 END) AS total_amount,
+       COUNT(CASE WHEN doc_type = 'INVOICE' THEN 1 END) AS invoices,
+       COUNT(CASE WHEN doc_type = 'CREDIT_NOTE' THEN 1 END) AS credit_notes,
+       COUNT(CASE WHEN doc_type = 'PAYMENT' THEN 1 END) AS payments
+FROM sat_documents
+GROUP BY supplier_rfc, supplier_name
+ORDER BY total_docs DESC LIMIT 20;
+
+-- SAT documents with validation status summary:
+SELECT status, doc_type, COUNT(*) AS count,
+       SUM(CASE WHEN total ~ '^[0-9.]+$' THEN CAST(total AS NUMERIC) ELSE 0 END) AS total_amount
+FROM sat_documents
+GROUP BY status, doc_type
+ORDER BY status, doc_type;
+
+-- SAT documents not yet merged (pending processing):
+SELECT d.doc_type, d.supplier_rfc, d.supplier_name,
+       d.total, d.moneda, d.status, d.received_at
+FROM sat_documents d
+LEFT JOIN sat_simple_merged m ON d.supplier_rfc = m.vendor_rfc
+    AND d.fiscal_year = m.fiscal_year AND d.fiscal_period = m.fiscal_period
+WHERE m.id IS NULL
+ORDER BY d.received_at DESC LIMIT 50;
+
+-- SAT documents by fiscal period:
+SELECT fiscal_year, fiscal_period,
+       COUNT(*) AS doc_count,
+       COUNT(CASE WHEN doc_type = 'INVOICE' THEN 1 END) AS invoices,
+       COUNT(CASE WHEN doc_type = 'CREDIT_NOTE' THEN 1 END) AS credit_notes,
+       COUNT(CASE WHEN doc_type = 'PAYMENT' THEN 1 END) AS payments
+FROM sat_documents
+WHERE fiscal_year IS NOT NULL
+GROUP BY fiscal_year, fiscal_period
+ORDER BY fiscal_year DESC, fiscal_period DESC;
+
+-- Supplier token status:
+SELECT supplier_rfc, supplier_name, is_active,
+       created_at, expires_at, last_used_at,
+       CASE WHEN expires_at < NOW() THEN 'EXPIRED'
+            WHEN is_active = true THEN 'ACTIVE'
+            ELSE 'INACTIVE' END AS token_status
+FROM supplier_tokens
+ORDER BY last_used_at DESC NULLS LAST;
 
 ══════════════════════════════════════════════════════
 OUTPUT RULE: Return ONLY the SQL inside a ```sql block. NOTHING ELSE.
