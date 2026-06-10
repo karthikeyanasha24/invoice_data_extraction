@@ -3099,9 +3099,19 @@ async def post_ai_analysis_chat(
             if sap_session_for_sql is not None:
                 sap_session_for_sql.close()
 
-        return payload
+        # Serialize explicitly so any non-JSON-safe type (Decimal, datetime, UUID)
+        # raises inside this try/except rather than in Starlette's middleware.
+        import json as _json
+        from fastapi.responses import Response as _Response
+        try:
+            _body = _json.dumps(payload, default=str).encode("utf-8")
+        except Exception as _se:
+            logger.error(f"Payload serialization failed: {_se}")
+            raise HTTPException(status_code=500, detail=f"Serialization error: {_se}")
+        return _Response(content=_body, media_type="application/json")
     except Exception as e:
-        logger.warning(f"AI analysis chat failed: {e}")
+        import traceback
+        logger.error(f"AI analysis chat failed [{type(e).__name__}]: {e}\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),

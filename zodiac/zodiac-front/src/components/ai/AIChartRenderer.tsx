@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  Cell, LabelList,
+  Cell, LabelList, Brush,
 } from 'recharts';
 import {
   Download, Calendar, TrendingUp,
@@ -151,6 +151,29 @@ function fmtCell(key: string, v: number, rowCcy?: string): string {
   return fmtNumberPlain(v, 4);
 }
 
+/**
+ * Robust numeric coercion: handles plain numbers plus formatted strings
+ * with thousands separators — "1,234.56" (US) and "1.234,56" (EU).
+ * Keeps chart math consistent with what the table displays.
+ */
+function toNum(v: any): number {
+  if (typeof v === 'number') return v;
+  if (v === null || v === undefined || v === '') return NaN;
+  let s = String(v).trim();
+  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+  if (!/^-?\d[\d.,\s]*$/.test(s)) return Number(s); // not numeric-looking — let Number decide (NaN)
+  s = s.replace(/\s/g, '');
+  if (s.includes(',') && s.includes('.')) {
+    s = s.lastIndexOf(',') > s.lastIndexOf('.')
+      ? s.replace(/\./g, '').replace(',', '.') // EU: 1.234,56
+      : s.replace(/,/g, '');                   // US: 1,234.56
+  } else if (s.includes(',')) {
+    const tail = s.slice(s.lastIndexOf(',') + 1);
+    s = tail.length <= 2 ? s.replace(/,(\d{1,2})$/, '.$1').replace(/,/g, '') : s.replace(/,/g, '');
+  }
+  return Number(s);
+}
+
 function getCcy(row: any): string | undefined {
   const k = Object.keys(row || {}).find(x => /^(currency|waerk|waers|rtcur|hwaer)$/i.test(x));
   return k ? String(row[k]) : undefined;
@@ -193,7 +216,7 @@ function isDateCol(col: string, sampleVal: any): boolean {
 
 function isNumericVal(v: any): boolean {
   if (v === null || v === undefined || v === '') return false;
-  return !isNaN(Number(v));
+  return !isNaN(toNum(v));
 }
 
 /** Split columns into {dims, measures} for a data row */
@@ -314,8 +337,19 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       !(activeType === 'stacked_bar' || chart.stacked) &&
       activeType !== 'bar_horizontal';
 
+    // Coerce measure values to real numbers (formatted strings like "1,234.56"
+    // render fine in tables but break Recharts bar heights → chart ≠ table).
+    const normalized = chart.data.map((r) => {
+      const out: any = { ...r };
+      for (const k of yKeys) {
+        const n = toNum(r?.[k]);
+        if (Number.isFinite(n)) out[k] = n;
+      }
+      return out;
+    });
+
     // sort time-series data
-    const sorted = [...chart.data].sort((a, b) => {
+    const sorted = [...normalized].sort((a, b) => {
       const va = String(a?.[xKey] ?? ''), vb = String(b?.[xKey] ?? '');
       if (/^\d{4}-/.test(va) && /^\d{4}-/.test(vb)) return va < vb ? -1 : va > vb ? 1 : 0;
       return 0;
@@ -324,7 +358,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     const maxPercentVal = percentKeys.length
       ? Math.max(
           100,
-          ...sorted.flatMap((r) => percentKeys.map((k) => Math.abs(Number(r[k]) || 0))),
+          ...sorted.flatMap((r) => percentKeys.map((k) => Math.abs(toNum(r[k]) || 0))),
         )
       : 100;
 
@@ -342,7 +376,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       const key = String(name ?? '');
       const lbl = key.replace(/_/g, ' ');
       const rc = getCcy(props?.payload) ?? currency;
-      return [fmtCell(key, Number(value), rc), lbl];
+      return [fmtCell(key, toNum(value), rc), lbl];
     };
 
     const grid = <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.15} vertical={false} />;
@@ -397,10 +431,13 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     if (activeType === 'bar' || activeType === 'stacked_bar' || activeType === 'bar_horizontal') {
       const isHoriz = activeType === 'bar_horizontal';
       const isStack = activeType === 'stacked_bar' || chart.stacked;
-      const barH = isHoriz ? Math.max(280, sorted.length * 34 + 60) : 340;
+      const barH = isHoriz ? Math.max(280, sorted.length * 34 + 60) : 360;
       const dualVertical = useDualPercentAxis && !isHoriz;
       const seriesKeys = dualVertical ? [...leftAxisKeys, ...percentKeys] : yKeys;
       const legendCount = dualVertical ? seriesKeys.length : yKeys.length;
+      // Dynamic width: give each bar category breathing room so labels don't overlap
+      const dynBarWidth = isHoriz ? undefined : Math.max(700, sorted.length * 64);
+      const showBrush = !isHoriz && sorted.length > 8;
 
       return (
         <div>
@@ -409,14 +446,15 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
               Left axis: amounts using each row currency code (WAERS/WAERK). Right axis: % values — separate scales so bars match the table.
             </p>
           )}
-          <ResponsiveContainer width="100%" height={barH}>
+          <div style={dynBarWidth ? { minWidth: dynBarWidth } : undefined}>
+          <ResponsiveContainer width="100%" height={showBrush ? barH + 36 : barH}>
           <BarChart
             data={sorted}
             layout={isHoriz ? 'vertical' : 'horizontal'}
             margin={{
-              top: 20,
+              top: 24,
               right: isHoriz ? 60 : dualVertical ? 54 : 20,
-              bottom: 10,
+              bottom: showBrush ? 4 : 10,
               left: 0,
             }}
           >
@@ -463,7 +501,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                         position="top"
                         style={{ fontSize: '10px', fontWeight: 700, fill: '#374151' }}
                         formatter={(v: any) =>
-                          fmtCell(key, Number(v), mixedC ? undefined : currency)}
+                          fmtCell(key, toNum(v), mixedC ? undefined : currency)}
                       />
                     )}
                   </Bar>
@@ -483,7 +521,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                         dataKey={key}
                         position="top"
                         style={{ fontSize: '10px', fontWeight: 700, fill: '#7c3aed' }}
-                        formatter={(v: any) => fmtCell(key, Number(v))}
+                        formatter={(v: any) => fmtCell(key, toNum(v))}
                       />
                     )}
                   </Bar>
@@ -510,14 +548,26 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                       position={isHoriz ? 'right' : 'top'}
                       style={{ fontSize: '10px', fontWeight: 700, fill: '#374151' }}
                       formatter={(v: any) =>
-                        fmtCell(key, Number(v), mixedC ? undefined : currency)}
+                        fmtCell(key, toNum(v), mixedC ? undefined : currency)}
                     />
                   )}
                 </Bar>
               ))
             )}
+            {showBrush && (
+              <Brush
+                dataKey={xKey}
+                height={24}
+                stroke="#6366f1"
+                fill="#f8fafc"
+                travellerWidth={7}
+                startIndex={0}
+                endIndex={Math.min(sorted.length - 1, 19)}
+              />
+            )}
           </BarChart>
         </ResponsiveContainer>
+        </div>
         </div>
       );
     }
@@ -525,9 +575,12 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     /* ── LINE ───────────────────────────────────────────────── */
     if (activeType === 'line') {
       const dualLine = useDualPercentAxis;
+      const dynLineWidth = Math.max(700, sorted.length * 48);
+      const showLineBrush = sorted.length > 10;
       return (
-        <ResponsiveContainer width="100%" height={340}>
-          <LineChart data={sorted} margin={{ top: 20, right: dualLine ? 52 : 20, bottom: 10, left: 0 }}>
+        <div style={{ minWidth: dynLineWidth }}>
+        <ResponsiveContainer width="100%" height={showLineBrush ? 376 : 340}>
+          <LineChart data={sorted} margin={{ top: 24, right: dualLine ? 52 : 20, bottom: showLineBrush ? 4 : 10, left: 0 }}>
             {grid}
             {xA}
             {dualLine ? <>{yLeft}{yRight}</> : yA}
@@ -575,8 +628,20 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 />
               ))
             )}
+            {showLineBrush && (
+              <Brush
+                dataKey={xKey}
+                height={24}
+                stroke="#6366f1"
+                fill="#f8fafc"
+                travellerWidth={7}
+                startIndex={0}
+                endIndex={Math.min(sorted.length - 1, 19)}
+              />
+            )}
           </LineChart>
         </ResponsiveContainer>
+        </div>
       );
     }
 
@@ -584,9 +649,12 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     if (activeType === 'area' || activeType === 'stacked_area') {
       const isStack = activeType === 'stacked_area';
       const dualArea = useDualPercentAxis && !isStack;
+      const dynAreaWidth = Math.max(700, sorted.length * 48);
+      const showAreaBrush = sorted.length > 10;
       return (
-        <ResponsiveContainer width="100%" height={340}>
-          <AreaChart data={sorted} margin={{ top: 20, right: dualArea ? 52 : 20, bottom: 10, left: 0 }}>
+        <div style={{ minWidth: dynAreaWidth }}>
+        <ResponsiveContainer width="100%" height={showAreaBrush ? 376 : 340}>
+          <AreaChart data={sorted} margin={{ top: 24, right: dualArea ? 52 : 20, bottom: showAreaBrush ? 4 : 10, left: 0 }}>
             {grid}
             {xA}
             {dualArea ? <>{yLeft}{yRight}</> : yA}
@@ -639,8 +707,20 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 />
               ))
             )}
+            {showAreaBrush && (
+              <Brush
+                dataKey={xKey}
+                height={24}
+                stroke="#6366f1"
+                fill="#f8fafc"
+                travellerWidth={7}
+                startIndex={0}
+                endIndex={Math.min(sorted.length - 1, 19)}
+              />
+            )}
           </AreaChart>
         </ResponsiveContainer>
+        </div>
       );
     }
 
@@ -652,7 +732,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
         <p className="text-sm text-red-500 p-4">Pie config error: missing dimension or measure</p>
       );
 
-      const total = sorted.reduce((s, r) => s + Number(r[valueKey] ?? 0), 0);
+      const total = sorted.reduce((s, r) => s + (toNum(r[valueKey] ?? 0) || 0), 0);
       const pct = (v: number) => total ? ((v / total) * 100).toFixed(1) + '%' : '0%';
 
       return (
@@ -691,7 +771,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                   const r = outerRadius + 32;
                   const x = cx + r * Math.cos(-midAngle * RADIAN);
                   const y = cy + r * Math.sin(-midAngle * RADIAN);
-                  const p = (Number(value) / total) * 100;
+                  const p = (toNum(value) / total) * 100;
                   if (p < 4 || !Number.isFinite(p)) return null;
                   return (
                     <text x={x} y={y} fill="#1e293b"
@@ -721,7 +801,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 itemStyle={{ color: '#f8fafc' }}
                 formatter={(v: any, _n: any, props: any) => {
                   const rc = getCcy(props?.payload) ?? currency;
-                  return [`${fmtMoney(Number(v), rc)}  (${pct(Number(v))})`, String(props?.payload?.[nameKey] ?? '')];
+                  return [`${fmtMoney(toNum(v), rc)}  (${pct(toNum(v))})`, String(props?.payload?.[nameKey] ?? '')];
                 }}
               />
             </PieChart>
@@ -733,7 +813,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                   style={{ backgroundColor: colors[i % colors.length] }} />
                 <span className="font-medium truncate max-w-[100px]">{String(row[nameKey] ?? '')}</span>
-                <span className="text-slate-400 tabular-nums">{pct(Number(row[valueKey] ?? 0))}</span>
+                <span className="text-slate-400 tabular-nums">{pct(toNum(row[valueKey] ?? 0))}</span>
               </div>
             ))}
           </div>
@@ -761,7 +841,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 className={`border-b border-slate-100 hover:bg-indigo-50/30 transition-colors ${ri % 2 === 1 ? 'bg-slate-50/40' : 'bg-white'}`}>
                 {colKeys.map((k, ci) => {
                   const v = row[k];
-                  const num = typeof v === 'number' || (typeof v === 'string' && v !== '' && !isNaN(Number(v)) && !isDimension(k, v));
+                  const num = typeof v === 'number' || (typeof v === 'string' && v !== '' && !isNaN(toNum(v)) && !isDimension(k, v));
                   const rc = getCcy(row) ?? currency;
                   const display = v == null ? '—'
                     : num ? (
@@ -774,7 +854,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                               : 'text-slate-800'
                         }
                       >
-                        {fmtCell(k, Number(v), rc)}
+                        {fmtCell(k, toNum(v), rc)}
                       </span>
                     )
                     : String(v);
@@ -805,8 +885,9 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
 
       {charts.map((chart, idx) => {
         try {
-          const activeType = overrides[idx] || chart.chart_type || 'bar';
-          const typeList = available[idx] || [chart.chart_type];
+          const typeList = available[idx] || [chart.chart_type || 'bar'];
+          const preferredDefault = typeList.includes('line') ? 'line' : (chart.chart_type || 'bar');
+          const activeType = overrides[idx] || preferredDefault;
           const mixedC = chart.chart_type !== 'table' && multiCcy(chart.data);
 
           const EMOJI: Record<string, string> = {
@@ -859,11 +940,9 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                             type="button"
                             title={`Switch to ${T_LABEL[t] || t}`}
                             onClick={() => setOverrides(prev => ({ ...prev, [idx]: t }))}
-                            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold transition-all duration-150 ${
-                              isActive
-                                ? 'bg-indigo-600 text-white shadow-sm scale-105'
-                                : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-                            }`}
+                            className={['flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold transition-all duration-150',
+                              isActive ? 'bg-indigo-600 text-white shadow-sm scale-105' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+                            ].join(' ')}
                           >
                             {T_ICON[t] ?? null}
                             <span className="uppercase tracking-wide">{T_LABEL[t] || t}</span>
@@ -880,7 +959,9 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
               </div>
 
               {/* ── Chart body ── */}
-              <div className="p-5 pb-4">{renderChart(chart, idx, activeType)}</div>
+              <div className="overflow-x-auto">
+                <div className="p-4 pb-3">{renderChart(chart, idx, activeType)}</div>
+              </div>
 
               {/* ── Footer ── */}
               {chart.data?.length > 0 && (

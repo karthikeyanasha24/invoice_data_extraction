@@ -1488,6 +1488,8 @@ def _universal_query(
     auto-retry with error feedback up to max_retries times.
     """
     from openai import OpenAI
+    from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
+
     client = OpenAI(api_key=api_key)
 
     schema = _build_schema_prompt()
@@ -1504,7 +1506,10 @@ def _universal_query(
     for attempt in range(max_retries):
         try:
             resp = client.chat.completions.create(
-                model=model, messages=messages, temperature=0.05, max_tokens=900,
+                model=model,
+                messages=messages,
+                **openai_chat_temperature_kwargs(model, 0.05),
+                **openai_completion_limit_kwargs(model, 900),
             )
             raw = resp.choices[0].message.content or ""
             sql = _extract_sql(raw)
@@ -1595,7 +1600,8 @@ def _universal_query(
                                 f"Write a 2-4 sentence summary:"
                             )},
                         ],
-                        temperature=0.15, max_tokens=350,
+                        **openai_chat_temperature_kwargs(fast_model, 0.15),
+                        **openai_completion_limit_kwargs(fast_model, 350),
                     )
                     summary = (sr.choices[0].message.content.strip() or summary) + chart_note
                 except Exception:
@@ -1701,7 +1707,10 @@ def _followup_analysis(question: str, prev_q: str, prev_sql: str,
                        rows: List[Dict], api_key: str) -> str:
     from openai import OpenAI
     from ..services.schema_context_builder import build_schema_context
+    from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
+
     client = OpenAI(api_key=api_key)
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     schema_ctx = build_schema_context(
         question=f"{prev_q}\n{question}", focus_tables=None, max_tables=25, max_cols_per_table=40,
@@ -1719,9 +1728,10 @@ def _followup_analysis(question: str, prev_q: str, prev_sql: str,
         f"rows_empty={is_empty}"
     )
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.1, max_tokens=900,
+        **openai_chat_temperature_kwargs(model, 0.1),
+        **openai_completion_limit_kwargs(model, 900),
     )
     return (resp.choices[0].message.content or "").strip() or "Could not generate follow-up answer."
 
@@ -1782,11 +1792,15 @@ async def post_query_adaptive(
         summary = f"Custom SQL executed. {len(data)} row(s) returned."
         try:
             from openai import OpenAI
+            from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
+
             c = OpenAI(api_key=api_key)
+            fast_model = os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini")
             r = c.chat.completions.create(
-                model=os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini"),
+                model=fast_model,
                 messages=[{"role": "user", "content": f"SQL: {overrideSql[:400]}\nResults ({len(data)} rows): {data[:5]}\nSummarize in 2 sentences:"}],
-                temperature=0.1, max_tokens=200,
+                **openai_chat_temperature_kwargs(fast_model, 0.1),
+                **openai_completion_limit_kwargs(fast_model, 200),
             )
             summary = r.choices[0].message.content.strip() or summary
         except Exception: pass
@@ -1824,16 +1838,60 @@ async def post_query_adaptive(
         except Exception as e:
             raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
 
-    # ── Path 3: Universal NL → SQL → Execute ───────────────────────────────
-    logger.info(f"[universal] question: {q[:120]}")
+    # ── Path 3: Scalable dashboard router (operational → intent → catalog → universal) ──
+    from ..services.operational_query_resolver import _extract_user_question
+    from ..services.dashboard_query_router import run_dashboard_query
+
+    clean_q = _extract_user_question(q)
     try:
-        result = _universal_query(q, api_key, db, USE_SAP_DB_FOR_AI, max_retries=3)
-        if result:
-            result["tableHint"] = tableHint
-            return result
-        raise RuntimeError("Universal engine: all retries failed")
-    except Exception as univ_err:
-        logger.warning(f"[universal] falling back to orchestrator: {univ_err}")
+        router_payload = run_dashboard_query(
+            db, api_key, clean_q, [], time_scope="current", days=30,
+        )
+        reason = router_payload.get("sql_path_reason") or router_payload.get("reason") or ""
+        if reason and reason != "no_match":
+            rows_out = router_payload.get("rows_preview") or []
+            logger.info("[adaptive] scalable router: %s — %d rows", reason, len(rows_out))
+            return {
+                "sql": router_payload.get("sql") or "",
+                "rowCount": len(rows_out),
+                "data": rows_out,
+                "summary": router_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
+                "tableHint": tableHint,
+                "charts": router_payload.get("charts") or [],
+                "pipeline": reason,
+            }
+    except Exception as router_err:
+        logger.warning("[adaptive] scalable router failed: %s", router_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # ── Path 4: Multi-Stage AI Analyst Pipeline (fallback) ─────────────────
+    logger.info(f"[analyst-pipeline] question: {q[:120]}")
+    try:
+        from ..services.analyst_pipeline import run_analyst_pipeline
+        analyst_db = get_sap_session() if USE_SAP_DB_FOR_AI else db
+        try:
+            result = run_analyst_pipeline(question=q, db_session=analyst_db)
+            if result:
+                result["tableHint"] = tableHint
+                return result
+        finally:
+            if USE_SAP_DB_FOR_AI and analyst_db is not db:
+                try: analyst_db.close()
+                except Exception: pass
+        raise RuntimeError("Analyst pipeline returned empty result")
+    except Exception as pipeline_err:
+        logger.warning(f"[analyst-pipeline] falling back to universal engine: {pipeline_err}")
+        try:
+            result = _universal_query(q, api_key, db, USE_SAP_DB_FOR_AI, max_retries=3)
+            if result:
+                result["tableHint"] = tableHint
+                return result
+            raise RuntimeError("Universal engine: all retries failed")
+        except Exception as univ_err:
+            logger.warning(f"[universal] falling back to orchestrator: {univ_err}")
         try:
             from ..services.ai_analysis_orchestrator import run_ai_analysis_orchestrator, orchestrator_payload
             sap_sess = get_sap_session() if USE_SAP_DB_FOR_AI else None
@@ -1849,7 +1907,7 @@ async def post_query_adaptive(
                     try: sap_sess.close()
                     except Exception: pass
             rows_out = payload.get("rows") or payload.get("rows_preview") or []
-            out: Dict[str, Any] = {
+            out = {
                 "sql": payload.get("sql") or "",
                 "rowCount": len(rows_out),
                 "data": rows_out,
@@ -1863,5 +1921,5 @@ async def post_query_adaptive(
             raise HTTPException(status_code=500, detail={
                 "error_code": "query_failed",
                 "message": str(orch_err),
-                "hint": "Try specifying table names explicitly (e.g. 'from VBRK' or 'using invoice_v2_business_data').",
+                "hint": "Try specifying table names explicitly.",
             })

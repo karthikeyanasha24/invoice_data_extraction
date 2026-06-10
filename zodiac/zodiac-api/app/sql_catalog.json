@@ -959,6 +959,43 @@
     "priority": 0
   },
   {
+    "id": "open_po_by_vendor",
+    "description": "Open purchase orders grouped by vendor (delivery incomplete lines)",
+    "question_patterns": [
+      "open purchase orders by vendor",
+      "open PO by vendor",
+      "open purchase order by vendor",
+      "open pos by vendor",
+      "pending purchase orders by vendor",
+      "outstanding purchase orders by vendor"
+    ],
+    "keywords": [
+      "open",
+      "purchase",
+      "order",
+      "vendor",
+      "supplier",
+      "po",
+      "pending",
+      "outstanding",
+      "ekko",
+      "ekpo"
+    ],
+    "neg_keywords": [
+      "material",
+      "received",
+      "delivered",
+      "ordered vs"
+    ],
+    "tables": [
+      "EKKO",
+      "EKPO",
+      "LFA1"
+    ],
+    "sql": "SELECT k.\"lifnr\" AS vendor_id,\n       l.\"name1\" AS vendor_name,\n       COUNT(DISTINCT k.\"ebeln\") AS open_po_count,\n       COUNT(*) AS open_line_count\nFROM \"EKKO\" k\nINNER JOIN \"EKPO\" p ON k.\"ebeln\" = p.\"ebeln\"\nLEFT JOIN \"LFA1\" l ON k.\"lifnr\" = l.\"lifnr\"\nWHERE TRIM(COALESCE(p.\"elikz\", '')) = ''\n  AND TRIM(COALESCE(p.\"loekz\", '')) = ''\n  AND TRIM(COALESCE(k.\"loekz\", '')) = ''\nGROUP BY k.\"lifnr\", l.\"name1\"\nORDER BY open_po_count DESC\nLIMIT 50",
+    "priority": 12
+  },
+  {
     "id": "po_count_by_vendor",
     "description": "Number of purchase orders by vendor (top 20)",
     "question_patterns": [
@@ -2661,6 +2698,8 @@
       "list profit centers",
       "all profit centers",
       "profit center master",
+      "show profit center master records",
+      "profit center master records",
       "CEPC profit centers",
       "show profit centers"
     ],

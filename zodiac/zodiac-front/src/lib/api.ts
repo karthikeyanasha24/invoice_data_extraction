@@ -44,6 +44,7 @@ const API_BASE_URL = resolveAxiosBaseURL();
 
 export const api = axios.create({
     baseURL: API_BASE_URL,
+    timeout: 600000,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -1796,6 +1797,7 @@ export const dashboardApi = {
                 query_mode: queryMode || 'new',
             }, {
                 signal: options?.signal,
+                timeout: 600000,
                 headers: isMobile ? { 'X-Client-Platform': 'mobile' } : {},
             });
             return response.data;
@@ -1804,11 +1806,24 @@ export const dashboardApi = {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'AbortError' || error?.name === 'CanceledError') {
                 throw error;
             }
+            if (error?.code === 'ECONNABORTED') {
+                throw new Error('AI query timed out after 10 minutes. Try a simpler question or select tables from the schema browser.');
+            }
+            if (error?.code === 'ECONNRESET' || error?.message === 'Network Error') {
+                throw new Error(
+                    'Connection to the backend was interrupted (often a dev-proxy timeout on long AI queries). ' +
+                    'Set NEXT_PUBLIC_API_URL=http://localhost:8000 in zodiac-front/.env.local and restart npm run dev.'
+                );
+            }
             console.error('AI analysis chat failed:', error);
             if (error.response?.status === 401) {
                 throw new Error('Session expired. Please log in again.');
             }
-            throw new Error(error.response?.data?.detail || 'Failed to get AI analysis response.');
+            const detail = error.response?.data?.detail;
+            const detailMsg = typeof detail === 'string'
+                ? detail
+                : (detail?.message || detail?.error || JSON.stringify(detail)) || 'Failed to get AI analysis response.';
+            throw new Error(detailMsg);
         }
     },
 
@@ -1830,11 +1845,27 @@ export const dashboardApi = {
         overrideSql?: string | null;
     }) => {
         try {
-            const response = await api.post('/api/query/adaptive', body);
+            const response = await api.post('/api/query/adaptive', body, { timeout: 600000 });
             return response.data;
         } catch (error: any) {
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') {
+                throw error;
+            }
+            if (error?.code === 'ECONNABORTED') {
+                throw new Error('Query timed out after 10 minutes. Try a simpler question or use a quick-action chip.');
+            }
+            if (error?.code === 'ECONNRESET' || error?.message === 'Network Error') {
+                throw new Error(
+                    'Cannot reach the API backend. Start zodiac-api on port 8000 (python start.py) ' +
+                    'and ensure NEXT_PUBLIC_API_URL=http://localhost:8000 in .env.local, then restart npm run dev.'
+                );
+            }
             console.error('Adaptive query failed:', error);
-            throw new Error(error.response?.data?.message || error.response?.data?.detail || 'Adaptive query failed.');
+            const detail = error.response?.data?.detail;
+            const msg = typeof detail === 'string'
+                ? detail
+                : detail?.message || detail?.error || 'Adaptive query failed.';
+            throw new Error(msg);
         }
     },
 

@@ -682,6 +682,22 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
         r'\bstock\b',                       # MM Inventory — MARD
         r'\binventor(y|ies)\b',
         r'\b(mard|marc|marm)\b',
+        # SD sales orders — VBAK/VBAP/VBEP, NOT billing VBRK/VBRP. "Sales order
+        # count by month" must not be answered with billing-date (FKDAT) SQL.
+        r'\bsales\s+orders?\b',
+        r'\border\s+date\b',
+        r'\b(vbak|vbap|vbep)\b',
+        r'\bschedule\s+line',
+        r'\bdocument\s+flow\b',
+        # MM Purchasing — EKKO/EKPO; "top vendors by PO value" is not billing
+        r'\bpurchase\s+(order|requisition)',
+        r'\b(ekko|ekpo|ekbe|eban)\b',
+        # LE Deliveries — LIKP/LIPS
+        r'\bdeliver(y|ies)\b',
+        r'\b(likp|lips)\b',
+        # MM/FI invoice verification — RBKP/RSEG
+        r'\binvoice\s+verification\b',
+        r'\b(rbkp|rseg)\b',
     ]
     if any(re.search(p, q) for p in hard_exclusions):
         return False  # always route to sap_sql_agent regardless of analytics signals

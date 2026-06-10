@@ -1,12 +1,12 @@
 'use client';
 
 import MainLayout from '@/components/MainLayout';
-import DashboardAIAnalysis from '@/components/DashboardAIAnalysis';
+import IntelligencePage from '@/components/IntelligencePage';
 
 export default function DashboardAIPage() {
   return (
-    <MainLayout>
-      <DashboardAIAnalysis />
+    <MainLayout fillViewport>
+      <IntelligencePage />
     </MainLayout>
   );
 }

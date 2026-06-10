@@ -61,11 +61,24 @@ def langchain_openai_temperature_kwargs(model: Optional[str], temperature: float
     return {"temperature": float(temperature)}
 
 
-def openai_completion_limit_kwargs(model: Optional[str], limit: int) -> Dict[str, int]:
-    """Args for ``OpenAI().chat.completions.create`` output token cap."""
+def openai_completion_limit_kwargs(model: Optional[str], limit: int) -> Dict[str, Any]:
+    """Args for ``OpenAI().chat.completions.create`` output token cap.
+
+    Reasoning models (gpt-5 / o-series) spend hidden reasoning tokens BEFORE the
+    visible answer. If ``max_completion_tokens`` is small (e.g. 900), reasoning
+    consumes the whole budget and ``message.content`` comes back EMPTY with
+    finish_reason="length" — surfacing as blank answers like "Could not generate
+    follow-up answer." So for these models we (a) add headroom for reasoning and
+    (b) default reasoning_effort to "low" for fast, non-empty answers.
+    Override with OPENAI_REASONING_EFFORT=minimal|low|medium|high|off.
+    """
     n = max(1, int(limit))
     if model_requires_max_completion_tokens(model):
-        return {"max_completion_tokens": n}
+        kwargs: Dict[str, Any] = {"max_completion_tokens": max(n + 1600, n * 2)}
+        effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
+        if effort not in ("off", "none", ""):
+            kwargs["reasoning_effort"] = effort
+        return kwargs
     return {"max_tokens": n}
 
 

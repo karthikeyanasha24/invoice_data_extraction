@@ -126,4 +126,14 @@ def follow_up_requires_fresh_sql(question: str) -> bool:
         return True
     if re.search(r"\b(select|from)\b.+\bwhere\b", q, re.I):
         return True
+    # A named calendar year re-scopes the analysis — prior rows can't answer it.
+    if re.search(r"\b(19|20)\d{2}\b", q):
+        return True
+    # Fresh "metric by dimension" ranking/aggregation (e.g. "highest sales by customer",
+    # "total revenue per country") always needs its own SELECT.
+    if (
+        re.search(r"\b(highest|lowest|top|bottom|best|worst|total|sum|average|show me)\b", ql)
+        and re.search(r"\b(by|per)\s+(customer|customers|product|products|material|materials|vendor|vendors|supplier|suppliers|country|countries|industry|industries|year|month|plant|region)\b", ql)
+    ):
+        return True
     return False

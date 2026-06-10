@@ -12,7 +12,7 @@ load_dotenv()
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("\ufeffDATABASE_URL")
 if not DATABASE_URL:
-    print("❌ ERROR: DATABASE_URL environment variable is required but not set!")
+    print("[ERROR] DATABASE_URL environment variable is required but not set!")
     print("Available environment variables:")
     for key, value in os.environ.items():
         if 'DATABASE' in key or 'API' in key or 'CORS' in key:
@@ -64,11 +64,11 @@ def init_models():
         from .models.certificate_revocation import CertificateRevocation
         from .models.ai_query_memory import AiQueryMemory
         # Models are now registered with Base.metadata
-        print("✅ All models initialized and registered with Base.metadata")
+        print("[OK] All models initialized and registered with Base.metadata")
     except ImportError as e:
-        print(f"⚠️ Warning: Could not import all models: {e}")
+        print(f"[WARN] Could not import all models: {e}")
     except Exception as e:
-        print(f"⚠️ Warning: Error initializing models: {e}")
+        print(f"[WARN] Error initializing models: {e}")
 
 # Initialize all models when this module is loaded
 init_models()
@@ -87,10 +87,10 @@ def create_all_tables():
         
         # Create all tables defined in models
         Base.metadata.create_all(bind=engine)
-        print("✅ All database tables created/verified successfully")
+        print("[OK] All database tables created/verified successfully")
         return True
     except Exception as e:
-        print(f"❌ Error creating database tables: {e}")
+        print(f"[ERROR] Error creating database tables: {e}")
         return False
 
 # ------------------------------------------
@@ -273,7 +273,7 @@ def ensure_columns_exist():
             try:
                 # Check if table exists first
                 if table_name not in inspector.get_table_names():
-                    print(f"⚠️ Table '{table_name}' does not exist yet. It will be created by Base.metadata.create_all()")
+                    print(f"[WARN] Table '{table_name}' does not exist yet. It will be created by Base.metadata.create_all()")
                     continue
                 
                 tables_checked += 1
@@ -286,31 +286,31 @@ def ensure_columns_exist():
                         continue
                     
                     if col not in existing_columns:
-                        print(f"🛠️ Adding missing column '{col}' to '{table_name}'...")
+                        print(f"[INFO] Adding missing column '{col}' to '{table_name}'...")
                         try:
                             # Add the column
                             conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col} {definition};"))
                             conn.commit()
                             columns_added += 1
-                            print(f"✅ Successfully added column '{col}' to '{table_name}'")
+                            print(f"[OK] Successfully added column '{col}' to '{table_name}'")
                         except Exception as e:
                             error_msg = str(e).lower()
                             # Column might already exist due to race condition
                             if "already exists" in error_msg or "duplicate" in error_msg:
-                                print(f"ℹ️ Column '{col}' already exists in '{table_name}' (race condition)")
+                                print(f"[INFO] Column '{col}' already exists in '{table_name}' (race condition)")
                             # Handle constraint violations for NOT NULL columns on tables with data
                             elif "violates not-null constraint" in error_msg or ("not null" in error_msg and "default" not in definition.lower()):
-                                print(f"⚠️ Cannot add NOT NULL column '{col}' to '{table_name}' with existing data without a default. Error: {e}")
+                                print(f"[WARN] Cannot add NOT NULL column '{col}' to '{table_name}' with existing data without a default. Error: {e}")
                             else:
-                                print(f"⚠️ Failed to add column '{col}' to '{table_name}': {e}")
+                                print(f"[WARN] Failed to add column '{col}' to '{table_name}': {e}")
                             conn.rollback()
                     # Column exists, silently continue
                         
             except Exception as e:
-                print(f"⚠️ Could not inspect/update table '{table_name}': {e}")
+                print(f"[WARN] Could not inspect/update table '{table_name}': {e}")
                 continue
 
-        print(f"✅ Column check complete: {tables_checked} tables checked, {columns_added} columns added.")
+        print(f"[OK] Column check complete: {tables_checked} tables checked, {columns_added} columns added.")
 
 # Note: ensure_columns_exist() is not called here because tables might not exist yet.
 # It should be called after Base.metadata.create_all() in server.py or startup
@@ -355,7 +355,7 @@ def get_sap_engine():
         _sap_session_factory = sessionmaker(autocommit=False, autoflush=False, bind=_sap_engine)
         return _sap_engine
     except Exception as e:
-        print(f"⚠️ SAP database engine creation failed: {e}")
+        print(f"[WARN] SAP database engine creation failed: {e}")
         return None
 
 

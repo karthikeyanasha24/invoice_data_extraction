@@ -319,6 +319,20 @@ class SchemaIntelligenceService:
         ) or re.search(r"\beban\b", lower_text):
             _append_table("EBAN")
 
+        # ── SAT / CFDI / Inbound document routing ────────────────────────────
+        # "SAT documents", "CFDI", "inbound invoice", "inbound document",
+        # "supplier sent", "payment complement" all map to sat_documents.
+        _SAT_TRIGGERS = (
+            "sat document", "sat invoice", "sat credit", "cfdi",
+            "inbound document", "inbound invoice", "inbound sat",
+            "payment complement", "sat_document", "received document",
+            "most sat", "supplier sent", "suppliers sent",
+        )
+        if any(k in lower_text for k in _SAT_TRIGGERS) or re.search(r"\bsat\b", lower_text):
+            for t in ("sat_documents", "sat_simple_merged"):
+                if t in self.tables and self.tables[t] not in candidates:
+                    candidates.insert(0, self.tables[t])  # highest priority
+
         return candidates
 
     def suggest_join_paths(self, tables: List[str]) -> List[JoinEdge]:

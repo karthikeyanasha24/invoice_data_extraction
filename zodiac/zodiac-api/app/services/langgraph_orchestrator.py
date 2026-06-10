@@ -234,6 +234,7 @@ Check the following 18 points:
 17. CRITICAL — KNA1 join: JOIN KNA1 ON LPAD(TRIM(VBRK.kunag),10,'0') = LPAD(TRIM(KNA1.kunnr),10,'0'). Without LPAD on both sides, rows with different leading-zero counts silently fail to match.
 18. VBRP join: always join VBRP ON LPAD(TRIM(VBRK.vbeln),10,'0') = LPAD(TRIM(VBRP.vbeln),10,'0') and also match VBRK.mandt = VBRP.mandt when mandt column exists.
 19. CRITICAL — Table name casing: PostgreSQL stores SAP tables under their EXACT UPPERCASE names (VBRK, VBRP, MAKT, KNA1, etc.) using quoted identifiers. Always write table names as double-quoted uppercase — "VBRK" not vbrk or VBRK. Unquoted identifiers (lowercase or uppercase) are folded to lowercase by PostgreSQL and cause "relation does not exist". If the SQL uses unquoted or lowercase table names, add double quotes and uppercase them in corrected_sql.
+20. CRITICAL — Currency in rankings: NETWR is in document currency (VBRK.WAERK). For "highest/top/lowest ... by customer/product/vendor" the SQL must NOT sum NETWR across mixed currencies — either include WAERK in SELECT+GROUP BY (per-currency ranking) or filter to a single currency. If missing, add WAERK to the grouping in corrected_sql.
 
 Return JSON only:
 {
@@ -257,11 +258,30 @@ def _node_check_sql(state: GraphState) -> str:
         state.error = "Empty SQL from generator"
         return "error_recovery"
 
+    # FAST PATH: run the deterministic precision validator first. When the SQL
+    # already passes schema/join/date/currency checks, skip the LLM round-trip
+    # entirely — this removes one sequential LLM call from every happy-path query.
+    _det_errors: List[str] = []
+    try:
+        from .sap_sql_precision_validator import validate_sql_precision
+
+        _vr = validate_sql_precision(sql, state.schema or {}, question=state.question)
+        if _vr.is_valid:
+            state.checked_sql = _finalize_sap_sql(_vr.normalized_sql or sql, state.schema or {})
+            logger.info("check_sql: deterministic validator passed — skipping LLM check")
+            return "execute_sql"
+        _det_errors = list(_vr.errors or [])
+        logger.info("check_sql: deterministic validator flagged %s — using LLM to correct", _det_errors[:3])
+    except Exception as _det_exc:
+        logger.debug("check_sql: deterministic validator unavailable (%s) — falling back to LLM check", _det_exc)
+
     try:
         # Build concise schema excerpt for the tables actually used
         schema_excerpt = _extract_used_schema(sql, state.schema or {})
 
         prompt = _CHECK_SQL_PROMPT.format(schema=schema_excerpt[:3000], sql=sql[:2000])
+        if _det_errors:
+            prompt += "\n\nKnown validation errors (must be fixed in corrected_sql):\n- " + "\n- ".join(_det_errors[:6])
         response = state.client.chat.completions.create(
             model=_OPENAI_FAST_MODEL,
             messages=[

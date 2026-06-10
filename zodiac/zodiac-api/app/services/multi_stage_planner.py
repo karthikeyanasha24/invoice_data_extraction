@@ -30,52 +30,106 @@ from ..config.config import (
     LANGGRAPH_SQL_MAX_TOKENS,
     LANGGRAPH_SQL_MODEL,
 )
-# from .sap_sql_precision_validator import _validate_sql_candidate
 
 logger = logging.getLogger("zodiac-api.multi_stage_planner")
 
-# ERP RULES (Ported from reference architecture)
-ERP_SQL_RULES = """
-══ ERP T-SQL RULES — ALL MANDATORY ══
+# ═══════════════════════════════════════════════════════════════════════
+# DOMAIN → TABLE MAP  (Stage 2/3: Domain Classification + Category Discovery)
+# ═══════════════════════════════════════════════════════════════════════
+DOMAIN_TABLE_MAP: Dict[str, Dict[str, List[str]]] = {
+    "sales": {
+        "primary": ["VBRK", "VBRP", "VBAK", "VBAP"],
+        "support": ["KNA1", "MAKT", "VBFA", "VBEP", "KONV", "MVKE"],
+    },
+    "delivery": {
+        "primary": ["LIKP", "LIPS"],
+        "support": ["KNA1", "MAKT", "VBFA", "VBRP"],
+    },
+    "finance": {
+        "primary": ["BKPF", "BSEG"],
+        "support": ["BSAD", "KNA1", "FAGLFLEXA", "DFKKOP"],
+    },
+    "purchasing": {
+        "primary": ["EKKO", "EKPO"],
+        "support": ["LFA1", "MAKT", "MARA", "EBAN", "EINA"],
+    },
+    "inventory": {
+        "primary": ["MARA", "MARD", "MARC"],
+        "support": ["MAKT", "MBEW", "MCHB"],
+    },
+    "customer": {
+        "primary": ["KNA1", "KNVV"],
+        "support": ["VBRK", "BSAD", "KNVP"],
+    },
+    "vendor": {
+        "primary": ["LFA1", "LFB1"],
+        "support": ["EKKO", "LFM1", "EKPO"],
+    },
+    "controlling": {
+        "primary": ["COEP", "CEPC", "CSKS"],
+        "support": ["COSP", "COSS", "AUFK", "CRHD"],
+    },
+    "costing": {
+        "primary": ["CKIS", "KEKO", "CKHS"],
+        "support": ["KEPH", "CKMLCR", "MBEW"],
+    },
+    "sat_inbound": {
+        "primary": ["sat_documents"],
+        "support": ["sat_canonical_merged", "sat_simple_merged", "supplier_tokens", "sat_company_mappings"],
+    },
+    "edi_operations": {
+        "primary": ["zodiac_invoice_failed_edi", "zodiac_invoice_success_edi"],
+        "support": ["converted_invoices", "invoice_v2_documents", "invoice_v2_validated"],
+    },
+    "general": {
+        "primary": ["VBRK", "VBRP", "KNA1"],
+        "support": ["MAKT", "MARA", "VBAK"],
+    },
+}
 
+# Domain keyword signals for fast classification
+_DOMAIN_SIGNALS: Dict[str, List[str]] = {
+    "sat_inbound": ["sat", "cfdi", "inbound document", "inbound invoice", "supplier sent", "payment complement", "sat document", "cfdi uuid"],
+    "edi_operations": ["edi", "failed invoice", "zodiac invoice", "conversion", "v2 invoice", "outbound", "conversion rate", "funnel"],
+    "sales": ["billing", "revenue", "invoice", "vbrk", "vbrp", "net value", "billed amount", "billing document", "sales order", "vbak", "vbap"],
+    "delivery": ["delivery", "shipment", "dispatch", "likp", "lips", "shipped", "goods issue"],
+    "finance": ["accounting", "gl", "general ledger", "bkpf", "bseg", "posting", "fiscal year", "open item", "receivable", "payable", "bsad"],
+    "purchasing": ["purchase order", "vendor", "procurement", "ekko", "ekpo", "po value", "goods receipt", "purchase requisition"],
+    "inventory": ["stock", "inventory", "material", "warehouse", "mara", "mard", "mchb", "storage location", "plant stock"],
+    "customer": ["customer", "client", "buyer", "kna1", "knvv", "customer master", "customer list"],
+    "vendor": ["vendor", "supplier", "lfa1", "lfb1", "vendor master"],
+    "controlling": ["cost center", "profit center", "controlling", "coep", "cepc", "csks", "co document"],
+    "costing": ["costing", "cost estimate", "ckis", "keko", "product cost", "standard cost"],
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# ERP SQL RULES (shared across generation + validation prompts)
+# ═══════════════════════════════════════════════════════════════════════
+ERP_SQL_RULES = """
+══ ERP SQL RULES — ALL MANDATORY ══
 1. Use ONLY column names that appear in the provided schema — never guess or invent columns.
-2. DATE ARITHMETIC (critical for time-range queries)
-   - Date columns are often strings or datetimes — always CAST to date before comparison.
-   - SAP date fields may be stored as YYYYMMDD text (example: fkdat). In PostgreSQL, parse with to_date(col, 'YYYYMMDD') before filtering/grouping.
-   - For "monthly trend", bucket with date_trunc('month', parsed_date) and output YYYY-MM.
-3. JOINS (always explicit — direction depends on the question)
-   - Normal ranking / top products / invoices (sales rows drive the grain): INNER JOIN or LEFT JOIN.
-   - NEVER use implicit cross joins (missing ON clause).
-4. RESULT SIZE
-   - Non-aggregate SELECT → MUST include TOP (N) or LIMIT N.
-   - "Top 10" questions → LIMIT 10 ... ORDER BY metric DESC.
-5. NULL SAFETY
-   - Wrap nullable numeric cols.
+2. DATE ARITHMETIC
+   - SAP date fields (fkdat, erdat, budat) are stored as YYYYMMDD text — parse with to_date(col,'YYYYMMDD').
+   - For monthly trend: date_trunc('month', parsed_date) → output YYYY-MM.
+   - For PostgreSQL date ranges use INTERVAL: CURRENT_DATE - INTERVAL '30 days'.
+3. JOINS — always explicit with ON clause. Never implicit cross joins.
+4. RESULT SIZE — handled by smart execution layer. Do NOT add LIMIT unless the user explicitly asked for top N.
+   If user says "top 10" → add ORDER BY metric DESC LIMIT 10.
+5. NULL SAFETY — wrap nullable numeric cols with COALESCE(col, 0).
 6. FORMAT
-   - No semicolons at end.
-   - Always alias all aggregates: SUM(x) AS TotalX, COUNT(*) AS TxnCount.
-   - Always include ORDER BY for trend/ranking queries.
+   - No semicolons at end. Always alias aggregates: SUM(x) AS TotalX.
    - Column aliases must not contain spaces (use CamelCase or underscore).
-   - **Table identifiers:** Match the SCHEMA exactly. Many SAP replicas use lowercase physical names (`vbrk`, `vbrp`, `makt`). Unquoted lowercase is correct there. `"VBRP"` is case-sensitive uppercase and **fails** if the real table is `vbrp` — never invent casing; copy from the schema list.
-   - When the schema snapshot shows uppercase quoted names only, quote those identifiers consistently with the snapshot.
-   - VERY IMPORTANT: SAP **columns** in PostgreSQL are almost always lowercase (e.g. vbrk.vbeln, vbrp.netwr, ekko.ebeln when using lowercase tables). Do NOT use uppercase column names.
-7. GROUPING AND AGGREGATION (CRITICAL)
-   - Every non-aggregate SELECT column must appear in GROUP BY.
-   - When asked for "Top N vendors/customers/products" or similar ranking, you MUST group by the entity ID/Name and aggregate the metric (e.g., SUM(netwr) AS TotalAmount). DO NOT select all columns and just append LIMIT.
-   - Example for Top 5 Vendors by Purchase Order Value:
-     SELECT "EKKO".lifnr AS Vendor, SUM("EKPO".netwr) AS TotalOrderValue FROM "EKKO" INNER JOIN "EKPO" ON "EKKO".ebeln = "EKPO".ebeln GROUP BY "EKKO".lifnr ORDER BY TotalOrderValue DESC LIMIT 5
-8. MASTER DATA FOR READABLE RESULTS (when user asks customers, vendors, materials, products, or industry context)
-   - Include BOTH technical key AND description/name in SELECT when schema lists those columns.
-   - Customers (sold-to / payer): JOIN "KNA1" ON "KNA1".kunnr = <customer key from fact table>; SELECT kunnr plus name1 (and brsch for industry if needed).
-   - Materials: JOIN "MAKT" ON "MAKT".matnr = <material from lines> AND spras = 'E' (or appropriate language); SELECT matnr plus maktx.
-   - Vendors: JOIN "LFA1" ON "LFA1".lifnr = <vendor from PO/header>.
-9. NEVER generate DROP, DELETE, UPDATE, INSERT, ALTER statements. READ ONLY.
-10. PLANT / SLOC: warehouse or plant filters often use werks (plant) and lgort (storage location) on MARD/LIPS/EKPO/VBRP — use columns from the schema only.
-11. PRICING: SD header tables VBRK / VBAK expose knumv — join "KONV" ON "KONV".knumv = header.knumv; align line kposn with VBRP.posnr or VBAP.posnr when filtering item-level conditions.
-12. FI-AR open items: customer secondary index "BSAD" links customers to financial docs — join "KNA1" on kunnr; tie to "BSEG"/"BKPF" via belnr (and bukrs/gjahr when present in schema) for full document context.
+   - Always ORDER BY for ranking/trend queries.
+   - SAP tables in PostgreSQL: uppercase quoted ("VBRK") or lowercase unquoted (vbrk) — copy EXACTLY from schema list.
+   - SAP COLUMNS are almost always lowercase (vbeln, netwr, fkdat) — never uppercase column names.
+7. GROUP BY — every non-aggregate SELECT column must be in GROUP BY.
+8. MASTER DATA — include name/description columns when available (KNA1.name1, MAKT.maktx, LFA1.name1).
+9. READ ONLY — never generate DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE.
+10. SAT/CFDI — use sat_documents table with lowercase column names. Key fields:
+    supplier_rfc, supplier_name, receiver_rfc, total, subtotal, fecha (invoice date), received_at (arrival), doc_type, status.
 """
 
-# Related SAP tables pulled into the schema prompt when a seed table is chosen (improves joins & labels).
+# SAP related tables for join expansion
 _SAP_RELATED_TABLES: Dict[str, Tuple[str, ...]] = {
     "VBRK": ("VBRP", "KNA1", "KONV", "VBFA"),
     "VBRP": ("VBRK", "MAKT", "MARA"),
@@ -91,116 +145,156 @@ _SAP_RELATED_TABLES: Dict[str, Tuple[str, ...]] = {
     "MARA": ("MAKT", "MARD", "MBEW"),
     "MARD": ("MARA", "MAKT"),
     "MBEW": ("MARA", "MAKT"),
+    "sat_documents": ("sat_simple_merged", "supplier_tokens"),
+    "SAT_DOCUMENTS": ("sat_simple_merged", "supplier_tokens"),
 }
 
 
-def _effective_schema_table_budget(question: str) -> int:
-    """Widen schema context when the user implies joins / drill-down (bounded)."""
-    q = (question or "").lower()
-    complex_q = bool(
-        re.search(r"\bjoin\b", q)
-        or any(
-            p in q
-            for p in (
-                "together with",
-                "combined with",
-                "drill down",
-                "drill-down",
-                "multiple tables",
-                "cross-reference",
-                "cross reference",
-            )
-        )
-        or any(
-            p in q
-            for p in (
-                "plant",
-                "factory",
-                "storage location",
-                "by customer and",
-                "by material and",
-            )
-        )
-        or re.search(r"\bwerk\b", q)
-        or re.search(r"\bsloc\b", q)
-        or any(
-            p in q
-            for p in (
-                "pricing",
-                "condition record",
-                "document flow",
-                "schedule line",
-                "schedule lines",
-                "preceding document",
-                "subsequent document",
-                "open item",
-                "open items",
-                "receivable",
-                "dunning",
-                "cost center",
-                "cost centre",
-            )
-        )
-    )
-    n = LANGGRAPH_MAX_SCHEMA_TABLES + (LANGGRAPH_SCHEMA_JOIN_BOOST if complex_q else 0)
-    return max(4, min(LANGGRAPH_MAX_SCHEMA_TABLES_HARD_CAP, n))
+# ═══════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _classify_domain(question: str) -> str:
+    """Stage 2: Rule-based domain classification — fast, no LLM call needed."""
+    q = question.lower()
+    best_domain = "general"
+    best_score = 0
+    for domain, signals in _DOMAIN_SIGNALS.items():
+        score = sum(1 for s in signals if s in q)
+        if score > best_score:
+            best_score = score
+            best_domain = domain
+    return best_domain
 
 
-def _expand_table_names(seed_names: List[str], max_tables: int) -> List[str]:
-    """Breadth-first add related tables up to max_tables (preserves seed order)."""
-    seen: List[str] = []
-    for s in seed_names:
-        u = (s or "").upper()
-        if u and u not in seen and u in schema_intelligence.tables:
-            seen.append(u)
-    i = 0
-    while i < len(seen) and len(seen) < max_tables:
-        name = seen[i]
-        i += 1
-        for rel in _SAP_RELATED_TABLES.get(name, ()):
-            if len(seen) >= max_tables:
-                break
-            ru = rel.upper()
-            if ru not in seen and ru in schema_intelligence.tables:
-                seen.append(ru)
-    return seen[:max_tables]
+def _select_tables_for_domain(domain: str, question: str, max_tables: int = 8) -> List[str]:
+    """Stage 3/4: Category → Table selection. Returns resolved table names from schema_intelligence."""
+    domain_def = DOMAIN_TABLE_MAP.get(domain, DOMAIN_TABLE_MAP["general"])
+    primary = domain_def["primary"]
+    support = domain_def["support"]
+
+    # Resolve to actual keys in schema_intelligence
+    all_candidates = primary + support
+    resolved: List[str] = []
+    for name in all_candidates:
+        key = _resolve_table_key(name)
+        if key and key not in resolved:
+            resolved.append(key)
+        if len(resolved) >= max_tables:
+            break
+
+    # If we didn't find enough, fall back to schema_intelligence semantic resolution
+    if len(resolved) < 2:
+        fallback = schema_intelligence.resolve_entities(question)
+        for t in fallback:
+            if t and t.name not in resolved:
+                resolved.append(t.name)
+
+    return resolved[:max_tables]
 
 
-def _prioritized_column_lines(t: TableProfile, max_cols: int) -> List[str]:
-    """Wide SAP tables: surface keys, amounts, dates, and descriptions first."""
-    cols = list(t.columns.values())
+def _resolve_table_key(name: str) -> Optional[str]:
+    """Resolve a table name to the actual key in schema_intelligence (handles case)."""
+    if not name:
+        return None
+    if name in schema_intelligence.tables:
+        return name
+    u = name.upper()
+    if u in schema_intelligence.tables:
+        return u
+    lo = name.lower()
+    if lo in schema_intelligence.tables:
+        return lo
+    return None
 
-    def score(col: ColumnProfile) -> Tuple[int, str]:
+
+def _score_columns(cols: List[ColumnProfile], question: str) -> List[ColumnProfile]:
+    """Stage 6: Column Ranking — score columns by relevance to the question. Return top N."""
+    q = question.lower()
+    q_words = set(re.findall(r'\w+', q))
+
+    def score(col: ColumnProfile) -> int:
+        s = 0
         role = (getattr(col, "semantic_role", None) or "").lower()
         name_u = col.name.upper()
-        s = 0
-        if role == "key":
-            s += 100
-        elif role == "amount":
-            s += 85
-        elif role == "date":
-            s += 75
-        if name_u in ("NAME1", "NAME2", "MAKTX", "SPRAS", "WAERS", "WAERK", "MEINS"):
-            s += 55
-        if name_u.endswith("TXT") or name_u.endswith("_TXT"):
-            s += 25
-        return (-s, name_u)
+        name_l = col.name.lower()
 
-    cols_sorted = sorted(cols, key=score)
-    cap = max(12, max_cols)
-    shown = cols_sorted[:cap]
+        # Semantic role scoring
+        if role == "key": s += 80
+        elif role == "amount": s += 90
+        elif role == "date": s += 75
+        elif role == "dimension": s += 60
+
+        # Question relevance
+        if name_l in q_words: s += 100
+        if any(name_l in w or w in name_l for w in q_words if len(w) > 3): s += 30
+
+        # Common important columns
+        if name_u in ("NAME1", "NAME2", "MAKTX", "WAERS", "WAERK", "MEINS"): s += 50
+        if name_u in ("KUNNR", "MATNR", "VBELN", "EBELN", "BELNR", "LIFNR"): s += 70
+        if name_u in ("NETWR", "DMBTR", "WRBTR", "NETPR", "MENGE", "FKIMG"): s += 85
+        if name_u in ("FKDAT", "ERDAT", "BUDAT", "BLDAT", "AEDAT"): s += 70
+        if name_u.endswith("TXT") or name_u.endswith("_TXT"): s += 20
+
+        # Penalize audit/internal cols
+        if name_u in ("MANDT", "LOEKZ", "AENAM", "ERNAM", "ERZEIT", "AEZEIT"): s -= 20
+        if any(p in name_l for p in ("created_by", "modified_by", "internal", "_code")): s -= 10
+
+        return s
+
+    scored = sorted(cols, key=score, reverse=True)
+    cap = max(LANGGRAPH_MAX_COLUMNS_PER_TABLE, 20)
+    return scored[:cap]
+
+
+def _build_schema_text(table_names: List[str], question: str) -> Tuple[str, List[str]]:
+    """Stage 5: Column Discovery — build focused schema text for SQL generation."""
     lines: List[str] = []
-    for c in shown:
-        role = getattr(c, "semantic_role", "") or ""
-        role_tag = f" [{role}]" if role else ""
-        lines.append(f"  {c.name} ({c.data_type}){role_tag}")
-    if len(cols) > cap:
-        lines.append(f"  … ({len(cols) - cap} more columns omitted for {t.name})")
-    return lines
+    resolved_names: List[str] = []
+
+    for name in table_names:
+        t = schema_intelligence.tables.get(name)
+        if not t:
+            continue
+        resolved_names.append(t.name)
+        cols = list(t.columns.values())
+        top_cols = _score_columns(cols, question)
+
+        lines.append(f"\n{t.name}:")
+        for c in top_cols:
+            role = getattr(c, "semantic_role", "") or ""
+            role_tag = f" [{role}]" if role else ""
+            lines.append(f"  {c.name} ({c.data_type}){role_tag}")
+        omitted = len(cols) - len(top_cols)
+        if omitted > 0:
+            lines.append(f"  … ({omitted} lower-relevance columns omitted)")
+
+    return "\n".join(lines), resolved_names
+
+
+def _get_join_hints(table_names: List[str]) -> str:
+    """Stage 7: Relationship Graph — return known join edges for selected tables."""
+    table_set = set(table_names)
+    hints: List[str] = []
+    for edge in (getattr(schema_intelligence, "join_graph", None) or []):
+        if edge.source_table in table_set and edge.target_table in table_set:
+            hints.append(
+                f'"{edge.source_table}".{edge.source_column.lower()} = '
+                f'"{edge.target_table}".{edge.target_column.lower()}'
+            )
+    return "\n".join(sorted(set(hints))) if hints else ""
+
+
+def _extract_sql(text: str) -> str:
+    if not text:
+        return ""
+    fenced = re.search(r"```(?:sql)?\s*([\s\S]*?)```", text, re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    return text.strip()
 
 
 def _take_first_sql_statement(sql: str) -> str:
-    """Execute only the first statement if the model emitted multiple (; injection guard)."""
     s = (sql or "").strip().rstrip(";")
     if ";" not in s:
         return s
@@ -208,386 +302,423 @@ def _take_first_sql_statement(sql: str) -> str:
     return parts[0] if parts else s
 
 
-def _needs_automatic_row_cap(sql: str) -> bool:
-    """True when the query looks like an unbounded row scan (no LIMIT / GROUP BY / aggregates)."""
-    if not sql or not sql.strip():
-        return False
-    if re.search(r"\bLIMIT\s+\d+", sql, re.I):
-        return False
-    if re.search(r"\bGROUP\s+BY\b", sql, re.I):
-        return False
-    if re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", sql, re.I):
-        return False
-    return True
-
-
-def _append_row_limit(sql: str, max_rows: int) -> str:
-    if max_rows <= 0 or not sql:
-        return sql
-    s = sql.strip().rstrip(";")
-    return f"{s} LIMIT {max_rows}"
-
-
 _FORBIDDEN_WRITE_SQL = re.compile(
-    r"\b("
-    r"DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|"
-    r"EXECUTE|CALL\b"
-    r")\b|\bMERGE\s+INTO\b|\bCOPY\s+",
+    r"\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|EXECUTE|CALL)\b|\bMERGE\s+INTO\b|\bCOPY\s+",
     re.I,
 )
 
 
 def _validate_readonly_sql(sql: str) -> Optional[str]:
-    """Return error message if SQL is not a safe read-only query."""
     s = (sql or "").strip()
     if not s:
         return "Empty SQL."
-    head = re.sub(r"^\s+", "", s)
-    up = head.upper()
+    up = re.sub(r"^\s+", "", s).upper()
     if up.startswith("WITH"):
         if not re.search(r"\bSELECT\b", s, re.I):
-            return "Only read-only WITH … SELECT is allowed."
+            return "Only WITH…SELECT is allowed."
     elif not up.startswith("SELECT"):
-        return "Only SELECT (or WITH … SELECT) queries are allowed."
+        return "Only SELECT queries are allowed."
     if _FORBIDDEN_WRITE_SQL.search(s):
         return "Forbidden statement — read-only SELECT only."
     return None
 
 
-def _extract_top_n_from_question(question: str) -> Optional[int]:
-    for pat in (
-        r"\btop\s+(\d+)\b",
-        r"\bfirst\s+(\d+)\b",
-        r"\bbottom\s+(\d+)\b",
-        r"\blimit\s+to\s+(\d+)\b",
-        r"\b(\d+)\s+(?:largest|biggest|highest)\b",
-        r"\b(\d+)\s+(?:smallest|lowest)\b",
-    ):
+def _is_aggregation_query(sql: str) -> bool:
+    """True if SQL already has GROUP BY or aggregate functions — don't add LIMIT."""
+    return bool(
+        re.search(r"\bGROUP\s+BY\b", sql, re.I) or
+        re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", sql, re.I)
+    )
+
+
+def _has_explicit_limit(sql: str) -> bool:
+    return bool(re.search(r"\bLIMIT\s+\d+", sql, re.I))
+
+
+def _extract_top_n(question: str) -> Optional[int]:
+    for pat in (r"\btop\s+(\d+)\b", r"\bfirst\s+(\d+)\b", r"\bbottom\s+(\d+)\b"):
         m = re.search(pat, question or "", re.I)
         if m:
-            try:
-                n = int(m.group(1))
-                return n if 1 <= n <= 10_000 else None
-            except ValueError:
-                return None
+            n = int(m.group(1))
+            return n if 1 <= n <= 10_000 else None
     return None
 
 
-def _build_dynamic_question_hints(question: str, days: int) -> str:
-    """Lightweight NL hints to steer SQL (dates, ranking) — no schema coupling."""
-    q = question or ""
+def _build_time_hints(question: str, days: int) -> str:
+    """Build time-range SQL hints from natural language question."""
+    q = question.lower()
     lines: List[str] = []
-    ql = q.lower()
 
-    n = _extract_top_n_from_question(q)
-    if n is not None:
-        want_low = bool(
-            re.search(r"\b(bottom|lowest|smallest|worst|least)\b", ql)
-            or re.search(r"\b(\d+)\s+(?:smallest|lowest)\b", ql)
-        )
-        if want_low:
-            lines.append(
-                f"- Ranking: user wants the bottom/lowest side — ORDER BY the main metric ASC, LIMIT {n}."
-            )
-        else:
-            lines.append(
-                f"- Ranking: user asked for roughly TOP {n} — ORDER BY the main metric DESC, LIMIT {n}."
-            )
+    top_n = _extract_top_n(question)
+    if top_n:
+        want_low = bool(re.search(r"\b(bottom|lowest|smallest|worst|least)\b", q))
+        direction = "ASC" if want_low else "DESC"
+        lines.append(f"- Ranking: ORDER BY metric {direction}, LIMIT {top_n}.")
 
-    # Relative windows (PostgreSQL-oriented phrasing)
-    m = re.search(r"\b(?:last|past)\s+(\d+)\s*(?:day|days)\b", ql)
-    if m:
-        lines.append(f"- Time: last {m.group(1)} day(s) → filter parsed SAP dates ≥ CURRENT_DATE - INTERVAL '{m.group(1)} days'.")
-    m = re.search(r"\b(?:last|past)\s+(\d+)\s*(?:week|weeks)\b", ql)
-    if m:
-        w = int(m.group(1))
-        lines.append(f"- Time: last {w} week(s) → ≥ CURRENT_DATE - INTERVAL '{w * 7} days'.")
-    m = re.search(r"\b(?:last|past)\s+(\d+)\s*(?:month|months)\b", ql)
-    if m:
+    if re.search(r"\b(?:last|past)\s+(\d+)\s*days?\b", q):
+        m = re.search(r"\b(?:last|past)\s+(\d+)\s*days?\b", q)
+        lines.append(f"- Time: last {m.group(1)} day(s) → ≥ CURRENT_DATE - INTERVAL '{m.group(1)} days'.")
+    if re.search(r"\b(?:last|past)\s+(\d+)\s*months?\b", q):
+        m = re.search(r"\b(?:last|past)\s+(\d+)\s*months?\b", q)
         lines.append(f"- Time: last {m.group(1)} month(s) → ≥ CURRENT_DATE - INTERVAL '{m.group(1)} months'.")
-    if "ytd" in ql or "year to date" in ql:
-        lines.append("- Time: year-to-date → from date_trunc('year', CURRENT_DATE) through CURRENT_DATE.")
-    if "this quarter" in ql or "current quarter" in ql:
-        lines.append("- Time: current calendar quarter → date_trunc('quarter', CURRENT_DATE) bounds.")
-    if "last quarter" in ql or "previous quarter" in ql:
-        lines.append("- Time: previous calendar quarter → date_trunc on CURRENT_DATE - INTERVAL '3 months'.")
-    if any(k in ql for k in ("this year", "current year", "calendar year to date")):
-        lines.append("- Time: this calendar year → parsed dates ≥ date_trunc('year', CURRENT_DATE).")
-    if any(k in ql for k in ("last year", "previous year", "prior year")):
-        lines.append(
-            "- Time: last calendar year → parsed dates >= date_trunc('year', CURRENT_DATE - INTERVAL '1 year') "
-            "AND < date_trunc('year', CURRENT_DATE)."
-        )
-    if any(k in ql for k in ("rolling 12", "rolling twelve", "trailing twelve", "ttm", "last 12 months")):
+    if "ytd" in q or "year to date" in q:
+        lines.append("- Time: YTD → from date_trunc('year', CURRENT_DATE).")
+    if "last quarter" in q or "previous quarter" in q:
+        lines.append("- Time: last quarter → date_trunc('quarter', CURRENT_DATE - INTERVAL '3 months').")
+    if "this quarter" in q or "current quarter" in q:
+        lines.append("- Time: current quarter → date_trunc('quarter', CURRENT_DATE).")
+    if "last year" in q or "previous year" in q:
+        lines.append("- Time: last year → date_trunc('year', CURRENT_DATE - INTERVAL '1 year') through date_trunc('year', CURRENT_DATE).")
+    if any(k in q for k in ("this year", "current year")):
+        lines.append("- Time: this year → ≥ date_trunc('year', CURRENT_DATE).")
+    if "rolling 12" in q or "last 12 months" in q or "ttm" in q:
         lines.append("- Time: rolling 12 months → ≥ CURRENT_DATE - INTERVAL '12 months'.")
-    if "fiscal" in ql:
-        lines.append("- If fiscal year applies, approximate with calendar year unless schema has fiscal period fields.")
-    if any(k in ql for k in ("compare", "versus", " vs ")) or "comparison" in ql:
-        lines.append(
-            "- Comparison / vs: use two explicit date buckets or periods (e.g. subqueries or CASE) with clear labels in SELECT."
-        )
+    if "monthly" in q or "by month" in q:
+        lines.append("- Monthly bucketing: date_trunc('month', parsed_date) AS Month, output 'YYYY-MM'.")
 
-    if days and ("recent" in ql or "dashboard" in ql or "default period" in ql):
-        lines.append(f"- Dashboard context uses ~{days} day(s); align date filters if the question does not specify another range.")
+    # SAT-specific hints
+    sat_triggers = ("sat ", "cfdi", "inbound document", "sat document", "sat invoice", "payment complement")
+    if any(k in q for k in sat_triggers) or re.search(r"\bsat\b", q):
+        lines.append(
+            "- SAT CONTEXT: Use `sat_documents` table. Key date column: received_at (arrival), fecha (invoice date).\n"
+            "  supplier_rfc, supplier_name, receiver_rfc, total, subtotal, doc_type, status.\n"
+            "  Example: SELECT supplier_name, COUNT(*) AS docs, SUM(total) AS total_amount FROM sat_documents GROUP BY supplier_name ORDER BY docs DESC LIMIT 10;"
+        )
 
     if not lines:
         return ""
-    return "══ QUESTION-DERIVED HINTS (apply if consistent with schema) ══\n" + "\n".join(lines)
+    return "══ QUERY HINTS ══\n" + "\n".join(lines)
 
 
-def _infer_period_blurb(question: str, days: int, time_scope: str) -> str:
-    """Short UI/API summary of how the question's time intent was interpreted."""
-    ql = (question or "").lower()
-    bits: List[str] = []
-    ts = (time_scope or "").strip().lower()
-    if ts and ts not in ("current", ""):
-        bits.append(f"scope={time_scope}")
-    if any(k in ql for k in ("rolling 12", "trailing twelve", "ttm")) or "last 12 months" in ql:
-        bits.append("rolling ~12 months")
-    elif any(k in ql for k in ("last year", "previous year", "prior year")):
-        bits.append("prior calendar year")
-    elif any(k in ql for k in ("this year", "current year")) and "last year" not in ql:
-        bits.append("current calendar year")
-    elif "ytd" in ql or "year to date" in ql:
-        bits.append("year-to-date")
-    elif "this quarter" in ql or "current quarter" in ql:
-        bits.append("current quarter")
-    elif "last quarter" in ql or "previous quarter" in ql:
-        bits.append("previous quarter")
-    m = re.search(r"\b(?:last|past)\s+(\d+)\s*(?:month|months)\b", ql)
+def _infer_period_blurb(question: str, days: int) -> str:
+    q = question.lower()
+    if "last year" in q or "previous year" in q:
+        return "Interpreted period: prior calendar year"
+    if "this year" in q or "ytd" in q or "year to date" in q:
+        return "Interpreted period: year-to-date"
+    if "last quarter" in q:
+        return "Interpreted period: previous quarter"
+    if "this quarter" in q or "current quarter" in q:
+        return "Interpreted period: current quarter"
+    m = re.search(r"\b(?:last|past)\s+(\d+)\s*months?\b", q)
     if m:
-        bits.append(f"last {m.group(1)} month(s)")
-    m = re.search(r"\b(?:last|past)\s+(\d+)\s*(?:day|days)\b", ql)
+        return f"Interpreted period: last {m.group(1)} month(s)"
+    m = re.search(r"\b(?:last|past)\s+(\d+)\s*days?\b", q)
     if m:
-        bits.append(f"last {m.group(1)} day(s)")
-    if days and ("recent" in ql or "dashboard" in ql or "default period" in ql):
-        bits.append(f"dashboard ~{days} day window")
-    if not bits:
-        return ""
-    return "Interpreted period: " + "; ".join(bits)
+        return f"Interpreted period: last {m.group(1)} day(s)"
+    if days:
+        return f"Interpreted period: last {days} day(s)"
+    return ""
 
 
-def _format_conversation_history_for_prompt(
-    history: List[Dict[str, Any]],
-    sql_snippet_max: int = 2800,
-) -> str:
-    """Include assistant sql in the transcript when the client sends it (follow-up accuracy)."""
+def _format_conversation_history(history: List[Dict[str, Any]]) -> str:
     if not history:
         return "No previous conversation."
-    chunks: List[str] = []
+    chunks = []
     for msg in history:
         role = (msg.get("role") or "unknown").upper()
         content = (msg.get("content") or "").strip()
         sql = (msg.get("sql") or "").strip()
         if role == "ASSISTANT" and sql:
-            sq = sql[:sql_snippet_max]
-            chunks.append(f"{role}: {content}\n[LAST_EXECUTED_SQL]\n{sq}")
+            chunks.append(f"{role}: {content}\n[LAST_EXECUTED_SQL]\n{sql[:2000]}")
         else:
             chunks.append(f"{role}: {content}")
     return "\n".join(chunks)
 
 
-def _extract_sql(text: str) -> str:
-    if not text:
-        return ""
-    # Try to find markdown fences
-    fenced = re.search(r"```(?:sql)?\s*([\s\S]*?)```", text, re.IGNORECASE)
-    if fenced:
-        return fenced.group(1).strip()
-    # Otherwise just strip and return
-    return text.strip()
+# ═══════════════════════════════════════════════════════════════════════
+# SMART EXECUTION — Stage 10
+# ═══════════════════════════════════════════════════════════════════════
+
+def _determine_execution_strategy(sql: str, question: str) -> str:
+    """
+    Determine how to execute the query:
+    - 'direct': aggregation/grouped query → run as-is, return all rows
+    - 'top_n': user asked for top N → apply LIMIT if not already present
+    - 'bounded_scan': raw row scan, add safety LIMIT 1000
+    - 'summary_needed': potentially huge dataset → generate summary query
+    """
+    if _is_aggregation_query(sql):
+        return "direct"
+    top_n = _extract_top_n(question)
+    if top_n:
+        return "top_n"
+    q = question.lower()
+    if any(k in q for k in ("all ", "every ", "full list", "show me all", "list all", "everything")):
+        return "bounded_scan"
+    return "bounded_scan"
 
 
-def _build_monthly_billing_revenue_sql_if_applicable(question: str) -> str:
-    """Deterministic fallback for monthly VBRK billing trend queries."""
-    q = (question or "").lower()
-    if "monthly" not in q:
-        return ""
-    if "billing" not in q and "revenue" not in q:
-        return ""
-    if "past year" not in q and "last year" not in q and "12 month" not in q:
-        return ""
+def _apply_execution_strategy(sql: str, strategy: str, question: str) -> str:
+    """Apply the execution strategy to the SQL."""
+    if strategy == "direct":
+        return sql  # No limit on aggregation queries
+    if strategy == "top_n":
+        if not _has_explicit_limit(sql):
+            top_n = _extract_top_n(question) or 100
+            return sql.rstrip(";").strip() + f" LIMIT {top_n}"
+        return sql
+    if strategy == "bounded_scan":
+        if not _has_explicit_limit(sql) and not _is_aggregation_query(sql):
+            return sql.rstrip(";").strip() + " LIMIT 1000"
+        return sql
+    return sql
 
-    # SAP extracts often store FKDAT as YYYYMMDD text; parse safely before filtering.
-    return """
-SELECT
-  to_char(date_trunc('month', to_date("VBRK".fkdat, 'YYYYMMDD')), 'YYYY-MM') AS billing_month,
-  SUM(COALESCE(CAST("VBRK".netwr AS numeric), 0)) AS total_billing_revenue,
-  "VBRK".waerk AS currency
-FROM "VBRK"
-WHERE "VBRK".fkdat IS NOT NULL
-  AND "VBRK".fkdat ~ '^[0-9]{8}$'
-  AND to_date("VBRK".fkdat, 'YYYYMMDD') >= (CURRENT_DATE - INTERVAL '12 months')
-GROUP BY date_trunc('month', to_date("VBRK".fkdat, 'YYYYMMDD')), "VBRK".waerk
-ORDER BY billing_month
-""".strip()
 
-# State Schema
+# ═══════════════════════════════════════════════════════════════════════
+# MULTI-CHART GENERATION — Stage 12/13
+# ═══════════════════════════════════════════════════════════════════════
+
+def _detect_column_types(rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Detect column types: 'numeric', 'date', 'category'."""
+    if not rows:
+        return {}
+    sample = rows[0]
+    types: Dict[str, str] = {}
+    for k, v in sample.items():
+        import decimal
+        if isinstance(v, (int, float, decimal.Decimal)):
+            types[k] = "numeric"
+        elif isinstance(v, str):
+            # Check if it looks like a date
+            if re.match(r"^\d{4}-\d{2}", str(v)):
+                types[k] = "date"
+            elif re.match(r"^\d+\.?\d*$", str(v).replace(",", "")):
+                types[k] = "numeric"
+            else:
+                types[k] = "category"
+        else:
+            types[k] = "category"
+    return types
+
+
+def _generate_multi_charts(
+    rows: List[Dict[str, Any]],
+    question: str,
+    domain: str,
+) -> List[Dict[str, Any]]:
+    """
+    Stage 12/13: Auto Visualization + Multi-Visualization Output.
+    Generate 1-3 chart specs from the query results.
+    """
+    if not rows:
+        return []
+
+    col_types = _detect_column_types(rows)
+    numeric_cols = [k for k, t in col_types.items() if t == "numeric"]
+    date_cols = [k for k, t in col_types.items() if t == "date"]
+    cat_cols = [k for k, t in col_types.items() if t == "category"]
+
+    q = question.lower()
+    charts: List[Dict[str, Any]] = []
+
+    # ── Primary chart ──
+    primary_type = "bar"  # default
+    if date_cols or any(w in q for w in ("trend", "monthly", "over time", "time series", "by month", "timeline", "quarterly", "weekly", "year")):
+        primary_type = "line"
+    elif any(w in q for w in ("share", "distribution", "breakdown", "portion", "pie", "contribution")) and 2 <= len(rows) <= 10:
+        primary_type = "pie"
+    elif len(cat_cols) > 0 and len(rows) > 20:
+        primary_type = "line"  # many data points → line is cleaner
+
+    if numeric_cols and (cat_cols or date_cols):
+        x_key = date_cols[0] if date_cols else (cat_cols[0] if cat_cols else list(rows[0].keys())[0])
+        primary_chart = {
+            "chart_type": primary_type,
+            "title": question[:70],
+            "data": rows,
+            "x_key": x_key,
+            "y_keys": numeric_cols[:3],
+            "period_info": _infer_period_blurb(question, 30),
+        }
+        charts.append(primary_chart)
+
+    # ── Secondary chart — add contrast ──
+    if len(rows) >= 2 and numeric_cols:
+        if primary_type == "line" and len(rows) <= 20 and cat_cols:
+            # Add bar for comparison
+            charts.append({
+                "chart_type": "bar",
+                "title": f"Comparison: {question[:50]}",
+                "data": rows,
+            })
+        elif primary_type == "bar" and len(rows) <= 8 and numeric_cols:
+            # Add pie for share view
+            charts.append({
+                "chart_type": "pie",
+                "title": f"Share: {cat_cols[0] if cat_cols else 'Distribution'} — {numeric_cols[0] if numeric_cols else ''}",
+                "data": rows,
+            })
+
+    # If no chart could be determined but there's data, return a bar
+    if not charts and rows and len(rows) > 0:
+        keys = list(rows[0].keys())
+        if len(keys) >= 2:
+            charts.append({
+                "chart_type": "bar",
+                "title": question[:70],
+                "data": rows,
+            })
+
+    return charts[:3]  # max 3 charts
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# AGENT STATE
+# ═══════════════════════════════════════════════════════════════════════
+
 class AgentState(TypedDict):
     question: str
-    date_context: str
-    table_hint: Optional[str]
-    user_date_range: Dict[str, str]
-
-    top_views: List[str]
-    schema_text: str
-
-    sample_text: str
-
-    generated_sql: str
-    checked_sql: str
-    execution_result: Dict[str, Any]
-    retry_count: int
-    retry_errors: Annotated[List[str], operator.add]
-    zero_rows_retried: bool
-
-    rag_context: str
+    conversation_history: List[Dict[str, Any]]
     dashboard_context: str
     days: int
     time_scope: str
 
-    final_answer: str
-    final_data: List[Dict[str, Any]]
+    # Stage 2/3: Domain + Schema
+    domain: str
+    selected_tables: List[str]
+    schema_text: str
+    top_views: List[str]
+    rag_context: str
+
+    # Stage 3: SQL
+    generated_sql: str
+    checked_sql: str
+
+    # Stage 5: Execution
+    execution_strategy: str
+    execution_result: Dict[str, Any]
     final_sql: str
+    final_data: List[Dict[str, Any]]
+    retry_count: int
+    retry_errors: Annotated[List[str], operator.add]
+    zero_rows_retried: bool
+
+    # Stage 6: Answer + Insights
+    final_answer: str
     confidence: str
     confidence_note: str
-    
-    node_log: Annotated[List[str], operator.add]
-    chart_policy: Optional[str]
-    conversation_history: List[Dict[str, Any]]
+    kpis: List[Dict[str, Any]]
+    insights: List[str]
 
-class LangGraphPlanner:
+    # Stage 7: Visualization
+    charts: List[Dict[str, Any]]
+    chart_policy: Optional[str]
+
+    node_log: Annotated[List[str], operator.add]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INTELLIGENT PLANNER
+# ═══════════════════════════════════════════════════════════════════════
+
+class IntelligentPlanner:
+    """
+    8-stage AI Data Analyst pipeline:
+    1. domain_classify  — fast rule-based domain detection
+    2. select_schema    — domain → tables → ranked columns (no full schema dump)
+    3. build_context    — join hints + RAG
+    4. generate_sql     — SQL generation with focused context
+    5. check_sql        — SQL validation + fix
+    6. smart_execute    — adaptive execution (no dumb limits on aggregations)
+    7. generate_answer  — AI analyst summary + KPIs + insights
+    8. auto_visualize   — multiple chart specs
+    """
+
     def __init__(self, db: Session, api_key: str):
         self.db = db
         self.api_key = api_key
-        sql_model = LANGGRAPH_SQL_MODEL
-        ans_model = LANGGRAPH_ANSWER_MODEL
-        logger.info("[langgraph] SQL model: %s | answer model: %s", sql_model, ans_model)
-        # GPT-5 / o-series: use max_completion_tokens (not max_tokens) and API-safe temperature via helpers.
         self.llm_sql = ChatOpenAI(
             api_key=api_key,
-            model=sql_model,
-            **langchain_openai_temperature_kwargs(sql_model, 0.0),
-            **langchain_openai_limit_kwargs(sql_model, max(512, LANGGRAPH_SQL_MAX_TOKENS)),
+            model=LANGGRAPH_SQL_MODEL,
+            **langchain_openai_temperature_kwargs(LANGGRAPH_SQL_MODEL, 0.0),
+            **langchain_openai_limit_kwargs(LANGGRAPH_SQL_MODEL, max(512, LANGGRAPH_SQL_MAX_TOKENS)),
         )
         self.llm_answer = ChatOpenAI(
             api_key=api_key,
-            model=ans_model,
-            **langchain_openai_temperature_kwargs(ans_model, 0.2),
-            **langchain_openai_limit_kwargs(ans_model, max(256, LANGGRAPH_ANSWER_MAX_TOKENS)),
+            model=LANGGRAPH_ANSWER_MODEL,
+            **langchain_openai_temperature_kwargs(LANGGRAPH_ANSWER_MODEL, 0.2),
+            **langchain_openai_limit_kwargs(LANGGRAPH_ANSWER_MODEL, max(256, LANGGRAPH_ANSWER_MAX_TOKENS)),
         )
 
-    def load_schema(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: load_schema")
-        
-        # Use schema_intelligence to resolve tables
-        from app.services.explicit_table_sql import extract_explicit_table_identifiers, strip_generative_client_routing_block
-        
-        # 1. Strip the [ZODIAC_GENERATIVE_CLIENT_ROUTING] block first
-        clean_query = strip_generative_client_routing_block(state["question"])
-        
-        # 2. Try to get explicit tables (like EKKO, EKPO)
-        explicit_ids = extract_explicit_table_identifiers(clean_query)
-        tables = []
-        
-        if explicit_ids:
-            for t_name in explicit_ids:
-                t_obj = schema_intelligence.tables.get(t_name) or schema_intelligence.tables.get(t_name.upper())
-                if t_obj:
-                    tables.append(t_obj)
-                    
-        # 3. If no explicit tables found, use semantic resolution
-        if not tables:
-            tables = schema_intelligence.resolve_entities(clean_query)
-            
-        if not tables:
-            table_names = ["VBRK", "VBRP", "KNA1", "MARA"]
-            tables = [schema_intelligence.tables.get(t) for t in table_names if t in schema_intelligence.tables]
+    # ── Stage 1+2: Domain Classify ───────────────────────────────────
+    def domain_classify(self, state: AgentState) -> Dict[str, Any]:
+        logger.info("[planner] node: domain_classify")
+        from .explicit_table_sql import strip_generative_client_routing_block
+        clean = strip_generative_client_routing_block(state["question"])
+        domain = _classify_domain(clean)
+        logger.info("[planner] domain=%s", domain)
+        return {"domain": domain, "node_log": [f"domain_classify:{domain}"]}
 
-        # Pull in related masters / line tables so the model sees join keys (KNA1, MAKT, …).
-        seed_names = [t.name for t in tables if t]
-        table_budget = _effective_schema_table_budget(clean_query)
-        expanded_names = _expand_table_names(seed_names, table_budget)
-        tables = [schema_intelligence.tables[n] for n in expanded_names if n in schema_intelligence.tables]
+    # ── Stage 3+4+5: Select Schema ───────────────────────────────────
+    def select_schema(self, state: AgentState) -> Dict[str, Any]:
+        logger.info("[planner] node: select_schema")
+        from .explicit_table_sql import extract_explicit_table_identifiers, strip_generative_client_routing_block
+        clean = strip_generative_client_routing_block(state["question"])
 
-        schema_text_lines = []
-        top_views = []
-        for t in tables:
-            if not t: continue
-            top_views.append(t.name)
-            cols = _prioritized_column_lines(t, LANGGRAPH_MAX_COLUMNS_PER_TABLE)
-            schema_text_lines.append(f"\n{t.name}:")
-            schema_text_lines.extend(cols)
-            
-        schema_text = "\n".join(schema_text_lines)
-        return {
-            "top_views": top_views,
-            "schema_text": schema_text,
-            "node_log": ["load_schema"]
-        }
+        # Explicit table names take priority (e.g., user mentions EKKO, VBRK)
+        explicit = extract_explicit_table_identifiers(clean)
+        if explicit:
+            table_names = [_resolve_table_key(t) for t in explicit if _resolve_table_key(t)]
+            # Expand with related tables
+            domain_extras = DOMAIN_TABLE_MAP.get(state["domain"], DOMAIN_TABLE_MAP["general"])
+            for t in domain_extras.get("support", [])[:3]:
+                key = _resolve_table_key(t)
+                if key and key not in table_names:
+                    table_names.append(key)
+        else:
+            table_names = _select_tables_for_domain(state["domain"], clean, max_tables=8)
 
-    def retrieve_context(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: retrieve_context")
-        chunks: List[str] = []
+        table_names = [t for t in table_names if t][:10]
+        schema_text, resolved = _build_schema_text(table_names, clean)
+
+        # Build join hints (Stage 7: Relationship Graph)
+        join_hints = _get_join_hints(resolved)
+        rag_parts = []
         dc = (state.get("dashboard_context") or "").strip()
         if dc:
-            chunks.append(
-                "[DASHBOARD SNAPSHOT — use for filters, labels, and period hints when relevant]\n" + dc[:8000]
-            )
-        views = set(state.get("top_views") or [])
-        hints: List[str] = []
-        for edge in getattr(schema_intelligence, "join_graph", None) or []:
-            if edge.source_table in views and edge.target_table in views:
-                hints.append(
-                    f'"{edge.source_table}".{edge.source_column.lower()} = '
-                    f'"{edge.target_table}".{edge.target_column.lower()}'
-                )
-        if hints:
-            chunks.append(
-                "══ KNOWN JOIN KEYS (prefer these ON clauses when both tables appear in FROM) ══\n"
-                + "\n".join(sorted(set(hints)))
-            )
-        # Prior SQL is already under [LAST_EXECUTED_SQL] in CONVERSATION HISTORY — omit here to save tokens.
-        rag = "\n\n".join(chunks)
-        return {"rag_context": rag, "node_log": ["retrieve_context"]}
+            rag_parts.append("[DASHBOARD CONTEXT]\n" + dc[:6000])
+        if join_hints:
+            rag_parts.append("══ KNOWN JOIN KEYS ══\n" + join_hints)
+        rag = "\n\n".join(rag_parts)
 
+        logger.info("[planner] selected tables: %s", resolved)
+        return {
+            "selected_tables": resolved,
+            "schema_text": schema_text,
+            "top_views": resolved,
+            "rag_context": rag,
+            "node_log": [f"select_schema:{len(resolved)}_tables"],
+        }
+
+    # ── Stage 8: Generate SQL ────────────────────────────────────────
     def generate_sql(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: generate_sql")
-        
+        logger.info("[planner] node: generate_sql")
         retry_guidance = ""
         if state.get("retry_count", 0) > 0 and state.get("retry_errors"):
-            retry_guidance = f"\n\n══ PREVIOUS ERRORS — do NOT repeat these mistakes ══\n" + "\n".join(state["retry_errors"])
+            retry_guidance = "\n\n══ PREVIOUS ERRORS — do NOT repeat ══\n" + "\n".join(state["retry_errors"])
 
-        system_prompt = f"""You are a SQL expert for an SAP ERP system.
-Write ONE valid SQL SELECT statement that answers the user's question.
-Use ONLY column names that appear in the provided schema — never guess or invent columns.
+        system_prompt = f"""You are a senior SQL expert for an SAP ERP / PostgreSQL system.
+Write ONE valid SQL SELECT statement answering the user's question.
 {ERP_SQL_RULES}
-Output ONLY the SQL — no explanation, no markdown fences, no semicolons at end."""
+Output ONLY the SQL — no explanation, no markdown fences, no semicolons at end.
+IMPORTANT: Do NOT add LIMIT unless the user explicitly asked for top N. The execution layer handles result sizing."""
 
-        scope_lines: List[str] = []
-        if state.get("time_scope"):
-            scope_lines.append(f"time_scope: {state['time_scope']}")
-        if state.get("days"):
-            scope_lines.append(f"dashboard_recent_days: {state['days']}")
-        scope_block = "\n".join(scope_lines) if scope_lines else "None."
         rag = (state.get("rag_context") or "").strip()
-        rag_block = f"\n\n{rag}" if rag else ""
-        dyn_hints = _build_dynamic_question_hints(state["question"], int(state.get("days") or 30))
-        hints_block = f"\n\n{dyn_hints}" if dyn_hints else ""
-
-        hist_txt = _format_conversation_history_for_prompt(state.get("conversation_history") or [])
+        time_hints = _build_time_hints(state["question"], state.get("days", 30))
+        hist_txt = _format_conversation_history(state.get("conversation_history") or [])
         follow_block = ""
         if "LAST_EXECUTED_SQL" in hist_txt:
-            follow_block = """
-══ FOLLOW-UP (when [LAST_EXECUTED_SQL] appears above) ══
-Prefer EDITING that query (filters, JOINs, GROUP BY, ORDER BY, LIMIT) to satisfy the new question.
-Do not rebuild from unrelated tables unless the user clearly switched topics."""
+            follow_block = "\n\n══ FOLLOW-UP: prefer editing the last SQL rather than rebuilding from scratch ══"
 
-        user_prompt = f"""[SCHEMA — ONLY use columns listed here]
+        user_prompt = f"""[SCHEMA — {len(state.get('selected_tables', []))} tables selected based on your question]
 {state.get('schema_text', '')}
 
-[DATE / SCOPE HINTS]
-{scope_block}{rag_block}{hints_block}
+[DOMAIN: {state.get('domain', 'general').upper()}]
+
+{f'[RAG CONTEXT]{chr(10)}{rag}' if rag else ''}
+
+{time_hints}
 
 [CONVERSATION HISTORY]
 {hist_txt}{follow_block}
@@ -598,102 +729,81 @@ Do not rebuild from unrelated tables unless the user clearly switched topics."""
 
         response = self.llm_sql.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ])
-        
         sql = _extract_sql(response.content)
+        logger.info("[planner] generated SQL length=%d", len(sql))
         return {"generated_sql": sql, "node_log": ["generate_sql"]}
 
+    # ── Stage 9: Check SQL ───────────────────────────────────────────
     def check_sql(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: check_sql")
-        # Perform both LLM-based check and deterministic validator check
-        system_prompt = f"""You are a SQL code reviewer for SAP data.
-Your job is to FIX BUGS without changing the intent or scope of the query.
-══ ABSOLUTE DO-NOT-CHANGE RULES ══
-1. NEVER change FROM table name or JOIN table name.
-2. NEVER increase TOP N if the user asked for a specific number.
-3. NEVER remove or change a JOIN that already has a valid ON clause.
-4. PostgreSQL requires quotes for uppercase table names. You MUST quote tables like "EKKO", "EKPO" or PostgreSQL will convert them to lowercase and fail to find the table.
-5. VERY IMPORTANT: In PostgreSQL, all SAP column names are LOWERCASE. You MUST use lowercase for all column names (e.g. "EKKO"."ebeln", "EKPO"."netwr").
-
+        logger.info("[planner] node: check_sql")
+        system_prompt = f"""You are a SQL reviewer for SAP/PostgreSQL.
+Fix bugs without changing intent or scope.
+Rules:
+- NEVER change table names or remove valid JOINs.
+- PostgreSQL: uppercase table names MUST be quoted ("VBRK"). SAP column names are lowercase.
+- Do NOT add LIMIT unless user asked for top N — let execution layer handle sizing.
 {ERP_SQL_RULES}
-
-Output ONLY the SQL — no explanation, no markdown fences."""
+Output ONLY the corrected SQL."""
 
         rag = (state.get("rag_context") or "").strip()
-        rag_block = f"\n\n{rag}" if rag else ""
-        dyn_hints = _build_dynamic_question_hints(state["question"], int(state.get("days") or 30))
-        hints_block = f"\n\n{dyn_hints}" if dyn_hints else ""
         user_prompt = f"""[SCHEMA]
-{state.get('schema_text', '')}{rag_block}{hints_block}
+{state.get('schema_text', '')}
+
+{f'[CONTEXT]{chr(10)}{rag}' if rag else ''}
 
 [SQL TO REVIEW]
 {state.get('generated_sql', '')}"""
 
         response = self.llm_sql.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ])
-        
-        checked_sql = _extract_sql(response.content)
-        
-        # Now run through deterministic validator
-        # Note: In dashboard.py, _validate_sql_candidate is already called after the payload is returned.
-        # So we skip running it here to avoid circular imports.
-        # validation, blocking_detail = _validate_sql_candidate(self.db, state["question"], checked_sql)
-        # if blocking_detail:
-        #     logger.warning(f"[langgraph] deterministic validation blocking: {blocking_detail}")
-            
-        return {"checked_sql": checked_sql, "node_log": ["check_sql"]}
+        checked = _extract_sql(response.content)
+        return {"checked_sql": checked, "node_log": ["check_sql"]}
 
-    def execute_sql(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: execute_sql")
-        sql = _take_first_sql_statement(state.get("checked_sql") or state.get("generated_sql") or "")
-        exec_warnings: List[str] = []
-        auto_limit_applied = False
+    # ── Stage 10: Smart Execute ──────────────────────────────────────
+    def smart_execute(self, state: AgentState) -> Dict[str, Any]:
+        logger.info("[planner] node: smart_execute")
+        raw_sql = _take_first_sql_statement(
+            state.get("checked_sql") or state.get("generated_sql") or ""
+        )
 
-        readonly_err = _validate_readonly_sql(sql)
+        readonly_err = _validate_readonly_sql(raw_sql)
         if readonly_err:
-            execution_result = {
-                "error": readonly_err,
-                "data": [],
-                "row_count": 0,
-                "warnings": [],
-            }
             return {
-                "execution_result": execution_result,
+                "execution_result": {"error": readonly_err, "data": [], "row_count": 0},
                 "final_sql": None,
                 "final_data": [],
-                "node_log": ["execute_sql"],
+                "execution_strategy": "blocked",
+                "node_log": ["smart_execute_blocked"],
             }
 
-        if sql and LANGGRAPH_SELECT_ROW_CAP > 0 and _needs_automatic_row_cap(sql):
-            sql = _append_row_limit(sql, LANGGRAPH_SELECT_ROW_CAP)
-            auto_limit_applied = True
-            logger.info(
-                "[langgraph] applied automatic LIMIT %s for unbounded SELECT",
-                LANGGRAPH_SELECT_ROW_CAP,
-            )
+        # Determine strategy
+        strategy = _determine_execution_strategy(raw_sql, state["question"])
+        sql = _apply_execution_strategy(raw_sql, strategy, state["question"])
+        logger.info("[planner] execution strategy=%s", strategy)
 
-        # Map LLM table ids to physical Postgres names (db_table_mapping.json: e.g. vbrp vs "VBRP").
+        # Apply SQL sanitizers
         try:
             from .sap_sql_agent import _quote_catalog_sql_tables
-
             sql = _quote_catalog_sql_tables(sql)
-        except Exception as _qct_err:
-            logger.debug("[langgraph] _quote_catalog_sql_tables skipped: %s", _qct_err)
+        except Exception:
+            pass
         try:
             from .sql_generation_sanitizers import (
-                prepare_sql_for_sqlalchemy_text_execution as _prep_sql,
-                sanitize_generated_sap_sql as _sanitize_sap,
+                prepare_sql_for_sqlalchemy_text_execution as _prep,
+                sanitize_generated_sap_sql as _sanitize,
             )
-            sql = _sanitize_sap(sql, state.get("question"))
-            sql = _prep_sql(sql)
-        except Exception as _prep_err:
-            logger.debug("[langgraph] prepare_sql skipped: %s", _prep_err)
+            sql = _sanitize(sql, state.get("question"))
+            sql = _prep(sql)
+        except Exception:
+            pass
 
         result_data: List[Dict[str, Any]] = []
         error_msg = ""
+        warnings: List[str] = []
 
         try:
             result = self.db.execute(text(sql))
@@ -705,50 +815,39 @@ Output ONLY the SQL — no explanation, no markdown fences."""
             except Exception:
                 pass
 
-        if (
-            not error_msg
-            and auto_limit_applied
-            and LANGGRAPH_SELECT_ROW_CAP > 0
-            and len(result_data) >= LANGGRAPH_SELECT_ROW_CAP
-        ):
-            exec_warnings.append(
-                f"Results may be truncated at LIMIT {LANGGRAPH_SELECT_ROW_CAP} (safety cap on unbounded SELECT)."
-            )
+        if not error_msg and strategy == "bounded_scan" and len(result_data) >= 1000:
+            warnings.append("Results capped at 1000 rows for row-scan queries. The data may be truncated — consider adding aggregation for complete totals.")
 
         execution_result = {
             "error": error_msg,
             "data": result_data,
             "row_count": len(result_data),
-            "warnings": exec_warnings,
+            "warnings": warnings,
         }
-        
         return {
             "execution_result": execution_result,
+            "execution_strategy": strategy,
             "final_sql": None if error_msg else sql,
             "final_data": [] if error_msg else result_data,
-            "node_log": ["execute_sql"]
+            "node_log": [f"smart_execute:{strategy}:{len(result_data)}_rows"],
         }
 
+    # ── Error Recovery ───────────────────────────────────────────────
     def error_recovery(self, state: AgentState) -> Dict[str, Any]:
         attempt = state.get("retry_count", 0) + 1
-        err_msg = state.get("execution_result", {}).get("error", "unknown error")
+        err_msg = (state.get("execution_result") or {}).get("error", "unknown error")
         failed_sql = state.get("checked_sql") or state.get("generated_sql")
-        logger.info(f"[langgraph] node: error_recovery attempt {attempt}, error: {err_msg}")
-        
-        system_prompt = f"""You are a SQL debugger. A query failed with the error shown. Fix the SQL so it executes without error.
-Study the error carefully.
-IMPORTANT: Table name CASE must match the schema snapshot in [SCHEMA]. Many SAP replicas use lowercase physical names (vbrp, vbrk) while others use quoted uppercase ("VBRK"). Copy identifiers EXACTLY from the schema list — do not guess.
-PostgreSQL: unquoted identifiers fold to lowercase; double-quoted identifiers are case-sensitive.
-VERY IMPORTANT: SAP column names are almost always lowercase (e.g. vbeln, netwr, fkdat).
-{ERP_SQL_RULES}
-Output ONLY the corrected SQL — no explanation."""
+        logger.info("[planner] node: error_recovery attempt=%d error=%s", attempt, err_msg[:120])
 
-        rag = (state.get("rag_context") or "").strip()
-        rag_block = f"\n\n{rag}" if rag else ""
-        dyn_hints = _build_dynamic_question_hints(state["question"], int(state.get("days") or 30))
-        hints_block = f"\n\n{dyn_hints}" if dyn_hints else ""
+        system_prompt = f"""You are a SQL debugger for SAP/PostgreSQL.
+Fix the SQL to eliminate the error below.
+- PostgreSQL: unquoted identifiers fold to lowercase. Double-quote uppercase names: "VBRK", "EKKO".
+- SAP column names are almost always lowercase: vbeln, netwr, fkdat.
+{ERP_SQL_RULES}
+Output ONLY the corrected SQL."""
+
         user_prompt = f"""[SCHEMA]
-{state.get('schema_text', '')}{rag_block}{hints_block}
+{state.get('schema_text', '')}
 
 [FAILED SQL]
 {failed_sql}
@@ -757,279 +856,330 @@ Output ONLY the corrected SQL — no explanation."""
 {err_msg}
 
 Fix the SQL."""
-
         response = self.llm_sql.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ])
-        
-        fixed_sql = _extract_sql(response.content)
+        fixed = _extract_sql(response.content)
         return {
-            "checked_sql": fixed_sql,
-            "generated_sql": fixed_sql,
+            "checked_sql": fixed,
+            "generated_sql": fixed,
             "retry_count": attempt,
             "retry_errors": [f"Attempt {attempt}: {err_msg}"],
-            "node_log": ["error_recovery"]
+            "node_log": ["error_recovery"],
         }
 
+    # ── Zero Rows Recovery ───────────────────────────────────────────
     def zero_rows_recovery(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: zero_rows_recovery")
-        deterministic_sql = _build_monthly_billing_revenue_sql_if_applicable(state.get("question", ""))
-        if deterministic_sql:
-            logger.info("[langgraph] zero_rows_recovery: applying deterministic monthly billing fallback")
-            return {
-                "generated_sql": deterministic_sql,
-                "checked_sql": deterministic_sql,
-                "zero_rows_retried": True,
-                "node_log": ["zero_rows_recovery"]
-            }
-
-        system_prompt = f"""You are a SQL expert. A query returned 0 rows.
-Common causes: date range too narrow, filter value misspelled.
-Fix the query so it returns data.
+        logger.info("[planner] node: zero_rows_recovery")
+        system_prompt = f"""A query returned 0 rows. Widen filters or relax conditions.
+Common causes: date range too narrow, filter value misspelled, wrong join direction.
 {ERP_SQL_RULES}
 Output ONLY the corrected SQL."""
 
-        rag = (state.get("rag_context") or "").strip()
-        rag_block = f"\n\n{rag}" if rag else ""
-        dyn_hints = _build_dynamic_question_hints(state["question"], int(state.get("days") or 30))
-        hints_block = f"\n\n{dyn_hints}" if dyn_hints else ""
         user_prompt = f"""[SCHEMA]
-{state.get('schema_text', '')}{rag_block}{hints_block}
+{state.get('schema_text', '')}
 
-[ZERO-ROW QUERY — widen date range or relax filters]
+[ZERO-ROW SQL]
 {state.get('checked_sql') or state.get('generated_sql')}
 
-Hint: remove or widen date filters; if filtering by name, try removing the filter."""
-
+Widen date filters or remove overly specific filters."""
         response = self.llm_sql.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ])
-        
-        fixed_sql = _extract_sql(response.content)
+        fixed = _extract_sql(response.content)
         return {
-            "generated_sql": fixed_sql,
-            "checked_sql": fixed_sql,
+            "generated_sql": fixed,
+            "checked_sql": fixed,
             "zero_rows_retried": True,
-            "node_log": ["zero_rows_recovery"]
+            "node_log": ["zero_rows_recovery"],
         }
 
+    # ── Stage 11: Generate Answer + Insights ────────────────────────
     def generate_answer(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: generate_answer")
+        logger.info("[planner] node: generate_answer")
         rows = state.get("final_data", [])
-        
+
         if not rows:
-            err = state.get("execution_result", {}).get("error")
-            msg = f"Could not retrieve data due to error: {err}" if err else "No matching records found. Try widening filters."
+            err = (state.get("execution_result") or {}).get("error")
+            msg = f"Could not retrieve data: {err}" if err else "No matching records found. Try widening your filters or rephrasing your question."
             return {
                 "final_answer": msg,
                 "confidence": "low",
                 "confidence_note": "0 rows returned",
-                "node_log": ["generate_answer"]
+                "kpis": [],
+                "insights": [],
+                "node_log": ["generate_answer_no_data"],
             }
-            
-        exec_ws = (state.get("execution_result") or {}).get("warnings") or []
-        sample_n = min(50, len(rows))
+
+        sample_n = min(80, len(rows))
         sample = json.dumps(rows[:sample_n], default=str)
-        system_prompt = """You are a business intelligence analyst for an ERP system.
-Summarize the query results in 2-5 plain English sentences.
+        exec_ws = (state.get("execution_result") or {}).get("warnings") or []
+        warn_block = ("\n[EXECUTION NOTES]\n" + "\n".join(exec_ws)) if exec_ws else ""
+
+        system_prompt = """You are a senior business intelligence analyst for an ERP system.
+Analyse the query results and respond with a JSON object ONLY (no extra text):
+{
+  "summary": "2-4 sentence plain-English executive summary. Lead with the most important number. Be specific — include actual values. Use currency symbols where appropriate.",
+  "kpis": [{"label": "string", "value": "string", "unit": "string (optional)"}],
+  "insights": ["finding 1", "finding 2", "finding 3"],
+  "recommendations": ["action 1", "action 2"]
+}
 Rules:
-- Lead with the single most important number or finding.
-- Use standard number formatting with commas.
-- Be precise — include actual numbers from the data, not vague descriptions.
-- If there are totals/sums in the data, state them prominently.
-- If the data shows a trend, describe the direction clearly.
-- If EXECUTION NOTES mention row caps or truncation, qualify that figures are based on the returned sample only.
-- Do NOT mention SQL, database, columns, or technical details.
-- Speak directly ("Total sales were...", "Revenue is...")."""
-
+- summary: precise, data-driven, no technical jargon (no SQL, columns, tables)
+- kpis: 2-4 key metrics extracted or calculated from the data (totals, averages, top values)
+- insights: 2-3 patterns, trends, or anomalies noticed in the data
+- recommendations: 1-2 actionable business suggestions based on the findings
+- If EXECUTION NOTES mention truncation, qualify figures as "based on sample"
+"""
         dc = (state.get("dashboard_context") or "").strip()
-        dc_block = f"\n\n[CONTEXT]\n{dc[:4000]}\n" if dc else ""
-        warn_block = (
-            "\n\n[EXECUTION NOTES]\n" + "\n".join(exec_ws) + "\n"
-            if exec_ws
-            else ""
-        )
-
         user_prompt = f"""[QUESTION]
-{state['question']}{dc_block}{warn_block}
-[DATA — {len(rows)} row(s)]
+{state['question']}
+[DOMAIN: {state.get('domain', '').upper()}]
+{f'[CONTEXT]{chr(10)}{dc[:3000]}' if dc else ''}
+{warn_block}
+[DATA — {len(rows)} row(s), sample of {sample_n}]
 {sample}"""
 
-        response = self.llm_answer.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ])
+        try:
+            response = self.llm_answer.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ])
+            raw = (response.content or "").strip()
+            # Extract JSON from response
+            json_match = re.search(r'\{[\s\S]*\}', raw)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                summary = parsed.get("summary", "")
+                kpis = parsed.get("kpis", [])
+                insights = parsed.get("insights", [])
+            else:
+                summary = raw
+                kpis = []
+                insights = []
+        except Exception as e:
+            logger.warning("[planner] generate_answer JSON parse failed: %s", e)
+            summary = f"Query returned {len(rows)} row(s)."
+            kpis = []
+            insights = []
 
-        body = (response.content or "").strip()
-        if not body and rows:
-            body = (
-                "Here are the results for your question. "
-                f"The table shows **{len(rows)}** row(s); see the preview below for figures."
-            )
+        if not summary:
+            summary = f"The query returned **{len(rows)}** row(s). See the table and charts below for details."
 
+        conf = "medium" if exec_ws else "high"
         return {
-            "final_answer": body,
-            "confidence": "medium" if exec_ws else "high",
-            "confidence_note": (
-                "Figures reflect returned rows only; see warnings for any row cap."
-                if exec_ws
-                else ""
-            ),
-            "node_log": ["generate_answer"]
+            "final_answer": summary,
+            "kpis": kpis,
+            "insights": insights,
+            "confidence": conf,
+            "confidence_note": "See warnings — results may be sampled." if exec_ws else "",
+            "node_log": ["generate_answer"],
         }
 
-    def verify_answer(self, state: AgentState) -> Dict[str, Any]:
-        logger.info("[langgraph] node: verify_answer")
-        if LANGGRAPH_SKIP_VERIFY_ANSWER:
-            return {"node_log": ["verify_answer_skipped"]}
+    # ── Stage 12/13: Auto Visualize ──────────────────────────────────
+    def auto_visualize(self, state: AgentState) -> Dict[str, Any]:
+        logger.info("[planner] node: auto_visualize")
         rows = state.get("final_data", [])
-        if not state.get("final_answer") or not rows:
-            return {"node_log": ["verify_answer"]}
-            
-        sample_n = min(50, len(rows))
-        sample = json.dumps(rows[:sample_n], default=str)
-        system_prompt = """You are a fact-checker.
-Verify every number in the answer is correct according to the data.
-If a number is wrong, silently correct it.
-Respond ONLY with the (possibly corrected) answer text."""
-
-        exec_ws = (state.get("execution_result") or {}).get("warnings") or []
-        notes_block = (
-            "\n\n[EXECUTION NOTES]\n" + "\n".join(exec_ws)
-            if exec_ws
-            else ""
-        )
-        user_prompt = f"""[ANSWER TO VERIFY]
-{state['final_answer']}
-
-[ACTUAL DATA]
-{sample}{notes_block}"""
-
-        response = self.llm_answer.invoke([
-            SystemMessage(
-                content=system_prompt
-                + " If notes mention truncation/caps, ensure the answer does not imply complete population totals."
-            ),
-            HumanMessage(content=user_prompt),
-        ])
-
-        verified = (response.content or "").strip()
-        if not verified:
-            # Do not wipe a good summary if the verifier returns nothing (common on slow/mobile timeouts).
-            return {"node_log": ["verify_answer_empty_kept_prior"]}
-
+        domain = state.get("domain", "general")
+        charts = _generate_multi_charts(rows, state.get("question", ""), domain)
+        policy = charts[0]["chart_type"] if charts else "table"
+        logger.info("[planner] generated %d chart(s), primary=%s", len(charts), policy)
         return {
-            "final_answer": verified,
-            "node_log": ["verify_answer"],
-        }
-        
-    def visualize(self, state: AgentState) -> Dict[str, Any]:
-        """Detect chart policy based on data shape, matching frontend ECharts capabilities."""
-        logger.info("[langgraph] node: visualize")
-        rows = state.get("final_data", [])
-        policy = "table"
-        
-        if rows:
-            import decimal
-
-            keys = list(rows[0].keys())
-            has_numeric = False
-            for k in keys:
-                val = rows[0][k]
-                if isinstance(val, (int, float, decimal.Decimal)):
-                    has_numeric = True
-                    break
-                if isinstance(val, str) and val.replace(".", "", 1).replace("-", "", 1).isdigit():
-                    has_numeric = True
-                    break
-
-            qlow = (state.get("question") or "").lower()
-            trend_q = any(
-                w in qlow
-                for w in (
-                    "trend",
-                    "monthly",
-                    "over time",
-                    "time series",
-                    "by month",
-                    "quarter",
-                    "weekly",
-                    "year over year",
-                    "yoy",
-                )
-            )
-
-            if has_numeric and len(keys) >= 2:
-                policy = "line" if trend_q else "bar"
-                if not trend_q and len(rows) > 10:
-                    policy = "line"
-                if "pie" in qlow or "share" in qlow:
-                    policy = "pie"
-                    
-        return {
+            "charts": charts,
             "chart_policy": policy,
-            "node_log": ["visualize"]
+            "node_log": [f"auto_visualize:{len(charts)}_charts"],
         }
 
-def route_after_execute(state: AgentState) -> str:
-    err = state.get("execution_result", {}).get("error")
+
+# ═══════════════════════════════════════════════════════════════════════
+# GRAPH BUILDER
+# ═══════════════════════════════════════════════════════════════════════
+
+def _route_after_execute(state: AgentState) -> str:
+    err = (state.get("execution_result") or {}).get("error", "")
     rows = len(state.get("final_data", []))
-    
+
     if err:
-        el = (err or "").lower()
-        # Non-recoverable policy violations — don't waste repair attempts
-        if "read-only" in el or "forbidden statement" in el or "only select" in el:
+        el = err.lower()
+        if any(k in el for k in ("read-only", "forbidden statement", "only select")):
             return "generate_answer"
         if state.get("retry_count", 0) < 3:
             return "error_recovery"
         return "generate_answer"
-    
+
     if rows == 0 and not state.get("zero_rows_retried", False):
         return "zero_rows_recovery"
-        
-    return "visualize"
 
-def build_graph(planner: LangGraphPlanner) -> Any:
-    graph = StateGraph(AgentState)
-    
-    graph.add_node("load_schema", planner.load_schema)
-    graph.add_node("retrieve_context", planner.retrieve_context)
-    graph.add_node("generate_sql", planner.generate_sql)
-    graph.add_node("check_sql", planner.check_sql)
-    graph.add_node("execute_sql", planner.execute_sql)
-    graph.add_node("error_recovery", planner.error_recovery)
-    graph.add_node("zero_rows_recovery", planner.zero_rows_recovery)
-    graph.add_node("visualize", planner.visualize)
-    graph.add_node("generate_answer", planner.generate_answer)
-    graph.add_node("verify_answer", planner.verify_answer)
-    
-    graph.add_edge(START, "load_schema")
-    graph.add_edge("load_schema", "retrieve_context")
-    graph.add_edge("retrieve_context", "generate_sql")
-    graph.add_edge("generate_sql", "check_sql")
-    graph.add_edge("check_sql", "execute_sql")
-    
-    graph.add_conditional_edges(
-        "execute_sql", 
-        route_after_execute,
+    return "auto_visualize"
+
+
+def _build_intelligent_graph(planner: IntelligentPlanner) -> Any:
+    g = StateGraph(AgentState)
+    g.add_node("domain_classify", planner.domain_classify)
+    g.add_node("select_schema", planner.select_schema)
+    g.add_node("generate_sql", planner.generate_sql)
+    g.add_node("check_sql", planner.check_sql)
+    g.add_node("smart_execute", planner.smart_execute)
+    g.add_node("error_recovery", planner.error_recovery)
+    g.add_node("zero_rows_recovery", planner.zero_rows_recovery)
+    g.add_node("auto_visualize", planner.auto_visualize)
+    g.add_node("generate_answer", planner.generate_answer)
+
+    g.add_edge(START, "domain_classify")
+    g.add_edge("domain_classify", "select_schema")
+    g.add_edge("select_schema", "generate_sql")
+    g.add_edge("generate_sql", "check_sql")
+    g.add_edge("check_sql", "smart_execute")
+
+    g.add_conditional_edges(
+        "smart_execute",
+        _route_after_execute,
         {
             "error_recovery": "error_recovery",
             "zero_rows_recovery": "zero_rows_recovery",
-            "visualize": "visualize",
-            "generate_answer": "generate_answer"
-        }
+            "auto_visualize": "auto_visualize",
+            "generate_answer": "generate_answer",
+        },
     )
-    
-    graph.add_edge("error_recovery", "execute_sql")
-    graph.add_edge("zero_rows_recovery", "execute_sql")
-    
-    graph.add_edge("visualize", "generate_answer")
-    graph.add_edge("generate_answer", "verify_answer")
-    graph.add_edge("verify_answer", END)
-    
-    return graph.compile()
+    g.add_edge("error_recovery", "smart_execute")
+    g.add_edge("zero_rows_recovery", "smart_execute")
+    g.add_edge("auto_visualize", "generate_answer")
+    g.add_edge("generate_answer", END)
+
+    return g.compile()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════
+
+def _run_intelligent_pipeline(
+    db: Session,
+    api_key: str,
+    query: str,
+    conversation_history: list,
+    dashboard_context: str,
+    days_int: int,
+    time_scope: str,
+) -> Dict[str, Any]:
+    t0 = time.time()
+    from .ai_query_accuracy import build_query_telemetry, log_query_telemetry
+
+    planner = IntelligentPlanner(db, api_key)
+    app = _build_intelligent_graph(planner)
+
+    initial_state: AgentState = {
+        "question": query,
+        "conversation_history": conversation_history or [],
+        "dashboard_context": (dashboard_context or "").strip()[:10000],
+        "days": max(1, min(365, days_int)),
+        "time_scope": (time_scope or "current").strip(),
+        "domain": "general",
+        "selected_tables": [],
+        "schema_text": "",
+        "top_views": [],
+        "rag_context": "",
+        "generated_sql": "",
+        "checked_sql": "",
+        "execution_strategy": "",
+        "execution_result": {},
+        "final_sql": "",
+        "final_data": [],
+        "retry_count": 0,
+        "retry_errors": [],
+        "zero_rows_retried": False,
+        "final_answer": "",
+        "confidence": "medium",
+        "confidence_note": "",
+        "kpis": [],
+        "insights": [],
+        "charts": [],
+        "chart_policy": None,
+        "node_log": [],
+    }
+
+    result = app.invoke(initial_state)
+
+    def _to_json_safe(obj: Any) -> Any:
+        try:
+            return json.loads(json.dumps(obj, default=str))
+        except Exception:
+            return obj if not isinstance(obj, list) else []
+
+    safe_data = _to_json_safe(result.get("final_data") or [])
+    charts = _to_json_safe(result.get("charts") or [])
+    kpis = result.get("kpis") or []
+    insights = result.get("insights") or []
+
+    exec_meta = result.get("execution_result") or {}
+    exec_warnings = list(exec_meta.get("warnings") or [])
+    retries = result.get("retry_errors") or []
+    conf = result.get("confidence", "medium")
+    if exec_meta.get("error"):
+        conf = "low"
+    elif len(retries) >= 2:
+        conf = "low"
+
+    reply_text = (result.get("final_answer") or "").strip()
+    if not reply_text:
+        reply_text = (
+            "Query complete. See the table and charts below."
+            if safe_data
+            else "No data found. Try rephrasing or widening your filters."
+        )
+
+    # Build reply with insights appended
+    if insights:
+        reply_text += "\n\n**Key Insights:**\n" + "\n".join(f"- {i}" for i in insights[:3])
+
+    payload = {
+        "reply": reply_text,
+        "action": "new",
+        "reason": "intelligent_pipeline",
+        "sql_path_reason": "intelligent_pipeline",
+        "domain": result.get("domain", "general"),
+        "schema_tables": result.get("top_views") or [],
+        "sql": result.get("final_sql", ""),
+        "rows_preview": safe_data,
+        "charts": charts,
+        "kpis": kpis,
+        "insights": insights,
+        "time_scope": time_scope or "current",
+        "date_range": {},
+        "period_info": _infer_period_blurb(query or "", days_int),
+        "errors": retries,
+        "warnings": exec_warnings,
+        "confidence": conf,
+        "confidence_note": (result.get("confidence_note") or "").strip(),
+        "node_log": result.get("node_log", []),
+        "execution_strategy": result.get("execution_strategy", ""),
+    }
+
+    elapsed_ms = int((time.time() - t0) * 1000)
+    try:
+        tel = build_query_telemetry(
+            question=query or "",
+            pipeline="intelligent_pipeline",
+            reason="intelligent_pipeline",
+            sql=str(payload.get("sql") or ""),
+            preview_row_count=len(safe_data),
+            total_ms=elapsed_ms,
+            sql_repair_count=len(retries),
+            node_log_count=len(result.get("node_log") or []),
+            execution_error=(exec_meta.get("error") if isinstance(exec_meta, dict) else None),
+            extra={"confidence": conf, "domain": result.get("domain", "")},
+        )
+        payload["query_telemetry"] = tel
+        log_query_telemetry(tel, question_snip=query or "")
+    except Exception:
+        pass
+
+    logger.info("[planner] intelligent_pipeline done: %dms, %d rows, %d charts, domain=%s",
+                elapsed_ms, len(safe_data), len(charts), result.get("domain", ""))
+    return payload
+
 
 def run_planner(
     db: Session,
@@ -1041,157 +1191,67 @@ def run_planner(
     days: int = 30,
     time_scope: str = "current",
 ) -> Dict[str, Any]:
-    t0 = time.time()
-    from .ai_query_accuracy import build_query_telemetry, log_query_telemetry
-
+    """
+    Main entry point. Runs fast-path resolvers first (operational + catalog),
+    then falls back to the intelligent multi-stage pipeline.
+    """
     try:
         days_int = int(days)
     except (TypeError, ValueError):
         days_int = 30
 
-    # Billing/revenue ranking & aggregates: deterministic SQL — avoids multi-minute LangGraph loops.
+    # ── Fast path 1: Operational Zodiac queries ──────────────────────
     try:
-        from .intent_dashboard_fast_path import try_intent_dashboard_fast_path
-
-        fast = try_intent_dashboard_fast_path(
-            db,
-            query or "",
-            days=days_int,
-            time_scope=(time_scope or "current").strip(),
+        from .dashboard_query_router import (
+            _try_operational, _try_sql_catalog, _build_payload,
+            _serialize_rows, _execute_sql
         )
-        if fast is not None:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            tel = build_query_telemetry(
-                question=query or "",
-                pipeline="intent_sql_fast",
-                reason=str(fast.get("reason") or "intent_sql_fast"),
-                sql=str(fast.get("sql") or ""),
-                preview_row_count=len(fast.get("rows_preview") or []),
-                total_ms=elapsed_ms,
-                sql_repair_count=0,
-                node_log_count=len(fast.get("node_log") or []),
-                execution_error=None,
+        from ..config.config import USE_SAP_DB_FOR_AI
+
+        if not USE_SAP_DB_FOR_AI:
+            op_result = _try_operational(
+                db, query or "",
+                time_scope=time_scope or "current",
+                days=days_int,
+                api_key=api_key,
             )
-            fast["query_telemetry"] = tel
-            fast["sql_path_reason"] = "intent_sql_fast"
-            log_query_telemetry(tel, question_snip=query or "")
-            return fast
-    except Exception as _fast_err:
-        logger.debug("intent fast path skipped: %s", _fast_err)
+            if op_result:
+                logger.info("[planner] fast-path: operational match")
+                return op_result
+    except Exception as e:
+        logger.debug("[planner] operational fast-path skipped: %s", e)
 
-    planner = LangGraphPlanner(db, api_key)
-    app = build_graph(planner)
-    
-    initial_state = {
-        "question": query,
-        "date_context": "",
-        "table_hint": None,
-        "user_date_range": {},
-        "top_views": [],
-        "schema_text": "",
-        "sample_text": "",
-        "generated_sql": "",
-        "checked_sql": "",
-        "execution_result": {},
-        "retry_count": 0,
-        "retry_errors": [],
-        "zero_rows_retried": False,
-        "rag_context": "",
-        "dashboard_context": (dashboard_context or "").strip()[:12000],
-        "days": max(1, min(365, days_int)),
-        "time_scope": (time_scope or "current").strip(),
-        "final_answer": "",
-        "final_data": [],
-        "final_sql": "",
-        "confidence": "medium",
-        "confidence_note": "",
-        "node_log": [],
-        "chart_policy": None,
-        "conversation_history": conversation_history or []
-    }
-    
-    result = app.invoke(initial_state)
+    # ── Fast path 2: SQL catalog patterns ───────────────────────────
+    try:
+        from .dashboard_query_router import _try_sql_catalog, _build_payload
+        catalog_result = _try_sql_catalog(db, query or "")
+        if catalog_result:
+            sql, rows, tables = catalog_result
+            logger.info("[planner] fast-path: catalog match")
+            return _build_payload(
+                query=query or "",
+                pipeline="sql_catalog",
+                reason="sql_catalog",
+                sql=sql,
+                rows=rows,
+                reply=f"Found **{len(rows)}** row(s) matching your query.",
+                schema_tables=tables,
+                time_scope=time_scope or "current",
+                period_info=_infer_period_blurb(query or "", days_int),
+                confidence="high" if rows else "medium",
+                charts=_generate_multi_charts(rows, query or "", "general") if rows else [],
+                elapsed_ms=0,
+            )
+    except Exception as e:
+        logger.debug("[planner] catalog fast-path skipped: %s", e)
 
-    period_blurb = _infer_period_blurb(
-        query or "",
-        max(1, min(365, days_int)),
-        (time_scope or "current").strip(),
+    # ── Primary: Intelligent multi-stage pipeline ────────────────────
+    return _run_intelligent_pipeline(
+        db=db,
+        api_key=api_key,
+        query=query or "",
+        conversation_history=conversation_history or [],
+        dashboard_context=dashboard_context or "",
+        days_int=days_int,
+        time_scope=time_scope or "current",
     )
-
-    chart_spec = None
-    if result.get("chart_policy") and result.get("chart_policy") != "table":
-        chart_spec = {
-            "chart_type": result["chart_policy"],
-            "title": f"{result['chart_policy'].capitalize()} Chart",
-            "data": result.get("final_data", []),
-        }
-        
-    exec_meta = result.get("execution_result") or {}
-    exec_warnings = list(exec_meta.get("warnings") or [])
-    retries = result.get("retry_errors") or []
-    conf = result.get("confidence", "medium")
-    exec_err = exec_meta.get("error")
-    if exec_err:
-        conf = "low"
-    elif len(retries) >= 2:
-        conf = "low"
-    elif len(retries) == 1 and conf == "high":
-        conf = "medium"
-    warn_blob = " ".join(exec_warnings).lower()
-    if exec_warnings and "truncat" in warn_blob and conf == "high":
-        conf = "medium"
-
-    cn = (result.get("confidence_note") or "").strip()
-    if len(retries) >= 1:
-        cn = (cn + " " if cn else "").strip() + (
-            f" SQL required {len(retries)} repair attempt(s) before success."
-        )
-    if exec_warnings and not cn:
-        cn = "See warnings — results may be subject to row or sampling limits."
-
-    final_rows = result.get("final_data") or []
-    reply_text = (result.get("final_answer") or "").strip()
-    if not reply_text:
-        reply_text = (
-            "The model did not return a written summary. "
-            "Use the **table and chart** below for the query results."
-            if final_rows
-            else "Analysis complete."
-        )
-
-    payload = {
-        "reply": reply_text,
-        "action": "new",
-        "reason": "langgraph_pipeline",
-        "schema_tables": result.get("top_views") or [],
-        "sql": result.get("final_sql", ""),
-        "rows_preview": result.get("final_data", []),
-        "charts": [chart_spec] if chart_spec else [],
-        "time_scope": result.get("time_scope") or "current",
-        "date_range": {},
-        "period_info": period_blurb,
-        "errors": retries,
-        "warnings": exec_warnings,
-        "confidence": conf,
-        "confidence_note": cn.strip(),
-        "node_log": result.get("node_log", []),
-    }
-
-    elapsed_ms = int((time.time() - t0) * 1000)
-    tel = build_query_telemetry(
-        question=query or "",
-        pipeline="langgraph_pipeline",
-        reason="langgraph_pipeline",
-        sql=str(payload.get("sql") or ""),
-        preview_row_count=len(payload.get("rows_preview") or []),
-        total_ms=elapsed_ms,
-        sql_repair_count=len(retries),
-        node_log_count=len(result.get("node_log") or []),
-        execution_error=(exec_meta.get("error") if isinstance(exec_meta, dict) else None),
-        extra={"confidence": conf, "zero_rows_retried": bool(result.get("zero_rows_retried"))},
-    )
-    payload["query_telemetry"] = tel
-    payload["sql_path_reason"] = "langgraph_pipeline"
-    log_query_telemetry(tel, question_snip=query or "")
-
-    return payload

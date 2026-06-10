@@ -1,0 +1,845 @@
+'use client';
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { dashboardApi } from '@/lib/api';
+import AIChartRenderer from './ai/AIChartRenderer';
+import MultiModelComparison from './ai/MultiModelComparison';
+import {
+  buildAugmentedGenerativeQuestion,
+  GENERATIVE_ROUTING_OPTIONS,
+  type GenerativeRoutingFocus,
+} from './sapGenerativeAIRouting';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import {
+  Database, Search, Pin, PinOff, ChevronRight,
+  Send, Sparkles, X, Copy, Check, RotateCcw, Zap,
+  Table2, GitBranch, BarChart3,
+  CheckCircle2, Circle, Loader2, AlertTriangle, Code2,
+  ArrowRight, Eye, EyeOff,
+  Layers, MessageSquare,
+} from 'lucide-react';
+
+// ─── Table catalogue ─────────────────────────────────────────────────────────
+const TABLE_CATEGORIES: Record<string, string[]> = {
+  'Sales & Billing': ['VBRK', 'vbrp', 'VBAK', 'VBAP', 'VBEP', 'VBFA', 'KONV', 'MVKE'],
+  'Delivery': ['LIKP', 'LIPS', 'LSEG'],
+  'Customer': ['KNA1', 'KNVV', 'KNVP', 'KNBK'],
+  'Vendor': ['LFA1', 'LFB1', 'LFM1'],
+  'Purchasing': ['EKKO', 'EKPO', 'EBAN', 'EINA', 'EINE', 'RBKP', 'RSEG', 'RESB'],
+  'Material': ['MARA', 'MARC', 'MARD', 'MAKT', 'MARM', 'MBEW', 'MBEWH', 'MCHB', 'MEAN', 'MKPF', 'MLAN', 'MSLB', 'STKO', 'STPO', 'CABN', 'AUSP', 'KLAH'],
+  'Finance (FI)': ['BKPF', 'BSEG', 'BSAD', 'FAGLFLEXA', 'DFKKOP', 'T016T'],
+  'Controlling (CO)': ['COEP', 'COSP', 'COSS', 'CEPC', 'CSKS', 'CSKT', 'CRHD', 'AUFK', 'AFKO', 'AFPO'],
+  'Costing (CO-PC)': ['CKIS', 'CKHS', 'CKIT', 'KEKO', 'KEPH', 'CKMLCR', 'CKMLHD', 'CKMLPP', 'CKMLPR', 'TCKH1', 'TCKH2'],
+  'CO-PA': ['CE1BGIS', 'CE1IDEA', 'CE1INT1', 'CE1PR22', 'CE1R300', 'CE1S_AL', 'CE1S_CP', 'CE1S_GO', 'CE2BGIS', 'CE2IDEA', 'CE2S_AL', 'CE2S_CP', 'CS2S_GO'],
+  'SAT / Inbound': ['sat_documents', 'sat_canonical_merged', 'sat_company_mappings', 'sat_duplicate_checks', 'sat_processing_logs', 'sat_sap_account_mapping', 'sat_simple_merged', 'sat_supplier_account_mapping', 'certificate_renewal_requests', 'certificate_revocation_list', 'customer_certificates', 'customer_delivery_settings', 'customer_receiver_rfc', 'customer_tokens', 'supplier_tokens', 'user_customers'],
+  'Zodiac / EDI': ['ai_analysis_memory', 'ai_query_embeddings', 'ai_query_memory', 'ai_training_data', 'converted_invoices', 'correction_cache', 'customers', 'invoice_business_data', 'invoice_v2_business_data', 'invoice_v2_correction_cache', 'invoice_v2_documents', 'invoice_v2_validated', 'v2_correction_cache', 'v2_invoice_documents', 'v2_validated_invoices', 'zodiac_customers', 'zodiac_invoice_failed_edi', 'zodiac_invoice_success_edi', 'zodiac_users'],
+};
+
+const TABLE_DESC: Record<string, string> = {
+  VBRK: 'Billing Document Header', vbrp: 'Billing Document Items', VBAK: 'Sales Order Header',
+  VBAP: 'Sales Order Items', VBEP: 'Schedule Lines', VBFA: 'Document Flow', KONV: 'Pricing Conditions',
+  LIKP: 'Delivery Header', LIPS: 'Delivery Items', KNA1: 'Customer Master', KNVV: 'Customer Sales Data',
+  LFA1: 'Vendor Master', LFB1: 'Vendor Company', LFM1: 'Vendor Purchasing', EKKO: 'Purchase Order Header',
+  EKPO: 'Purchase Order Items', EBAN: 'Purchase Requisition', MARA: 'Material Master', MARC: 'Material Plant Data',
+  MARD: 'Stock Levels', MAKT: 'Material Descriptions', BKPF: 'Accounting Doc Header', BSEG: 'Accounting Doc Segment',
+  FAGLFLEXA: 'GL Actual Line Items', COEP: 'CO Doc Line Items', CEPC: 'Profit Center', CSKS: 'Cost Center',
+  CKIS: 'Cost Estimate Items', KEKO: 'Product Costing Header',
+  sat_documents: 'SAT/CFDI Inbound Documents (Mexico)', sat_simple_merged: 'SAT Simple Merged Records',
+  supplier_tokens: 'Supplier Auth Tokens', customer_tokens: 'Customer Auth Tokens',
+  zodiac_invoice_failed_edi: 'Failed EDI Invoices', zodiac_invoice_success_edi: 'Successful EDI Invoices',
+  converted_invoices: 'Successfully Converted Invoices', invoice_v2_documents: 'Invoice V2 Documents',
+};
+
+const TABLE_SUGGESTIONS: Record<string, string[]> = {
+  sat_documents: [
+    'Show all inbound SAT documents ordered by received date',
+    'Which suppliers sent the most SAT documents?',
+    'Show SAT document count by type (invoice, credit note, payment)',
+    'Show SAT documents received this week',
+    'Show supplier with highest total invoice amount',
+  ],
+  VBRK: [
+    'Show top 10 customers by billing amount',
+    'What is total billed amount this month?',
+    'List invoices that are open or overdue',
+    'Compare billing volume by month',
+  ],
+  VBAK: [
+    'Show recent sales orders with status',
+    'Which orders are not fully delivered?',
+    'Show sales order value by customer',
+  ],
+  EKKO: [
+    'Show open purchase orders by vendor',
+    'What is total PO value this quarter?',
+    'List purchase orders pending goods receipt',
+  ],
+  KNA1: ['Show top customers by revenue', 'List customers with payment terms', 'Show customer distribution by country'],
+  BKPF: ['Show accounting documents posted this month', 'List documents by posting date', 'Show GL postings by cost center'],
+  zodiac_invoice_failed_edi: ['Show failed EDI invoices and error reasons', 'Which customer has most EDI failures?'],
+};
+
+const DEFAULT_SUGGESTIONS = [
+  'Show top 10 customers by revenue',
+  'Show all inbound SAT documents received this week',
+  'Which suppliers sent the most documents?',
+  'Show sales order count by month',
+  'Show failed invoices and error summary',
+  'Show billing documents with amounts and currency',
+];
+
+/** Realtime analysis chips — synced with test_operational_realtime_prompts.py */
+const REALTIME_PROMPTS: { label: string; query: string }[] = [
+  { label: 'Failed invoices', query: 'Summarize failed invoices and main failure reasons in the last 30 days (Zodiac EDI failure tables)' },
+  { label: 'Inbound SAT', query: 'Summarize inbound SAT documents: merges, sent to SAP vs pending, and top suppliers (sat_canonical_merged)' },
+  { label: 'Top customers', query: 'Show top customers with currency and ranked invoice counts from extracted Zodiac invoice business data (last 30 days)' },
+  { label: 'Outbound flow', query: 'Show outbound process flow with document counts per V2 funnel stage (received, validated, failed, pending)' },
+  { label: 'EDI status', query: 'EDI status: count succeeded vs failed EDI submissions by Zodiac account for the last 30 days' },
+  { label: 'Conversion rate', query: 'What is the V2 invoice conversion success rate versus documents received, and which funnel step shows the largest backlog?' },
+  { label: 'Inbound vs Outbound', query: 'Compare inbound SAT documents vs outbound invoices by document type for the last 30 days' },
+  { label: 'By supplier', query: 'Compare inbound SAT vs outbound invoices by supplier name for the last 30 days' },
+  { label: 'By country', query: 'Compare inbound SAT vs outbound invoices by customer country for the last 30 days' },
+];
+
+const AI_CONTEXT_KEYS = ['stats', 'inbound_summary', 'business_summary', 'process_flow', 'failed_summary'];
+
+// ─── AI Pipeline steps (cosmetic progress — matches scalable router, not LangGraph) ──
+const PIPELINE_STEPS = [
+  { id: 'route', label: 'Routing your question', msStart: 0 },
+  { id: 'schema', label: 'Matching tables from 121-table schema', msStart: 1500 },
+  { id: 'sql', label: 'Generating SQL (catalog or adaptive engine)', msStart: 4000 },
+  { id: 'execute', label: 'Executing query on database', msStart: 12000 },
+  { id: 'summarize', label: 'Summarizing results', msStart: 25000 },
+];
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+type SchemaEntry = { columns: string[]; description: string; source: string };
+type SchemaMap = Record<string, SchemaEntry>;
+type ConvMessage = { role: 'user' | 'assistant'; content: string; ts: number; result?: QueryResult };
+type QueryResult = {
+  sql?: string;
+  data?: any[];
+  charts?: any[];
+  meta?: {
+    schema_tables?: string[];
+    confidence?: string;
+    warnings?: string[];
+    sql_path_reason?: string;
+    query_telemetry?: {
+      pipeline?: string;
+      reason?: string;
+      total_ms?: number;
+      execution_error?: string;
+      sql_repair_count?: number;
+    };
+  };
+};
+
+type MultiModelResult = {
+  synthesized_answer: string;
+  best_model: string;
+  total_time_ms: number;
+  sql?: string;
+  row_count?: number;
+  models: { name: string; content: string; response_time_ms: number; success: boolean; error?: string }[];
+};
+
+// ─── Copy hook ───────────────────────────────────────────────────────────────
+function useCopy() {
+  const [copied, setCopied] = useState(false);
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return { copied, copy };
+}
+
+// ─── Schema Sidebar ──────────────────────────────────────────────────────────
+function SchemaSidebar({
+  schema, schemaLoading, pinnedTables, onTogglePin, onSelectTable, selectedTables,
+}: {
+  schema: SchemaMap; schemaLoading: boolean; pinnedTables: Set<string>;
+  onTogglePin: (t: string) => void; onSelectTable: (t: string) => void; selectedTables: Set<string>;
+}) {
+  const [search, setSearch] = useState('');
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set(['SAT / Inbound', 'Sales & Billing']));
+  const [expandedTable, setExpandedTable] = useState<string | null>(null);
+
+  const filteredCats = Object.entries(TABLE_CATEGORIES).map(([cat, tables]) => ({
+    cat,
+    tables: tables.filter((t) =>
+      !search || t.toLowerCase().includes(search.toLowerCase()) ||
+      (TABLE_DESC[t] || '').toLowerCase().includes(search.toLowerCase())
+    ),
+  })).filter(({ tables }) => !search || tables.length > 0);
+
+  const toggleCat = (cat: string) => {
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat); else next.add(cat);
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-white border-r border-slate-200">
+      <div className="px-3 py-3 border-b border-slate-100 space-y-2">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-blue-600 flex-shrink-0" />
+          <span className="text-sm font-semibold text-slate-800">Schema Browser</span>
+          {!schemaLoading && (
+            <span className="ml-auto text-[10px] font-mono bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full">121 tables</span>
+          )}
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <input
+            type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search tables…"
+            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+          />
+        </div>
+      </div>
+
+      {pinnedTables.size > 0 && (
+        <div className="px-3 py-2 border-b border-slate-100 bg-blue-50/40">
+          <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+            <Pin className="h-2.5 w-2.5" /> Pinned
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {[...pinnedTables].map((t) => (
+              <button key={t} onClick={() => onSelectTable(t)}
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-all ${selectedTables.has(t) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50'}`}>
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto py-1">
+        {schemaLoading ? (
+          <div className="flex items-center justify-center py-10 gap-2 text-slate-400">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-xs">Loading schema…</span>
+          </div>
+        ) : (
+          filteredCats.map(({ cat, tables }) => (
+            <div key={cat}>
+              <button onClick={() => toggleCat(cat)}
+                className="w-full flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-50 transition-colors text-left">
+                <ChevronRight className={`h-3 w-3 text-slate-400 flex-shrink-0 transition-transform ${expandedCats.has(cat) ? 'rotate-90' : ''}`} />
+                <span className="text-[11px] font-semibold text-slate-600 flex-1">{cat}</span>
+                <span className="text-[10px] text-slate-400">{tables.length}</span>
+              </button>
+              {expandedCats.has(cat) && tables.map((tbl) => {
+                const cols = schema[tbl]?.columns || [];
+                const isExpanded = expandedTable === tbl;
+                const isSelected = selectedTables.has(tbl);
+                const isPinned = pinnedTables.has(tbl);
+                return (
+                  <div key={tbl} className={`${isSelected ? 'bg-blue-50/70' : ''}`}>
+                    <div className="flex items-center gap-1 px-2 py-1 hover:bg-slate-50 group">
+                      <button onClick={() => setExpandedTable(isExpanded ? null : tbl)}
+                        className="flex-1 flex items-center gap-1.5 min-w-0">
+                        <Table2 className={`h-3 w-3 flex-shrink-0 ${isSelected ? 'text-blue-600' : 'text-slate-400'}`} />
+                        <span className={`text-[11px] font-mono truncate ${isSelected ? 'text-blue-700 font-semibold' : 'text-slate-700'}`}>{tbl}</span>
+                        {cols.length > 0 && <span className="text-[9px] text-slate-400 flex-shrink-0">({cols.length})</span>}
+                      </button>
+                      <button onClick={() => onTogglePin(tbl)}
+                        className={`p-0.5 rounded opacity-0 group-hover:opacity-100 transition-all ${isPinned ? 'opacity-100 text-blue-500' : 'text-slate-400 hover:text-blue-500'}`}>
+                        {isPinned ? <Pin className="h-2.5 w-2.5" /> : <PinOff className="h-2.5 w-2.5" />}
+                      </button>
+                      <button onClick={() => onSelectTable(tbl)}
+                        className={`p-0.5 rounded transition-colors ${isSelected ? 'text-blue-600' : 'text-slate-400 hover:text-blue-500 opacity-0 group-hover:opacity-100'}`}>
+                        <CheckCircle2 className="h-2.5 w-2.5" />
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="ml-6 mr-2 mb-1.5 px-2.5 py-2 bg-slate-50 border border-slate-100 rounded-xl">
+                        {TABLE_DESC[tbl] && <p className="text-[10px] text-slate-500 mb-1.5 italic">{TABLE_DESC[tbl]}</p>}
+                        {cols.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {cols.slice(0, 18).map((col) => (
+                              <span key={col} className="text-[9px] font-mono bg-white border border-slate-200 text-slate-600 px-1 py-0.5 rounded">{col}</span>
+                            ))}
+                            {cols.length > 18 && <span className="text-[9px] text-slate-400">+{cols.length - 18} more</span>}
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-slate-400">Click a query to explore columns</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Pipeline Progress ───────────────────────────────────────────────────────
+function PipelineProgress({ elapsed }: { elapsed: number }) {
+  const elapsedMs = elapsed * 1000;
+  const done = PIPELINE_STEPS.filter((s) => elapsedMs > s.msStart);
+  const next = PIPELINE_STEPS.find((s) => elapsedMs <= s.msStart);
+  const pct = Math.min(95, (done.length / PIPELINE_STEPS.length) * 100);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm max-w-md">
+      <div className="flex items-center gap-2.5 mb-4">
+        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow">
+          <Sparkles className="h-4 w-4 text-white" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-slate-800">AI SQL Copilot</p>
+          <p className="text-[10px] text-slate-400">Universal SQL engine (121 tables)…</p>
+        </div>
+        <span className="ml-auto text-xs font-mono text-slate-400">{elapsed.toFixed(1)}s</span>
+      </div>
+
+      <div className="h-1.5 bg-slate-100 rounded-full mb-4 overflow-hidden">
+        <div className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-500"
+          style={{ width: `${pct}%` }} />
+      </div>
+
+      <div className="space-y-2.5">
+        {PIPELINE_STEPS.map((step) => {
+          const isDone = elapsedMs > step.msStart;
+          const isActive = next?.id === step.id;
+          return (
+            <div key={step.id} className={`flex items-center gap-3 transition-all duration-300 ${!isDone && !isActive ? 'opacity-25' : ''}`}>
+              <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 transition-all ${
+                isDone ? 'bg-emerald-100' : isActive ? 'bg-blue-100 ring-2 ring-blue-300 ring-offset-1' : 'bg-slate-100'
+              }`}>
+                {isDone ? (
+                  <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                ) : isActive ? (
+                  <Loader2 className="h-3 w-3 text-blue-600 animate-spin" />
+                ) : (
+                  <Circle className="h-3 w-3 text-slate-300" />
+                )}
+              </div>
+              <span className={`text-xs font-medium transition-colors ${isDone ? 'text-emerald-700' : isActive ? 'text-blue-700' : 'text-slate-400'}`}>
+                {step.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Reasoning Panel ──────────────────────────────────────────────────────
+function AIReasoningPanel({ result, schemaMap }: { result: QueryResult | null; schemaMap: SchemaMap }) {
+  if (!result) {
+    return (
+      <div className="p-4 flex flex-col items-center justify-center h-full text-center">
+        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mb-3">
+          <Layers className="h-6 w-6 text-slate-300" />
+        </div>
+        <p className="text-xs text-slate-400 leading-relaxed">AI reasoning context will appear here after your first query</p>
+      </div>
+    );
+  }
+
+  const tables = result.meta?.schema_tables || [];
+  const confidence = result.meta?.confidence || 'medium';
+  const warnings = result.meta?.warnings || [];
+  const rows = result.data || [];
+  const repairCount = result.meta?.query_telemetry?.sql_repair_count || 0;
+  const confPct = confidence === 'high' ? 95 : confidence === 'medium' ? 72 : 45;
+  const confStyle = {
+    high: { bar: 'bg-emerald-500', bg: 'bg-emerald-50 border-emerald-200 text-emerald-800', label: 'High — schema validated' },
+    medium: { bar: 'bg-amber-500', bg: 'bg-amber-50 border-amber-200 text-amber-800', label: 'Medium — AI generated' },
+    low: { bar: 'bg-red-500', bg: 'bg-red-50 border-red-200 text-red-800', label: 'Low — review carefully' },
+  }[confidence as 'high' | 'medium' | 'low'] || { bar: 'bg-amber-500', bg: 'bg-amber-50 border-amber-200 text-amber-800', label: 'AI generated' };
+
+  return (
+    <div className="p-3 space-y-4 overflow-y-auto h-full">
+      {/* Confidence */}
+      <div className={`rounded-xl border p-3 ${confStyle.bg}`}>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold">Confidence</span>
+          <span className="text-xl font-bold font-mono">{confPct}%</span>
+        </div>
+        <div className="h-1.5 bg-white/60 rounded-full overflow-hidden mb-1.5">
+          <div className={`h-full rounded-full transition-all duration-700 ${confStyle.bar}`} style={{ width: `${confPct}%` }} />
+        </div>
+        <p className="text-[10px] opacity-80">{confStyle.label}</p>
+      </div>
+
+      {/* Tables used */}
+      {tables.length > 0 && (
+        <div>
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <GitBranch className="h-3 w-3" /> Tables Used ({tables.length})
+          </p>
+          <div className="space-y-1">
+            {tables.map((t) => (
+              <div key={t} className="flex items-start gap-2 py-1.5 px-2.5 bg-slate-50 border border-slate-100 rounded-lg">
+                <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-mono font-semibold text-slate-800">{t}</p>
+                  {(TABLE_DESC[t] || schemaMap[t]?.description) && (
+                    <p className="text-[9px] text-slate-400 leading-tight">{TABLE_DESC[t] || schemaMap[t]?.description}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Result stats */}
+      <div>
+        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+          <BarChart3 className="h-3 w-3" /> Result
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 text-center">
+            <p className="text-xl font-bold font-mono text-slate-800">{rows.length}</p>
+            <p className="text-[10px] text-slate-500">Rows</p>
+          </div>
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 text-center">
+            <p className="text-xl font-bold font-mono text-slate-800">{result.charts?.length || 0}</p>
+            <p className="text-[10px] text-slate-500">Charts</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Warnings */}
+      {repairCount >= 2 && (
+        <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 p-2.5">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <p className="text-[10px] text-amber-800">SQL required {repairCount} repair attempts. Review the generated query carefully.</p>
+        </div>
+      )}
+      {warnings.map((w, i) => (
+        <div key={i} className="flex items-start gap-2 rounded-xl bg-blue-50 border border-blue-200 p-2.5">
+          <AlertTriangle className="h-3.5 w-3.5 text-blue-600 flex-shrink-0 mt-0.5" />
+          <p className="text-[10px] text-blue-800">{w}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Data Table ──────────────────────────────────────────────────────────────
+function DataTable({ rows }: { rows: any[] }) {
+  if (!rows?.length) return null;
+  const keys = Array.from(new Set(rows.flatMap(Object.keys)));
+  return (
+    <div className="overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm" style={{ maxHeight: 340 }}>
+      <table className="w-full text-xs border-collapse">
+        <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+          <tr>
+            {keys.map((k) => (
+              <th key={k} className="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">
+                {k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className="border-b border-slate-50 hover:bg-slate-50/80 transition-colors">
+              {keys.map((k) => (
+                <td key={k} className="px-3 py-2 text-slate-700 max-w-[180px] truncate" title={String(row[k] ?? '')}>
+                  {row[k] === null || row[k] === undefined
+                    ? <span className="text-slate-300">—</span>
+                    : String(row[k])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="px-3 py-1.5 border-t border-slate-100 bg-slate-50/80 text-[10px] text-slate-400">
+        {rows.length} row{rows.length !== 1 ? 's' : ''} returned
+      </div>
+    </div>
+  );
+}
+
+// ─── SQL Card ────────────────────────────────────────────────────────────────
+function SQLCard({ sql }: { sql: string }) {
+  const { copied, copy } = useCopy();
+  const [expanded, setExpanded] = useState(false);
+  const lines = sql.split('\n');
+  const needsExpand = lines.length > 5;
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-[#0f172a] overflow-hidden shadow-md">
+      <div className="flex items-center gap-2 px-3 py-2 bg-[#1e293b] border-b border-slate-700">
+        <div className="flex gap-1">
+          <span className="w-2.5 h-2.5 rounded-full bg-red-500/70" />
+          <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/70" />
+          <span className="w-2.5 h-2.5 rounded-full bg-green-500/70" />
+        </div>
+        <Code2 className="h-3.5 w-3.5 text-slate-500 ml-1" />
+        <span className="text-[11px] font-mono text-slate-500">Generated SQL</span>
+        <div className="ml-auto flex items-center gap-3">
+          {needsExpand && (
+            <button onClick={() => setExpanded(!expanded)}
+              className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1 transition-colors">
+              {expanded ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              {expanded ? 'Collapse' : 'Expand'}
+            </button>
+          )}
+          <button onClick={() => copy(sql)}
+            className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1 transition-colors">
+            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
+      </div>
+      <pre className="px-4 py-3 text-[11px] font-mono text-emerald-300 overflow-auto leading-relaxed whitespace-pre-wrap">
+        {expanded ? sql : lines.slice(0, 5).join('\n')}
+        {!expanded && needsExpand && <span className="text-slate-600"> …</span>}
+      </pre>
+    </div>
+  );
+}
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+export default function DashboardAIAnalysis() {
+  const [schema, setSchema] = useState<SchemaMap>({});
+  const [schemaLoading, setSchemaLoading] = useState(true);
+  const [pinnedTables, setPinnedTables] = useState<Set<string>>(new Set(['sat_documents', 'VBRK', 'KNA1']));
+  const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [contextOpen, setContextOpen] = useState(true);
+
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [history, setHistory] = useState<ConvMessage[]>([]);
+  const [result, setResult] = useState<QueryResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [queryMode, setQueryMode] = useState<'new' | 'follow_up'>('new');
+  const [analysisSection, setAnalysisSection] = useState<'realtime' | 'historical'>('realtime');
+  const [routingFocus, setRoutingFocus] = useState<GenerativeRoutingFocus>('auto');
+  const [compareModels, setCompareModels] = useState(false);
+  const [multiModelResult, setMultiModelResult] = useState<MultiModelResult | null>(null);
+  const [recentInbound, setRecentInbound] = useState<any[]>([]);
+  const [lastInboundPoll, setLastInboundPoll] = useState<number | null>(null);
+
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    dashboardApi.getAIAnalysisSchema()
+      .then((res) => setSchema(res.schema || {}))
+      .catch(() => {})
+      .finally(() => setSchemaLoading(false));
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [history, loading, multiModelResult]);
+
+  // Poll recent inbound SAT docs for realtime analysis panel (provider push can replace this later)
+  useEffect(() => {
+    if (analysisSection !== 'realtime') return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await dashboardApi.getV2InboundRecent(8);
+        if (!cancelled) {
+          setRecentInbound(data.recent_documents || []);
+          setLastInboundPoll(Date.now());
+        }
+      } catch {
+        /* auth / network — ignore */
+      }
+    };
+    poll();
+    const id = setInterval(poll, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [analysisSection]);
+
+  const startTimer = () => {
+    setElapsed(0);
+    elapsedRef.current = setInterval(() => setElapsed((e) => +(e + 0.1).toFixed(1)), 100);
+  };
+  const stopTimer = () => { if (elapsedRef.current) clearInterval(elapsedRef.current); };
+
+  const handleTogglePin = (t: string) => setPinnedTables((p) => { const n = new Set(p); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+  const handleSelectTable = (t: string) => setSelectedTables((p) => { const n = new Set(p); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+  const handleAbort = () => { abortRef.current?.abort(); stopTimer(); setLoading(false); };
+
+  const sendQuery = useCallback(async (question: string) => {
+    if (!question.trim() || loading) return;
+    setError(null);
+    setLoading(true);
+    setResult(null);
+    setMultiModelResult(null);
+    startTimer();
+
+    const userMsg: ConvMessage = { role: 'user', content: question, ts: Date.now() };
+    const newHistory = queryMode === 'follow_up' ? [...history, userMsg] : [userMsg];
+    setHistory(newHistory);
+
+    abortRef.current = new AbortController();
+    const convHistory = queryMode === 'follow_up' ? history.map((m) => ({ role: m.role, content: m.content })) : [];
+    const hint = selectedTables.size > 0 ? `\n[Hint — use tables: ${[...selectedTables].join(', ')}]` : '';
+    const augmented = buildAugmentedGenerativeQuestion(question + hint, {
+      queryMode,
+      section: analysisSection,
+      routingFocus,
+    });
+    const timeScope = analysisSection === 'realtime' ? 'current' : 'historical';
+
+    try {
+      if (compareModels) {
+        const mm = await dashboardApi.postAIAnalysisMultiModel(
+          augmented,
+          AI_CONTEXT_KEYS,
+          365,
+          timeScope,
+        );
+        setMultiModelResult(mm);
+        const reply = mm.synthesized_answer || 'Multi-model analysis completed.';
+        const rowNote = mm.row_count ? ` (${mm.row_count} SQL rows)` : '';
+        const newResult: QueryResult = {
+          sql: mm.sql,
+          data: [],
+          charts: [],
+          meta: { sql_path_reason: 'multi_model_compare' },
+        };
+        setHistory([...newHistory, { role: 'assistant', content: reply + rowNote, ts: Date.now(), result: newResult }]);
+        setResult(newResult);
+        setQueryMode('follow_up');
+        return;
+      }
+
+      const res = await dashboardApi.postAIAnalysisChat(
+        augmented,
+        convHistory,
+        AI_CONTEXT_KEYS,
+        365,
+        timeScope,
+        undefined,
+        queryMode,
+        { signal: abortRef.current.signal }
+      );
+      const reply = res.reply || res.summary || res.answer || 'Query completed.';
+      const rows = res.rows || res.data || res.rows_preview || [];
+      const newResult: QueryResult = {
+        sql: res.sql,
+        data: rows,
+        charts: res.charts || [],
+        meta: {
+          schema_tables: res.schema_tables,
+          confidence: res.confidence,
+          sql_path_reason: res.sql_path_reason || res.reason,
+          query_telemetry: res.query_telemetry,
+        },
+      };
+      setHistory([...newHistory, { role: 'assistant', content: reply, ts: Date.now(), result: newResult }]);
+      setResult(newResult);
+      setQueryMode('follow_up');
+    } catch (err: any) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError') return;
+      const rawMsg = typeof err?.message === 'string' ? err.message : '';
+      const msg = (!rawMsg || rawMsg === '[object Object]')
+        ? (typeof err?.response?.data?.detail === 'string'
+            ? err.response.data.detail
+            : err?.response?.data?.detail?.message || 'Query failed — the AI could not generate valid SQL. Try rephrasing or select tables from the schema browser.')
+        : rawMsg;
+      setError(msg);
+      setHistory([...newHistory, { role: 'assistant', content: `⚠️ ${msg}`, ts: Date.now() }]);
+    } finally {
+      stopTimer();
+      setLoading(false);
+    }
+  }, [loading, history, queryMode, selectedTables, analysisSection, routingFocus, compareModels]);
+
+  const handleSubmit = () => { const q = input.trim(); if (!q) return; setInput(''); sendQuery(q); };
+  const handleNewConversation = () => {
+    setHistory([]);
+    setResult(null);
+    setMultiModelResult(null);
+    setError(null);
+    setQueryMode('new');
+  };
+
+  const activeSuggestions = analysisSection === 'realtime'
+    ? REALTIME_PROMPTS.map((p) => p.query)
+    : (() => {
+        for (const t of [...selectedTables, ...pinnedTables]) {
+          if (TABLE_SUGGESTIONS[t]) return TABLE_SUGGESTIONS[t];
+        }
+        return DEFAULT_SUGGESTIONS;
+      })();
+
+  return (
+    <div className="flex flex-1 min-h-0 bg-slate-50 overflow-hidden">
+
+      {/* ── Schema Sidebar ─────────────────────────────────────────── */}
+      <div className={`flex-shrink-0 transition-all duration-300 ${sidebarOpen ? 'w-64' : 'w-0 overflow-hidden'}`}>
+        <div className="h-full">
+          <SchemaSidebar
+            schema={schema} schemaLoading={schemaLoading}
+            pinnedTables={pinnedTables} onTogglePin={handleTogglePin}
+            onSelectTable={handleSelectTable} selectedTables={selectedTables}
+          />
+        </div>
+      </div>
+
+      {/* ── Main Workspace ─────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* Toolbar */}
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-white border-b border-slate-200 flex-shrink-0">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)}
+            className={`p-1.5 rounded-lg hover:bg-slate-100 transition-colors ${sidebarOpen ? 'text-blue-600 bg-blue-50' : 'text-slate-500'}`}
+            title="Toggle schema browser">
+            <Database className="h-4 w-4" />
+          </button>
+
+          <div className="flex items-center gap-1.5 ml-1">
+            <div className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="text-xs text-slate-600 font-medium">PostgreSQL · Zodiac · 121 tables</span>
+          </div>
+
+          {selectedTables.size > 0 && (
+            <div className="flex items-center gap-1.5 ml-2 flex-wrap">
+              <span className="text-[10px] text-slate-400">Query hint:</span>
+              {[...selectedTables].map((t) => (
+                <span key={t} className="inline-flex items-center gap-1 text-[10px] font-mono bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
+                  {t} <button onClick={() => handleSelectTable(t)}><X className="h-2 w-2" /></button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+            <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+              <button onClick={() => setAnalysisSection('realtime')}
+                className={`text-[11px] px-2.5 py-1 rounded-md transition-all ${analysisSection === 'realtime' ? 'bg-white shadow-sm text-emerald-700 font-medium' : 'text-slate-500 hover:text-slate-700'}`}>
+                Realtime
+              </button>
+              <button onClick={() => setAnalysisSection('historical')}
+                className={`text-[11px] px-2.5 py-1 rounded-md transition-all ${analysisSection === 'historical' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-700'}`}>
+                Historical
+              </button>
+            </div>
+            <select
+              value={routingFocus}
+              onChange={(e) => setRoutingFocus(e.target.value as GenerativeRoutingFocus)}
+              className="text-[11px] border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-600"
+              title="Schema routing focus"
+            >
+              {GENERATIVE_ROUTING_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>{o.short}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={compareModels}
+                onChange={(e) => setCompareModels(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Compare Gemini
+            </label>
+            <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+              <button onClick={() => setQueryMode('new')}
+                className={`text-[11px] px-2.5 py-1 rounded-md transition-all ${queryMode === 'new' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-700'}`}>
+                New Query
+              </button>
+              <button onClick={() => setQueryMode('follow_up')} disabled={history.length === 0}
+                className={`text-[11px] px-2.5 py-1 rounded-md transition-all disabled:opacity-40 ${queryMode === 'follow_up' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-700'}`}>
+                Follow-up
+              </button>
+            </div>
+            <button onClick={handleNewConversation}
+              className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors text-slate-500" title="New conversation">
+              <RotateCcw className="h-4 w-4" />
+            </button>
+            <button onClick={() => setContextOpen(!contextOpen)}
+              className={`p-1.5 rounded-lg hover:bg-slate-100 transition-colors ${contextOpen ? 'text-blue-600 bg-blue-50' : 'text-slate-500'}`}
+              title="Toggle AI context panel">
+              <Layers className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Realtime analysis bar */}
+        {analysisSection === 'realtime' && (
+          <div className="flex-shrink-0 border-b border-slate-200 bg-gradient-to-r from-emerald-50/80 to-white px-4 py-2.5 space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                Realtime analysis
+              </span>
+              {lastInboundPoll && (
+                <span className="text-[10px] text-slate-400">
+                  Last sync {new Date(lastInboundPoll).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+              {recentInbound.length > 0 && (
+                <span className="text-[10px] text-slate-500 truncate max-w-md">
+                  Latest: {recentInbound[0].supplier_name || recentInbound[0].supplier_rfc} · {recentInbound[0].doc_type}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {REALTIME_PROMPTS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled={loading}
+                  onClick={() => sendQuery(p.query)}
+                  className="text-[10px] px-2.5 py-1 rounded-full border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-50 hover:border-emerald-300 transition-colors disabled:opacity-50"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Conversation */}
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+
+          {/* Empty state */}
+          {history.length === 0 && !loading && (
+            <div className="max-w-2xl mx-auto">
+              <div className="text-center mb-8 pt-4">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
+                  <Sparkles className="h-8 w-8 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">AI SQL Copilot</h2>
+                <p className="text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+                  Ask any question in plain English. I'll identify relevant tables from the 121-table database, validate against the schema, and generate accurate SQL — then explain every decision.
+                </p>
+              </div>
+
+              <div className="mb-3">
+                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Zap className="h-3 w-3 text-amber-400" />
+                  {analysisSection === 'realtime'
+                    ? 'Realtime prompts — click to run'
+                    : selectedTables.size > 0 ? `Suggestions for ${[...selectedTables].join(', ')}` : 'Example queries — click to run'}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {activeSuggestions.slice(0, 6).map((q, i) => (
+                    <button key={i} onClick={() => sendQuery(q)}
+                      className="text-left px-4 py-3 rounded-xl border border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/60 hover:shadow-md transition-all text-sm text-slate-700 flex items-center gap-2.5 group shadow-sm">
+                      <ArrowRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-blue-500 flex-shrink-0 transition-colors" />
+                      <span className="leading-snug">{q}<

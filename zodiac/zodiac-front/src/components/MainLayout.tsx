@@ -9,9 +9,11 @@ import { Menu, X } from 'lucide-react';
 interface MainLayoutProps {
   children: React.ReactNode;
   topSection?: React.ReactNode;
+  /** Full-height page with no outer padding (e.g. AI copilot). */
+  fillViewport?: boolean;
 }
 
-export default function MainLayout({ children, topSection }: MainLayoutProps) {
+export default function MainLayout({ children, topSection, fillViewport = false }: MainLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -72,6 +74,7 @@ export default function MainLayout({ children, topSection }: MainLayoutProps) {
         {/* Main Content Area */}
         <div className={cn(
           "flex-1 transition-all duration-300 flex flex-col min-w-0 w-full",
+          fillViewport && "h-screen overflow-hidden",
           !isMobile && (sidebarCollapsed ? "lg:ml-16" : "lg:ml-64")
         )}>
           {/* Mobile Menu Button */}
@@ -97,8 +100,14 @@ export default function MainLayout({ children, topSection }: MainLayoutProps) {
           )}
           
           {/* Scrollable Main Content */}
-          <main className="flex-1 overflow-auto">
-            <div className="w-full min-w-0 p-4 sm:p-6">
+          <main className={cn(
+            "flex-1 min-h-0",
+            fillViewport ? "overflow-hidden flex flex-col" : "overflow-auto",
+          )}>
+            <div className={cn(
+              "w-full min-w-0",
+              fillViewport ? "flex-1 flex flex-col min-h-0" : "p-4 sm:p-6",
+            )}>
               {children}
             </div>
           </main>

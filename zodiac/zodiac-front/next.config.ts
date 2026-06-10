@@ -15,6 +15,12 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
+  experimental: {
+    // AI queries can run for minutes; the default ~30s proxy timeout caused
+    // "socket hang up" 500s on /api/query/adaptive even though the backend
+    // completed fine. Match the 10-minute axios timeout used by the frontend.
+    proxyTimeout: 600_000,
+  },
   async rewrites() {
     return [
       {

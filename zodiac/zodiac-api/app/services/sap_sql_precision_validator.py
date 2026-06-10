@@ -487,10 +487,20 @@ def validate_sql_precision(
         # Currency: summed billing amounts without WAERK may mix currencies.
         if touches_billing_tables and re.search(r"\b(sum|avg)\s*\([^)]*netwr", sql_l, re.IGNORECASE):
             if "waerk" not in sql_l:
-                warnings.append(
-                    "Currency (WAERK) is not in the SQL; if multiple currencies exist, totals may mix currencies — "
-                    "group or filter by WAERK for per-currency sums, or state that amounts are mixed."
-                )
+                # For ranking/breakdown questions ("highest sales by customer", "top N ..."),
+                # mixing currencies produces a WRONG ranking (e.g. JPY totals dwarf EUR).
+                # Enforce as a hard error so the agent regenerates with WAERK grouped/filtered.
+                if ranking_intent or breakdown_intent:
+                    errors.append(
+                        "Ranking/breakdown over summed NETWR must handle currency: include VBRK.WAERK in "
+                        "GROUP BY (per-currency ranking) or filter to a single currency (e.g. WAERK = 'EUR'). "
+                        "Summing mixed currencies produces wrong rankings."
+                    )
+                else:
+                    warnings.append(
+                        "Currency (WAERK) is not in the SQL; if multiple currencies exist, totals may mix currencies — "
+                        "group or filter by WAERK for per-currency sums, or state that amounts are mixed."
+                    )
 
     return SapSqlValidationResult(
         is_valid=not errors,

@@ -8,7 +8,29 @@ import json
 import logging
 import re
 from dataclasses import dataclass, asdict
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
+
+
+def _parse_numeric_string(s: str) -> Optional[float]:
+    """Parse a numeric string that may use US ("1,234.56") or EU ("1.234,56") separators."""
+    try:
+        if "," in s and "." in s:
+            # Whichever separator comes last is the decimal mark
+            if s.rfind(",") > s.rfind("."):
+                s = s.replace(".", "").replace(",", ".")  # EU style
+            else:
+                s = s.replace(",", "")  # US style
+        elif "," in s:
+            # Single comma followed by exactly 1-2 digits → decimal mark; else thousands
+            head, _, tail = s.rpartition(",")
+            if head and len(tail) in (1, 2):
+                s = f"{head.replace(',', '')}.{tail}"
+            else:
+                s = s.replace(",", "")
+        return float(s)
+    except (ValueError, TypeError):
+        return None
 
 from openai import OpenAI
 
@@ -629,8 +651,19 @@ def _format_chart_data(rows: List[Dict[str, Any]], max_items: int = 50) -> List[
             elif isinstance(value, str) and re.fullmatch(r"\d{8}", value.strip()):
                 # Even columns not named "date" but containing 8-digit SAP dates — convert them
                 clean_row[key] = _format_sap_date(value.strip())
-            elif isinstance(value, (int, float)):
+            elif isinstance(value, (int, float, Decimal)):
+                # Decimal (Postgres NUMERIC) must become a JSON number, not a string —
+                # string amounts break chart math in the frontend (table looks right, bars wrong).
                 clean_row[key] = round(float(value), 2)
+            elif (
+                isinstance(value, str)
+                and re.fullmatch(r"-?\d[\d.,]*\d|-?\d", value.strip())
+                and ("," in value or "." in value)
+            ):
+                # Numeric string carrying separators ("1,234.56" / "1.234,56" / "123.45").
+                # Pure-digit strings are left alone — they may be SAP IDs (kunnr, matnr, vbeln).
+                parsed = _parse_numeric_string(value.strip())
+                clean_row[key] = round(parsed, 2) if parsed is not None else str(value)
             else:
                 clean_row[key] = str(value)
         formatted.append(clean_row)
