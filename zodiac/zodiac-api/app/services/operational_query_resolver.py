@@ -78,18 +78,43 @@ OUTBOUND FUNNEL NOTE: To show the processing funnel for V2 invoices:
   - Not yet validated = v2_invoice_documents WHERE validation_status = 'not_validated'
 
 ### invoice_v2_business_data
-Business-level extracted invoice metrics (current app pipeline).
+Business-level extracted invoice metrics (current app pipeline). This is the richest outbound
+table — prefer it over invoice_business_data for any question involving country, supplier,
+product, industry, or fiscal period breakdowns.
 Columns:
 - id (INTEGER, primary key)
 - user_id (INTEGER)
 - customer_id (TEXT, nullable)
 - customer_name (TEXT, nullable)
+- customer_country (TEXT, nullable, indexed) — destination/billing country of the customer
+- supplier_id (TEXT, nullable, indexed)
+- supplier_name (TEXT, nullable, indexed)
+- products (JSON column type — NOT jsonb; SQLAlchemy model uses Column(JSON)), nullable —
+  array of line items, e.g.
+  [{"name": "...", "description": "...", "quantity": 1, "price": 100.0, "revenue": 100.0,
+    "unit_code": "...", "ids": [...]}, ...]. Since the column is plain `json`, cast it to jsonb
+  before unnesting: `LATERAL jsonb_array_elements(COALESCE(products::jsonb, '[]'::jsonb)) AS prod`
+  and `prod->>'name'` / `(prod->>'revenue')::NUMERIC` to break out by product.
+- total_products_count (INTEGER, default 0)
 - total_amount (NUMERIC, nullable)
 - tax_amount (NUMERIC, nullable)
 - currency (TEXT, nullable)
-- invoice_date (DATE, nullable)
+- industry (TEXT, nullable, indexed) — auto-inferred from products/customer
+- industry_confidence (FLOAT, nullable) — 0.0 to 1.0
+- invoice_date (DATE, nullable, indexed)
+- fiscal_quarter (TEXT, nullable) — e.g. 'Q1'
+- fiscal_year (INTEGER, nullable, indexed)
+- season (TEXT, nullable)
+- current_stage (TEXT, nullable, indexed) — VALIDATED, CONVERTED, SENT, etc. (E2E funnel stage)
+- stage_status (TEXT, nullable) — SUCCESS, FAILED, PENDING
 - created_at (TIMESTAMPTZ)
 - updated_at (TIMESTAMPTZ)
+
+NOTE ON DIMENSION COVERAGE: country and product/material breakdowns only exist on the OUTBOUND
+side (this table). The inbound sat_documents/sat_canonical_merged tables (CFDI/SAT) have no
+country column (CFDI is Mexico-only on the supplier side) and no structured product/line-item
+column — only doc_type (INVOICE/PAYMENT/CREDIT_NOTE) and a raw xml_content blob. Never invent
+inbound country or product numbers; state plainly that those dimensions aren't tracked inbound.
 
 ### invoice_business_data
 Legacy invoice business metrics table.
@@ -278,6 +303,15 @@ IMPORTANT RULES:
 8. Return ONLY a single SELECT statement. No markdown, no explanation, no multiple statements.
 9. Keep the query focused and efficient. Use LIMIT 100 if no natural limit applies.
 10. Use TO_CHAR(DATE_TRUNC('month', col), 'YYYY-MM') for month grouping.
+11. For "by product" questions on invoice_v2_business_data, the `products` column is plain `json`
+    (not jsonb) — cast it before unnesting: `LATERAL jsonb_array_elements(COALESCE(products::jsonb,
+    '[]'::jsonb)) AS prod` and group by `prod->>'name'`. For "by country", group by
+    `customer_country`. You may combine both in one GROUP BY for "by country and product"
+    questions — this table supports both dimensions at once.
+12. The inbound SAT/CFDI tables (sat_documents, sat_canonical_merged) have no country or product
+    column. If asked to compare inbound vs outbound by country or product, only break out the
+    outbound side by those dimensions and represent inbound as a single total (do not fabricate
+    a per-country or per-product inbound number).
 
 Generate the SQL now (or respond NOT_OPERATIONAL if not applicable):"""
 
@@ -717,53 +751,52 @@ ORDER BY sort_order
 """.strip()
 
 
-def _detect_inbound_outbound_dimension(question: str) -> str:
+def _detect_inbound_outbound_dimensions(question: str) -> List[str]:
+    """
+    Returns the ordered, de-duplicated list of comparison dimensions mentioned in the
+    question, e.g. "compare inbound vs outbound by country and product" -> ["country", "product"].
+    A question can name more than one dimension; previously only the first match (by a fixed
+    priority order) was honored and the rest were silently dropped. Falls back to ["doc_type"]
+    if nothing specific is mentioned.
+    """
     q = (question or "").lower()
-    if any(w in q for w in ("country", "countries", "nation")):
-        return "country"
-    if any(w in q for w in ("product", "products", "material", "sku")):
-        return "product"
+    dims: List[str] = []
     if any(w in q for w in ("supplier", "vendor")):
-        return "supplier"
+        dims.append("supplier")
+    if any(w in q for w in ("country", "countries", "nation")):
+        dims.append("country")
+    if any(w in q for w in ("product", "products", "material", "sku")):
+        dims.append("product")
     if any(w in q for w in ("document type", "doc type", "doc_type", "type of document")):
-        return "doc_type"
-    return "doc_type"
+        dims.append("doc_type")
+    return dims or ["doc_type"]
+
+
+def _detect_inbound_outbound_dimension(question: str) -> str:
+    """Back-compat shim: first dimension only. Prefer _detect_inbound_outbound_dimensions."""
+    return _detect_inbound_outbound_dimensions(question)[0]
 
 
 def build_inbound_vs_outbound_comparison_sql(question: str, days: int = 30) -> str:
     """
     Side-by-side inbound SAT vs outbound invoice metrics.
-    Supports grouping by document type, supplier, country, or product.
+    Supports grouping by any combination of: document type, supplier, country, product.
+
+    Honesty constraint: sat_documents (inbound CFDI) has no country or product/material
+    column — only supplier_rfc/supplier_name and doc_type are real shared dimensions. When the
+    question asks for country and/or product, the outbound side (invoice_v2_business_data, which
+    really does have customer_country and a products JSONB array) is broken out fully; the inbound
+    side is only ever broken out by supplier/doc_type, with country/product columns on inbound
+    rows labeled as not tracked rather than faked via a join that can't actually match.
     """
     d = max(1, min(365, int(days)))
-    dim = _detect_inbound_outbound_dimension(question)
+    dims = set(_detect_inbound_outbound_dimensions(question))
+    has_supplier = "supplier" in dims
+    has_country = "country" in dims
+    has_product = "product" in dims
 
-    if dim == "country":
-        return f"""
-SELECT
-    COALESCE(NULLIF(TRIM(b.customer_country), ''), 'UNKNOWN') AS dimension_value,
-    0::BIGINT AS inbound_sat_docs,
-    COUNT(*) AS outbound_invoices,
-    ROUND(SUM(COALESCE(b.total_amount, 0)), 2) AS outbound_total_amount,
-    COALESCE(NULLIF(TRIM(b.currency), ''), 'UNKNOWN') AS currency
-FROM invoice_v2_business_data b
-WHERE b.created_at >= NOW() - INTERVAL '{d} days'
-GROUP BY dimension_value, currency
-UNION ALL
-SELECT
-    'MX (inbound SAT)' AS dimension_value,
-    COUNT(*) AS inbound_sat_docs,
-    0::BIGINT AS outbound_invoices,
-    ROUND(SUM(COALESCE(NULLIF(TRIM(total), '')::NUMERIC, 0)), 2) AS outbound_total_amount,
-    COALESCE(NULLIF(TRIM(moneda), ''), 'MXN') AS currency
-FROM sat_documents
-WHERE received_at >= NOW() - INTERVAL '{d} days'
-GROUP BY currency
-ORDER BY inbound_sat_docs DESC, outbound_invoices DESC
-LIMIT 50
-""".strip()
-
-    if dim == "supplier":
+    # --- Pure supplier (existing, verified-working path) ---
+    if dims == {"supplier"}:
         return f"""
 WITH inbound AS (
     SELECT
@@ -795,36 +828,111 @@ ORDER BY COALESCE(i.inbound_count, 0) + COALESCE(o.outbound_count, 0) DESC
 LIMIT 50
 """.strip()
 
-    if dim == "product":
-        return f"""
-WITH outbound_products AS (
-    SELECT
-        COALESCE(NULLIF(TRIM(prod->>'name'), ''), NULLIF(TRIM(prod->>'description'), ''), 'Unknown') AS product_name,
-        COUNT(*) AS outbound_line_count,
-        ROUND(SUM(COALESCE((prod->>'revenue')::NUMERIC, (prod->>'price')::NUMERIC, 0)), 2) AS outbound_amount
-    FROM invoice_v2_business_data b,
-        LATERAL jsonb_array_elements(COALESCE(b.products::jsonb, '[]'::jsonb)) AS prod
-    WHERE b.created_at >= NOW() - INTERVAL '{d} days'
-    GROUP BY product_name
+    # --- Any combination involving country and/or product (with or without supplier) ---
+    if has_country or has_product:
+        outbound_cols = []
+        outbound_group = []
+        if has_supplier:
+            outbound_cols.append(
+                "COALESCE(NULLIF(TRIM(b.supplier_name), ''), NULLIF(TRIM(b.supplier_id), ''), 'Unknown') AS supplier"
+            )
+            outbound_group.append("supplier")
+        if has_country:
+            outbound_cols.append("COALESCE(NULLIF(TRIM(b.customer_country), ''), 'UNKNOWN') AS country")
+            outbound_group.append("country")
+        if has_product:
+            outbound_cols.append(
+                "COALESCE(NULLIF(TRIM(prod->>'name'), ''), NULLIF(TRIM(prod->>'description'), ''), 'Unknown') AS product"
+            )
+            outbound_group.append("product")
+
+        outbound_from = (
+            "FROM invoice_v2_business_data b,\n"
+            "    LATERAL jsonb_array_elements(COALESCE(b.products::jsonb, '[]'::jsonb)) AS prod"
+            if has_product
+            else "FROM invoice_v2_business_data b"
+        )
+        amount_expr = (
+            "ROUND(SUM(COALESCE((prod->>'revenue')::NUMERIC, (prod->>'price')::NUMERIC, 0)), 2)"
+            if has_product
+            else "ROUND(SUM(COALESCE(b.total_amount, 0)), 2)"
+        )
+        count_label = "outbound_lines" if has_product else "outbound_invoices"
+
+        outbound_sql = f"""
+SELECT
+    {', '.join(outbound_cols)},
+    COUNT(*) AS {count_label},
+    {amount_expr} AS outbound_amount
+{outbound_from}
+WHERE b.created_at >= NOW() - INTERVAL '{d} days'
+GROUP BY {', '.join(outbound_group)}
+""".strip()
+
+        if has_supplier:
+            # Supplier is a real shared key with the inbound side — join on it. Country/product
+            # (when also requested) come exclusively from the outbound CTE, which has real data;
+            # the inbound side never fakes a country/product breakdown it doesn't have.
+            inbound_sql = f"""
+SELECT
+    COALESCE(NULLIF(TRIM(supplier_name), ''), supplier_rfc, 'Unknown') AS supplier,
+    COUNT(*) AS inbound_sat_docs,
+    ROUND(SUM(COALESCE(NULLIF(TRIM(total), '')::NUMERIC, 0)), 2) AS inbound_amount
+FROM sat_documents
+WHERE received_at >= NOW() - INTERVAL '{d} days'
+GROUP BY supplier
+""".strip()
+            select_cols = ["COALESCE(o.supplier, i.supplier) AS supplier"]
+            if has_country:
+                select_cols.append("o.country")
+            if has_product:
+                select_cols.append("o.product")
+            select_cols.append(f"COALESCE(o.{count_label}, 0) AS {count_label}")
+            select_cols.append("COALESCE(o.outbound_amount, 0) AS outbound_amount")
+            select_cols.append("COALESCE(i.inbound_sat_docs, 0) AS inbound_sat_docs")
+            select_cols.append("COALESCE(i.inbound_amount, 0) AS inbound_amount")
+            return f"""
+WITH outbound AS (
+{outbound_sql}
 ),
-inbound_types AS (
-    SELECT doc_type AS product_name, COUNT(*) AS inbound_count
-    FROM sat_documents
-    WHERE received_at >= NOW() - INTERVAL '{d} days'
-    GROUP BY doc_type
+inbound AS (
+{inbound_sql}
 )
 SELECT
-    COALESCE(op.product_name, it.product_name) AS dimension_value,
-    COALESCE(it.inbound_count, 0) AS inbound_sat_docs,
-    COALESCE(op.outbound_line_count, 0) AS outbound_lines,
-    COALESCE(op.outbound_amount, 0) AS outbound_amount
-FROM outbound_products op
-FULL OUTER JOIN inbound_types it ON op.product_name = it.product_name
-ORDER BY COALESCE(it.inbound_count, 0) + COALESCE(op.outbound_line_count, 0) DESC
+    {', '.join(select_cols)}
+FROM outbound o
+FULL OUTER JOIN inbound i ON o.supplier = i.supplier
+ORDER BY COALESCE(o.{count_label}, 0) + COALESCE(i.inbound_sat_docs, 0) DESC
 LIMIT 50
 """.strip()
 
-    # doc_type default
+        # country and/or product without supplier: no real shared key with inbound at all —
+        # return the genuine outbound breakdown plus one honest inbound total row (not a fake join).
+        null_cols = []
+        if has_country:
+            null_cols.append("country")
+        if has_product:
+            null_cols.append("product")
+        inbound_note_cols = ", ".join(
+            f"'N/A (not tracked inbound)' AS {c}" for c in null_cols
+        )
+        return f"""
+SELECT 'outbound' AS pipeline, {', '.join(c.split(' AS ')[-1] for c in outbound_cols)},
+       {count_label}, outbound_amount,
+       0::BIGINT AS inbound_sat_docs, 0::NUMERIC AS inbound_amount
+FROM ({outbound_sql}) AS outbound_breakdown
+UNION ALL
+SELECT 'inbound_total' AS pipeline, {inbound_note_cols},
+       0::BIGINT AS {count_label}, 0::NUMERIC AS outbound_amount,
+       COUNT(*) AS inbound_sat_docs,
+       ROUND(SUM(COALESCE(NULLIF(TRIM(total), '')::NUMERIC, 0)), 2) AS inbound_amount
+FROM sat_documents
+WHERE received_at >= NOW() - INTERVAL '{d} days'
+ORDER BY {count_label} DESC
+LIMIT 50
+""".strip()
+
+    # doc_type default (no supplier/country/product mentioned)
     return f"""
 SELECT 'inbound_sat' AS pipeline, doc_type AS dimension_value, COUNT(*) AS doc_count,
        ROUND(SUM(COALESCE(NULLIF(TRIM(total), '')::NUMERIC, 0)), 2) AS total_amount

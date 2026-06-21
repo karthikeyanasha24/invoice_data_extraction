@@ -5,6 +5,7 @@ import json
 import operator
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Annotated, TypedDict
 
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 
 from .schema_intelligence import ColumnProfile, schema_intelligence, TableProfile
+from .schema_nl_lexicon import SAP_COLUMN_NL_HINTS
 from ..utils.openai_chat_params import (
     langchain_openai_limit_kwargs,
     langchain_openai_temperature_kwargs,
@@ -34,12 +36,40 @@ from ..config.config import (
 logger = logging.getLogger("zodiac-api.multi_stage_planner")
 
 # ═══════════════════════════════════════════════════════════════════════
+# SCHEMA INTELLIGENCE BOOTSTRAP
+# schema_intelligence is a shared singleton that starts empty (no tables,
+# no join graph) until .initialize() is called. Without this, every
+# query gets an empty schema/join context — the planner "doesn't
+# understand" ANY question, not just dimension questions. Lazily
+# initialize it on first use here.
+# ═══════════════════════════════════════════════════════════════════════
+_SCHEMA_EXPORT_PATH = Path(__file__).resolve().parents[2] / "schema_export.json"
+_TABLE_KNOWLEDGE_PATH = Path(__file__).resolve().parents[1] / "sap_table_knowledge.json"
+
+
+def _ensure_schema_intelligence() -> None:
+    """Lazily populate schema_intelligence.tables / join_graph on first use."""
+    if schema_intelligence._initialized:
+        return
+    try:
+        schema_intelligence.initialize(_SCHEMA_EXPORT_PATH, _TABLE_KNOWLEDGE_PATH)
+        logger.info(
+            "schema_intelligence bootstrapped: %d tables, %d join edges (export=%s, knowledge=%s)",
+            len(schema_intelligence.tables),
+            len(schema_intelligence.join_graph),
+            _SCHEMA_EXPORT_PATH,
+            _TABLE_KNOWLEDGE_PATH,
+        )
+    except Exception:
+        logger.exception("Failed to initialize schema_intelligence")
+
+# ═══════════════════════════════════════════════════════════════════════
 # DOMAIN → TABLE MAP  (Stage 2/3: Domain Classification + Category Discovery)
 # ═══════════════════════════════════════════════════════════════════════
 DOMAIN_TABLE_MAP: Dict[str, Dict[str, List[str]]] = {
     "sales": {
         "primary": ["VBRK", "VBRP", "VBAK", "VBAP"],
-        "support": ["KNA1", "MAKT", "VBFA", "VBEP", "KONV", "MVKE"],
+        "support": ["KNA1", "MAKT", "VBFA", "VBEP", "KONV", "MVKE", "LIKP"],
     },
     "delivery": {
         "primary": ["LIKP", "LIPS"],
@@ -91,8 +121,8 @@ DOMAIN_TABLE_MAP: Dict[str, Dict[str, List[str]]] = {
 _DOMAIN_SIGNALS: Dict[str, List[str]] = {
     "sat_inbound": ["sat", "cfdi", "inbound document", "inbound invoice", "supplier sent", "payment complement", "sat document", "cfdi uuid"],
     "edi_operations": ["edi", "failed invoice", "zodiac invoice", "conversion", "v2 invoice", "outbound", "conversion rate", "funnel"],
-    "sales": ["billing", "revenue", "invoice", "vbrk", "vbrp", "net value", "billed amount", "billing document", "sales order", "vbak", "vbap"],
-    "delivery": ["delivery", "shipment", "dispatch", "likp", "lips", "shipped", "goods issue"],
+    "sales": ["billing", "revenue", "invoice", "vbrk", "vbrp", "net value", "billed amount", "billing document", "sales order", "vbak", "vbap", "sales organization", "sales org", "product group", "material group", "destination country", "document category", "sd document type", "sales region"],
+    "delivery": ["delivery", "shipment", "dispatch", "likp", "lips", "shipped", "goods issue", "transport mode", "shipping type", "mode of transport", "route", "vsart"],
     "finance": ["accounting", "gl", "general ledger", "bkpf", "bseg", "posting", "fiscal year", "open item", "receivable", "payable", "bsad"],
     "purchasing": ["purchase order", "vendor", "procurement", "ekko", "ekpo", "po value", "goods receipt", "purchase requisition"],
     "inventory": ["stock", "inventory", "material", "warehouse", "mara", "mard", "mchb", "storage location", "plant stock"],
@@ -169,6 +199,7 @@ def _classify_domain(question: str) -> str:
 
 def _select_tables_for_domain(domain: str, question: str, max_tables: int = 8) -> List[str]:
     """Stage 3/4: Category → Table selection. Returns resolved table names from schema_intelligence."""
+    _ensure_schema_intelligence()
     domain_def = DOMAIN_TABLE_MAP.get(domain, DOMAIN_TABLE_MAP["general"])
     primary = domain_def["primary"]
     support = domain_def["support"]
@@ -229,6 +260,10 @@ def _score_columns(cols: List[ColumnProfile], question: str) -> List[ColumnProfi
         if name_l in q_words: s += 100
         if any(name_l in w or w in name_l for w in q_words if len(w) > 3): s += 30
 
+        # NL dimension/synonym hints (e.g. "country" -> land1, "sales org" -> vkorg,
+        # "product group" -> matkl, "transport mode" -> vsart, "document category" -> vbtyp)
+        if any(hint in q for hint in SAP_COLUMN_NL_HINTS.get(name_l, ())): s += 95
+
         # Common important columns
         if name_u in ("NAME1", "NAME2", "MAKTX", "WAERS", "WAERK", "MEINS"): s += 50
         if name_u in ("KUNNR", "MATNR", "VBELN", "EBELN", "BELNR", "LIFNR"): s += 70
@@ -264,7 +299,9 @@ def _build_schema_text(table_names: List[str], question: str) -> Tuple[str, List
         for c in top_cols:
             role = getattr(c, "semantic_role", "") or ""
             role_tag = f" [{role}]" if role else ""
-            lines.append(f"  {c.name} ({c.data_type}){role_tag}")
+            hints = SAP_COLUMN_NL_HINTS.get(c.name.lower())
+            hint_tag = f" — {', '.join(hints[:3])}" if hints else ""
+            lines.append(f"  {c.name} ({c.data_type}){role_tag}{hint_tag}")
         omitted = len(cols) - len(top_cols)
         if omitted > 0:
             lines.append(f"  … ({omitted} lower-relevance columns omitted)")
@@ -1221,7 +1258,7 @@ def run_planner(
     except Exception as e:
         logger.debug("[planner] operational fast-path skipped: %s", e)
 
-    # ── Fast path 2: SQL catalog patterns ───────────────────────────
+    # ── Fast path 2: SQL catalog patterns ──────────────────────────────────────────────────────────────────────────────────────────────
     try:
         from .dashboard_query_router import _try_sql_catalog, _build_payload
         catalog_result = _try_sql_catalog(db, query or "")
@@ -1245,7 +1282,7 @@ def run_planner(
     except Exception as e:
         logger.debug("[planner] catalog fast-path skipped: %s", e)
 
-    # ── Primary: Intelligent multi-stage pipeline ────────────────────
+    # ── Primary: Intelligent multi-stage pipeline ────────────────────────────────────────
     return _run_intelligent_pipeline(
         db=db,
         api_key=api_key,

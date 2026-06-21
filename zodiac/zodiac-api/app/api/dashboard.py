@@ -981,6 +981,22 @@ async def get_dashboard_v2_inbound(
             SupplierToken.last_used_at >= (datetime.utcnow() - timedelta(days=7))
         ).scalar() or 0
 
+        # Timeline: daily inbound document counts (for inbound vs outbound comparison chart)
+        timeline_cutoff = cutoff_date or (datetime.utcnow() - timedelta(days=30))
+        timeline_rows = db.query(
+            cast(SATDocument.received_at, Date).label("date"),
+            func.count(SATDocument.id).label("count")
+        ).filter(
+            SATDocument.user_id == current_user.id,
+            SATDocument.received_at >= timeline_cutoff
+        ).group_by(cast(SATDocument.received_at, Date)).order_by(
+            cast(SATDocument.received_at, Date)
+        ).all()
+        timeline = [
+            {"date": d.date.strftime("%Y-%m-%d") if d.date else None, "documents": d.count}
+            for d in timeline_rows
+        ]
+
         return {
             "summary": {
                 "total_documents": total_documents,
@@ -992,6 +1008,7 @@ async def get_dashboard_v2_inbound(
             "by_source": by_source,
             "by_period": by_period,
             "top_suppliers": top_suppliers,
+            "timeline": timeline,
             "tokens": {
                 "total": token_total,
                 "active": token_active,

@@ -123,6 +123,51 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     return _serialize_rows(rows_raw)
 
 
+def _summarize_operational_rows(query: str, op_type: str, rows: List[Dict[str, Any]]) -> str:
+    """
+    Real natural-language summary of operational query results, instead of a
+    generic row-count template. This is what made the Real-time AI box look
+    "broken" — every operational fast-path hit used to return the literal
+    string "Found N row(s) from the Zodiac operational database" no matter
+    what was actually asked or returned. Falls back to that same safe default
+    if the LLM call fails for any reason.
+    """
+    if not rows:
+        return "No rows matched in the operational database for this question."
+
+    try:
+        import json as _json
+
+        from .multi_llm_client import smart_chat_completion
+
+        preview = rows[:25]
+        prompt = (
+            "You are a business analyst summarizing a SQL query result for a non-technical user.\n"
+            f"User's question: {query}\n"
+            f"Matched query pattern: {op_type}\n"
+            f"Result rows as JSON (showing {len(preview)} of {len(rows)} total rows):\n"
+            f"{_json.dumps(preview, default=str)[:6000]}\n\n"
+            "Write a concise 2-4 sentence answer that directly addresses the question using the real "
+            "names/numbers/amounts from the rows above (e.g. specific suppliers, countries, products, "
+            "counts, totals, currencies) — do not just restate the row count. If the rows don't fully "
+            "cover every dimension the user asked about, say so plainly instead of guessing or inventing "
+            "numbers."
+        )
+        text, _model = smart_chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=400,
+            require_premium=False,
+        )
+        text = (text or "").strip()
+        if text:
+            return text
+    except Exception as exc:
+        logger.warning("operational row summary generation failed, using fallback text: %s", exc)
+
+    return f"Found **{len(rows)}** row(s) from the Zodiac operational database."
+
+
 def _try_operational(
     db: Session,
     query: str,
@@ -140,11 +185,7 @@ def _try_operational(
     op_sql, op_type = op
     rows = _execute_sql(db, op_sql, query)
     row_count = len(rows)
-    reply = (
-        f"Found **{row_count}** row(s) from the Zodiac operational database."
-        if row_count
-        else "No rows matched in the operational database for this question."
-    )
+    reply = _summarize_operational_rows(query, op_type, rows)
     return _build_payload(
         query=query,
         pipeline="operational_fast_path",

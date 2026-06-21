@@ -128,6 +128,17 @@ class SchemaIntelligenceService:
                 elif cu in {"MANDT", "VBELN", "MATNR", "KUNNR", "LIFNR", "BUKRS", "GJAHR", "BELNR"}:
                     col.semantic_role = "key"
 
+    def _resolve_table_name(self, name: str) -> Optional[str]:
+        """Resolve a table name to its actual key in self.tables (handles case,
+        since schema_export.json mixes upper/lowercase table names, e.g. 'vbrp')."""
+        if name in self.tables:
+            return name
+        if name.upper() in self.tables:
+            return name.upper()
+        if name.lower() in self.tables:
+            return name.lower()
+        return None
+
     def _resolve_column_key(self, table: str, col: str) -> Optional[str]:
         """SAP exports use lowercase column keys; edge definitions may be uppercase."""
         cols = self.tables[table].columns
@@ -180,12 +191,14 @@ class SchemaIntelligenceService:
         ]
         
         for src, scol, tgt, tcol in known_relations:
-            if src not in self.tables or tgt not in self.tables:
+            rsrc = self._resolve_table_name(src)
+            rtgt = self._resolve_table_name(tgt)
+            if not rsrc or not rtgt:
                 continue
-            sk = self._resolve_column_key(src, scol)
-            tk = self._resolve_column_key(tgt, tcol)
+            sk = self._resolve_column_key(rsrc, scol)
+            tk = self._resolve_column_key(rtgt, tcol)
             if sk and tk:
-                self.join_graph.append(JoinEdge(src, sk, tgt, tk))
+                self.join_graph.append(JoinEdge(rsrc, sk, rtgt, tk))
 
     def resolve_entities(self, query: str) -> List[TableProfile]:
         """Explicit SAP table tokens plus domain keywords (always merged, deduped)."""
@@ -202,13 +215,14 @@ class SchemaIntelligenceService:
         words = re.findall(r"\b[A-Za-z0-9_]+\b", text.upper())
         candidates: List[TableProfile] = []
         for word in words:
-            if word in self.tables and self.tables[word] not in candidates:
-                candidates.append(self.tables[word])
+            key = self._resolve_table_name(word)
+            if key and self.tables[key] not in candidates:
+                candidates.append(self.tables[key])
 
         def _append_table(name: str) -> None:
-            u = name.upper()
-            if u in self.tables and self.tables[u] not in candidates:
-                candidates.append(self.tables[u])
+            key = self._resolve_table_name(name)
+            if key and self.tables[key] not in candidates:
+                candidates.append(self.tables[key])
 
         # Keyword domains always augment explicit table mentions (deduped; planner caps breadth).
         lower_text = text.lower()

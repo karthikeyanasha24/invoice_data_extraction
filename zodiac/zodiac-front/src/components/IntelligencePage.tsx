@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { dashboardApi } from '@/lib/api';
 import DashboardAIAnalysis from './DashboardAIAnalysis';
 import AIChartRenderer from './ai/AIChartRenderer';
@@ -10,6 +10,9 @@ import {
   Sparkles, RefreshCw, Send, Loader2,
   ArrowDownCircle, ArrowUpCircle, Activity, TrendingUp,
 } from 'lucide-react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from 'recharts';
 
 // ─── Domain categories ────────────────────────────────────────────────────────
 const DOMAIN_CATEGORIES = [
@@ -407,9 +410,32 @@ export default function IntelligencePage() {
   const outFunnel = outbound?.funnel ?? {};
   const totalDocs = inbSum.total_documents ?? 0;
   const sentToSAP = inbSum.merges_sent_to_sap ?? 0;
-  const converted = outFunnel.converted_ok ?? outFunnel.documents_converted ?? 0;
+  const converted = outFunnel.converted_success ?? outFunnel.converted_ok ?? outFunnel.documents_converted ?? 0;
   const received  = outFunnel.documents_received ?? outFunnel.received ?? 0;
   const successRate = received > 0 ? pct(converted, received) : 'N/A';
+
+  // Inbound vs Outbound — merge both daily timelines into one chart-friendly series
+  const comparisonData = useMemo(() => {
+    const inTl: { date: string; documents: number }[] = inbound?.timeline ?? [];
+    const outTl: { date: string; documents: number }[] = outbound?.timeline ?? [];
+    const byDate: Record<string, { date: string; inbound: number; outbound: number }> = {};
+    for (const row of inTl) {
+      if (!row.date) continue;
+      byDate[row.date] = byDate[row.date] || { date: row.date, inbound: 0, outbound: 0 };
+      byDate[row.date].inbound = row.documents;
+    }
+    for (const row of outTl) {
+      if (!row.date) continue;
+      byDate[row.date] = byDate[row.date] || { date: row.date, inbound: 0, outbound: 0 };
+      byDate[row.date].outbound = row.documents;
+    }
+    return Object.values(byDate)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((row) => ({
+        ...row,
+        label: new Date(row.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      }));
+  }, [inbound, outbound]);
 
   const handleAsk = (q: string) => { setPendingChatQuestion(q); setTab('chat'); };
 
@@ -494,6 +520,35 @@ export default function IntelligencePage() {
             </div>
           </div>
 
+          {/* Inbound vs Outbound comparison chart */}
+          <div className="flex-shrink-0 px-5 pb-3">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
+                <Activity className="h-3.5 w-3.5 text-indigo-500" />
+                <p className="text-xs font-semibold text-slate-800">Inbound vs Outbound — Last {days} Days</p>
+              </div>
+              <div className="px-2 py-2">
+                {loading ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
+                ) : comparisonData.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-8">No document activity in this period.</p>
+                ) : (
+                  <ResponsiveContainer width="100%" height={160}>
+                    <LineChart data={comparisonData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={{ stroke: '#e2e8f0' }} />
+                      <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} allowDecimals={false} width={28} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Line type="monotone" dataKey="inbound" name="Inbound (SAT)" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="outbound" name="Outbound (EDI)" stroke="#6366f1" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* ── 3-column body ── */}
           <div className="flex-1 overflow-hidden flex gap-0 px-5 pb-5">
 
@@ -554,11 +609,11 @@ export default function IntelligencePage() {
                   ) : (
                     <div className="space-y-0">
                       <FunnelRow step={1} label="Received"       value={outFunnel.documents_received ?? outFunnel.received ?? 0} />
-                      <FunnelRow step={2} label="Validated ✓"    value={outFunnel.validated_ok ?? outFunnel.documents_validated ?? 0} />
-                      <FunnelRow step={3} label="Validation ✗"   value={outFunnel.validation_failed ?? outFunnel.documents_validation_failed ?? 0} isRed />
-                      <FunnelRow step={4} label="Converted ✓"    value={outFunnel.converted_ok ?? outFunnel.documents_converted ?? 0} />
-                      <FunnelRow step={5} label="Converted ✗"    value={outFunnel.conversion_failed ?? outFunnel.documents_conversion_failed ?? 0} isRed />
-                      <FunnelRow step={6} label="Pending"        value={outFunnel.pending ?? outFunnel.documents_pending ?? 0} />
+                      <FunnelRow step={2} label="Validated ✓"    value={outFunnel.validated_success ?? outFunnel.validated_ok ?? outFunnel.documents_validated ?? 0} />
+                      <FunnelRow step={3} label="Validation ✗"   value={outFunnel.validated_failed ?? outFunnel.validation_failed ?? outFunnel.documents_validation_failed ?? 0} isRed />
+                      <FunnelRow step={4} label="Converted ✓"    value={outFunnel.converted_success ?? outFunnel.converted_ok ?? outFunnel.documents_converted ?? 0} />
+                      <FunnelRow step={5} label="Converted ✗"    value={outFunnel.converted_failed ?? outFunnel.conversion_failed ?? outFunnel.documents_conversion_failed ?? 0} isRed />
+                      <FunnelRow step={6} label="Pending"        value={outFunnel.converted_pending ?? outFunnel.pending ?? outFunnel.documents_pending ?? 0} />
                     </div>
                   )}
                 </div>
