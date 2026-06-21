@@ -2128,7 +2128,11 @@
       "earned",
       "earn"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "country", "region", "sales org", "sales organization", "plant",
+      "by vendor", "per vendor", "by supplier", "per supplier",
+      "year over year", "trend", "broken down by", "split by", "grouped by", "year"
+    ],
     "tables": [
       "vbrp",
       "VBRK",
@@ -3229,7 +3233,11 @@
       "cogs",
       "cost of goods"
     ],
-    "neg_keywords": [],
+    "neg_keywords": [
+      "country", "region", "sales org", "sales organization", "plant",
+      "by vendor", "per vendor", "by supplier", "per supplier",
+      "year over year", "trend", "broken down by", "split by", "grouped by", "year"
+    ],
     "tables": ["vbrp", "VBRK", "MAKT", "CKIS"],
     "priority": 1,
     "sql": "SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, COALESCE(c.total_cost, 0) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0) AS margin, CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN ROUND(100.0 * (SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0)) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2) ELSE NULL END AS margin_pct FROM vbrp v LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) AS total_cost FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.matnr, m.maktx, c.total_cost ORDER BY margin DESC NULLS LAST LIMIT 500"

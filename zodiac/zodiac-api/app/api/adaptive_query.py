@@ -393,6 +393,18 @@ Master vs transaction:
   Master tables hold attributes (KNA1 customer, MARA material, MAKT text, MARC plant params, MVKE sales views).
   Always join facts → masters on business keys (VBELN, MATNR, KUNNR); never invent keys between unrelated masters.
 
+Margin / profitability — purchasing ↔ sales BRIDGE (cross-domain, no document link exists):
+  "EKPO" → "vbrp":  ep.matnr = p.matnr   (what we PAID a supplier for a material ↔ what we CHARGED a
+                                            customer for the SAME material. MATNR is the ONLY common key —
+                                            there is no PO-to-billing-document link. Aggregate each side
+                                            separately first, THEN join the aggregates on matnr — joining the
+                                            raw line-item tables directly multiplies rows, since one material
+                                            can appear on many POs and many billing lines.)
+  This bridge answers ANY "margin / profit / what we buy vs sell / supplier cost vs customer price"
+  question, for any material, country, region, sales org, plant, product group, or time period named
+  in the question — the data exists in EKPO + vbrp/VBRK, it just needs this join. Do not say it's
+  uncomputable; see Section 4's margin pattern for the full generalized query.
+
 ══════════════════════════════════════════════════════
 SECTION 3: BUSINESS RULES & KEYWORD MAPPING
 ══════════════════════════════════════════════════════
@@ -471,6 +483,8 @@ KEYWORD → TABLES MAPPING:
   "duplicate" → sat_duplicate_checks
   "supplier token" / "API token" / "expired token" → supplier_tokens
   "AI query" / "chat history" → ai_chat_turns, ai_query_memory
+  "margin" / "profit" / "profitability" / "what we paid vs charged" / "buy vs sell" →
+      "EKPO" (purchase cost) + "vbrp"/"VBRK" (sales revenue), aggregated separately then joined on matnr
 
 ══════════════════════════════════════════════════════
 SECTION 3b: ADDITIONAL SAP ACCURACY RULES (mandatory)
@@ -514,6 +528,29 @@ PURCHASING PRICE PER UNIT (EINE / EKPO):
                    / NULLIF(CAST(NULLIF(TRIM(CAST(peinh AS TEXT)),'') AS NUMERIC), 0)
   Always divide by peinh when computing unit prices from purchasing info records.
 
+MARGIN / PROFIT-BY-PRODUCT QUESTIONS (mandatory approach):
+  Questions like "margin per product", "profit by material", "what we paid suppliers vs charged
+  customers", "buy for X sell for Y, what's the difference" are ALWAYS computable from EKPO (cost)
+  + vbrp/VBRK (revenue) joined on matnr — see Section 4's margin pattern. Never respond that this
+  needs data that isn't available; the join is the only thing required. To add a dimension the user
+  names (country, region, sales org, plant, product group, time period, one specific product):
+    - Customer/sales-side filters (country, region, sales org) → join through KNA1 (k.kunag = c.kunnr)
+      or use VBRK.vkorg directly; add the column to GROUP BY in the sales CTE.
+    - Supplier/purchase-side filters (vendor, vendor country, plant) → join through LFA1 (ek.lifnr =
+      v.lifnr) or EKPO.werks; add to GROUP BY in the purchases CTE.
+    - Time period → SUBSTRING(TRIM(k."fkdat"),1,4) for sales year, SUBSTRING(TRIM(ek."bedat"),1,4) for
+      purchase year; filter/group both CTEs independently since sales and purchase dates differ.
+    - One specific product → if the user gives the exact matnr code, filter WHERE matnr = '...' in
+      both CTEs. If the user names a product colloquially (a model name/description, not the literal
+      matnr key), do NOT assume that text equals matnr — first resolve it via
+      MAKT.maktx ILIKE '%name%' (spras='E') to get the real matnr, then filter both CTEs on that
+      resolved matnr (e.g. WHERE matnr IN (SELECT matnr FROM "MAKT" WHERE maktx ILIKE '%name%' AND
+      spras='E')). Matching the literal name string against matnr directly will silently return 0
+      rows on one side and produce a misleading 100% (or 0%) margin.
+  Sales and purchase amounts may be in different currencies (VBRK.waerk vs EKKO.waers) — include both
+  currency columns in the output so the user can see if they differ; do not silently combine mismatched
+  currencies into one number.
+
 ══════════════════════════════════════════════════════
 SECTION 4: PROVEN READY-TO-USE SQL PATTERNS
 ══════════════════════════════════════════════════════
@@ -529,6 +566,38 @@ LEFT JOIN "KNA1" c ON k."kunag" = c."kunnr"
 WHERE SUBSTRING(TRIM(k."fkdat"),1,4) = '2001'
 GROUP BY k."vbeln", k."kunag", c."name1", k."waerk", k."fkdat"
 ORDER BY total_billed DESC LIMIT 20;
+
+-- Margin/profit by product (what we paid suppliers vs what we charged customers, same material):
+-- GENERALIZE THIS: add country/region/sales-org/plant/product-group/year filters or GROUP BY columns
+-- inside the two CTEs as needed for the specific question — aggregate each side first, join last.
+WITH sales AS (
+  SELECT p."matnr" AS matnr, k."waerk" AS sales_currency,
+         SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)),'') AS NUMERIC)) AS total_sales
+  FROM "vbrp" p
+  JOIN "VBRK" k ON LPAD(TRIM(p."vbeln"),10,'0') = LPAD(TRIM(k."vbeln"),10,'0')
+  WHERE TRIM(COALESCE(p."matnr",'')) <> ''
+  GROUP BY p."matnr", k."waerk"
+),
+purchases AS (
+  SELECT ep."matnr" AS matnr, ek."waers" AS purchase_currency,
+         SUM(CAST(NULLIF(TRIM(CAST(ep."netwr" AS TEXT)),'') AS NUMERIC)) AS total_purchase_cost
+  FROM "EKPO" ep
+  LEFT JOIN "EKKO" ek ON ep."ebeln" = ek."ebeln"
+  WHERE TRIM(COALESCE(ep."matnr",'')) <> '' AND TRIM(COALESCE(ep."netwr",'')) <> ''
+  GROUP BY ep."matnr", ek."waers"
+)
+SELECT m."matnr" AS material_id, t."maktx" AS material_name,
+       s.total_sales, s.sales_currency,
+       p.total_purchase_cost, p.purchase_currency,
+       (s.total_sales - p.total_purchase_cost) AS margin,
+       CASE WHEN s.total_sales > 0
+            THEN ROUND(100.0 * (s.total_sales - p.total_purchase_cost) / s.total_sales, 2)
+       END AS margin_pct
+FROM sales s
+JOIN purchases p ON s."matnr" = p."matnr"
+LEFT JOIN "MARA" m ON s."matnr" = m."matnr"
+LEFT JOIN "MAKT" t ON m."matnr" = t."matnr" AND t."spras" = 'E'
+ORDER BY margin DESC LIMIT 200;
 
 -- Overdue purchase orders:
 SELECT k."ebeln" AS po_number, k."lifnr" AS vendor_id, l."name1" AS vendor_name,

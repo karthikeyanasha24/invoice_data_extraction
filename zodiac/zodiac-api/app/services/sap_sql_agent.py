@@ -747,6 +747,29 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
             best_entry = entry
 
     if best_score >= 4 and best_entry:
+        # ── Margin/profit sanity guard ───────────────────────────────────────
+        # "margin"/"profit"/"profitability" questions can score high on a catalog
+        # entry that only covers ONE side of the calculation (e.g. a plain
+        # "revenue by sales org" template that happens to share "sales"/
+        # "organization" keywords) and silently return the wrong number — not an
+        # error, just a different, incomplete answer with no cost/margin column.
+        # A true margin answer must combine a sales-side amount (vbrp/VBRK netwr)
+        # AND a purchase-side amount (EKPO netwr) in the same query. If the
+        # question asks about margin/profit but the matched entry doesn't do
+        # that, treat it as no confident match so it falls through to the LLM
+        # engine, which can build the real cross-domain margin query.
+        asks_margin = bool(re.search(r"\b(margin|profit|profitability)\b", q_lower))
+        if asks_margin:
+            entry_sql_lower = (best_entry.get("sql") or "").lower()
+            has_sales_amount = ("vbrp" in entry_sql_lower) or ("vbrk" in entry_sql_lower)
+            has_cost_amount = ("ekpo" in entry_sql_lower) or ("ckis" in entry_sql_lower)
+            if not (has_sales_amount and has_cost_amount):
+                logger.info(
+                    "sql_catalog: rejecting [%s] (score=%.1f) — question asks about margin/profit "
+                    "but entry doesn't combine sales + purchase cost; falling through to LLM engine. q=%r",
+                    best_entry["id"], best_score, question[:80],
+                )
+                return None
         logger.info(
             "sql_catalog: matched [%s] (score=%.1f) for question: %r",
             best_entry["id"], best_score, question[:80],
