@@ -242,6 +242,45 @@ def prepare_sql_for_sqlalchemy_text_execution(sql: str) -> str:
     return s
 
 
+def sanitize_trim_type_safety_sql(sql: str) -> str:
+    """
+    Wrap bare `TRIM(alias.column)` arguments in `CAST(... AS TEXT)`.
+
+    Root cause this fixes: some SAP replica columns that catalog/generated SQL
+    assumes are TEXT (e.g. matnr) are actually stored as NUMERIC in this DB.
+    Postgres' TRIM()/btrim() only accepts text input, so a bare
+    `TRIM(v.matnr)` raises `function pg_catalog.btrim(numeric) does not exist`
+    whenever that column happens to be numeric — and this was being thrown
+    inside a try/except in the catalog/operational paths and silently
+    swallowed, so the query falls through to a weaker fallback engine
+    instead of surfacing the real error.
+
+    `CAST(x AS TEXT)` is safe and idempotent for both TEXT and NUMERIC
+    columns (and NULL), so wrapping every bare `alias.column` TRIM argument
+    this way fixes the crash regardless of the column's actual stored type,
+    without needing to know in advance which columns are numeric.
+
+    Skips arguments that are already a function call / CAST / nested
+    expression (only rewrites the simple `alias.column` or bare `column`
+    case) to avoid double-wrapping or mangling more complex expressions.
+    """
+    if not sql or "trim(" not in sql.lower():
+        return sql
+
+    def _replace(m: re.Match) -> str:
+        arg = m.group(1)
+        return f"TRIM(CAST({arg} AS TEXT))"
+
+    # alias.column or bare column — simple identifier(s) only, no nested parens/commas
+    sql = re.sub(
+        r'\bTRIM\(\s*("?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\.\s*"?[A-Za-z_][A-Za-z0-9_]*"?)?)\s*\)',
+        _replace,
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
 def sanitize_gjahr_sql(sql: str) -> str:
     """
     Replace gjahr references with FKDAT-based calendar year expression.
@@ -737,7 +776,8 @@ def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
     """
     if not sql:
         return sql
-    s = sanitize_gjahr_sql(sql)
+    s = sanitize_trim_type_safety_sql(sql)
+    s = sanitize_gjahr_sql(s)
     s = sanitize_netwr_sql(s)
     s = sanitize_sap_amount_columns_sql(s)
     s = sanitize_having_alias_references(s)

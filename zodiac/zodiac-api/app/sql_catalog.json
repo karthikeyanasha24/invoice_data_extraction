@@ -2088,13 +2088,23 @@
   },
   {
     "id": "sales_purchase_by_material",
-    "description": "Sales revenue vs purchase cost by material (top 20)",
+    "description": "Per-product margin: what we paid suppliers (purchase price, EKPO) vs what we charged customers (sales price, VBRP), joined by material number — computes margin and margin_pct",
     "question_patterns": [
       "product profitability",
       "margin by product",
+      "margin per product",
       "sales vs cost by product",
       "revenue vs purchase cost by material",
-      "profit margin by material"
+      "profit margin by material",
+      "what we paid suppliers vs what we charged customers",
+      "purchase price vs sales price by product",
+      "buy from supplier and sell to customer",
+      "buy for and sell for",
+      "compare purchase price and sales price",
+      "how much profit did we earn on each product",
+      "how much profit per product",
+      "what is the difference between what we buy and sell",
+      "supplier cost vs customer price"
     ],
     "keywords": [
       "profitability",
@@ -2105,7 +2115,18 @@
       "cost",
       "profit",
       "sales",
-      "purchase"
+      "purchase",
+      "supplier",
+      "vendor",
+      "paid",
+      "charged",
+      "buy",
+      "bought",
+      "sell",
+      "sold",
+      "difference",
+      "earned",
+      "earn"
     ],
     "neg_keywords": [],
     "tables": [
@@ -2114,8 +2135,8 @@
       "EKPO",
       "MAKT"
     ],
-    "sql": "SELECT m.maktx AS material_name,\n       s.matnr AS material_number,\n       s.total_sales,\n       p.total_purchase_cost\nFROM (\n  SELECT TRIM(v.matnr) AS matnr, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales\n  FROM vbrp v\n  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\n  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\n  GROUP BY TRIM(v.matnr)\n) s\nJOIN (\n  SELECT ep.matnr, SUM(ep.netwr) AS total_purchase_cost\n  FROM EKPO ep\n  WHERE ep.matnr IS NOT NULL AND ep.netwr IS NOT NULL\n  GROUP BY ep.matnr\n) p ON s.matnr = p.matnr\nLEFT JOIN MAKT m ON s.matnr = m.matnr AND m.spras = 'E'\nORDER BY s.total_sales DESC\nLIMIT 20",
-    "priority": 0
+    "sql": "SELECT m.maktx AS material_name,\n       s.matnr AS material_number,\n       s.total_sales,\n       p.total_purchase_cost,\n       (s.total_sales - p.total_purchase_cost) AS margin,\n       CASE WHEN s.total_sales > 0 THEN ROUND(100.0 * (s.total_sales - p.total_purchase_cost) / s.total_sales, 2) ELSE NULL END AS margin_pct\nFROM (\n  SELECT TRIM(v.matnr) AS matnr, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS total_sales\n  FROM vbrp v\n  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)\n  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) != ''\n  GROUP BY TRIM(v.matnr)\n) s\nJOIN (\n  SELECT TRIM(CAST(ep.matnr AS TEXT)) AS matnr, SUM(CAST(NULLIF(TRIM(CAST(ep.netwr AS TEXT)), '') AS NUMERIC)) AS total_purchase_cost\n  FROM EKPO ep\n  WHERE ep.matnr IS NOT NULL AND ep.netwr IS NOT NULL\n  GROUP BY TRIM(CAST(ep.matnr AS TEXT))\n) p ON s.matnr = p.matnr\nLEFT JOIN MAKT m ON s.matnr = m.matnr AND m.spras = 'E'\nORDER BY margin DESC NULLS LAST\nLIMIT 500",
+    "priority": 2
   },
   {
     "id": "sales_ekpo_purchase_by_material",

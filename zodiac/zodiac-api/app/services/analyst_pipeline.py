@@ -220,6 +220,7 @@ class IntentObject:
     kpis: List[Dict[str, Any]] = field(default_factory=list)
     pipeline_ms: int = 0
     warnings: List[str] = field(default_factory=list)
+    degraded_fallback: bool = False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -950,6 +951,10 @@ def run_analyst_pipeline(
                 if attempt == 0 and intent.selected_tables:
                     primary = intent.selected_tables[0]
                     logger.warning("[pipeline] CANNOT_ANSWER — fallback count for table %s", primary)
+                    # Mark this as a degraded fallback up front — whether or not the
+                    # COUNT(*) itself succeeds, the original question was not answered,
+                    # and downstream summarization must not invent a narrative from it.
+                    intent.degraded_fallback = True
                     sql = f"SELECT COUNT(*) AS total_rows FROM {primary}"
                     ok2, _ = stage9_validate_sql(sql, intent)
                     if ok2:
@@ -962,6 +967,10 @@ def run_analyst_pipeline(
                             break
                         except Exception as e:
                             exec_error = str(e)
+                            intent.warnings.append(
+                                f"Original question was too complex, and the fallback row-count "
+                                f"query also failed: {exec_error}"
+                            )
                 break
             logger.warning("[pipeline] S9 invalid attempt=%d: %s", attempt + 1, reason)
             continue
@@ -982,7 +991,22 @@ def run_analyst_pipeline(
     intent.row_count = len(rows)
     intent.total_rows_in_db = total_count
 
-    summary, findings, kpis = stage11_summarize(intent, rows, sql, total_count)
+    if intent.degraded_fallback:
+        # The SQL generator could not build a real query for this question — what's in
+        # `rows` is just a row count on a guessed table, not an answer. Say so plainly
+        # instead of letting an LLM invent a confident business narrative from it.
+        primary_table = intent.selected_tables[0] if intent.selected_tables else "the selected table"
+        summary = (
+            f"I couldn't build a precise query for this question — it likely needs a join or "
+            f"calculation (e.g. combining multiple tables) that the automatic SQL generator wasn't "
+            f"able to construct. What's shown is just a row count for **{primary_table}**, not a real "
+            f"answer, so please don't treat it as a finding. Try rephrasing more specifically (naming "
+            f"the exact tables/fields if you know them), or this question may need a purpose-built query."
+        )
+        findings = ["Automatic SQL generation failed for this question — result below is a fallback row count, not an answer."]
+        kpis: List[Dict[str, Any]] = []
+    else:
+        summary, findings, kpis = stage11_summarize(intent, rows, sql, total_count)
     intent.summary      = summary
     intent.key_findings = findings
     intent.kpis         = kpis
@@ -997,8 +1021,12 @@ def run_analyst_pipeline(
     except Exception:
         pass
 
-    # If no rows returned, add a warning with the generated SQL for debugging
-    if not intent.rows and intent.sql and not intent.sql.startswith("CANNOT_ANSWER"):
+    # If no rows returned, add a warning with the generated SQL for debugging.
+    # Skip this generic override when we already set an honest degraded-fallback
+    # summary above — that message is more accurate (it explains the SQL generator
+    # couldn't answer the question at all, rather than implying a real query ran
+    # and simply matched nothing).
+    if not intent.rows and intent.sql and not intent.sql.startswith("CANNOT_ANSWER") and not intent.degraded_fallback:
         intent.warnings.append(f"Query returned 0 rows. SQL: {intent.sql[:400]}")
         intent.summary = (
             "No data was returned. This may mean:\n"
@@ -1006,6 +1034,14 @@ def run_analyst_pipeline(
             "- The filters did not match any records\n"
             "- Try rephrasing or asking about a different time period\n\n"
             f"**SQL generated:**\n```sql\n{intent.sql}\n```"
+        )
+    elif not intent.rows and intent.degraded_fallback:
+        primary_table = intent.selected_tables[0] if intent.selected_tables else "the selected table"
+        intent.summary = (
+            f"I couldn't build a working query for this question — it likely needs a join, "
+            f"calculation, or table this automatic SQL generator doesn't handle yet. Even the "
+            f"simplified fallback query against **{primary_table}** failed to run, so there's no "
+            f"result to show. Try rephrasing more specifically, or this may need a purpose-built query."
         )
 
     return {
