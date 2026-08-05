@@ -1,0 +1,113 @@
+For the expected presence, you know, availability, so what is important is that the basic things are, we have to have a basic thing, you know, a basic framework. So whenever I have to sometimes talk, then you have to be available to talk. Because sometimes it's not always easy to write and write and write and write, you understand? So it's important, very important that there is communication, not just writing communication, but also directly talking.
+
+Because you are much more faster sometimes in explaining things than by the talking or writing, you know? So that's one of the basic things we need to establish before we commit to a client, you know? So why do we have a meeting with the client? I can also write to him, right? We don't talk. We talk to each other. So we see each other, we talk, we make sure the things are clear.
+
+And then we write, you know, as a protocol. But the meetings are important. And the same way the meetings, you should, of course, be also in a meeting when it's needed.
+
+And, okay, sometimes things can turn upside down. That's a different story. But in general standard, you have to be available for the meeting also, you know? So what I'm going to present you as is something which is responsible for the platform integration, right? Because that is a very important part of the project.
+
+Because here we are talking about, we previously did some other integrations, yeah? With other service providers. Now the whole scenario has changed because now we are using a platform. And the reason why we are using the platform is that we want to ensure safety for the customer also, you know? That he is, that there is something in between which helps him and additional value we are giving to the customer.
+
+And additional value, okay? That's why we are using the bridge EDI for that. So what we need to be sure is that the bridge EDI is able to perform, it's able to receive invoices. And it's able to push invoices to the endpoint.
+
+So the steps before, like, you know, when it receives, there are a lot of steps performed after it receives. Are you aware of that, those steps? Yeah, as I said, I was working on the generative AI pages, but one time you have asked me to work on invoices page also. So that time I have understand that part.
+
+Yes, so what is going to happen is that we need to work on the invoice page more. And then use the other part as an analysis. So whatever is real time, we will show that in the AI.
+
+Whatever data we get, we will show that in the AI, you know? So that is going to be the part of job we should be doing. So it means that we will have to integrate the AI platform with the backend SAP system, with their backend SAP system. And for that, we need to understand, okay, how do we integrate that? How do we integrate that, you know? So currently, we have to understand the current setup, what we are doing at the moment today.
+
+Okay. And I think you are also aware of that. Are you aware of that, the current setup, what we have done to integrate with SAP? No, currently, as I said, I worked on these two pages alone.
+
+Yes, I understand. So how are you going to understand that scenario? So the scenario is that you need to integrate the backend ERP system to the platform. And the platform will then do the mapping, the validations, the formatting, all the steps it will perform.
+
+And then it will create in the end format, in the end format, eventually. Let me check. I have the source code, the entire source code, right? So I'll go through each file.
+
+So which part is responsible for that? I'll work on that. Exactly, exactly. Because we need to understand how it's all done.
+
+Because you know what is going to happen, already using existing framework, right? For other scenarios, we're already using it, right? What we need to do is we need to adopt that, copy that, and then create a new scenario, a new adapter, right? A new adapter. So the previous adapter we used was for CFDI, which is another format. So what we will do is we will try to create another format for another country.
+
+So for every country, we will need to create some specific standard module adapter, a module adapter in the platform. And that module adapter will not be used for other countries. So what you're going to do is you're going to create a module adapter, which means it's a pipeline.
+
+It's a separate pipeline, which will then refer to a specific country. And that specific country will have specific mapping, specific validations, specific business rules, specific formatting, you know, target format, integrations, you know, to the endpoints. We will use the same platform, but we will do that things in a different panel, you know, in a separate pipeline.
+
+So every country will have a separate adapter. That is what we're trying to do. So and then the analysis part will automatically, we can do the analysis based on what is already there.
+
+So basically, what we did just now, what we have done right now in the bridge EDI, right, that will not be used for the customer scenario. That will be separated from there. So the customer scenario is going to be used explicitly for his own space.
+
+Okay, sir. Yeah, yeah. So we need to define how we are going to achieve that.
+
+Okay, let me go through the entire file. So I'll get an understanding of what is there, what is not there and what can be implemented. Based on that, I'll make a file regarding what are the things I need from you like, you said different country modules, module adapter, right? So I might need some information from you.
+
+So I'll make a document for that as well. So it will be, yes, while working, I'll make a document for like, what have we done, what we so far done, what yet to done kind of thing. You don't need to make a document for what have we done.
+
+I know what has been done. What I need is, what I need is a separate space for the customer. So because this customer is going to have his own space in our platform to run his own transaction.
+
+So what we will have to do is, we will have to replicate the current, replicate it. Okay, sir. Yeah, yeah.
+
+The data is of course not going to be the data what we will be using from the other ERP system, right? It's going to be the customer's ERP system. So basically, we will exclusively create for him a special. So the model has to be done in such a way that whenever we have a new country, we are going to, what we are going to do is, we are going to use, create, we're going to use the same space.
+
+Yeah, for the same, for the same customer. So we are going to add simply, we're going to add simply new business rules. Like you add up for different countries.
+
+Yes, the space is the same, but the countries are different. So the logic can be different. The business rule, the validation rules can be different, you know.
+
+So that is going to change. But using the current scenario, what we have, what we have created already, that will help you to replicate another, a new scenario for a new country. Okay, I understand.
+
+Yeah, because, yeah, so we need to create separately, and it has to be secured because, you know, it also has to have some kind of form, I would say, able to handle data, you know, in an efficient way. Say we have 1000 invoices, 10,000 invoices, you know, it should not be, it should not, I would say, queue, you know, and then cause issues. You know what I'm saying? Yeah, yeah.
+
+But it has to run smoothly. Yes, I understand. So, so what we receive the invoice on the platform, the platform then does all the steps, and then it pushes to the endpoint.
+
+The endpoint is the API. So we'll get an API from the endpoint. Okay, yeah.
+
+So we will have that endpoint API, that endpoint API, we will push the documents, different about three or four types of documents, we will push it to the endpoint, and then the endpoint will send us a confirmation. Yeah, that yes, it has received it. Yes, I understand.
+
+That information has to be via mail or it will be on the platform itself? On the platform, it will receive back the confirmation. And that confirmation will be pushed back to the back end ERP system. Yeah.
+
+So this is, this is the process, you know, basically, and this is actually also what is happening at the moment. Okay. So this is already we already have tested this and it works for other, for other scenarios.
+
+But we are now talking about exclusive for this customer. So we need to see how we can work that out. Because, you know, if we have a problem on in today's scenario, what we are doing for this customer is a different setup.
+
+It's a direct setup. It's a direct setup. That means we don't, we have not introduced any platform in between.
+
+Okay, so if we by introducing the platform, it should add value, it should not cause delay. Do you understand what I'm saying? Yes. So the customer is this is what we want to offer additionally to the customer.
+
+But it has to work. It has to work in a good way. You know, it should not be more problems and more communication issues.
+
+Let me analyze the entire file. So I'll make a document how it can be done. Yeah.
+
+Okay, you can you're welcome to share that. And then and then let me know how we can achieve that, you know. So basically, we need to, yeah, we need some possibility.
+
+So I just need to understand that you understand what you're doing. That you understood the concept. Yeah.
+
+Yeah, you explained it. Yes. All right.
+
+So sounds good. So, you know, this is important. And the next meeting will be, I think, I propose is around the 10th of July.
+
+So I don't because I will be traveling. So I will not be available. So my first availability will be, I mean, I'm available this week.
+
+Yeah. But next week, I'll be traveling. So, you know, after the 10th of July, I will be available, you know, again.
+
+If you can send that before. So what we can do is if it is if your proposal, I mean, if it works in timelines for you, you can achieve that good in a quicker way. Then, you know, then we can talk on the meeting with the customer and say that, look, we can give him this, you know, we should not.
+
+Previously, we did this type of implementations without the platform. It took us about 10 days. Now, when we introduce the platform, we should not increase the timeline, you know, by more days.
+
+So before you want to work in the website and make it happen, right? It's up to you. It's up to you what you can achieve. I don't know.
+
+No, I just want to make sure I have to start working on the website. You said the client meeting is on the 10th. Should I need to wait till 10 or should I need to start working right away? You can start working.
+
+The sooner you start, the much better, because then we can show to the client something. You know what I'm saying? Yeah, yeah. We can show the client something and see.
+
+I mean, you should be saying, oh, yeah, yeah, this is really good. This is what I need. This is, you know, because then in the end, when we have this, when we already have it, right, what is good, what good is that we can, what we can do is when we already have it, we only need to focus on the integration parts, right? Yes, sir.
+
+Because the integration will be linked to the system. Okay. Right? Yes, sir.
+
+It will have a different HTTP connection, you know, and different REST API connection and also the target system. The endpoint will be also different. So we will need to make sure that we are good in that.
+
+We are able to achieve that, yeah? We need to be sure. Okay, sir. Yeah? Yes, sir.
+
+So, yeah, just let me know if you have any issues. So we can always be in touch, okay? Sure, sure. All right.
+
+So any questions? No, sir. All clear. Okay, perfect.
+
+Thank you. So thanks a lot. We'll catch up with you soon.
+
+Thank you. Thank you.

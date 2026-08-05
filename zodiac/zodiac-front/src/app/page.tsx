@@ -51,7 +51,8 @@ function HomeContent() {
     
     if (isAuthenticated && !loading && user) {
       if (user.is_customer_user && !user.is_admin) {
-        router.push('/customer-invoices');
+        // Phase 11 — dedicated customer portal (not admin shell)
+        router.push('/customer/overview');
       } else {
         router.push('/dashboard');
       }

@@ -24,7 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -32,6 +32,8 @@ from ..database import get_db
 from ..config.config import OPENAI_API_KEY, USE_SAP_DB_FOR_AI
 from ..database import get_sap_session
 from ..services.ai_followup_routing import follow_up_requires_fresh_sql
+from ..api.auth import get_current_user_optional
+from ..models.user import ZodiacUser
 
 logger = logging.getLogger("zodiac-api.adaptive_query")
 router = APIRouter(tags=["adaptive-query"])
@@ -550,6 +552,12 @@ MARGIN / PROFIT-BY-PRODUCT QUESTIONS (mandatory approach):
   Sales and purchase amounts may be in different currencies (VBRK.waerk vs EKKO.waers) — include both
   currency columns in the output so the user can see if they differ; do not silently combine mismatched
   currencies into one number.
+  EKPO is the ONLY correct cost basis for "margin"/"profit" — it is what we actually paid suppliers.
+  Do NOT use CKIS for margin/profit questions: CKIS holds planned/standard cost estimates (not actual
+  purchase price), and CKIS.matnr is blank on ~70% of rows (the real material link runs through
+  CKIS.kalnr → KEKO.matnr, which CKIS alone does not give you) — joining vbrp.matnr = CKIS.matnr
+  directly silently drops most of the data. Only use CKIS if the user explicitly asks for "standard
+  cost" rather than plain "margin"/"profit"/"profit margin".
 
 ══════════════════════════════════════════════════════
 SECTION 4: PROVEN READY-TO-USE SQL PATTERNS
@@ -921,13 +929,29 @@ def _col_role(col: str) -> str:
 def _is_numeric_val(v: Any) -> bool:
     if v is None:
         return False
+    if isinstance(v, bool):
+        return False
     if isinstance(v, (int, float)):
         return True
     try:
-        float(str(v).replace(",", ""))
+        from decimal import Decimal
+        if isinstance(v, Decimal):
+            return True
+    except Exception:
+        pass
+    try:
+        float(str(v).replace(",", "").replace(" ", "").strip())
         return True
     except Exception:
         return False
+
+
+def _column_has_numeric(data: List[Dict[str, Any]], col: str, sample: int = 15) -> bool:
+    """True if any of the first `sample` rows has a numeric value for col."""
+    for row in data[:sample]:
+        if _is_numeric_val(row.get(col)):
+            return True
+    return False
 
 
 def _auto_charts(
@@ -952,16 +976,34 @@ def _auto_charts(
         return []
 
     cols = list(data[0].keys())
-    # Classify columns based on name and actual values
+    # Classify columns based on name and actual values across a sample of rows
+    # (first-row-only missed product totals when row 0 had NULL NETWR casts).
     date_cols   = [c for c in cols if _col_role(c) == "date"]
     label_cols  = [c for c in cols if _col_role(c) == "label"]
-    numeric_cols = [c for c in cols if _col_role(c) == "numeric" and _is_numeric_val(data[0].get(c))]
+    numeric_cols = [
+        c for c in cols
+        if _col_role(c) == "numeric" and _column_has_numeric(data, c)
+    ]
 
     # Also detect columns that are actually numeric by value but not by name
     for c in cols:
         if c not in date_cols + label_cols + numeric_cols:
-            if _is_numeric_val(data[0].get(c)) and not isinstance(data[0].get(c), str):
+            if _column_has_numeric(data, c) and not isinstance(data[0].get(c), str):
+                # Prefer non-string numerics; still allow numeric strings via sample
                 numeric_cols.append(c)
+            elif c not in date_cols + label_cols + numeric_cols and _column_has_numeric(data, c):
+                # Numeric-looking strings (e.g. "1234.56" from some drivers)
+                if _col_role(c) != "label":
+                    numeric_cols.append(c)
+
+    # Deduplicate while preserving order
+    _seen_num: set = set()
+    _deduped: List[str] = []
+    for c in numeric_cols:
+        if c not in _seen_num:
+            _seen_num.add(c)
+            _deduped.append(c)
+    numeric_cols = _deduped
 
     # Need at least one dimension and one measure
     x_candidates = date_cols or label_cols or [c for c in cols if c not in numeric_cols]
@@ -1826,13 +1868,58 @@ async def get_query_adaptive() -> Dict[str, Any]:
     return {"error": "method_not_allowed", "message": "Use POST /api/query/adaptive"}
 
 
+@router.get("/api/query/adaptive/history")
+async def get_adaptive_chat_history(
+    thread_id: str = Query(..., min_length=8),
+    db: Session = Depends(get_db),
+    current_user: Optional[ZodiacUser] = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """
+    Load persisted Full Chat turns for an adaptive thread (ada_*).
+    Reuses chat_thread_store (same tables as schema-chat; separate ada_ prefix).
+    """
+    from ..services.chat_thread_store import (
+        load_thread, thread_owner_user_id, ensure_chat_tables,
+    )
+
+    tid = (thread_id or "").strip()
+    if not tid.startswith("ada_"):
+        raise HTTPException(status_code=400, detail="thread_id must start with ada_")
+    ensure_chat_tables(db)
+    owner = thread_owner_user_id(db, tid)
+    if owner is not None and current_user is not None and int(current_user.id) != int(owner):
+        raise HTTPException(status_code=403, detail="thread_not_owned")
+    uid = int(current_user.id) if current_user is not None else (int(owner) if owner else 0)
+    if not uid:
+        return {"thread_id": tid, "messages": []}
+    turns = load_thread(db, uid, tid, last_n=80)
+    messages: List[Dict[str, Any]] = []
+    for t in turns:
+        role = t.get("role")
+        content = t.get("content") or ""
+        msg: Dict[str, Any] = {"role": role, "content": content}
+        if role == "assistant":
+            rows = t.get("result_rows") or []
+            msg["result"] = {
+                "sql": t.get("sql_executed") or "",
+                "data": rows,
+                "charts": t.get("charts") or [],
+                "summary": content,
+                "rowCount": len(rows) if isinstance(rows, list) else 0,
+            }
+        messages.append(msg)
+    return {"thread_id": tid, "messages": messages}
+
+
 @router.post("/api/query/adaptive")
 async def post_query_adaptive(
     question: str = Body(..., embed=True),
     tableHint: Optional[str] = Body(default=None, embed=True),
     contextData: Optional[Dict[str, Any]] = Body(default=None, embed=True),
     overrideSql: Optional[str] = Body(default=None, embed=True),
+    threadId: Optional[str] = Body(default=None, embed=True),
     db: Session = Depends(get_db),
+    current_user: Optional[ZodiacUser] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
     q = (question or "").strip()
     if not q:
@@ -1841,6 +1928,76 @@ async def post_query_adaptive(
         raise HTTPException(status_code=400, detail="question_too_long (max 4000)")
 
     api_key = _get_openai_key()
+    thread_id = (threadId or "").strip() or None
+    if thread_id and not thread_id.startswith("ada_"):
+        thread_id = None  # ignore non-adaptive thread ids
+    user_id = int(current_user.id) if current_user is not None else None
+
+    def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Attach thread_id and persist via existing chat_thread_store when possible."""
+        if thread_id:
+            payload = {**payload, "thread_id": thread_id}
+        if not (user_id and thread_id):
+            return payload
+        try:
+            from ..services.chat_thread_store import (
+                ensure_chat_tables, save_turn, next_turn_index,
+            )
+            ensure_chat_tables(db)
+            idx = next_turn_index(db, user_id, thread_id)
+            save_turn(
+                db,
+                user_id=user_id,
+                thread_id=thread_id,
+                turn_index=idx,
+                role="user",
+                content=q[:10000],
+                query_mode="new",
+                action="adaptive",
+            )
+            summary = (
+                payload.get("summary")
+                or payload.get("answer")
+                or payload.get("reply")
+                or ""
+            )
+            rows = payload.get("data") or payload.get("rows") or []
+            charts = payload.get("charts") or []
+            cols = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else None
+            save_turn(
+                db,
+                user_id=user_id,
+                thread_id=thread_id,
+                turn_index=idx + 1,
+                role="assistant",
+                content=str(summary)[:10000],
+                sql_executed=payload.get("sql") or "",
+                result_rows=rows if isinstance(rows, list) else None,
+                result_columns=cols,
+                charts=charts,
+                query_mode="new",
+                action=payload.get("pipeline") or "adaptive",
+            )
+            try:
+                db.commit()
+            except Exception:
+                pass
+        except Exception as persist_err:
+            logger.debug("adaptive chat persist skipped: %s", persist_err)
+        return payload
+
+    def _ensure_charts(question_text: str, sql: str, rows: List[Dict[str, Any]], charts: Any) -> List[Dict[str, Any]]:
+        """Fill missing charts from result rows using existing _auto_charts (no new generator)."""
+        existing = charts if isinstance(charts, list) else []
+        if existing:
+            return existing
+        if not rows:
+            return []
+        try:
+            return _auto_charts(question_text, sql or "", rows) or []
+        except Exception as chart_err:
+            logger.warning("[adaptive] auto_charts failed: %s", chart_err)
+            return []
 
     # ── Path 1: Execute user-provided SQL directly ──────────────────────────
     if overrideSql and overrideSql.strip():
@@ -1873,8 +2030,11 @@ async def post_query_adaptive(
             )
             summary = r.choices[0].message.content.strip() or summary
         except Exception: pass
-        return {"sql": overrideSql, "rowCount": len(data), "data": data,
-                "summary": summary, "tableHint": tableHint}
+        charts = _ensure_charts(q, overrideSql, data, [])
+        return _persist_and_return({
+            "sql": overrideSql, "rowCount": len(data), "data": data,
+            "summary": summary, "tableHint": tableHint, "charts": charts,
+        })
 
     # ── Path 2: Follow-up — either fresh SQL (drill-down) or narrative analysis ──
     if contextData and isinstance(contextData, dict):
@@ -1892,26 +2052,80 @@ async def post_query_adaptive(
                 if result:
                     result["follow_up_mode"] = "drill_down_sql"
                     result["tableHint"] = tableHint
-                    return result
+                    result["charts"] = _ensure_charts(
+                        q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
+                    )
+                    return _persist_and_return(result)
             except Exception as drill_err:
                 logger.warning("[universal] drill-down SQL path failed: %s", drill_err)
             try:
                 answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
-                return {"type": "analysis", "answer": answer}
+                return _persist_and_return({"type": "analysis", "answer": answer})
             except Exception as e:
                 raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
 
         try:
             answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
-            return {"type": "analysis", "answer": answer}
+            return _persist_and_return({"type": "analysis", "answer": answer})
         except Exception as e:
             raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
 
-    # ── Path 3: Scalable dashboard router (operational → intent → catalog → universal) ──
     from ..services.operational_query_resolver import _extract_user_question
+    clean_q = _extract_user_question(q)
+
+    # ── Path 2.5: Year/period compare — BEFORE router/analyst intercept ─────
+    # Reuses compare_query_router + orchestrator compare action (no duplicated logic).
+    try:
+        from ..services.compare_query_router import should_route_period_compare
+        if should_route_period_compare(clean_q):
+            logger.info("[adaptive] period-compare fast path: %s", clean_q[:120])
+            from ..services.ai_analysis_orchestrator import (
+                run_ai_analysis_orchestrator, orchestrator_payload,
+            )
+            sap_sess = get_sap_session() if USE_SAP_DB_FOR_AI else None
+            try:
+                orch = run_ai_analysis_orchestrator(
+                    api_key=api_key,
+                    user_id=user_id or 0,
+                    user_query=clean_q,
+                    db=db,
+                    conversation_history=[],
+                    context_str="",
+                    sap_db=sap_sess,
+                    time_scope="both",
+                    days=30,
+                    thread_id=thread_id,
+                    query_mode="new",
+                )
+                payload = orchestrator_payload(orch)
+            finally:
+                if sap_sess is not None:
+                    try: sap_sess.close()
+                    except Exception: pass
+            rows_out = payload.get("rows") or payload.get("rows_preview") or []
+            charts = payload.get("charts") or []
+            if not charts and rows_out:
+                charts = _ensure_charts(clean_q, payload.get("sql") or "", rows_out, [])
+            return _persist_and_return({
+                "sql": payload.get("sql") or "",
+                "rowCount": len(rows_out),
+                "data": rows_out,
+                "tableHint": tableHint,
+                "summary": payload.get("reply") or "Comparison complete.",
+                "charts": charts,
+                "pipeline": "period_compare",
+                "action": payload.get("action") or "compare",
+            })
+    except Exception as cmp_err:
+        logger.warning("[adaptive] period-compare path failed, falling through: %s", cmp_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # ── Path 3: Scalable dashboard router (operational → intent → catalog → universal) ──
     from ..services.dashboard_query_router import run_dashboard_query
 
-    clean_q = _extract_user_question(q)
     try:
         router_payload = run_dashboard_query(
             db, api_key, clean_q, [], time_scope="current", days=30,
@@ -1919,16 +2133,18 @@ async def post_query_adaptive(
         reason = router_payload.get("sql_path_reason") or router_payload.get("reason") or ""
         if reason and reason != "no_match":
             rows_out = router_payload.get("rows_preview") or []
-            logger.info("[adaptive] scalable router: %s — %d rows", reason, len(rows_out))
-            return {
-                "sql": router_payload.get("sql") or "",
+            sql_out = router_payload.get("sql") or ""
+            charts = _ensure_charts(clean_q, sql_out, rows_out, router_payload.get("charts"))
+            logger.info("[adaptive] scalable router: %s — %d rows, %d charts", reason, len(rows_out), len(charts))
+            return _persist_and_return({
+                "sql": sql_out,
                 "rowCount": len(rows_out),
                 "data": rows_out,
                 "summary": router_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
                 "tableHint": tableHint,
-                "charts": router_payload.get("charts") or [],
+                "charts": charts,
                 "pipeline": reason,
-            }
+            })
     except Exception as router_err:
         logger.warning("[adaptive] scalable router failed: %s", router_err)
         try:
@@ -1945,7 +2161,10 @@ async def post_query_adaptive(
             result = run_analyst_pipeline(question=q, db_session=analyst_db)
             if result:
                 result["tableHint"] = tableHint
-                return result
+                result["charts"] = _ensure_charts(
+                    q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
+                )
+                return _persist_and_return(result)
         finally:
             if USE_SAP_DB_FOR_AI and analyst_db is not db:
                 try: analyst_db.close()
@@ -1957,7 +2176,10 @@ async def post_query_adaptive(
             result = _universal_query(q, api_key, db, USE_SAP_DB_FOR_AI, max_retries=3)
             if result:
                 result["tableHint"] = tableHint
-                return result
+                result["charts"] = _ensure_charts(
+                    q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
+                )
+                return _persist_and_return(result)
             raise RuntimeError("Universal engine: all retries failed")
         except Exception as univ_err:
             logger.warning(f"[universal] falling back to orchestrator: {univ_err}")
@@ -1966,9 +2188,9 @@ async def post_query_adaptive(
             sap_sess = get_sap_session() if USE_SAP_DB_FOR_AI else None
             try:
                 orch = run_ai_analysis_orchestrator(
-                    api_key=api_key, user_id=0, user_query=q, db=db,
+                    api_key=api_key, user_id=user_id or 0, user_query=q, db=db,
                     conversation_history=[], context_str="", sap_db=sap_sess,
-                    time_scope="current", days=30, thread_id=None, query_mode="new",
+                    time_scope="current", days=30, thread_id=thread_id, query_mode="new",
                 )
                 payload = orchestrator_payload(orch)
             finally:
@@ -1976,16 +2198,16 @@ async def post_query_adaptive(
                     try: sap_sess.close()
                     except Exception: pass
             rows_out = payload.get("rows") or payload.get("rows_preview") or []
+            charts = _ensure_charts(q, payload.get("sql") or "", rows_out, payload.get("charts"))
             out = {
                 "sql": payload.get("sql") or "",
                 "rowCount": len(rows_out),
                 "data": rows_out,
                 "tableHint": tableHint,
                 "summary": payload.get("reply") or "Query completed.",
+                "charts": charts,
             }
-            if payload.get("charts"):
-                out["charts"] = payload["charts"]
-            return out
+            return _persist_and_return(out)
         except Exception as orch_err:
             raise HTTPException(status_code=500, detail={
                 "error_code": "query_failed",

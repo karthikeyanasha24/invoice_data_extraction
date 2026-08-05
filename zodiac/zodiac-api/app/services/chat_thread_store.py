@@ -225,7 +225,7 @@ def load_thread(
         ensure_chat_tables(db)
         rows = db.execute(text("""
             SELECT role, content, sql_executed, result_rows, result_columns,
-                   key_metrics, warnings, dominant_currency, dominant_year,
+                   key_metrics, warnings, charts, dominant_currency, dominant_year,
                    time_scope, query_mode, action, turn_index
             FROM ai_chat_turns
             WHERE user_id = :uid AND thread_id = :tid
@@ -235,7 +235,7 @@ def load_thread(
 
         def _decode(row: Any) -> Dict:
             r = dict(row)
-            for key in ("result_rows", "result_columns", "key_metrics", "warnings"):
+            for key in ("result_rows", "result_columns", "key_metrics", "warnings", "charts"):
                 v = r.get(key)
                 if isinstance(v, str):
                     try:

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from ..models.customer import Customer
 from ..models.user import ZodiacUser
 from ..models.customer_receiver_rfc import CustomerReceiverRfc
+from ..models.workspace import WorkspaceSettings
 from ..schemas.customer import (
     CustomerCreate,
     CustomerUpdate,
@@ -55,10 +56,34 @@ def create_customer(
             validation_fields=customer.validation_fields,
         )
         db.add(db_customer)
+        db.flush()
+
+        # Phase 12 — auto-create workspace settings (pipeline off until configured)
+        existing_ws = (
+            db.query(WorkspaceSettings)
+            .filter(WorkspaceSettings.customer_id == customer.customer_id)
+            .first()
+        )
+        if not existing_ws:
+            db.add(
+                WorkspaceSettings(
+                    customer_id=customer.customer_id,
+                    display_name=customer.customer_id,
+                    pipeline_enabled=False,
+                    ai_scoped=True,
+                    monitoring_enabled=True,
+                    flags={"erp_update_mode": "auto"},
+                    created_by=current_user.id,
+                )
+            )
+
         db.commit()
         db.refresh(db_customer)
 
-        logger.info(f"✅ Customer created successfully: {db_customer.id}")
+        logger.info(
+            f"✅ Customer created successfully: {db_customer.id} "
+            f"(workspace settings ensured for {customer.customer_id})"
+        )
         return db_customer
 
     except HTTPException:

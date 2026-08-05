@@ -3,35 +3,32 @@
 import { useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
-import MainLayout from '@/components/MainLayout';
 import { Loader } from 'lucide-react';
+import { CUSTOMER_HOME_PATH } from '@/lib/customerPortal';
 
 /**
- * Legacy route: redirect to customer invoices (new default for customer users).
+ * Legacy route: redirect to the dedicated customer portal (no admin shell).
  */
 export default function CustomerDashboardPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.replace('/');
+    if (loading) return;
+    if (!user) {
+      router.replace('/customer/login');
       return;
     }
-    if (!loading && user && !user.is_customer_user) {
-      router.replace('/dashboard');
+    if (user.is_customer_user && !user.is_admin) {
+      router.replace(CUSTOMER_HOME_PATH);
       return;
     }
-    if (!loading && user?.is_customer_user) {
-      router.replace('/customer-invoices');
-    }
+    router.replace('/dashboard');
   }, [user, loading, router]);
 
   return (
-    <MainLayout>
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <Loader className="h-8 w-8 animate-spin text-blue-500" />
-      </div>
-    </MainLayout>
+    <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <Loader className="h-8 w-8 animate-spin text-emerald-600" aria-label="Redirecting" />
+    </div>
   );
 }

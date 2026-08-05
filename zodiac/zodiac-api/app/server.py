@@ -51,19 +51,33 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware configuration
-CORS_ORIGINS = os.getenv(
-    "CORS_ORIGINS", 
-    "https://www.bridgeedi.com,https://bridgeedi.com,https://zodiac-front.vercel.app,http://localhost:3000"
+# CORS middleware — honor CORS_ORIGINS (Phase 10 hardening).
+# Set CORS_ALLOW_ALL=true only for ephemeral local debugging (not production).
+_DEFAULT_CORS = (
+    "https://www.bridgeedi.com,https://bridgeedi.com,"
+    "https://zodiac-front.vercel.app,http://localhost:3000"
 )
-
-origins = [origin.strip() for origin in CORS_ORIGINS.split(",")]
-logger.info(f"[CORS] Origins configured: {origins}")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", _DEFAULT_CORS)
+CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+origins = [origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()]
+if not origins:
+    origins = [o.strip() for o in _DEFAULT_CORS.split(",")]
+_cors_origins = ["*"] if CORS_ALLOW_ALL else origins
+logger.info(
+    "[CORS] allow_all=%s origins=%s",
+    CORS_ALLOW_ALL,
+    _cors_origins if CORS_ALLOW_ALL else origins,
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for now (can restrict later if needed)
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=not CORS_ALLOW_ALL,  # credentials incompatible with "*"
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -91,6 +105,55 @@ async def health_check():
         "service": "zodiac-api",
         "version": "1.0.0"
     }
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    """
+    Readiness probe for enterprise tables (PR3).
+    Liveness remains /health. Returns 503 when required platform tables are missing.
+    """
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
+
+    from .database import engine
+
+    required_tables = [
+        "workspace_settings",
+        "workspace_erp_connections",
+        "workspace_adapter_config",
+        "erp_push_outbox",
+        "pipeline_timelines",
+        "pipeline_events",
+        "pipeline_metrics",
+        "alert_history",
+    ]
+    try:
+        existing = set(sa_inspect(engine).get_table_names())
+        missing = [t for t in required_tables if t not in existing]
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        body = {
+            "status": "ready" if not missing else "not_ready",
+            "service": "zodiac-api",
+            "missing_tables": missing,
+            "checked_tables": required_tables,
+        }
+        if missing:
+            return JSONResponse(status_code=503, content=body)
+        return body
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "service": "zodiac-api",
+                "error": str(e)[:500],
+                "missing_tables": required_tables,
+                "checked_tables": required_tables,
+            },
+        )
 
 # Import and register routers with safe error handling
 logger.info("[INIT] Loading API routers...")
@@ -233,12 +296,70 @@ except Exception as e:
     err_msg = str(e).encode('ascii', 'replace').decode('ascii')
     logger.error(f"[ERROR] Failed to load Certificates router: {err_msg}")
 
+# Phase 2 — Customer Workspace (additive; does not replace existing customer APIs)
+try:
+    from .api.workspace import router as workspace_router
+    app.include_router(workspace_router, prefix="/api/v1")
+    logger.info("[OK] Workspace router loaded")
+except Exception as e:
+    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+    logger.error(f"[ERROR] Failed to load Workspace router: {err_msg}")
+
+# Phase 4 — Invoice Processing Pipeline (opt-in; does not replace /sat/*)
+try:
+    from .api.pipeline import router as pipeline_router
+    app.include_router(pipeline_router, prefix="/api/v1")
+    logger.info("[OK] Pipeline router loaded")
+except Exception as e:
+    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+    logger.error(f"[ERROR] Failed to load Pipeline router: {err_msg}")
+
+# Phase 8 — Enterprise Monitoring (additive; observes pipeline only)
+try:
+    from .api.monitoring import router as monitoring_router
+    app.include_router(monitoring_router, prefix="/api/v1")
+    logger.info("[OK] Monitoring router loaded")
+except Exception as e:
+    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+    logger.error(f"[ERROR] Failed to load Monitoring router: {err_msg}")
+
+# Phase 9 — AI Operational Intelligence (additive; monitoring consumer only)
+try:
+    from .api.ai_ops import router as ai_ops_router
+    app.include_router(ai_ops_router, prefix="/api/v1")
+    logger.info("[OK] AI Ops router loaded")
+except Exception as e:
+    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+    logger.error(f"[ERROR] Failed to load AI Ops router: {err_msg}")
+
 logger.info("[OK] Zodiac API initialized successfully")
+
+
+@app.on_event("startup")
+async def _bridgeedi_startup():
+    """
+    Pilot deployability: register adapters, optional schema create, config posture.
+    Why: cold pipeline previously relied on lazy bootstrap; missing tables failed ready.
+    Risk: low — opt-in schema; config checks log only.
+    Rollback: no-op if startup import fails (logged).
+    """
+    try:
+        from .core.startup import run_startup
+
+        report = run_startup()
+        logger.info("[startup] BridgeEDI startup complete: %s", report)
+    except Exception as e:
+        err_msg = str(e).encode("ascii", "replace").decode("ascii")
+        logger.error("[startup] BridgeEDI startup failed (non-fatal): %s", err_msg)
+
 
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", 8000))
-    debug = os.getenv("API_DEBUG", "True").lower() == "true"
-    
+    # Reason: default True was unsafe for prod-like runs via `python -m app.server`.
+    # Risk: low — local `start.py` still uses reload=True explicitly.
+    # Rollback: set API_DEBUG=true in .env for local reload via this entrypoint.
+    debug = os.getenv("API_DEBUG", "false").lower() == "true"
+
     uvicorn.run(app, host=host, port=port, reload=debug)

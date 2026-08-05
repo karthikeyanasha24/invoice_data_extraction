@@ -1,0 +1,1274 @@
+{
+  "generated_at": "2026-08-03T12:34:11.155409Z",
+  "user": {
+    "id": 11,
+    "username": "ashakarthikeyan24",
+    "is_admin": true,
+    "is_customer_user": false
+  },
+  "customer": {
+    "id": "DE875243162",
+    "target_format": "XML_EMBED_X12"
+  },
+  "workspace_settings": {
+    "row": null,
+    "count": 0
+  },
+  "customer_count": 11,
+  "counts": {
+    "total": 41,
+    "failed": 24,
+    "slow": 15
+  },
+  "failed": [
+    {
+      "method": "POST",
+      "path": "/api/v1/user/auth/login",
+      "status": null,
+      "ms": 60340,
+      "slow": true,
+      "ok": false,
+      "summary": {},
+      "keys": [
+        "error"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace",
+      "status": 403,
+      "ms": 110,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not authenticated"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/stats",
+      "status": 404,
+      "ms": 12,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/overview",
+      "status": 404,
+      "ms": 4,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DOES_NOT_EXIST_XYZ",
+      "status": 403,
+      "ms": 1419,
+      "slow": true,
+      "ok": false,
+      "summary": {
+        "detail": "Not authorized for workspace 'DOES_NOT_EXIST_XYZ'"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/summary",
+      "status": 404,
+      "ms": 4,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/timeline",
+      "status": 404,
+      "ms": 195,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/events",
+      "status": 404,
+      "ms": 3,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/metrics",
+      "status": 404,
+      "ms": 8,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/alerts",
+      "status": 404,
+      "ms": 176,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/ops/DE875243162/summary",
+      "status": 404,
+      "ms": 189,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/ops/DE875243162/analytics",
+      "status": 404,
+      "ms": 5,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/ops/DE875243162/recommendations",
+      "status": 404,
+      "ms": 5,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/invoices/?skip=0&limit=5",
+      "status": 404,
+      "ms": 182,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/invoices-v2/?skip=0&limit=5",
+      "status": 404,
+      "ms": 133,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/supplier-tokens/",
+      "status": 404,
+      "ms": 32,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/supplier-tokens",
+      "status": 404,
+      "ms": 67,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/supplier-tokens",
+      "status": 404,
+      "ms": 64,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/supplier-mapping",
+      "status": 404,
+      "ms": 86,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/account-mapping",
+      "status": 404,
+      "ms": 13,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/quotations/",
+      "status": 404,
+      "ms": 3,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/quotations",
+      "status": 404,
+      "ms": 48,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/DE875243162/status",
+      "status": 404,
+      "ms": 95,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/executions?customer_id=DE875243162",
+      "status": 404,
+      "ms": 4,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    }
+  ],
+  "slow": [
+    {
+      "method": "POST",
+      "path": "/api/v1/user/auth/login",
+      "status": null,
+      "ms": 60340,
+      "slow": true,
+      "ok": false,
+      "summary": {},
+      "keys": [
+        "error"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/auth/fetch_user",
+      "status": 200,
+      "ms": 32890,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "username": "ashakarthikeyan24",
+        "is_admin": true
+      },
+      "keys": [
+        "email",
+        "username",
+        "id",
+        "is_active",
+        "is_verified",
+        "is_admin",
+        "is_customer_user",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "status": 200,
+      "ms": 4084,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "status": "ready",
+        "missing_tables": []
+      },
+      "keys": [
+        "status",
+        "service",
+        "missing_tables",
+        "checked_tables"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/?skip=0&limit=10",
+      "status": 200,
+      "ms": 1768,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 11,
+        "customers_count": 10
+      },
+      "keys": [
+        "total",
+        "skip",
+        "limit",
+        "customers"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/DE875243162",
+      "status": 200,
+      "ms": 1114,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162"
+      },
+      "keys": [
+        "customer_id",
+        "target_format",
+        "tax_value",
+        "tax_percentage",
+        "validation_fields",
+        "id",
+        "created_at"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace?skip=0&limit=100",
+      "status": 200,
+      "ms": 2048,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 11,
+        "workspaces_count": 11
+      },
+      "keys": [
+        "total",
+        "skip",
+        "limit",
+        "workspaces"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162",
+      "status": 200,
+      "ms": 2550,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162",
+        "has_settings": false,
+        "pipeline_enabled": false
+      },
+      "keys": [
+        "workspace_id",
+        "customer_id",
+        "display_name",
+        "pipeline_enabled",
+        "ai_scoped",
+        "monitoring_enabled",
+        "flags",
+        "has_settings",
+        "erp",
+        "erps",
+        "adapters",
+        "target_format"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/activity",
+      "status": 200,
+      "ms": 2424,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162"
+      },
+      "keys": [
+        "customer_id",
+        "workspace_id",
+        "v2_validated_count",
+        "sat_document_count",
+        "receiver_rfc_count",
+        "adapter_count",
+        "erp_connection_count",
+        "notes"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/onboarding-status",
+      "status": 200,
+      "ms": 3287,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "ready": false,
+        "missing": [
+          "workspace_settings",
+          "erp_configured",
+          "erp_secrets",
+          "adapter_enabled",
+          "government_endpoint",
+          "pipeline_enabled"
+        ],
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162"
+      },
+      "keys": [
+        "customer_id",
+        "workspace_id",
+        "ready",
+        "missing",
+        "steps",
+        "summary"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/erp",
+      "status": 200,
+      "ms": 1337,
+      "slow": true,
+      "ok": true,
+      "list_len": 0
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/adapters",
+      "status": 200,
+      "ms": 1336,
+      "slow": true,
+      "ok": true,
+      "list_len": 0
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/access-check",
+      "status": 200,
+      "ms": 1129,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162",
+        "is_admin": true,
+        "allowed": true
+      },
+      "keys": [
+        "customer_id",
+        "workspace_id",
+        "allowed",
+        "is_admin",
+        "is_customer_user"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DOES_NOT_EXIST_XYZ",
+      "status": 403,
+      "ms": 1419,
+      "slow": true,
+      "ok": false,
+      "summary": {
+        "detail": "Not authorized for workspace 'DOES_NOT_EXIST_XYZ'"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/documents?skip=0&limit=5",
+      "status": 200,
+      "ms": 2097,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 0,
+        "documents_count": 0
+      },
+      "keys": [
+        "total",
+        "documents"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/documents/?skip=0&limit=5",
+      "status": 200,
+      "ms": 1425,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 0,
+        "documents_count": 0
+      },
+      "keys": [
+        "total",
+        "documents"
+      ]
+    }
+  ],
+  "results": [
+    {
+      "method": "POST",
+      "path": "/api/v1/user/auth/login",
+      "status": null,
+      "ms": 60340,
+      "slow": true,
+      "ok": false,
+      "summary": {},
+      "keys": [
+        "error"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/auth/fetch_user",
+      "status": 200,
+      "ms": 32890,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "username": "ashakarthikeyan24",
+        "is_admin": true
+      },
+      "keys": [
+        "email",
+        "username",
+        "id",
+        "is_active",
+        "is_verified",
+        "is_admin",
+        "is_customer_user",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace",
+      "status": 403,
+      "ms": 110,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not authenticated"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "slow": false,
+      "ok": true,
+      "summary": {
+        "status": "healthy"
+      },
+      "keys": [
+        "status",
+        "service",
+        "version"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "status": 200,
+      "ms": 4084,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "status": "ready",
+        "missing_tables": []
+      },
+      "keys": [
+        "status",
+        "service",
+        "missing_tables",
+        "checked_tables"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/stats",
+      "status": 404,
+      "ms": 12,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/overview",
+      "status": 404,
+      "ms": 4,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/?skip=0&limit=10",
+      "status": 200,
+      "ms": 1768,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 11,
+        "customers_count": 10
+      },
+      "keys": [
+        "total",
+        "skip",
+        "limit",
+        "customers"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/DE875243162",
+      "status": 200,
+      "ms": 1114,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162"
+      },
+      "keys": [
+        "customer_id",
+        "target_format",
+        "tax_value",
+        "tax_percentage",
+        "validation_fields",
+        "id",
+        "created_at"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/formats/list",
+      "status": 200,
+      "ms": 836,
+      "slow": false,
+      "ok": true,
+      "summary": {},
+      "keys": [
+        "supported_formats",
+        "descriptions"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace?skip=0&limit=100",
+      "status": 200,
+      "ms": 2048,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 11,
+        "workspaces_count": 11
+      },
+      "keys": [
+        "total",
+        "skip",
+        "limit",
+        "workspaces"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162",
+      "status": 200,
+      "ms": 2550,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162",
+        "has_settings": false,
+        "pipeline_enabled": false
+      },
+      "keys": [
+        "workspace_id",
+        "customer_id",
+        "display_name",
+        "pipeline_enabled",
+        "ai_scoped",
+        "monitoring_enabled",
+        "flags",
+        "has_settings",
+        "erp",
+        "erps",
+        "adapters",
+        "target_format"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/activity",
+      "status": 200,
+      "ms": 2424,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162"
+      },
+      "keys": [
+        "customer_id",
+        "workspace_id",
+        "v2_validated_count",
+        "sat_document_count",
+        "receiver_rfc_count",
+        "adapter_count",
+        "erp_connection_count",
+        "notes"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/onboarding-status",
+      "status": 200,
+      "ms": 3287,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "ready": false,
+        "missing": [
+          "workspace_settings",
+          "erp_configured",
+          "erp_secrets",
+          "adapter_enabled",
+          "government_endpoint",
+          "pipeline_enabled"
+        ],
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162"
+      },
+      "keys": [
+        "customer_id",
+        "workspace_id",
+        "ready",
+        "missing",
+        "steps",
+        "summary"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/erp",
+      "status": 200,
+      "ms": 1337,
+      "slow": true,
+      "ok": true,
+      "list_len": 0
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/adapters",
+      "status": 200,
+      "ms": 1336,
+      "slow": true,
+      "ok": true,
+      "list_len": 0
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/access-check",
+      "status": 200,
+      "ms": 1129,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "workspace_id": "DE875243162",
+        "is_admin": true,
+        "allowed": true
+      },
+      "keys": [
+        "customer_id",
+        "workspace_id",
+        "allowed",
+        "is_admin",
+        "is_customer_user"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DOES_NOT_EXIST_XYZ",
+      "status": 403,
+      "ms": 1419,
+      "slow": true,
+      "ok": false,
+      "summary": {
+        "detail": "Not authorized for workspace 'DOES_NOT_EXIST_XYZ'"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/summary",
+      "status": 404,
+      "ms": 4,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/timeline",
+      "status": 404,
+      "ms": 195,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/events",
+      "status": 404,
+      "ms": 3,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/metrics",
+      "status": 404,
+      "ms": 8,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/DE875243162/alerts",
+      "status": 404,
+      "ms": 176,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/health",
+      "status": 200,
+      "ms": 152,
+      "slow": false,
+      "ok": true,
+      "summary": {},
+      "keys": [
+        "enabled",
+        "env",
+        "message"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/ops/DE875243162/summary",
+      "status": 404,
+      "ms": 189,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/ops/DE875243162/analytics",
+      "status": 404,
+      "ms": 5,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/ops/DE875243162/recommendations",
+      "status": 404,
+      "ms": 5,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/invoices/?skip=0&limit=5",
+      "status": 404,
+      "ms": 182,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/invoices-v2/?skip=0&limit=5",
+      "status": 404,
+      "ms": 133,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/documents?skip=0&limit=5",
+      "status": 200,
+      "ms": 2097,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 0,
+        "documents_count": 0
+      },
+      "keys": [
+        "total",
+        "documents"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/documents/?skip=0&limit=5",
+      "status": 200,
+      "ms": 1425,
+      "slow": true,
+      "ok": true,
+      "summary": {
+        "total": 0,
+        "documents_count": 0
+      },
+      "keys": [
+        "total",
+        "documents"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/health",
+      "status": 200,
+      "ms": 13,
+      "slow": false,
+      "ok": true,
+      "summary": {},
+      "keys": [
+        "enabled",
+        "env",
+        "message"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/supplier-tokens/",
+      "status": 404,
+      "ms": 32,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/supplier-tokens",
+      "status": 404,
+      "ms": 67,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/supplier-tokens",
+      "status": 404,
+      "ms": 64,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/supplier-mapping",
+      "status": 404,
+      "ms": 86,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/account-mapping",
+      "status": 404,
+      "ms": 13,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/quotations/",
+      "status": 404,
+      "ms": 3,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/quotations",
+      "status": 404,
+      "ms": 48,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/DE875243162/status",
+      "status": 404,
+      "ms": 95,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/executions?customer_id=DE875243162",
+      "status": 404,
+      "ms": 4,
+      "slow": false,
+      "ok": false,
+      "summary": {
+        "detail": "Not Found"
+      },
+      "keys": [
+        "detail"
+      ]
+    }
+  ]
+}

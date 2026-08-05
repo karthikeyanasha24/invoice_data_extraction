@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>BridgeEDI — Implementation Plan</title>
+<style>
+:root {
+  --ink: #1a1a1a;
+  --muted: #555;
+  --blue: #1e40af;
+  --blue-mid: #2563eb;
+  --line: #e5e7eb;
+  --soft: #f8fafc;
+}
+
+* { box-sizing: border-box; }
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 20mm 16mm;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.55;
+  color: var(--ink);
+  margin: 0;
+  padding: 0;
+  max-width: 100%;
+}
+
+/* Cover / title block */
+.doc-header {
+  border-bottom: 3px solid var(--blue-mid);
+  padding-bottom: 14px;
+  margin-bottom: 22px;
+}
+.doc-header h1 {
+  font-size: 20pt;
+  line-height: 1.25;
+  color: #0f172a;
+  margin: 0 0 4px 0;
+  border: none;
+  padding: 0;
+}
+.doc-header .subtitle {
+  font-size: 14pt;
+  color: var(--blue);
+  font-weight: 600;
+  margin: 0 0 12px 0;
+}
+.meta {
+  font-size: 9pt;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.meta p { margin: 2px 0; }
+
+h1 {
+  font-size: 16pt;
+  color: #0f172a;
+  border-bottom: 2px solid var(--blue-mid);
+  padding-bottom: 6px;
+  margin: 28px 0 12px;
+  page-break-after: avoid;
+}
+h2 {
+  font-size: 13pt;
+  color: var(--blue);
+  margin: 26px 0 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  page-break-after: avoid;
+}
+h3 {
+  font-size: 11.5pt;
+  color: #1d4ed8;
+  margin: 18px 0 8px;
+  page-break-after: avoid;
+}
+h4 {
+  font-size: 10.5pt;
+  color: #334155;
+  margin: 14px 0 6px;
+  page-break-after: avoid;
+}
+
+p { margin: 0 0 10px; }
+
+ul, ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+li { margin-bottom: 4px; }
+li > ul, li > ol { margin-top: 4px; margin-bottom: 4px; }
+
+strong { color: #0f172a; }
+
+a { color: var(--blue-mid); text-decoration: none; }
+
+hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 20px 0;
+}
+
+blockquote {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-left: 4px solid var(--blue-mid);
+  background: var(--soft);
+  color: #334155;
+  font-style: italic;
+}
+
+/* Tables — keep readable structure */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 16px;
+  font-size: 9pt;
+  line-height: 1.4;
+  page-break-inside: auto;
+}
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; page-break-after: auto; }
+th {
+  background: var(--blue);
+  color: #fff;
+  text-align: left;
+  padding: 7px 8px;
+  font-weight: 600;
+  vertical-align: top;
+}
+td {
+  border: 1px solid #d1d5db;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+tbody tr:nth-child(even) td { background: #f9fafb; }
+
+/* Code / ASCII diagrams */
+pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 12px 14px;
+  border-radius: 6px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 7.5pt;
+  line-height: 1.35;
+  white-space: pre;
+  overflow-x: auto;
+  margin: 10px 0 16px;
+  page-break-inside: avoid;
+}
+code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 9pt;
+  background: #f1f5f9;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #0f172a;
+}
+pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* Phase cards (definition-style tables from markdown) */
+.phase {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 10px 0 16px;
+  background: var(--soft);
+  page-break-inside: avoid;
+}
+
+.footer-note {
+  margin-top: 28px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 9pt;
+  color: var(--muted);
+  font-style: italic;
+}
+
+@media print {
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  a { color: inherit; text-decoration: none; }
+  h2, h3 { break-after: avoid; }
+  table, pre, blockquote { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<h1 id="bridgeedi-multi-country-adapter-customer-workspace">BridgeEDI — Multi-Country Adapter &amp; Customer Workspace</h1>
+<h1 id="implementation-plan">Implementation Plan</h1>
+<p><strong>Document type:</strong> Internal architecture &amp; implementation plan (pre-development)<br />
+<strong>Platform:</strong> BridgeEDI (codebase: <code>zodiac/zodiac-api</code> + <code>zodiac/zodiac-front</code>)<br />
+<strong>Based on:</strong> Repository analysis + client/meeting requirements (customer workspace, country adapters, ERP ↔ Government flow)<br />
+<strong>Constraint:</strong> No code changes in this document — planning only  </p>
+<hr />
+<h2 id="executive-summary">Executive Summary</h2>
+<p>BridgeEDI (Zodiac) already operates as an <strong>invoice / EDI / tax-document middleware</strong> with:</p>
+<ul>
+<li>Document intake (upload, API key, supplier token, SAP receive)</li>
+<li>Validation, conversion, correction</li>
+<li>Outbound connectors (PeppolSoft DBNA third-party, SAP billing POST for Mexico SAT/CFDI)</li>
+<li>Dashboards, certificates/mTLS, and Generative AI analytics over operational + SAP-shaped data</li>
+</ul>
+<p>The business goal is <strong>not</strong> a greenfield rewrite. It is to <strong>reuse the existing platform</strong> so that:</p>
+<ol>
+<li><strong>Each customer</strong> gets an <strong>isolated workspace</strong> (their ERP, their transactions, their monitoring/AI).</li>
+<li><strong>Each country</strong> gets a <strong>country adapter</strong> containing only: mapping, validation, business rules, formatting, and government/endpoint integration.</li>
+<li><strong>Shared platform</strong> owns: auth, orchestration, storage, retries/monitoring, audit, notifications, and AI analytics over that customer’s data.</li>
+</ol>
+<h3 id="what-exists-today-verified">What exists today (verified)</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Status in repo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Receive invoices</td>
+<td>Yes — V1, V2, SAT intake</td>
+</tr>
+<tr>
+<td>Validate / map / transform / format</td>
+<td>Yes — but <strong>embedded</strong> in services, not adapter interfaces</td>
+</tr>
+<tr>
+<td>Send to government / partner endpoint</td>
+<td>Partial — <strong>Mexico SAT → SAP</strong> and <strong>V1 → PeppolSoft</strong>; live SAT.gov PAC APIs <strong>not</strong> found</td>
+</tr>
+<tr>
+<td>Confirmation back to ERP</td>
+<td>Partial — SAP response stored on SAT merges; V2 customer delivery is a <strong>TODO stub</strong></td>
+</tr>
+<tr>
+<td>Logs / monitoring / AI</td>
+<td>Yes — dashboards + adaptive AI</td>
+</tr>
+<tr>
+<td>Durable queue / Celery</td>
+<td><strong>Not present</strong> — FastAPI BackgroundTasks + in-memory status</td>
+</tr>
+<tr>
+<td>Explicit country-adapter pattern</td>
+<td><strong>Not present</strong> — Mexico CFDI is a parallel module set</td>
+</tr>
+<tr>
+<td>True multi-tenant <code>tenant_id</code></td>
+<td><strong>Not present</strong> — isolation via <code>user_id</code> + <code>customer_id</code> + RFC lists</td>
+</tr>
+</tbody>
+</table>
+<h3 id="recommended-strategy">Recommended strategy</h3>
+<p><strong>Extract</strong> the Mexico SAT/CFDI path into the <strong>reference Country Adapter (MX)</strong>, keep shared orchestration, then <strong>clone the adapter contract</strong> for the next country—without rebuilding auth, portal, storage, or AI.</p>
+<hr />
+<h2 id="current-architecture">Current Architecture</h2>
+<h3 id="high-level-as-implemented">High-level (as implemented)</h3>
+<pre><code class="language-text">┌─────────────────┐     JWT / API Key / Token / mTLS
+│  Customer users │─────────────────────────────────┐
+│  Admin / Ops    │                                 │
+└─────────────────┘                                 ▼
+                                            ┌──────────────────┐
+                                            │  zodiac-front    │
+                                            │  Next.js portal  │
+                                            └────────┬─────────┘
+                                                     │ REST
+                                                     ▼
+┌──────────────┐   receive XML    ┌──────────────────────────────────────────┐
+│ Customer ERP │ ───────────────► │           zodiac-api (FastAPI)           │
+│ / SAP        │ ◄─────────────── │  Auth · Invoices V1/V2 · SAT · Dashboard │
+└──────────────┘   status / SAP   │  Certificates · AI adaptive query        │
+                                  └─────┬───────────────┬───────────┬────────┘
+                                        │               │           │
+                         ┌──────────────┘               │           └──────────────┐
+                         ▼                              ▼                          ▼
+                 PostgreSQL                    Local / Blob storage         External systems
+                 (app + SAP-shaped             (uploads, converted)         · SAP billing HTTP
+                  tables for AI)                                            · PeppolSoft DBNA
+                                                                            · LLM providers
+</code></pre>
+<h3 id="three-parallel-invoice-pipelines-fact">Three parallel invoice pipelines (FACT)</h3>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Entry</th>
+<th>Core services</th>
+<th>Outbound</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A — Legacy V1</strong></td>
+<td><code>/api/v1/invoices/process</code>, <code>/sap/process</code>, <code>/api/process</code></td>
+<td><code>process_service.process_invoice_internal</code>, <code>format_router</code></td>
+<td><code>external_api_service</code> → PeppolSoft</td>
+</tr>
+<tr>
+<td><strong>B — Invoices V2</strong></td>
+<td><code>/api/v1/invoices-v2/upload</code>, <code>/sap/receive</code></td>
+<td>validation → convert → deliver</td>
+<td><code>customer_delivery_service</code> (<strong>stub</strong>)</td>
+</tr>
+<tr>
+<td><strong>C — Mexico SAT/CFDI</strong></td>
+<td><code>/api/v1/sat/*</code>, canonical/simple merge</td>
+<td><code>sat_processor</code>, merge services, <code>sap_transformer</code></td>
+<td><code>sap_api_client</code> → SAP billing</td>
+</tr>
+</tbody>
+</table>
+<p>There is <strong>no single unified “country adapter” interface</strong> today. Country/jurisdiction logic for Mexico is a <strong>dedicated SAT stack</strong>.</p>
+<hr />
+<h2 id="folder-structure">Folder Structure</h2>
+<h3 id="repository-root-relevant">Repository root (relevant)</h3>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Purpose</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zodiac/zodiac-api/</code></td>
+<td>Production FastAPI backend</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>zodiac/zodiac-front/</code></td>
+<td>Production Next.js portal</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>zodiac/*.md</code></td>
+<td>Docs / proposals / fix notes</td>
+<td>Documentation</td>
+</tr>
+<tr>
+<td>Root <code>*.py</code> (converter demos)</td>
+<td>Ad-hoc XML/X12 scripts</td>
+<td><strong>Legacy / tooling</strong> — not wired into Zodiac runtime</td>
+</tr>
+<tr>
+<td>Root <code>zodiac-api/</code> stub</td>
+<td>Incomplete duplicate</td>
+<td><strong>Dead / accidental</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="zodiac-apiapp"><code>zodiac-api/app/</code></h3>
+<table>
+<thead>
+<tr>
+<th>Folder</th>
+<th>Purpose</th>
+<th>Responsibilities</th>
+<th>Dependencies</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api/</code></td>
+<td>HTTP routers</td>
+<td>Auth, invoices, V2, SAT, dashboard, certificates, customers</td>
+<td>services, models, schemas</td>
+<td><strong>Production</strong> (<code>sat_debug</code> not mounted)</td>
+</tr>
+<tr>
+<td><code>services/</code></td>
+<td>Business logic</td>
+<td>Process, SAT, SAP send/transform, AI SQL, certs, delivery</td>
+<td>models, utils, config, DB</td>
+<td><strong>Production</strong> (+ large AI surface; delivery stub)</td>
+</tr>
+<tr>
+<td><code>models/</code></td>
+<td>ORM</td>
+<td>Users, customers, invoices, SAT, certificates, AI memory</td>
+<td>SQLAlchemy Base</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>schemas/</code></td>
+<td>Pydantic DTOs</td>
+<td>Request/response validation</td>
+<td>FastAPI</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>utils/</code></td>
+<td>Formatters/parsers</td>
+<td>X12, EDIFACT, UBL, CFDI, PDF, crypto</td>
+<td>—</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>config/</code></td>
+<td>Env + blob</td>
+<td>Secrets, LLM knobs, storage mode</td>
+<td>dotenv</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>middleware/</code></td>
+<td>mTLS helpers</td>
+<td>Client cert header validation</td>
+<td>certificates</td>
+<td><strong>Production-capable</strong></td>
+</tr>
+<tr>
+<td><code>tasks/</code></td>
+<td>Ops scripts</td>
+<td>Certificate expiration monitor</td>
+<td>models</td>
+<td><strong>Ops script</strong> (cron not verified)</td>
+</tr>
+<tr>
+<td><code>analysis/</code></td>
+<td>Metrics/charts</td>
+<td>Dashboard insight helpers</td>
+<td>—</td>
+<td><strong>Production (AI/dashboard)</strong></td>
+</tr>
+<tr>
+<td><code>table_mapping/</code></td>
+<td>SAP column metadata</td>
+<td>AI SQL schema context</td>
+<td>JSON files</td>
+<td><strong>Production (AI)</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="zodiac-frontsrc"><code>zodiac-front/src/</code></h3>
+<table>
+<thead>
+<tr>
+<th>Folder</th>
+<th>Purpose</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app/</code></td>
+<td>Routes: dashboard, AI, invoices-v2, sat-documents, customers, upload</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>components/</code></td>
+<td>Feature UI (InvoicesV2, SAT<em>, Dashboard</em>, AI)</td>
+<td><strong>Production</strong> (some <code>.bak</code> leftovers)</td>
+</tr>
+<tr>
+<td><code>lib/api.ts</code></td>
+<td>Axios API client</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>contexts/</code></td>
+<td>AuthContext</td>
+<td><strong>Production</strong></td>
+</tr>
+<tr>
+<td><code>hooks/</code>, <code>types/</code></td>
+<td>Supporting</td>
+<td>Supporting</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="backend-architecture">Backend Architecture</h2>
+<p><strong>Entry:</strong> <code>app/server.py</code> → FastAPI <code>app</code>, CORS, router registration, optional invoice-bot <code>.env</code> merge.</p>
+<p><strong>Database:</strong> PostgreSQL via <code>DATABASE_URL</code>, SQLAlchemy sync sessions, connection pool (<code>pool_size</code> default 5).</p>
+<p><strong>Auth surfaces:</strong></p>
+<ul>
+<li>JWT (<code>api/auth.py</code>) — portal users  </li>
+<li>API keys (<code>api_key_auth.py</code>) — machine invoice API  </li>
+<li>Supplier tokens — SAT supplier intake  </li>
+<li>Customer tokens + mTLS — delivery / secure channels  </li>
+<li>Certificates lifecycle — <code>api/certificates.py</code></li>
+</ul>
+<p><strong>Background work (FACT):</strong> FastAPI <code>BackgroundTasks</code>, <code>asyncio.create_task</code> for V1; <strong>no Celery/Redis broker</strong>. In-memory status maps exist (<code>StatusTracker</code>, <code>_processing_invoices</code>) — <strong>fragile under multi-instance/serverless</strong>.</p>
+<hr />
+<h2 id="frontend-architecture">Frontend Architecture</h2>
+<p><strong>Stack:</strong> Next.js App Router, React, Tailwind, Axios, Recharts.</p>
+<p><strong>Customer-relevant UI surfaces:</strong></p>
+<ul>
+<li>Admin: Dashboard V2, Intelligence/AI (<code>/dashboard/ai</code>), Invoices V2, SAT Documents, Customers, Certificates  </li>
+<li>Customer user: <code>/customer-invoices</code>, <code>/customer-sat-documents</code>, <code>/customer-dashboard</code></li>
+</ul>
+<p><strong>Meeting implication:</strong> Customer workspace needs a <strong>dedicated portal space</strong> (nav + data scoped to that customer), separate from the shared demo/ops analytics used today—without forking the entire app.</p>
+<hr />
+<h2 id="integration-flow-target-vs-current">Integration Flow (Target vs Current)</h2>
+<h3 id="target-from-meeting">Target (from meeting)</h3>
+<pre><code class="language-text">Customer ERP → BridgeEDI → Mapping/Validation/Rules/Format
+  → Government Endpoint → Confirmation → BridgeEDI → Customer ERP
+  (+ logs, monitor, retry, AI)
+</code></pre>
+<h3 id="current-closest-match-mexico-sat-sap">Current closest match (Mexico SAT → SAP)</h3>
+<pre><code class="language-text">Supplier/Admin CFDI upload → sat_processor (parse/validate store)
+  → simple/canonical merge → sap_transformer → sap_api_client POST
+  → store sap_document_number / sap_response on merge record
+</code></pre>
+<p><strong>Gap vs meeting:</strong> Confirmation is stored on BridgeEDI; <strong>automatic push of confirmation back into customer ERP</strong> is not implemented as a generic ERP callback service (SAP send response is captured locally). V2 “send to customer” is explicitly unfinished.</p>
+<h3 id="current-v1-third-party-path">Current V1 third-party path</h3>
+<pre><code class="language-text">Upload → process_invoice_internal → format_router → external_api_service (PeppolSoft)
+  → success/failed EDI tables
+</code></pre>
+<p>This is a <strong>partner/network endpoint</strong>, not a government tax portal.</p>
+<hr />
+<h2 id="invoice-processing-flow-detailed">Invoice Processing Flow (detailed)</h2>
+<h3 id="path-a-v1-process_serviceprocess_invoice_internal">Path A — V1 (<code>process_service.process_invoice_internal</code>)</h3>
+<p><strong>Files:</strong> <code>api/invoices.py</code>, <code>services/process_service.py</code>, <code>format_router.py</code>, <code>external_api_service.py</code>, <code>status_tracker.py</code>, models <code>invoice.py</code></p>
+<p><strong>Documented stages (in code comments/flow):</strong> Upload → XML validation → EDI conversion → EDI validation → 3rd party endpoint → DB save (with AI correction branches).</p>
+<p><strong>DB:</strong> <code>zodiac_invoice_success_edi</code>, <code>zodiac_invoice_failed_edi</code> (+ business data helpers).</p>
+<h3 id="path-b-v2">Path B — V2</h3>
+<p><strong>Files:</strong> <code>api/invoices_v2.py</code>, <code>invoice_v2_validation_service.py</code>, <code>invoice_v2_correction_service.py</code>, <code>invoice_conversion_service.py</code>, <code>converted_invoices.py</code>, <code>customer_delivery_service.py</code></p>
+<p><strong>Flow:</strong> Document row → validate → validated row → convert to customer <code>target_format</code> → (intended) deliver.</p>
+<p><strong>DB:</strong> <code>v2_invoice_documents</code>, validated tables, converted invoices, BI tables.</p>
+<h3 id="path-c-satcfdi-current-country-implementation">Path C — SAT/CFDI (current country implementation)</h3>
+<p><strong>Files:</strong><br />
+API: <code>sat.py</code>, <code>sat_canonical.py</code>, <code>sat_simple_merge.py</code>, <code>sat_supplier_mapping.py</code><br />
+Services: <code>sat_processor.py</code>, <code>sat_canonical_merge_service.py</code>, <code>sat_supplier_mapping_service.py</code>, <code>sap_transformer.py</code>, <code>sap_api_client.py</code>, <code>sap_send_all.py</code><br />
+Utils: <code>cfdi_parser.py</code>, <code>xml_to_cfdi.py</code><br />
+Models: <code>sat_document.py</code>, <code>sat_simple_merged.py</code>, <code>sat_canonical_merged.py</code>, <code>sat_supplier_account_mapping.py</code>, <code>customer_receiver_rfc.py</code></p>
+<p><strong>Flow:</strong> Intake CFDI XML → parse (SAT namespaces) → store → merge → transform to SAP JSON → HTTP to SAP → persist confirmation fields.</p>
+<hr />
+<h2 id="sap-integration">SAP Integration</h2>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Implementation</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inbound invoice XML from SAP</td>
+<td><code>POST /invoices-v2/sap/receive</code>, V1 <code>/invoices/sap/process</code></td>
+<td>Multipart / process pipeline</td>
+</tr>
+<tr>
+<td>Outbound billing to SAP</td>
+<td><code>SAPAPIClient.send_json_to_sap_with_session</code></td>
+<td>CSRF + session POST; URL/credentials <strong>hardcoded in source</strong> (security risk)</td>
+</tr>
+<tr>
+<td>CFDI → SAP JSON</td>
+<td><code>sap_transformer.py</code></td>
+<td>Country-specific transform for MX</td>
+</tr>
+<tr>
+<td>Bulk send</td>
+<td><code>sap_send_all.py</code></td>
+<td>Pending merges</td>
+</tr>
+<tr>
+<td>AI over SAP tables</td>
+<td><code>sap_sql_agent.py</code>, <code>table_mapping/*</code>, adaptive query</td>
+<td>Uses app <code>DATABASE_URL</code> / <code>AI_CONTEXT_SOURCE</code> — <strong>not</strong> a separate live SAP RFC layer for invoices</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Unverified:</strong> Whether production overrides hardcoded SAP URL via env (not evident in <code>sap_api_client.py</code> from analysis).</p>
+<hr />
+<h2 id="government-integration">Government Integration</h2>
+<table>
+<thead>
+<tr>
+<th>Finding</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Implemented “government-adjacent” stack</strong></td>
+<td>Mexico CFDI intake + RFC mapping + merge + SAP posting</td>
+</tr>
+<tr>
+<td><strong>Live SAT.gov / PAC / timbrado APIs</strong></td>
+<td><strong>Not found</strong> in codebase</td>
+</tr>
+<tr>
+<td><strong>“Government confirmation” today</strong></td>
+<td>Practically = <strong>SAP accept/reject response</strong> after CFDI-derived posting, plus document status in portal</td>
+</tr>
+<tr>
+<td><strong>PeppolSoft</strong></td>
+<td>Third-party EDI network, used by V1</td>
+</tr>
+</tbody>
+</table>
+<p>For the new customer, the meeting states a <strong>different HTTP/REST endpoint</strong> and <strong>3–4 document types</strong> with confirmation returned to BridgeEDI then ERP. That endpoint <strong>is not in the repo</strong> — must be supplied as integration inputs (OpenAPI, auth, payloads, callbacks).</p>
+<hr />
+<h2 id="current-country-adapter-mexico-de-facto">Current Country Adapter (Mexico — de facto)</h2>
+<p>Even without an adapter interface, Mexico is the <strong>reference country module</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Adapter concern</th>
+<th>Where it lives today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mapping</td>
+<td><code>sap_transformer</code>, supplier/GL mapping services, RFC tables</td>
+</tr>
+<tr>
+<td>Validation</td>
+<td><code>CFDIParser</code>, SAT processor validation, receiver RFC allow-lists</td>
+</tr>
+<tr>
+<td>Business rules</td>
+<td>Merge rules (simple/canonical), duplicate checks, period/fiscal grouping</td>
+</tr>
+<tr>
+<td>Formatting</td>
+<td>CFDI XML parse; SAP JSON output format</td>
+</tr>
+<tr>
+<td>Endpoint integration</td>
+<td><code>sap_api_client</code> / <code>sap_send_all</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Everything else (auth, UI shell, DB engine, dashboards, AI chat, certificates) is shared platform.</strong></p>
+<hr />
+<h2 id="shared-components">Shared Components</h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Components (reuse as-is or with thin wrappers)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auth</td>
+<td>JWT, API keys, supplier/customer tokens, certificates/mTLS</td>
+</tr>
+<tr>
+<td>Portal shell</td>
+<td>MainLayout, Sidebar, AuthContext, api.ts patterns</td>
+</tr>
+<tr>
+<td>Orchestration primitives</td>
+<td>BackgroundTasks patterns, status tracking (needs hardening)</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>file_storage_service</code>, uploads/converted/Blob</td>
+</tr>
+<tr>
+<td>Customer master</td>
+<td><code>Customer</code>, <code>UserCustomer</code>, target_format</td>
+</tr>
+<tr>
+<td>Monitoring UI/API</td>
+<td>Dashboard V2 endpoints + components</td>
+</tr>
+<tr>
+<td>AI</td>
+<td>Adaptive query, charting, chat thread store (scoped by user today)</td>
+</tr>
+<tr>
+<td>Ops</td>
+<td>Health endpoints, logging</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="customer-workspace-design">Customer Workspace Design</h2>
+<h3 id="meeting-requirement">Meeting requirement</h3>
+<blockquote>
+<p>Exclusive space for the customer to run their own transactions; not mixed with other demo/scenario data.</p>
+</blockquote>
+<h3 id="current-isolation-fact">Current isolation (FACT)</h3>
+<ul>
+<li>Documents often filtered by <code>user_id</code></li>
+<li>Customer users via <code>UserCustomer</code></li>
+<li>Mexico: <code>CustomerReceiverRfc</code> for allowed RFCs</li>
+<li><strong>No</strong> first-class <code>workspace_id</code> / <code>tenant_id</code></li>
+</ul>
+<h3 id="proposed-model-design-not-implemented">Proposed model (design — not implemented)</h3>
+<pre><code class="language-text">Workspace (Customer)
+  ├── Users (roles)
+  ├── ERP connection config (base URL, auth, callback)
+  ├── Enabled country adapters [MX, XX, ...]
+  ├── Credentials / certificates
+  └── Transaction + audit data (scoped)
+</code></pre>
+<p><strong>Reuse:</strong> Existing <code>Customer</code> + <code>UserCustomer</code> as the workspace seed.<br />
+<strong>Add (planned):</strong> workspace-scoped routing to country adapters; stricter query filters; optional dedicated nav/branding for customer portal.</p>
+<p><strong>AI:</strong> Feed AI only from <strong>that workspace’s</strong> operational tables (meeting: real-time transactional data into AI analysis)—requires enforcing <code>customer_id</code>/<code>workspace_id</code> in adaptive SQL paths (today AI often sees broader schema).</p>
+<hr />
+<h2 id="country-adapter-design">Country Adapter Design</h2>
+<h3 id="contract-proposed">Contract (proposed)</h3>
+<p>Each country adapter package exposes:</p>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Responsibility</th>
+<th>MX reference today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>parse_and_validate(payload)</code></td>
+<td>Schema + tax-id rules</td>
+<td><code>CFDIParser</code> + sat_processor</td>
+</tr>
+<tr>
+<td><code>apply_mappings(ctx)</code></td>
+<td>Field / GL / party mapping</td>
+<td>supplier mapping + transformer</td>
+</tr>
+<tr>
+<td><code>apply_business_rules(ctx)</code></td>
+<td>Accept/reject/merge rules</td>
+<td>merge services</td>
+</tr>
+<tr>
+<td><code>format_outbound(ctx)</code></td>
+<td>Target government/ERP payload</td>
+<td>SAP JSON</td>
+</tr>
+<tr>
+<td><code>send(ctx)</code></td>
+<td>Call endpoint</td>
+<td><code>SAPAPIClient</code></td>
+</tr>
+<tr>
+<td><code>handle_confirmation(ctx)</code></td>
+<td>Normalize response</td>
+<td>sap_response fields</td>
+</tr>
+<tr>
+<td><code>push_to_erp(ctx)</code></td>
+<td>Confirmation to customer ERP</td>
+<td><strong>Gap — to build</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="shared-platform-owns">Shared platform owns</h3>
+<p>Intake API → authenticate → load workspace → select adapter by country → run hooks → persist audit → update monitor → notify → AI indexing.</p>
+<h3 id="adapter-isolation-rule-from-meeting">Adapter isolation rule (from meeting)</h3>
+<p>Adapter code <strong>must not</strong> be reused across countries. Shared utilities (HTTP client, retry policy, audit writer) stay in core; <strong>rules/mappings/formats/endpoints</strong> stay in the adapter.</p>
+<hr />
+<h2 id="ai-integration">AI Integration</h2>
+<table>
+<thead>
+<tr>
+<th>Current</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/dashboard/ai</code>, <code>POST /api/query/adaptive</code></td>
+<td>NL analytics over DB</td>
+</tr>
+<tr>
+<td>Dashboards</td>
+<td>Operational KPIs</td>
+</tr>
+<tr>
+<td>Chat threads</td>
+<td>Optional persistence (<code>ada_*</code> / schema-chat)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Meeting intent:</strong> AI shows <strong>realtime analysis of customer transaction data</strong>, not a separate product.</p>
+<p><strong>Plan implications:</strong></p>
+<ol>
+<li>Scope AI queries to workspace data.  </li>
+<li>Reuse adaptive pipeline + charts.  </li>
+<li>Add operational metrics events (submit, confirm, fail, retry) as first-class facts for AI.  </li>
+<li>Do <strong>not</strong> let AI mutate government payloads without controlled workflow.</li>
+</ol>
+<hr />
+<h2 id="monitoring-architecture">Monitoring Architecture</h2>
+<table>
+<thead>
+<tr>
+<th>Existing</th>
+<th>Gap for new program</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dashboard V2 inbound/outbound/business</td>
+<td>Workspace-scoped views</td>
+</tr>
+<tr>
+<td>Failed invoice analysis</td>
+<td>Adapter-level failure reasons</td>
+</tr>
+<tr>
+<td>Certificate health</td>
+<td>Per-workspace certs</td>
+</tr>
+<tr>
+<td>In-memory status for V1</td>
+<td>Durable transaction timeline</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Required for meeting SLAs:</strong> correlation ID end-to-end, retry visibility, endpoint health, alert hooks (email/Slack partially TODO in cert monitor).</p>
+<hr />
+<h2 id="security">Security</h2>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Current</th>
+<th>Plan note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JWT / RBAC</td>
+<td>Yes</td>
+<td>Extend roles for workspace</td>
+</tr>
+<tr>
+<td>API keys / tokens</td>
+<td>Yes</td>
+<td>Per-workspace keys</td>
+</tr>
+<tr>
+<td>mTLS / certificates</td>
+<td>Yes</td>
+<td>Per-customer ERP channels</td>
+</tr>
+<tr>
+<td>Secrets</td>
+<td>Mixed (env + <strong>hardcoded SAP/Peppol</strong>)</td>
+<td><strong>Must</strong> move outbound creds to vault/env before customer go-live</td>
+</tr>
+<tr>
+<td>TLS verify disabled on SAP client</td>
+<td>FACT in code</td>
+<td>Fix before production customer use</td>
+</tr>
+<tr>
+<td>Audit</td>
+<td>Partial (SAT logs, invoice tables)</td>
+<td>Standardize transaction event log</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="multi-tenant-strategy">Multi-Tenant Strategy</h2>
+<p><strong>Phase approach:</strong></p>
+<ol>
+<li><strong>Logical tenancy</strong> on existing Postgres (workspace_id on transaction tables; filter everywhere).  </li>
+<li><strong>Config tenancy</strong> (ERP endpoints, adapter enablement, mappings).  </li>
+<li>Later: stronger isolation (schema-per-tenant / DB-per-tenant) <strong>only if</strong> compliance requires — <strong>not</strong> evidenced as required in current code.</li>
+</ol>
+<p><strong>Risk if skipped:</strong> AI or dashboards leaking cross-customer rows (possible today if filters incomplete — full audit <strong>not</strong> exhaustively verified).</p>
+<hr />
+<h2 id="recommended-folder-structure">Recommended Folder Structure</h2>
+<pre><code class="language-text">zodiac-api/app/
+  core/                      # NEW thin layer (orchestration, retry, audit interfaces)
+    workspace/
+    pipeline/
+    adapters/base.py         # Protocol / ABC only
+  adapters/
+    mx_cfdi/                 # EXTRACT from sat_* + sap_transformer + sap_api_client pieces
+      mapping/
+      validation/
+      rules/
+      formatting/
+      connector/
+    &lt;country_code&gt;/          # NEW adapters clone this layout only
+  api/                       # Keep; add workspace-scoped routes gradually
+  services/                  # Shared services remain; country logic moves out over time
+  ...
+zodiac-front/src/
+  app/workspace/[customerId]/ # NEW customer space routes (or reuse customer-* with stricter scope)
+  adapters/                  # Optional UI panels per country
+</code></pre>
+<p><strong>Important:</strong> Prefer <strong>incremental extraction</strong> of MX into <code>adapters/mx_cfdi</code> over a big-bang move, to limit regression on live SAT customers.</p>
+<hr />
+<h2 id="recommended-adapter-pattern">Recommended Adapter Pattern</h2>
+<pre><code class="language-text">                    ┌─────────────────────────────┐
+   ERP / Upload ──► │ BridgeEDI Core Pipeline     │
+                    │ auth · workspace · audit    │
+                    │ retry · monitor · notify    │
+                    └─────────────┬───────────────┘
+                                  │ resolve adapter(country)
+                                  ▼
+                    ┌─────────────────────────────┐
+                    │ Country Adapter             │
+                    │ validate · map · rules      │
+                    │ format · send · confirm     │
+                    └─────────────┬───────────────┘
+                                  │
+                    Government / Partner Endpoint
+                                  │
+                                  ▼
+                    Core: persist confirm → push ERP → AI/monitor
+</code></pre>
+<hr />
+<h2 id="step-by-step-development-plan">Step-by-Step Development Plan</h2>
+<h3 id="phase-0-discovery-freeze-inventory-12-weeks">Phase 0 — Discovery freeze &amp; inventory (1–2 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Document MX reference adapter boundaries; list customer ERP + government API contracts; inventory hardcoded secrets</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td>SAT/SAP/V2/V1 services listed above; <code>andy.txt</code> requirements</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Client OpenAPI/auth samples; ERP callback contract</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>Low–Medium</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>Incomplete endpoint specs delay Phase 2</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>None (docs only)</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Adapter interface draft + gap list signed off</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-1-customer-workspace-mvp-23-weeks">Phase 1 — Customer workspace MVP (2–3 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Isolated customer space in portal; data scoped to customer; enable reuse of invoices + monitoring UI</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td><code>Customer</code>, <code>UserCustomer</code>, customer portal pages, dashboard filters, <code>api.ts</code></td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Phase 0 tenancy fields decision</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>Missed SQL filters → data leak</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>Admin global dashboards must keep working</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Demo-able “customer exclusive space” for meeting</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-2-extract-mx-as-reference-country-adapter-35-weeks">Phase 2 — Extract MX as reference Country Adapter (3–5 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Introduce adapter interface; wrap existing SAT→SAP path behind it; shared pipeline calls adapter hooks</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td><code>sat_*</code>, <code>sap_transformer</code>, <code>sap_api_client</code>, new <code>adapters/mx_cfdi</code>, thin <code>core/pipeline</code></td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Phase 1 workspace context passed into pipeline</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>High</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>SAT regression for existing Mexico flows</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>High on SAT send/merge — require golden tests on CFDI fixtures</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Same MX behavior via adapter API; proof that “new country = new adapter package”</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-3-durable-processing-retries-23-weeks">Phase 3 — Durable processing &amp; retries (2–3 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Replace in-memory status with DB-backed transaction log + retry policy; optional queue (Redis/SQS/Service Bus)</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td><code>status_tracker</code>, <code>invoices.py</code> background tasks, new transaction/outbox tables</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Infra choice (meeting: must handle 1k–10k invoices smoothly)</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>High</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>Under-estimating serverless multi-instance issues</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>V1 status polling UX</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Reliable retries/confirmations under load</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-4-new-country-adapter-customer-scenario-36-weeks">Phase 4 — New country adapter (customer scenario) (3–6 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Implement adapter for target country: mapping, validation, rules, format, endpoint send, confirmation handling</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td>New <code>adapters/&lt;cc&gt;/</code>; workspace ERP connector config; confirmation → ERP push</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Government API credentials; 3–4 document schemas; ERP update API</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>High (integration-bound)</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>Spec drift; auth differences (OAuth vs API key vs mTLS)</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>Should be <strong>isolated</strong> if adapter boundary is clean</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>End-to-end: ERP → BridgeEDI → Gov → Confirm → ERP</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-5-erp-confirmation-round-trip-23-weeks">Phase 5 — ERP confirmation round-trip (2–3 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Generic <code>push_to_erp</code> with per-workspace HTTP config; map government confirmation to ERP status fields</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td>New ERP connector service; replace/extend delivery stub patterns</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Customer ERP API</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>Medium–High</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>Idempotency / duplicate status posts</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>Existing SAP send path</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Meeting flow fully closed</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-6-workspace-scoped-ai-monitoring-23-weeks">Phase 6 — Workspace-scoped AI &amp; monitoring (2–3 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>AI + dashboards read only workspace transactions; realtime feed of pipeline events</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td><code>adaptive_query</code>, dashboard V2, Intelligence UI, event writers from pipeline</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Phases 1–4 data model</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>AI SQL escaping tenant filters</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>Global admin AI analytics</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>“Analysis based on what is already there” for the customer</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-7-hardening-go-live-2-weeks">Phase 7 — Hardening &amp; go-live (2 weeks)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Objectives</strong></td>
+<td>Secrets vault, TLS verify, load test 10k invoices, runbooks, alert channels</td>
+</tr>
+<tr>
+<td><strong>Files involved</strong></td>
+<td><code>sap_api_client</code>, <code>external_api_service</code>, config, cert monitor TODOs</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Staging environment</td>
+</tr>
+<tr>
+<td><strong>Complexity</strong></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>Risks</strong></td>
+<td>Production credential rotation</td>
+</tr>
+<tr>
+<td><strong>Regression</strong></td>
+<td>Connector auth</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Customer-ready platform path</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="complexity-timeline-note-from-meeting">Complexity &amp; timeline note (from meeting)</h2>
+<p>Previous direct integrations ~<strong>10 days</strong>. Platform introduction must <strong>not</strong> inflate timelines for the same integration scope.  </p>
+<p><strong>Implication:</strong> Phases 1–2 (workspace + MX extraction) are <strong>platform investment</strong>; Phase 4 (new country) should approach historical speed <strong>once</strong> adapter scaffolding exists. Show the client a <strong>workspace + MX-via-adapter demo</strong> early; treat new-country endpoint work as the variable path.</p>
+<hr />
+<h2 id="inputs-still-required-cannot-be-verified-from-repo">Inputs still required (cannot be verified from repo)</h2>
+<ol>
+<li>Target <strong>country</strong> and <strong>government API</strong> OpenAPI / auth / callbacks  </li>
+<li><strong>Document types</strong> (3–4) schemas and samples  </li>
+<li><strong>Customer ERP</strong> endpoints for submit + confirmation update  </li>
+<li>Non-functional targets (latency budget vs direct integration)  </li>
+<li>Whether confirmation is sync HTTP response only or also async webhook  </li>
+<li>Whether PeppolSoft remains in scope for this customer (meeting focuses on government endpoint)</li>
+</ol>
+<hr />
+<h2 id="risk-register">Risk Register</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Severity</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rewriting instead of extracting MX</td>
+<td>High</td>
+<td>Adapter wraps existing SAT/SAP path first</td>
+</tr>
+<tr>
+<td>Cross-customer data exposure</td>
+<td>Critical</td>
+<td>Workspace filters + AI scoping tests</td>
+</tr>
+<tr>
+<td>In-memory queues under scale</td>
+<td>High</td>
+<td>Phase 3 durable jobs before 10k volume claims</td>
+</tr>
+<tr>
+<td>Hardcoded SAP credentials / SSL verify=False</td>
+<td>Critical</td>
+<td>Env/vault + TLS before customer prod</td>
+</tr>
+<tr>
+<td>Customer delivery stub</td>
+<td>High</td>
+<td>Phase 5 ERP push</td>
+</tr>
+<tr>
+<td>Spec unknown for new government API</td>
+<td>High</td>
+<td>Block Phase 4 until samples arrive</td>
+</tr>
+<tr>
+<td>Timeline inflation</td>
+<td>Medium</td>
+<td>Parallelize workspace UI with MX extraction; reuse converters</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="success-criteria">Success Criteria</h2>
+<ol>
+<li><strong>Same BridgeEDI platform</strong> serves the new customer workspace.  </li>
+<li><strong>Mexico path</strong> still works, ideally behind adapter interface.  </li>
+<li><strong>New country</strong> added primarily as a new adapter package + config.  </li>
+<li>Flow demonstrated: <strong>ERP → BridgeEDI → Endpoint → Confirmation → ERP</strong>.  </li>
+<li>Monitoring + AI show <strong>that customer’s</strong> transactions.  </li>
+<li>Volume handling does not rely on single-process memory alone.</li>
+</ol>
+<hr />
+<h2 id="closing">Closing</h2>
+<p>The repository already contains a working middleware for invoice/tax document processing—especially a complete <strong>Mexico CFDI → SAP</strong> vertical and shared portal/AI/security. The multi-country program should <strong>formalize what Mexico already is (an adapter)</strong> and <strong>add customer workspaces</strong>, then <strong>plug the next country’s mapping/validation/rules/format/endpoint</strong> into the same core pipeline.</p>
+<p>This plan is the prerequisite for development start; no application code was modified to produce it.</p>
+<hr />
+<p><em>Document: IMPLEMENTATION_PLAN.md</em><br />
+<em>Platform: BridgeEDI / Zodiac</em></p>
+<div class="footer-note">
+Document: IMPLEMENTATION_PLAN.md · Platform: BridgeEDI / Zodiac · Planning only — no code changes
+</div>
+</body>
+</html>

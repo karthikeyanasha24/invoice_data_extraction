@@ -30,6 +30,7 @@ class CustomerUserCreate(BaseModel):
     email: str
     username: str
     password: str
+    customer_ids: List[str] = []
 
     @field_validator("email")
     @classmethod
@@ -86,7 +87,10 @@ def create_customer_user(
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create a customer user (is_customer_user=True). Admin only."""
+    """Create a customer user (is_customer_user=True). Admin only.
+
+    Optional ``customer_ids`` assigns portal access in the same request.
+    """
     require_admin(current_user)
     existing_by_email = db.query(ZodiacUser).filter(ZodiacUser.email == body.email).first()
     if existing_by_email:
@@ -100,6 +104,17 @@ def create_customer_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A user with this username already exists",
         )
+
+    customer_ids = list(
+        dict.fromkeys([c.strip() for c in (body.customer_ids or []) if c and c.strip()])
+    )
+    for cid in customer_ids:
+        if not db.query(Customer).filter(Customer.customer_id == cid).first():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer '{cid}' not found",
+            )
+
     hashed = get_password_hash(body.password)
     user = ZodiacUser(
         email=body.email,
@@ -108,15 +123,21 @@ def create_customer_user(
         is_customer_user=True,
     )
     db.add(user)
+    db.flush()
+    for cid in customer_ids:
+        db.add(UserCustomer(user_id=user.id, customer_id=cid))
     db.commit()
     db.refresh(user)
-    logger.info(f"Customer user created: {user.email} by admin {current_user.id}")
+    logger.info(
+        f"Customer user created: {user.email} by admin {current_user.id} "
+        f"(assigned={len(customer_ids)})"
+    )
     return CustomerUserResponse(
         id=user.id,
         email=user.email,
         username=user.username,
         is_customer_user=True,
-        customer_ids=[],
+        customer_ids=customer_ids,
     )
 
 

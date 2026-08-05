@@ -323,8 +323,8 @@ function AIChatPanel() {
               </div>
             )}
 
-            {/* Table fallback */}
-            {result.data?.length > 0 && !result.charts?.length && (
+            {/* Table — always show when rows exist so product/money values are never hidden behind empty charts */}
+            {result.data?.length > 0 && (
               <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200">
@@ -497,12 +497,10 @@ export default function IntelligencePage() {
         </div>
       </div>
 
-      {/* ── Full Chat tab ── */}
-      {tab === 'chat' && (
-        <div className="flex-1 overflow-hidden">
-          <DashboardAIAnalysis initialQuestion={pendingChatQuestion} />
-        </div>
-      )}
+      {/* Full Chat stays mounted (hidden) so conversation state survives tab switches */}
+      <div className={tab === 'chat' ? 'flex-1 overflow-hidden' : 'hidden'}>
+        <DashboardAIAnalysis initialQuestion={pendingChatQuestion} />
+      </div>
 
       {/* ── Realtime / Historical tabs ── */}
       {tab !== 'chat' && (

@@ -758,11 +758,24 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
         # question asks about margin/profit but the matched entry doesn't do
         # that, treat it as no confident match so it falls through to the LLM
         # engine, which can build the real cross-domain margin query.
+        #
+        # CKIS does NOT count as a valid cost basis here, even though one catalog
+        # entry (profit_margin_by_product) uses it. Verified empirically against
+        # the live DB: CKIS.matnr is blank on ~70% of its 78,853 rows (the real
+        # material link is CKIS.kalnr -> KEKO.matnr, which that template doesn't
+        # follow), and EKPO covers more than 2x as many sold materials as a direct
+        # CKIS.matnr join does (174 vs 82 of 564). CKIS also represents planned/
+        # standard cost estimates, not what we actually paid suppliers — a
+        # different metric from the one Andy asked for ("what we paid suppliers
+        # vs what we charged customers"). EKPO is the canonical cost basis for
+        # "margin"/"profit" system-wide; CKIS-only matches fall through to the
+        # LLM engine instead of returning a methodologically different or
+        # incomplete answer under the same word "margin".
         asks_margin = bool(re.search(r"\b(margin|profit|profitability)\b", q_lower))
         if asks_margin:
             entry_sql_lower = (best_entry.get("sql") or "").lower()
             has_sales_amount = ("vbrp" in entry_sql_lower) or ("vbrk" in entry_sql_lower)
-            has_cost_amount = ("ekpo" in entry_sql_lower) or ("ckis" in entry_sql_lower)
+            has_cost_amount = "ekpo" in entry_sql_lower
             if not (has_sales_amount and has_cost_amount):
                 logger.info(
                     "sql_catalog: rejecting [%s] (score=%.1f) — question asks about margin/profit "
@@ -770,6 +783,35 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
                     best_entry["id"], best_score, question[:80],
                 )
                 return None
+            # ── Margin dimension-mismatch guard ─────────────────────────────
+            # Both known margin catalog entries are FLAT per-material breakdowns
+            # (GROUP BY matnr only — no country/region/plant/vendor/product-group/
+            # year column). Found live: "by product group" and "by plant and
+            # product group" still scored high enough to match despite the
+            # neg_keywords penalty, and silently returned the flat per-material
+            # table instead of the breakdown actually asked for. Check directly
+            # for the SQL column the dimension needs; if the question names a
+            # dimension the matched entry's SQL never references, it's the wrong
+            # shape of answer — reject so it falls through to the LLM engine,
+            # which builds the correctly-grouped query.
+            dimension_hints = [
+                (r"\bcountry\b", "land1"),
+                (r"\bregion\b", "regio"),
+                (r"\bplant\b", "werks"),
+                (r"\b(vendor|supplier)\b", "lifnr"),
+                (r"\b(product\s*group|material\s*group)\b", "matkl"),
+                (r"\bsales\s*org\w*\b", "vkorg"),
+                (r"\b(year|quarter|month)\b", ("fkdat", "bedat", "date")),
+            ]
+            for word_pat, needed_cols in dimension_hints:
+                cols = (needed_cols,) if isinstance(needed_cols, str) else needed_cols
+                if re.search(word_pat, q_lower) and not any(c in entry_sql_lower for c in cols):
+                    logger.info(
+                        "sql_catalog: rejecting [%s] (score=%.1f) — question asks for a breakdown "
+                        "this entry's SQL doesn't group by (missing %s); falling through to LLM engine. q=%r",
+                        best_entry["id"], best_score, cols, question[:80],
+                    )
+                    return None
         logger.info(
             "sql_catalog: matched [%s] (score=%.1f) for question: %r",
             best_entry["id"], best_score, question[:80],

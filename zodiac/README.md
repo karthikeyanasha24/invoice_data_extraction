@@ -1,6 +1,17 @@
-# Zodiac Invoice Management System
+# Zodiac / BridgeEDI
 
 A modern invoice processing and management platform with AI-driven error correction capabilities.
+
+**Enterprise v1.0 Release Candidate** — see:
+
+- [`RELEASE_NOTES_v1.0.md`](RELEASE_NOTES_v1.0.md)
+- [`CHANGELOG.md`](CHANGELOG.md)
+- [`REPOSITORY_AUDIT.md`](REPOSITORY_AUDIT.md)
+- [`ENGINEERING_REVIEW_v1.0.md`](ENGINEERING_REVIEW_v1.0.md) — engineering baseline (**Good**)
+- [`FINAL_GO_LIVE_VALIDATION.md`](FINAL_GO_LIVE_VALIDATION.md) — **CONDITIONAL GO** (pilot)
+- [`docs/operations/README.md`](docs/operations/README.md) — ops index
+
+Historical planning notes (`IMPLEMENTATION_*.md`, ad-hoc `TEST_*.md`) are superseded for go-live by the documents above.
 
 ## 🚀 Quick Start
 

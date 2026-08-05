@@ -18,6 +18,7 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
+  Boxes,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -50,21 +51,31 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
   const { user, logout } = useAuth();
 
   const isCustomerUser = user?.is_customer_user && !user?.is_admin;
+  // Phase 2: workspace nav — default on; set NEXT_PUBLIC_WORKSPACE_UI=false to hide
+  const workspaceUiEnabled = process.env.NEXT_PUBLIC_WORKSPACE_UI !== 'false';
+  const workspaceMenuItem = {
+    id: 'workspaces',
+    label: 'Workspaces',
+    icon: Boxes,
+    path: '/workspace',
+    description: 'Customer exclusive workspace shell',
+  };
   const adminMenuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', description: 'Overview and analytics' },
     { id: 'generative-ai', label: 'Generative AI', icon: Sparkles, path: '/dashboard/ai', description: 'AI-powered dashboard analysis' },
     { id: 'invoices', label: 'Invoices', icon: FileText, path: '/invoices-v2', description: 'Manage and validate invoices' },
-    { id: 'quotations', label: 'Quotations', icon: Receipt, path: '/quotations', description: 'Manage quotation files' },
     { id: 'customers', label: 'Customers', icon: Building2, path: '/customers', description: 'Manage EDI customers' },
+    ...(workspaceUiEnabled ? [workspaceMenuItem] : []),
     ...(user?.is_admin ? [{ id: 'customer-users', label: 'Customer users', icon: Users, path: '/customer-users', description: 'Users & customer assignments' }] : []),
     { id: 'sat-documents', label: 'SAT Documents', icon: Receipt, path: '/sat-documents', description: 'CFDI documents & SAP integration' },
     { id: 'account-mapping', label: 'Account Mapping', icon: Settings, path: '/admin/account-mapping', description: 'RFC to SAP G/L mapping' },
     { id: 'supplier-tokens', label: 'Supplier Tokens', icon: Key, path: '/admin/supplier-tokens', description: 'Manage supplier API tokens' },
     { id: 'settings', label: 'Settings', icon: Settings, path: '/settings', description: 'Account and preferences' }
   ];
+  // Phase 11 — customer users are redirected to /customer/* (see MainLayout).
+  // Keep a minimal fallback menu pointing at the dedicated portal only.
   const customerUserMenuItems = [
-    { id: 'customer-invoices', label: 'Invoices', icon: FileText, path: '/customer-invoices', description: 'View and process your invoices' },
-    { id: 'customer-sat-documents', label: 'SAT Documents', icon: Receipt, path: '/customer-sat-documents', description: 'CFDI documents, merge and send to SAP' }
+    { id: 'customer-portal', label: 'Customer Portal', icon: Boxes, path: '/customer/overview', description: 'Your exclusive workspace' },
   ];
   const menuItems = isCustomerUser ? customerUserMenuItems : adminMenuItems;
 
@@ -74,8 +85,8 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
 
   const handleLogout = () => {
     logout();
-    // Redirect to sign-in page after logout
-    router.push('/');
+    // Customer portal users return to dedicated login
+    router.push(isCustomerUser ? '/customer/login' : '/');
   };
 
   return (

@@ -1,0 +1,332 @@
+{
+  "db": {
+    "is_admin": true,
+    "workspace_settings": null,
+    "target_format": "XML_EMBED_X12"
+  },
+  "counts": {
+    "total": 29,
+    "failed": 4,
+    "slow": 25
+  },
+  "results": [
+    {
+      "method": "POST",
+      "path": "/api/v1/workspace",
+      "status": null,
+      "ms": 46636,
+      "ok": false,
+      "summary": {}
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "status": null,
+      "ms": 90020,
+      "ok": false,
+      "summary": {}
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "status": null,
+      "ms": 90013,
+      "ok": false,
+      "summary": {}
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/auth/fetch_user",
+      "status": 200,
+      "ms": 7322,
+      "ok": true,
+      "summary": {
+        "is_admin": true,
+        "username": "ashakarthikeyan24"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/statistics?days=7",
+      "status": 200,
+      "ms": 5660,
+      "ok": true,
+      "summary": {
+        "timeline_len": 0,
+        "format_distribution_len": 0,
+        "customer_distribution_len": 1,
+        "request_type_distribution_len": 0,
+        "recent_activity_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/?skip=0&limit=5",
+      "status": 200,
+      "ms": 2856,
+      "ok": true,
+      "summary": {
+        "total": 11,
+        "customers_len": 5
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/customers/DE875243162",
+      "status": 200,
+      "ms": 1133,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace?skip=0&limit=50",
+      "status": 200,
+      "ms": 2294,
+      "ok": true,
+      "summary": {
+        "total": 11,
+        "workspaces_len": 11
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162",
+      "status": 200,
+      "ms": 2524,
+      "ok": true,
+      "summary": {
+        "has_settings": false,
+        "pipeline_enabled": false,
+        "customer_id": "DE875243162",
+        "erps_len": 0,
+        "adapters_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/activity",
+      "status": 200,
+      "ms": 2287,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "notes_len": 1
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/onboarding-status",
+      "status": 200,
+      "ms": 2795,
+      "ok": true,
+      "summary": {
+        "ready": false,
+        "missing": [
+          "workspace_settings",
+          "erp_configured",
+          "erp_secrets",
+          "adapter_enabled",
+          "government_endpoint",
+          "pipeline_enabled"
+        ],
+        "customer_id": "DE875243162",
+        "missing_len": 6,
+        "steps_len": 11
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/workspace/DE875243162/access-check",
+      "status": 200,
+      "ms": 1130,
+      "ok": true,
+      "summary": {
+        "allowed": true,
+        "is_admin": true,
+        "customer_id": "DE875243162"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/health",
+      "status": 200,
+      "ms": 50,
+      "ok": true,
+      "summary": {
+        "enabled": true
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/workspaces/DE875243162/summary",
+      "status": 200,
+      "ms": 1702,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "top_errors_len": 0,
+        "latest_transactions_len": 0,
+        "recent_alerts_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/workspaces/DE875243162/transactions?limit=10",
+      "status": 200,
+      "ms": 1432,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "transactions_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monitoring/workspaces/DE875243162/alerts",
+      "status": 200,
+      "ms": 1420,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "alerts_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/health",
+      "status": 200,
+      "ms": 19,
+      "ok": true,
+      "summary": {
+        "enabled": true
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/workspace/DE875243162/summary",
+      "status": 200,
+      "ms": 5276,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "top_errors_len": 0,
+        "recommendation_codes_len": 1,
+        "ai_facts_preview_len": 1
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ai/workspace/DE875243162/recommendations",
+      "status": 200,
+      "ms": 4437,
+      "ok": true,
+      "summary": {
+        "customer_id": "DE875243162",
+        "recommendations_len": 1
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/invoices/success?skip=0&limit=3",
+      "status": 200,
+      "ms": 5145,
+      "ok": true,
+      "summary": {}
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/invoices-v2/documents?skip=0&limit=3",
+      "status": 200,
+      "ms": 1915,
+      "ok": true,
+      "summary": {
+        "total": 0,
+        "documents_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/documents?skip=0&limit=3",
+      "status": 200,
+      "ms": 2338,
+      "ok": true,
+      "summary": {
+        "total": 0,
+        "documents_len": 0
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sat/supplier-mapping/list",
+      "status": 200,
+      "ms": 2706,
+      "ok": true,
+      "summary": {
+        "total": 4,
+        "mappings_len": 4
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/supplier-tokens/list",
+      "status": 200,
+      "ms": 1842,
+      "ok": true,
+      "summary": {
+        "total": 2,
+        "tokens_len": 2
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/health",
+      "status": 200,
+      "ms": 9,
+      "ok": true,
+      "summary": {
+        "enabled": true
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/stages",
+      "status": 200,
+      "ms": 4204,
+      "ok": true,
+      "summary": {
+        "stages_len": 14
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pipeline/adapters",
+      "status": 200,
+      "ms": 829,
+      "ok": true,
+      "summary": {
+        "adapters_len": 2
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/ai-analysis/schema",
+      "status": 200,
+      "ms": 18875,
+      "ok": true,
+      "summary": {}
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/user/auth/login",
+      "status": 401,
+      "ms": 14360,
+      "ok": false,
+      "summary": {
+        "detail": "Incorrect email or password"
+      }
+    }
+  ]
+}

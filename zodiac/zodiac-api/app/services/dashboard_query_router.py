@@ -29,7 +29,20 @@ def _langgraph_fallback_enabled() -> bool:
 
 
 def _serialize_rows(rows_raw) -> List[Dict[str, Any]]:
-    return [dict(r) for r in rows_raw]
+    """Convert SQLAlchemy row mappings to JSON-safe dicts (Decimal → float)."""
+    import datetime
+    import decimal
+
+    out: List[Dict[str, Any]] = []
+    for r in rows_raw:
+        d = dict(r)
+        for k, v in list(d.items()):
+            if isinstance(v, decimal.Decimal):
+                d[k] = float(v)
+            elif isinstance(v, (datetime.date, datetime.datetime)):
+                d[k] = v.isoformat()
+        out.append(d)
+    return out
 
 
 def _build_payload(

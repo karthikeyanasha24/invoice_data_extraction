@@ -166,7 +166,11 @@ api.interceptors.response.use(
                 });
 
                 console.log('🔐 API - 401 (session expired), clearing auth and redirecting to login');
-                window.location.href = '/';
+                // Phase 11 — preserve dedicated customer portal login entrypoint
+                const onCustomerPortal =
+                    typeof window !== 'undefined' &&
+                    window.location.pathname.startsWith('/customer');
+                window.location.href = onCustomerPortal ? '/customer/login' : '/';
             }
         } else if (error.response?.status === 401 && !isAuthCredentialRequest && !shouldForceLogout) {
             console.log('🔐 API - 401 received but NOT forcing logout (AI/dashboard endpoint or non-session error):', reqPath);
@@ -270,7 +274,12 @@ export const customerUsersApi = {
         const response = await api.get('/api/v1/customer-users');
         return response.data;
     },
-    create: async (data: { email: string; username: string; password: string }): Promise<CustomerUserResponse> => {
+    create: async (data: {
+        email: string;
+        username: string;
+        password: string;
+        customer_ids?: string[];
+    }): Promise<CustomerUserResponse> => {
         try {
             const response = await api.post('/api/v1/customer-users', data);
             return response.data;
@@ -1843,6 +1852,7 @@ export const dashboardApi = {
             data?: any[];
         } | null;
         overrideSql?: string | null;
+        threadId?: string | null;
     }) => {
         try {
             const response = await api.post('/api/query/adaptive', body, { timeout: 600000 });
@@ -1869,6 +1879,20 @@ export const dashboardApi = {
         }
     },
 
+    getAdaptiveChatHistory: async (threadId: string) => {
+        try {
+            const response = await api.get('/api/query/adaptive/history', {
+                params: { thread_id: threadId },
+            });
+            return response.data as {
+                thread_id: string;
+                messages: { role: string; content: string; result?: any }[];
+            };
+        } catch (error: any) {
+            console.error('Adaptive chat history failed:', error);
+            return { thread_id: threadId, messages: [] as { role: string; content: string; result?: any }[] };
+        }
+    },
     /**
      * Pure conversational chat for the Schema/Chat tab.
      * Answers questions about SAP tables, field meanings, joins, and business logic.
@@ -2944,6 +2968,217 @@ export const versionsApi = {
             `/api/v1/invoices/${trackingId}/save-xml`,
             formData,
             { headers: { 'Content-Type': 'multipart/form-data' } }
+        );
+        return response.data;
+    },
+};
+
+// Phase 2 — Customer Workspace API (additive; does not replace customerApi)
+export const workspaceApi = {
+    listWorkspaces: async () => {
+        const response = await api.get('/api/v1/workspace');
+        return response.data;
+    },
+
+    createSettings: async (body: {
+        customer_id: string;
+        display_name?: string;
+        pipeline_enabled?: boolean;
+        ai_scoped?: boolean;
+        monitoring_enabled?: boolean;
+        flags?: Record<string, unknown>;
+        notes?: string;
+    }) => {
+        const response = await api.post('/api/v1/workspace', body);
+        return response.data;
+    },
+
+    getWorkspace: async (customerId: string) => {
+        const response = await api.get(`/api/v1/workspace/${encodeURIComponent(customerId)}`);
+        return response.data;
+    },
+
+    updateSettings: async (
+        customerId: string,
+        body: {
+            display_name?: string;
+            pipeline_enabled?: boolean;
+            ai_scoped?: boolean;
+            monitoring_enabled?: boolean;
+            flags?: Record<string, unknown>;
+            notes?: string;
+        }
+    ) => {
+        const response = await api.patch(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/settings`,
+            body
+        );
+        return response.data;
+    },
+
+    upsertErp: async (
+        customerId: string,
+        body: {
+            connection_key?: string;
+            label?: string;
+            base_url?: string;
+            callback_url?: string;
+            auth_type?: string;
+            client_id_ref?: string;
+            client_secret_ref?: string;
+            extra_config?: Record<string, unknown>;
+            is_active?: boolean;
+        }
+    ) => {
+        const response = await api.put(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/erp`,
+            body
+        );
+        return response.data;
+    },
+
+    listErp: async (customerId: string) => {
+        const response = await api.get(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/erp`
+        );
+        return response.data;
+    },
+
+    upsertAdapter: async (
+        customerId: string,
+        body: {
+            country_code: string;
+            enabled?: boolean;
+            endpoint_url_ref?: string;
+            auth_type?: string;
+            auth_secret_ref?: string;
+            document_types?: string[];
+            rules_version?: string;
+            mapping_ref?: string;
+            extra_config?: Record<string, unknown>;
+        }
+    ) => {
+        const response = await api.put(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/adapters`,
+            body
+        );
+        return response.data;
+    },
+
+    listAdapters: async (customerId: string) => {
+        const response = await api.get(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/adapters`
+        );
+        return response.data;
+    },
+
+    accessCheck: async (customerId: string) => {
+        const response = await api.get(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/access-check`
+        );
+        return response.data;
+    },
+
+    getActivity: async (customerId: string) => {
+        const response = await api.get(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/activity`
+        );
+        return response.data;
+    },
+
+    getOnboardingStatus: async (customerId: string) => {
+        const response = await api.get(
+            `/api/v1/workspace/${encodeURIComponent(customerId)}/onboarding-status`
+        );
+        return response.data;
+    },
+};
+
+/** Phase 9 — operational intelligence over monitoring facts (not invoice SQL). */
+export const aiOpsApi = {
+    health: async () => {
+        const response = await api.get('/api/v1/ai/health');
+        return response.data;
+    },
+
+    getSummary: async (workspaceId: string, limit = 200) => {
+        const response = await api.get(
+            `/api/v1/ai/workspace/${encodeURIComponent(workspaceId)}/summary`,
+            { params: { limit } }
+        );
+        return response.data;
+    },
+
+    getAnalytics: async (workspaceId: string, limit = 200) => {
+        const response = await api.get(
+            `/api/v1/ai/workspace/${encodeURIComponent(workspaceId)}/analytics`,
+            { params: { limit } }
+        );
+        return response.data;
+    },
+
+    getRecommendations: async (workspaceId: string, limit = 200) => {
+        const response = await api.get(
+            `/api/v1/ai/workspace/${encodeURIComponent(workspaceId)}/recommendations`,
+            { params: { limit } }
+        );
+        return response.data;
+    },
+
+    ask: async (
+        workspaceId: string,
+        body: {
+            question: string;
+            limit?: number;
+            authorize_cross_workspace?: boolean;
+            workspace_ids?: string[];
+        }
+    ) => {
+        const response = await api.post(
+            `/api/v1/ai/workspace/${encodeURIComponent(workspaceId)}/ask`,
+            body
+        );
+        return response.data;
+    },
+};
+
+/** Phase 8 — workspace-scoped pipeline monitoring (observability only). */
+export const monitoringApi = {
+    health: async () => {
+        const response = await api.get('/api/v1/monitoring/health');
+        return response.data;
+    },
+
+    getSummary: async (customerId: string, limit = 100) => {
+        const response = await api.get(
+            `/api/v1/monitoring/workspaces/${encodeURIComponent(customerId)}/summary`,
+            { params: { limit } }
+        );
+        return response.data;
+    },
+
+    getTimeline: async (customerId: string, correlationId: string) => {
+        const response = await api.get(
+            `/api/v1/monitoring/workspaces/${encodeURIComponent(customerId)}/timelines/${encodeURIComponent(correlationId)}`
+        );
+        return response.data;
+    },
+
+    listTransactions: async (
+        customerId: string,
+        params?: { limit?: number; status?: string }
+    ) => {
+        const response = await api.get(
+            `/api/v1/monitoring/workspaces/${encodeURIComponent(customerId)}/transactions`,
+            { params }
+        );
+        return response.data;
+    },
+
+    listAlerts: async (customerId: string, limit = 50) => {
+        const response = await api.get(
+            `/api/v1/monitoring/workspaces/${encodeURIComponent(customerId)}/alerts`,
+            { params: { limit } }
         );
         return response.data;
     },

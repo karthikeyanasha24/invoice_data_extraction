@@ -26,6 +26,18 @@ import {
 import { cn } from '@/lib/utils';
 import AIChartRenderer from './ai/AIChartRenderer';
 
+/** Persist adaptive Full Chat thread id (reuses backend chat_thread_store via ada_ prefix). */
+const ADA_THREAD_KEY = 'zodiac_ada_thread_id';
+
+function ensureAdaptiveThreadId(): string {
+  if (typeof window === 'undefined') return `ada_ssr_${Date.now()}`;
+  let tid = sessionStorage.getItem(ADA_THREAD_KEY) || '';
+  if (!tid.startsWith('ada_')) {
+    tid = `ada_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem(ADA_THREAD_KEY, tid);
+  }
+  return tid;
+}
 // ─── Colour palette ──────────────────────────────────────────────────────────
 const PALETTE = [
   '#6366f1','#f59e0b','#10b981','#ef4444','#3b82f6',
@@ -462,10 +474,52 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [elapsed,    setElapsed]    = useState(0);
   const [error,      setError]      = useState<string | null>(null);
   const [isNewQuestion, setIsNewQuestion] = useState(false);
+  const [threadId,   setThreadId]   = useState<string>('');
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef   = useRef<HTMLDivElement>(null);
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef    = useRef<HTMLTextAreaElement>(null);
   const initialSentRef = useRef<string | null>(null);
+
+  // Resolve / restore adaptive thread id once on mount
+  useEffect(() => {
+    setThreadId(ensureAdaptiveThreadId());
+  }, []);
+
+  // Load persisted turns from chat_thread_store (ada_* via adaptive history API)
+  useEffect(() => {
+    if (!threadId || historyLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const hist = await dashboardApi.getAdaptiveChatHistory(threadId);
+        if (cancelled) return;
+        const restored: Message[] = (hist.messages || [])
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m, i) => ({
+            id: `hist-${i}-${Date.now()}`,
+            role: m.role as 'user' | 'assistant',
+            content: m.content || '',
+            result: m.role === 'assistant' && m.result ? {
+              sql: m.result.sql,
+              data: m.result.data || [],
+              rowCount: m.result.rowCount ?? (m.result.data?.length ?? 0),
+              charts: m.result.charts || [],
+              summary: m.result.summary || m.content,
+            } : undefined,
+            ts: Date.now() + i,
+          }));
+        if (restored.length > 0) {
+          setMessages((prev) => (prev.length === 0 ? restored : prev));
+        }
+      } catch {
+        /* history optional */
+      } finally {
+        if (!cancelled) setHistoryLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [threadId, historyLoaded]);
 
   // auto-scroll
   useEffect(() => {
@@ -487,6 +541,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading) return;
 
+    const tid = threadId || ensureAdaptiveThreadId();
+    if (!threadId) setThreadId(tid);
+
     setError(null);
     setInput('');
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: q, ts: Date.now() };
@@ -505,7 +562,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setIsNewQuestion(false); // reset after each send
 
     try {
-      const res = await dashboardApi.postAdaptiveQuery({ question: q, contextData });
+      const res = await dashboardApi.postAdaptiveQuery({
+        question: q,
+        contextData,
+        threadId: tid,
+      });
 
       // Normalise response — backend may return old shape or new pipeline shape
       const result: QueryResult = {
@@ -544,24 +605,25 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err: any) {
       setError(err.message || 'Query failed. Please try rephrasing.');
-      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+      // Keep the user message visible so history does not silently lose questions
     } finally {
       setLoading(false);
     }
     // isNewQuestion MUST be a dep: without it the memoized closure keeps a stale
     // value and the "New question" button silently never takes effect.
-  }, [messages, loading, isNewQuestion]);
+  }, [messages, loading, isNewQuestion, threadId]);
 
   // Auto-run a question handed over from another view (e.g. "What can you ask?"
   // sidebar on the Real-time tab). Guarded so the same question only fires once.
+  // Wait for history load so we don't race with restored messages.
   useEffect(() => {
     const q = (initialQuestion || '').trim();
-    if (q && initialSentRef.current !== q && !loading) {
+    if (q && historyLoaded && initialSentRef.current !== q && !loading) {
       initialSentRef.current = q;
       sendQuestion(q);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuestion]);
+  }, [initialQuestion, historyLoaded]);
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -570,7 +632,17 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     }
   };
 
-  const clearAll = () => { setMessages([]); setError(null); };
+  const clearAll = () => {
+    setMessages([]);
+    setError(null);
+    // Start a fresh adaptive thread so cleared UI does not reload old turns
+    if (typeof window !== 'undefined') {
+      const tid = `ada_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      sessionStorage.setItem(ADA_THREAD_KEY, tid);
+      setThreadId(tid);
+      setHistoryLoaded(true);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-slate-50">

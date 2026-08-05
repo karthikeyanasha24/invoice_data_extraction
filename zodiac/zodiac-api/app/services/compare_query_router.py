@@ -71,6 +71,28 @@ def build_billing_revenue_subqueries_for_years(years: List[str]) -> List[str]:
     return out
 
 
+def _coerce_numeric(v: Any) -> Optional[float]:
+    """Coerce int/float/Decimal/numeric-string to float; else None."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        from decimal import Decimal
+
+        if isinstance(v, Decimal):
+            return float(v)
+    except Exception:
+        pass
+    try:
+        s = str(v).strip().replace(",", "").replace(" ", "")
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
 def merge_year_compare_rows_for_chart(
     years: List[str],
     datasets: List[Tuple[str, List[Dict[str, Any]]]],
@@ -89,15 +111,14 @@ def merge_year_compare_rows_for_chart(
             # Prefer obvious total columns
             for key in r0:
                 lk = str(key).lower()
-                if lk in ("total", "total_revenue", "revenue", "sum", "amount", "sales", "t"):
-                    v = r0.get(key)
-                    if isinstance(v, (int, float)):
-                        total = float(v)
+                if lk in ("total", "total_revenue", "revenue", "sum", "amount", "sales", "total_sales", "t"):
+                    total = _coerce_numeric(r0.get(key))
+                    if total is not None:
                         break
             if total is None:
                 for _k, v in r0.items():
-                    if isinstance(v, (int, float)) and not isinstance(v, bool):
-                        total = float(v)
+                    total = _coerce_numeric(v)
+                    if total is not None:
                         break
         merged.append(
             {
@@ -125,12 +146,13 @@ def pick_numeric_total_from_rows(rows: List[Dict[str, Any]]) -> Optional[float]:
     lower_map = {str(k).lower(): k for k in r0}
     for p in priority:
         if p in lower_map:
-            v = r0.get(lower_map[p])
-            if isinstance(v, (int, float)):
-                return float(v)
+            coerced = _coerce_numeric(r0.get(lower_map[p]))
+            if coerced is not None:
+                return coerced
     for _k, v in r0.items():
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            return float(v)
+        coerced = _coerce_numeric(v)
+        if coerced is not None:
+            return coerced
     return None
 
 

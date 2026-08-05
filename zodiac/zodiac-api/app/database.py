@@ -63,6 +63,20 @@ def init_models():
         from .models.certificate_renewal_request import CertificateRenewalRequest
         from .models.certificate_revocation import CertificateRevocation
         from .models.ai_query_memory import AiQueryMemory
+        from .models.workspace import (
+            WorkspaceSettings,
+            WorkspaceErpConnection,
+            WorkspaceAdapterConfig,
+        )
+        # Phase 6 — ERP push outbox (idempotency); additive
+        from .models.erp_outbox import ErpPushOutbox  # noqa: F401
+        # Phase 8 — pipeline monitoring tables; additive
+        from .models.monitoring import (  # noqa: F401
+            AlertHistory,
+            PipelineEvent,
+            PipelineMetric,
+            PipelineTimeline,
+        )
         # Models are now registered with Base.metadata
         print("[OK] All models initialized and registered with Base.metadata")
     except ImportError as e:

@@ -74,6 +74,12 @@ export default function AuthForm({ isLogin, onToggleMode }: AuthFormProps) {
             <p className="mt-2 text-sm text-slate-600 max-w-sm mx-auto px-4">
               Zodiac is an AI-powered document management system.
             </p>
+            <p className="mt-3 text-xs text-slate-500">
+              Customer organization?{' '}
+              <a href="/customer/login" className="font-medium text-emerald-700 hover:underline">
+                Customer Portal sign-in
+              </a>
+            </p>
           </div>
 
           {/* Auth Form */}

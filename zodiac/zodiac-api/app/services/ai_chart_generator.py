@@ -200,12 +200,20 @@ def plan_compare_year_bar_chart(
         v = r.get("total_revenue")
         if y is None:
             continue
-        data.append(
-            {
-                "calendar_year": str(y),
-                "total_revenue": float(v) if isinstance(v, (int, float)) else v,
-            }
-        )
+        total: Optional[float] = None
+        if isinstance(v, bool):
+            total = None
+        elif isinstance(v, (int, float)):
+            total = float(v)
+        elif isinstance(v, Decimal):
+            total = float(v)
+        elif v is not None:
+            try:
+                total = float(str(v).replace(",", "").strip())
+            except (TypeError, ValueError):
+                total = None
+        data.append({"calendar_year": str(y), "total_revenue": total})
+    # Need at least two year rows; null totals still chart as gaps (better than no chart)
     if len(data) < 2:
         return None
     note = mixed_currency_disclaimer(data, "")
@@ -1266,3 +1274,26 @@ def generate_chart_data(
     except Exception as e:
         logger.error(f"generate_chart_data failed: {e}", exc_info=True)
         return []
+
+
+def chart_specs_to_json(specs: Optional[List[ChartSpec]]) -> List[Dict[str, Any]]:
+    """
+    Serialize ChartSpec dataclasses to Recharts-compatible JSON dicts.
+    Used by the orchestrator compare path and dashboard chart helpers.
+    """
+    if not specs:
+        return []
+    out: List[Dict[str, Any]] = []
+    for spec in specs:
+        if spec is None:
+            continue
+        if isinstance(spec, ChartSpec):
+            out.append(asdict(spec))
+        elif isinstance(spec, dict):
+            out.append(spec)
+        else:
+            try:
+                out.append(asdict(spec))
+            except Exception:
+                continue
+    return out

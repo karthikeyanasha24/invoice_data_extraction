@@ -1,0 +1,216 @@
+{
+  "bad_login": [
+    401,
+    {
+      "detail": "Incorrect email or password"
+    }
+  ],
+  "login_status": 200,
+  "user": {
+    "email": "puspesh@gmail.com",
+    "username": "puspesh",
+    "id": 1,
+    "is_active": true,
+    "is_verified": false,
+    "is_admin": true,
+    "is_customer_user": false,
+    "created_at": "2025-10-31T15:42:00.156472Z",
+    "updated_at": "2026-02-18T01:25:09.555937Z"
+  },
+  "api": {
+    "/health": {
+      "status": 200,
+      "summary": {
+        "status": "healthy"
+      }
+    },
+    "/health/ready": {
+      "status": 200,
+      "summary": {
+        "status": "ready",
+        "missing_tables_len": 0,
+        "checked_tables_len": 8
+      }
+    },
+    "/api/v1/user/auth/fetch_user": {
+      "status": 200,
+      "summary": {
+        "is_admin": true,
+        "username": "puspesh"
+      }
+    },
+    "/api/v1/dashboard/statistics?days=7": {
+      "status": 200,
+      "summary": {
+        "timeline_len": 0,
+        "format_distribution_len": 0,
+        "customer_distribution_len": 1,
+        "request_type_distribution_len": 0,
+        "recent_activity_len": 0
+      }
+    },
+    "/api/v1/customers/?skip=0&limit=5": {
+      "status": 200,
+      "summary": {
+        "total": 11,
+        "customers_len": 5
+      }
+    },
+    "/api/v1/customer-users": {
+      "status": 200,
+      "summary": {}
+    },
+    "/api/v1/workspace?skip=0&limit=20": {
+      "status": 200,
+      "summary": {
+        "total": 11,
+        "workspaces_len": 11
+      }
+    },
+    "/api/v1/workspace/DE875243162": {
+      "status": 200,
+      "summary": {
+        "has_settings": false,
+        "erps_len": 0,
+        "adapters_len": 0
+      }
+    },
+    "/api/v1/workspace/DE875243162/onboarding-status": {
+      "status": 200,
+      "summary": {
+        "ready": false,
+        "missing": [
+          "workspace_settings",
+          "erp_configured",
+          "erp_secrets",
+          "adapter_enabled",
+          "government_endpoint",
+          "pipeline_enabled"
+        ],
+        "missing_len": 6,
+        "steps_len": 11
+      }
+    },
+    "/api/v1/workspace/DOES_NOT_EXIST_XYZ": {
+      "status": 403,
+      "summary": {
+        "detail": "Not authorized for workspace 'DOES_NOT_EXIST_XYZ'"
+      }
+    },
+    "/api/v1/monitoring/workspaces/DE875243162/summary": {
+      "status": 200,
+      "summary": {
+        "top_errors_len": 0,
+        "latest_transactions_len": 0,
+        "recent_alerts_len": 0
+      }
+    },
+    "/api/v1/ai/workspace/DE875243162/summary": {
+      "status": 200,
+      "summary": {
+        "top_errors_len": 0,
+        "recommendation_codes_len": 1,
+        "ai_facts_preview_len": 1
+      }
+    },
+    "/api/v1/invoices/success?skip=0&limit=2": {
+      "status": 200,
+      "summary": {}
+    },
+    "/api/v1/sat/documents?skip=0&limit=2": {
+      "status": 200,
+      "summary": {
+        "total": 14,
+        "documents_len": 2
+      }
+    },
+    "/api/v1/sat/supplier-mapping/list": {
+      "status": 200,
+      "summary": {
+        "total": 4,
+        "mappings_len": 4
+      }
+    },
+    "/api/v1/supplier-tokens/list": {
+      "status": 200,
+      "summary": {
+        "total": 2,
+        "tokens_len": 2
+      }
+    },
+    "/api/v1/pipeline/health": {
+      "status": 200,
+      "summary": {
+        "enabled": true
+      }
+    },
+    "/api/v1/invoices-v2/documents?skip=0&limit=2": {
+      "status": 200,
+      "summary": {
+        "total": 67,
+        "documents_len": 2
+      }
+    },
+    "/api/v1/dashboard/ai-analysis/schema": {
+      "status": 200,
+      "summary": {}
+    }
+  },
+  "customer_users": [
+    {
+      "id": 9,
+      "username": "andix",
+      "email": "dodandre8@gmail.com",
+      "is_admin": false,
+      "is_customer_user": true
+    },
+    {
+      "id": 10,
+      "username": "test",
+      "email": "test@gmail.com",
+      "is_admin": false,
+      "is_customer_user": true
+    }
+  ],
+  "assignments": [
+    {
+      "user_id": 9,
+      "customer_id": "FR94341612687"
+    },
+    {
+      "user_id": 9,
+      "customer_id": "IT09415660159"
+    },
+    {
+      "user_id": 10,
+      "customer_id": "9429033591476"
+    },
+    {
+      "user_id": 10,
+      "customer_id": "DE875243162"
+    },
+    {
+      "user_id": 10,
+      "customer_id": "IIA040805DZ4"
+    }
+  ],
+  "users_1_11": [
+    {
+      "id": 1,
+      "username": "puspesh",
+      "is_admin": true,
+      "is_customer_user": false
+    },
+    {
+      "id": 11,
+      "username": "ashakarthikeyan24",
+      "is_admin": true,
+      "is_customer_user": false
+    }
+  ],
+  "workspace_settings_count": 0,
+  "pilot": {
+    "customer_id": "DE875243162",
+    "target_format": "XML_EMBED_X12"
+  }
+}

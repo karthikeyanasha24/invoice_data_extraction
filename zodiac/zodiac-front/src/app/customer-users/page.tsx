@@ -177,10 +177,17 @@ export default function CustomerUsersPage() {
                 <p className="text-sm text-gray-600 mb-3">
                   Select customer IDs this user can see (documents by customer).
                 </p>
-                <ul className="space-y-2">
+                <ul className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
                   {allCustomers.map((c) => (
                     <li key={c.customer_id}>
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      <label
+                        className={cn(
+                          'flex items-center gap-2 cursor-pointer rounded-md px-2 py-1.5 transition-colors',
+                          selectedCustomerIds.includes(c.customer_id)
+                            ? 'bg-emerald-50 text-emerald-900'
+                            : 'hover:bg-slate-100 text-slate-800'
+                        )}
+                      >
                         <input
                           type="checkbox"
                           checked={selectedCustomerIds.includes(c.customer_id)}
@@ -191,9 +198,9 @@ export default function CustomerUsersPage() {
                               setSelectedCustomerIds((prev) => prev.filter((id) => id !== c.customer_id));
                             }
                           }}
-                          className="rounded border-gray-300"
+                          className="h-4 w-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
                         />
-                        <span className="text-sm font-mono">{c.customer_id}</span>
+                        <span className="text-sm font-mono font-medium">{c.customer_id}</span>
                       </label>
                     </li>
                   ))}
@@ -278,14 +285,12 @@ function CreateCustomerUserModal({
     }
     try {
       setSubmitting(true);
-      const created = await customerUsersApi.create({
+      await customerUsersApi.create({
         email: email.trim().toLowerCase(),
         username: username.trim(),
         password,
+        customer_ids: selectedCustomerIds,
       });
-      if (selectedCustomerIds.length > 0) {
-        await customerUsersApi.assignCustomers(created.id, selectedCustomerIds);
-      }
       onCreated();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Failed to create customer user.');
@@ -348,10 +353,17 @@ function CreateCustomerUserModal({
             <p className="text-xs text-gray-500 mb-2">
               Select which customer IDs this user can see (documents by customer).
             </p>
-            <ul className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 rounded-lg p-2">
+            <ul className="space-y-2 max-h-40 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50">
               {allCustomers.map((c) => (
                 <li key={c.customer_id}>
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label
+                    className={cn(
+                      'flex items-center gap-2 cursor-pointer rounded-md px-2 py-1.5 transition-colors',
+                      selectedCustomerIds.includes(c.customer_id)
+                        ? 'bg-emerald-50 text-emerald-900'
+                        : 'hover:bg-slate-100 text-slate-800'
+                    )}
+                  >
                     <input
                       type="checkbox"
                       checked={selectedCustomerIds.includes(c.customer_id)}
@@ -362,9 +374,9 @@ function CreateCustomerUserModal({
                           setSelectedCustomerIds((prev) => prev.filter((id) => id !== c.customer_id));
                         }
                       }}
-                      className="rounded border-gray-300"
+                      className="h-4 w-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
                     />
-                    <span className="text-sm font-mono">{c.customer_id}</span>
+                    <span className="text-sm font-mono font-medium">{c.customer_id}</span>
                   </label>
                 </li>
               ))}
