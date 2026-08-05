@@ -123,24 +123,24 @@ export default function CustomerUsersPage() {
               Customer users and assigned customer IDs
             </div>
             {list.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">
+              <div className="p-8 text-center text-sm font-medium text-slate-600">
                 No customer users yet. Create one to assign customer IDs.
               </div>
             ) : (
               <ul className="divide-y divide-gray-200">
                 {list.map((cu) => (
-                  <li key={cu.id} className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+                  <li key={cu.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
                     <div>
-                      <span className="font-medium text-gray-900">{cu.email}</span>
-                      <span className="text-gray-500 ml-2">({cu.username})</span>
-                      <div className="text-sm text-gray-600 mt-0.5">
+                      <span className="font-medium text-slate-900">{cu.email}</span>
+                      <span className="ml-2 text-slate-600">({cu.username})</span>
+                      <div className="mt-0.5 text-sm text-slate-700">
                         Assigned: {cu.customer_ids?.length ? cu.customer_ids.join(', ') : '—'}
                       </div>
                     </div>
                     <button
                       type="button"
                       onClick={() => openAssignModal(cu)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-400 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
                     >
                       <Edit2 className="h-3.5 w-3.5" />
                       Edit customers
@@ -163,29 +163,34 @@ export default function CustomerUsersPage() {
         )}
 
         {assignModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-            <div className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[90vh] flex flex-col">
-              <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="font-semibold text-gray-900">
+          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4">
+            <div className="my-auto flex w-full max-w-md max-h-[min(90vh,720px)] flex-col rounded-xl bg-white text-slate-900 shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                <h2 className="font-semibold text-slate-900">
                   Assign customers — {assignModalOpen.email}
                 </h2>
-                <button type="button" onClick={() => setAssignModalOpen(null)} className="p-1 hover:bg-gray-100 rounded">
+                <button
+                  type="button"
+                  onClick={() => setAssignModalOpen(null)}
+                  className="rounded p-1 text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+                  aria-label="Close"
+                >
                   <X className="h-5 w-5" />
                 </button>
               </div>
-              <div className="p-4 overflow-y-auto flex-1">
-                <p className="text-sm text-gray-600 mb-3">
+              <div className="flex-1 overflow-y-auto p-4">
+                <p className="mb-3 text-sm font-medium text-slate-700">
                   Select customer IDs this user can see (documents by customer).
                 </p>
-                <ul className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                <ul className="space-y-2 rounded-lg border border-slate-300 bg-slate-50 p-2">
                   {allCustomers.map((c) => (
                     <li key={c.customer_id}>
                       <label
                         className={cn(
-                          'flex items-center gap-2 cursor-pointer rounded-md px-2 py-1.5 transition-colors',
+                          'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
                           selectedCustomerIds.includes(c.customer_id)
-                            ? 'bg-emerald-50 text-emerald-900'
-                            : 'hover:bg-slate-100 text-slate-800'
+                            ? 'bg-emerald-100 text-emerald-950'
+                            : 'text-slate-900 hover:bg-slate-100'
                         )}
                       >
                         <input
@@ -198,22 +203,24 @@ export default function CustomerUsersPage() {
                               setSelectedCustomerIds((prev) => prev.filter((id) => id !== c.customer_id));
                             }
                           }}
-                          className="h-4 w-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
+                          className="h-4 w-4 rounded border-slate-500 text-emerald-600 focus:ring-emerald-500"
                         />
-                        <span className="text-sm font-mono font-medium">{c.customer_id}</span>
+                        <span className="text-sm font-mono font-semibold text-slate-900">{c.customer_id}</span>
                       </label>
                     </li>
                   ))}
                 </ul>
                 {allCustomers.length === 0 && (
-                  <p className="text-sm text-gray-500">No customers in the system. Add customers first.</p>
+                  <p className="text-sm font-medium text-slate-600">
+                    No customers in the system. Add customers first.
+                  </p>
                 )}
               </div>
-              <div className="px-4 py-3 border-t border-gray-200 flex justify-end gap-2">
+              <div className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
                 <button
                   type="button"
                   onClick={() => setAssignModalOpen(null)}
-                  className="px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  className="rounded-lg border border-slate-400 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
                 >
                   Cancel
                 </button>
@@ -221,7 +228,7 @@ export default function CustomerUsersPage() {
                   type="button"
                   onClick={saveAssignCustomers}
                   disabled={assignSaving}
-                  className="inline-flex items-center gap-2 px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
                   {assignSaving ? <Loader className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   Save
@@ -300,68 +307,73 @@ function CreateCustomerUserModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[90vh] flex flex-col">
-        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="font-semibold text-gray-900">Create customer user</h2>
-          <button type="button" onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4">
+      <div className="my-auto flex w-full max-w-md max-h-[min(90vh,720px)] flex-col rounded-xl bg-white text-slate-900 shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <h2 className="font-semibold text-slate-900">Create customer user</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+            aria-label="Close"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-4 overflow-y-auto flex-1 space-y-4">
+        <form onSubmit={handleSubmit} className="flex-1 space-y-4 overflow-y-auto p-4">
           {err && (
-            <div className="p-2 bg-red-50 border border-red-200 rounded text-red-700 text-sm">{err}</div>
+            <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-800">{err}</div>
           )}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <label className="mb-1 block text-sm font-semibold text-slate-800">Email</label>
             <input
               type="email"
               value={email}
               onChange={(e) => { setEmail(e.target.value); setErr(null); }}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              className="w-full rounded-lg border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
               placeholder="user@example.com"
               autoComplete="email"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+            <label className="mb-1 block text-sm font-semibold text-slate-800">Username</label>
             <input
               type="text"
               value={username}
               onChange={(e) => { setUsername(e.target.value); setErr(null); }}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              className="w-full rounded-lg border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
               placeholder="Letters, numbers, dots, hyphens, underscores (2–64 chars)"
               maxLength={64}
             />
-            <p className="text-xs text-gray-500 mt-0.5">2–64 characters</p>
+            <p className="mt-0.5 text-xs font-medium text-slate-600">2–64 characters</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <label className="mb-1 block text-sm font-semibold text-slate-800">Password</label>
             <input
               type="password"
               value={password}
               onChange={(e) => { setPassword(e.target.value); setErr(null); }}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              className="w-full rounded-lg border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500"
               placeholder="Minimum 8 characters"
               minLength={8}
               autoComplete="new-password"
             />
-            <p className="text-xs text-gray-500 mt-0.5">Minimum 8 characters required</p>
+            <p className="mt-0.5 text-xs font-medium text-slate-600">Minimum 8 characters required</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Assign customers</label>
-            <p className="text-xs text-gray-500 mb-2">
+            <label className="mb-2 block text-sm font-semibold text-slate-800">Assign customers</label>
+            <p className="mb-2 text-xs font-medium text-slate-600">
               Select which customer IDs this user can see (documents by customer).
             </p>
-            <ul className="space-y-2 max-h-40 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50">
+            <ul className="max-h-40 space-y-2 overflow-y-auto rounded-lg border border-slate-300 bg-slate-50 p-2">
               {allCustomers.map((c) => (
                 <li key={c.customer_id}>
                   <label
                     className={cn(
-                      'flex items-center gap-2 cursor-pointer rounded-md px-2 py-1.5 transition-colors',
+                      'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
                       selectedCustomerIds.includes(c.customer_id)
-                        ? 'bg-emerald-50 text-emerald-900'
-                        : 'hover:bg-slate-100 text-slate-800'
+                        ? 'bg-emerald-100 text-emerald-950'
+                        : 'text-slate-900 hover:bg-slate-100'
                     )}
                   >
                     <input
@@ -374,26 +386,32 @@ function CreateCustomerUserModal({
                           setSelectedCustomerIds((prev) => prev.filter((id) => id !== c.customer_id));
                         }
                       }}
-                      className="h-4 w-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
+                      className="h-4 w-4 rounded border-slate-500 text-emerald-600 focus:ring-emerald-500"
                     />
-                    <span className="text-sm font-mono font-medium">{c.customer_id}</span>
+                    <span className="text-sm font-mono font-semibold text-slate-900">{c.customer_id}</span>
                   </label>
                 </li>
               ))}
             </ul>
             {allCustomers.length === 0 && (
-              <p className="text-sm text-gray-500 mt-1">No customers in the system. You can assign later.</p>
+              <p className="mt-1 text-sm font-medium text-slate-600">
+                No customers in the system. You can assign later.
+              </p>
             )}
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-400 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            >
               Cancel
             </button>
             <button
               type="submit"
               disabled={submitting}
               className={cn(
-                'inline-flex items-center gap-2 px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50',
+                'inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50'
               )}
             >
               {submitting && <Loader className="h-4 w-4 animate-spin" />}
