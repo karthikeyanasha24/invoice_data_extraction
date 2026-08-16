@@ -8,7 +8,12 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+.env.*
+!.env.example
 .env.local
 *.log
 .DS_Store
-.venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/

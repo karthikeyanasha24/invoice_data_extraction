@@ -115,11 +115,12 @@ def _should_skip_operational_for_sap(question: str) -> bool:
     if any(k in ql for k in ("sat", "cfdi", "edi", "inbound sat", "sat document", "zodiac invoice")):
         return False
     sap_signals = (
-        "revenue", "billing", "vbrk", "vbrp", "purchase order", "open po",
+        "revenue", "sales", "turnover", "highest sales", "total sales", "industry",
+        "billing", "vbrk", "vbrp", "kna1", "t016t", "purchase order", "open po",
         "open purchase", "ekko", "ekpo", "sales order", "profit center",
         "cost center", "faglflexa", "customers by revenue", "billed amount",
         "billing document", "vendor spend", "cepc", "csks", "material master",
-        "gl account", "accounting document",
+        "gl account", "accounting document", "by customer", "by industry",
     )
     return any(s in ql for s in sap_signals)
 

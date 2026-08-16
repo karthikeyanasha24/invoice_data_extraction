@@ -212,16 +212,16 @@ pre code {
 
 
 def build_html(md_text: str) -> str:
-    import markdown
+import markdown
 
     body = markdown.markdown(
         md_text,
-        extensions=[
-            "tables",
-            "fenced_code",
+    extensions=[
+        "tables",
+        "fenced_code",
             "sane_lists",
             "smarty",
-            "toc",
+        "toc",
         ],
         extension_configs={
             "toc": {"permalink": False},
@@ -348,12 +348,12 @@ def main() -> None:
     write_pdf_with_playwright(OUTPUT_HTML, OUTPUT_PDF)
 
     # Keep HTML for inspection; optional to delete — leave it for regenerations
-    print("=" * 50)
+print("=" * 50)
     print("PDF built with Chromium (structured layout)")
-    print(f"Input : {INPUT_MD}")
+print(f"Input : {INPUT_MD}")
     print(f"HTML  : {OUTPUT_HTML}")
-    print(f"Output: {OUTPUT_PDF}")
-    print("=" * 50)
+print(f"Output: {OUTPUT_PDF}")
+print("=" * 50)
 
 
 if __name__ == "__main__":

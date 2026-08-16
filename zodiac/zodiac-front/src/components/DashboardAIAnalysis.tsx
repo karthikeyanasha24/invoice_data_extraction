@@ -552,10 +552,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
     // build contextData only when the user is following up (not starting a new question)
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.result);
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
     const contextData = (!isNewQuestion && lastAssistant?.result)
       ? {
-          previousQuestion: lastAssistant.content,
+          previousQuestion: lastUser?.content || lastAssistant.content,
           previousSQL:      lastAssistant.result.sql || '',
+          previousPlan:     (lastAssistant.result as any).query_plan || (lastAssistant.result as any).queryPlan || null,
+          previousAnswerStatus: (lastAssistant.result as any).answer_status || null,
           data:             lastAssistant.result.data?.slice(0, 20) || [],
         }
       : null;
@@ -568,17 +571,23 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         threadId: tid,
       });
 
+      const answerStatus = res.answer_status || res.answerStatus || '';
+      const isCannotAnswer =
+        answerStatus === 'CANNOT_ANSWER' ||
+        res.type === 'cannot_answer' ||
+        !!res.degraded_fallback;
+
       // Normalise response — backend may return old shape or new pipeline shape
       const result: QueryResult = {
         sql:         res.sql || res.generatedSql,
-        data:        res.data || res.rows || [],
-        rowCount:    res.rowCount ?? res.row_count ?? (res.data?.length ?? 0),
+        data:        isCannotAnswer ? [] : (res.data || res.rows || []),
+        rowCount:    isCannotAnswer ? 0 : (res.rowCount ?? res.row_count ?? (res.data?.length ?? 0)),
         totalCount:  res.totalCount ?? res.total_count ?? -1,
         sqlStrategy: res.sqlStrategy || res.sql_strategy || 'full',
-        summary:     res.summary || res.executive_summary || '',
+        summary:     res.summary || res.executive_summary || res.answer || '',
         keyFindings: res.keyFindings || res.key_findings || [],
-        kpis:        res.kpis || [],
-        charts:      res.charts || res.chart_configs || [],
+        kpis:        isCannotAnswer ? [] : (res.kpis || []),
+        charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
         meta:        res.meta || {
           domain:        res.domain,
           intent:        res.intent,
@@ -586,10 +595,16 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           pipeline_ms:   res.pipeline_ms,
           warnings:      res.warnings || [],
         },
+        ...( {
+          query_plan: res.query_plan || res.queryPlan,
+          answer_status: answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS'),
+        } as any),
       };
 
       // If it's a pure analysis reply (follow-up text answer)
-      const summaryContent = res.type === 'analysis'
+      const summaryContent = isCannotAnswer
+        ? (res.summary || res.answer || 'I could not reliably answer this question.')
+        : res.type === 'analysis'
         ? (res.answer || res.summary || 'Done.')
         : (result.summary || (result.rowCount === 0
             ? 'Query executed but returned no data for this environment.'
@@ -599,7 +614,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: summaryContent,
-        result: res.type === 'analysis' ? undefined : result,
+        // Keep result for follow-up context even on cannot_answer (plan/status), but no fake rows
+        result: res.type === 'analysis' && !isCannotAnswer ? undefined : result,
         ts: Date.now(),
       };
       setMessages(prev => [...prev, assistantMsg]);

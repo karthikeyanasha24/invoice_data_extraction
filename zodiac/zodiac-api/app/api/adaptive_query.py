@@ -31,7 +31,15 @@ from sqlalchemy import text
 from ..database import get_db
 from ..config.config import OPENAI_API_KEY, USE_SAP_DB_FOR_AI
 from ..database import get_sap_session
-from ..services.ai_followup_routing import follow_up_requires_fresh_sql
+from ..services.ai_followup_routing import (
+    follow_up_requires_fresh_sql,
+    resolve_follow_up_sql_need,
+)
+from ..services.ai_query_plan import (
+    extract_query_plan,
+    plan_prompt_directive,
+    QueryPlan,
+)
 from ..api.auth import get_current_user_optional
 from ..models.user import ZodiacUser
 
@@ -75,6 +83,198 @@ def _col_type(tbl: str, col: str) -> str:
         if c["col"] == col:
             return c["type"]
     return "text"
+
+
+def _table_has_column(table: str, column: str) -> bool:
+    """True if schema lists `column` on `table` (case-insensitive). Schema is source of truth."""
+    want_t = (table or "").strip().lower()
+    want_c = (column or "").strip().lower()
+    if not want_t or not want_c:
+        return False
+    schema = _load_schema()
+    for tname, cols in schema.items():
+        if str(tname).lower() != want_t:
+            continue
+        for c in cols or []:
+            if str(c.get("col") or "").lower() == want_c:
+                return True
+    return False
+
+
+def _guardrail_intent_text(question: str, plan: Optional[QueryPlan] = None) -> str:
+    """
+    Extract the user's real question for intent-sensitive guardrails.
+
+    Follow-up prompts embed instructional text (e.g. 'For invoice zero/negative: …')
+    which must NOT trigger zero/negative invoice rules on ordinary sales queries.
+    """
+    q = question or ""
+    m = re.search(
+        r"New request \(generate ONE new PostgreSQL SELECT for this\):\s*(.+?)(?:\nRules:|\Z)",
+        q,
+        re.I | re.S,
+    )
+    if m:
+        return m.group(1).strip()
+    m2 = re.search(r"(?im)^Question:\s*(.+)$", q.strip())
+    if m2:
+        return m2.group(1).strip()
+    # Drop continuation boilerplate / embedded SQL rules
+    skip_frags = (
+        "continuation of an analysis",
+        "previous sql",
+        "previous question:",
+        "sample of prior",
+        "semantic query plan",
+        "for invoice zero/negative",
+        "generate one new postgresql",
+        "rules:",
+        "scope change:",
+        "product drill-down:",
+    )
+    lines: List[str] = []
+    for line in q.splitlines():
+        ll = line.lower().strip()
+        if not ll:
+            continue
+        if any(f in ll for f in skip_frags):
+            continue
+        if ll.startswith("```"):
+            continue
+        lines.append(line)
+    cleaned = "\n".join(lines).strip()
+    if cleaned:
+        return cleaned
+    if plan is not None:
+        # Last resort: reconstruct a short intent phrase from the plan
+        parts = [plan.metric or "sales"]
+        if plan.dimensions:
+            parts.append("by " + ", ".join(plan.dimensions))
+        years = (plan.filters or {}).get("years") or []
+        if years:
+            parts.append("years " + ",".join(str(y) for y in years))
+        return " ".join(parts)
+    return q
+
+
+def _is_sap_erp_intent(question: str, plan: Optional[QueryPlan] = None) -> bool:
+    """
+    True when the question must stay in SAP/ERP (VBRK/KNA1/T016T/…) domain.
+
+    Prevents failed SAP generation from silently answering via Zodiac EDI tables.
+    """
+    q = _guardrail_intent_text(question, plan).lower()
+    # Explicit EDI / portal ops without SAP sales semantics may use invoice_v2_* intentionally
+    edi_only = any(
+        tok in q
+        for tok in (
+            "edi", "cfdi", "sat document", "zodiac invoice", "invoice_v2",
+            "portal invoice", "failed edi", "success edi",
+        )
+    )
+    sap_tokens = (
+        "sales", "revenue", "turnover", "billing", "industry", "sector",
+        "vbrk", "vbrp", "kna1", "t016t", "mara", "makt", "material", "matnr",
+        "sap", "fkdat", "kunag", "brsch", "brtxt", "highest sales", "total sales",
+        "by customer", "by industry", "product",
+    )
+    has_sap = any(tok in q for tok in sap_tokens)
+    if plan is not None:
+        if plan.metric == "sales":
+            has_sap = True
+        if any(d in (plan.dimensions or []) for d in ("industry", "product", "customer")):
+            if plan.metric in ("sales", "quantity", "average") or (plan.filters or {}).get("years"):
+                has_sap = True
+        if plan.grain == "line":
+            has_sap = True
+        if (plan.filters or {}).get("years") and plan.metric in ("sales", "count", "average"):
+            # year-scoped sales/count on follow-up stays SAP unless clearly EDI-only
+            if "invoice count" in q and not any(t in q for t in ("sales", "revenue", "billing", "industry")):
+                pass
+            else:
+                has_sap = True
+    if not has_sap:
+        return False
+    if edi_only and not any(t in q for t in ("sales", "revenue", "industry", "vbrk", "billing", "sap")):
+        return False
+    # "invoice count by customer" without year/sales/industry → allow EDI domain
+    if "invoice count" in q and not any(
+        t in q for t in ("sales", "revenue", "billing", "industry", "vbrk", "2004", "2005", "2003")
+    ):
+        if not (plan and (plan.filters or {}).get("years") and plan.metric == "sales"):
+            return False
+    return True
+
+
+def _cannot_answer_payload(
+    question: str,
+    *,
+    reason: str,
+    plan: Optional[QueryPlan] = None,
+    follow_up_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Explicit inability-to-answer — never an unrelated EDI row count."""
+    summary = (
+        "I couldn't reliably answer this SAP/ERP question because the required query "
+        "could not be generated against the connected billing/customer/industry tables. "
+        f"({reason}) Please rephrase or narrow the request — I will not substitute an "
+        "unrelated EDI invoice count."
+    )
+    out: Dict[str, Any] = {
+        "type": "cannot_answer",
+        "answer_status": "CANNOT_ANSWER",
+        "sql": "",
+        "rowCount": 0,
+        "data": [],
+        "summary": summary,
+        "answer": summary,
+        "keyFindings": [
+            "SAP/ERP query generation failed — no unrelated EDI fallback was used.",
+            reason,
+        ],
+        "charts": [],
+        "degraded_fallback": False,
+        "domain_locked": "sap_erp",
+        "failure_reason": reason,
+        "question": (question or "")[:500],
+    }
+    if plan is not None:
+        out["query_plan"] = plan.to_dict()
+        out["plan_fingerprint"] = plan.fingerprint()
+    if follow_up_mode:
+        out["follow_up_mode"] = follow_up_mode
+    return out
+
+
+def _annotate_answer_status(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach answer_status without breaking older frontend fields."""
+    if not isinstance(payload, dict):
+        return payload
+    if payload.get("answer_status"):
+        return payload
+    if payload.get("type") == "cannot_answer" or payload.get("answer_status") == "CANNOT_ANSWER":
+        payload["answer_status"] = "CANNOT_ANSWER"
+        return payload
+    if payload.get("degraded_fallback") or payload.get("follow_up_mode") == "analysis_fallback":
+        payload["answer_status"] = "CANNOT_ANSWER"
+        return payload
+    if payload.get("type") == "analysis" and not (payload.get("sql") or "").strip():
+        payload["answer_status"] = "PARTIAL"
+        return payload
+    if payload.get("execution_error") or payload.get("error_code"):
+        payload["answer_status"] = "ERROR"
+        return payload
+    sql = (payload.get("sql") or "").strip().lower()
+    if "invoice_v2_business_data" in sql and "total_rows" in sql:
+        # Legacy degraded count shape — never SUCCESS
+        payload["answer_status"] = "CANNOT_ANSWER"
+        payload["degraded_fallback"] = True
+        return payload
+    if payload.get("data") is not None or payload.get("sql"):
+        payload["answer_status"] = "SUCCESS"
+        return payload
+    payload["answer_status"] = "ERROR"
+    return payload
 
 
 # ─── Numeric TEXT columns that need CAST in aggregate functions ───────────────
@@ -143,7 +343,7 @@ _TABLE_CONTEXT: Dict[str, str] = {
     "BSAD":   "Customer cleared items (open item accounting). belnr=doc#, kunnr=customer, dmbtr=cleared amount(TEXT→CAST), wrbtr=doc currency amount(TEXT→CAST), shkzg=D/C, budat=clearing date(YYYYMMDD), augdt=clearing date",
     "FAGLFLEXA": "General ledger ACTUAL line items (new GL). prctr=profit center, rbukrs=company code, racct=GL account, docnr=doc#, ryear=fiscal year, poper=period('001'-'012'), hsl=local amount(TEXT→CAST), ksl=2nd currency amount(TEXT→CAST), msl=quantity(TEXT→CAST), rtcur=currency, rclnt=client",
     "DFKKOP":  "FI-CA document item (contract accounts). faedn=due date(YYYYMMDD), betrw=amount, waers=currency",
-    "T016T":   "Industry sector TEXTS (KNA1.brsch = T016T.brsch, spras=language). Use ONLY when the user explicitly asks for industry/sector; join via KNA1 — not for generic customer lists",
+    "T016T":   "Industry sector TEXTS (KNA1.brsch = T016T.brsch). Columns in THIS schema: brsch, brtxt (spras may be ABSENT — never invent spras). Use ONLY when the user explicitly asks for industry/sector; join via KNA1",
     # SAP Controlling
     "COEP":   "CO document line items (actual). kokrs=controlling area, belnr=doc#, buzei=item#, objnr=cost object, kstar=cost element, kostl=cost center, lstar=activity type, wkg001-wkg012=period amounts (need CAST if TEXT)",
     "COSP":   "Cost totals external postings. kokrs=controlling area, objnr=cost object, kstar=cost element, gjahr=fiscal year",
@@ -497,11 +697,11 @@ FISCAL-YEAR COMPOUND KEYS (critical — belnr alone is NEVER unique across years
   BKPF + BSEG:    JOIN ON b."belnr" = s."belnr" AND b."bukrs" = s."bukrs" AND b."gjahr" = s."gjahr"
   Missing gjahr or bukrs silently returns cross-year / cross-company matches — ALWAYS include all keys.
 
-TEXT/DESCRIPTION TABLE LANGUAGE FILTER (mandatory to prevent row multiplication):
-  MAKT: always join with AND t."spras" = 'E'   (English; one row per material per language)
-  T016T: always join with AND t."spras" = 'E'  (industry sector texts)
-  CSKT: always join with AND s."spras" = 'E'   (cost center texts)
-  Without spras the join returns N rows per key (one per language), inflating counts and corrupting SUM.
+TEXT/DESCRIPTION TABLE LANGUAGE FILTER (schema-aware — never invent columns):
+  MAKT: if spras exists in schema, join with AND t."spras" = 'E'
+  T016T: if spras exists in schema, filter spras='E'; if spras does NOT exist (this DB: brsch/brtxt only), join ONLY on brsch — do NOT add spras
+  CSKT: if spras exists, join with AND s."spras" = 'E'
+  Requiring a non-existent spras column causes schema validation failure. Schema columns are the source of truth.
 
 ACTIVE / OPEN RECORD FILTERS (deletion/block flags):
   Open POs:       TRIM(COALESCE(k."loekz",'')) = '' (EKKO) AND TRIM(COALESCE(p."loekz",'')) = '' (EKPO)
@@ -1129,22 +1329,40 @@ def _chart_title(question: str, fallback: str) -> str:
     return q[:50].strip() + "…"
 
 
-def _sql_guardrail_violations(question: str, sql: str) -> List[str]:
+def _sql_guardrail_violations(
+    question: str,
+    sql: str,
+    plan: Optional[QueryPlan] = None,
+) -> List[str]:
     """
     Hard business guardrails for known accuracy issues.
     If any violation is returned, ask the model to regenerate SQL before executing.
+
+    Intent detection uses the user's real question (and optional QueryPlan), NOT
+    instructional boilerplate embedded in follow-up prompts.
     """
-    q = (question or "").lower()
+    q = _guardrail_intent_text(question, plan).lower()
     s = (sql or "")
     s_lower = s.lower()
     violations: List[str] = []
 
-    asks_line_level = any(tok in q for tok in ("line item", "line items", "item level", "product level", "by product"))
-    asks_invoice_doc_value = (
-        any(tok in q for tok in ("invoice", "billing document", "billing"))
-        and any(tok in q for tok in ("zero", "negative", "invoice value", "invoice total", "document total", "netwr"))
+    # Prefer plan grain / dimensions when available
+    if plan is not None and plan.grain == "line":
+        asks_line_level = True
+    else:
+        asks_line_level = any(
+            tok in q for tok in ("line item", "line items", "item level", "product level", "by product")
+        )
+    # Zero/negative invoice rules apply ONLY when the user asks for that exception set.
+    # Do NOT treat "billing"+"netwr" alone as zero/negative (false positive on sales ranking).
+    asks_zero_negative_invoice = (
+        any(tok in q for tok in ("zero", "negative"))
+        and any(tok in q for tok in ("invoice", "billing document", "billing", "document"))
         and not asks_line_level
+    ) or (
+        any(tok in q for tok in ("zero invoice", "negative invoice", "zero-value", "zero value"))
     )
+    asks_invoice_doc_value = asks_zero_negative_invoice
     if asks_invoice_doc_value:
         has_vbrk = '"vbrk"' in s_lower
         has_header_netwr = bool(re.search(r'"vbrk"\s*\.\s*"netwr"', s_lower))
@@ -1221,17 +1439,73 @@ def _sql_guardrail_violations(question: str, sql: str) -> List[str]:
             )
 
     # Accuracy critical: VBRK.GJAHR is unreliable in this dataset (often '0000').
-    asks_year_billing = any(tok in q for tok in ("year", "fiscal year", "in 20", "in 19")) and any(
-        tok in q for tok in ("invoice", "billing", "sales", "vbrk")
-    )
-    if asks_year_billing and (
+    # Any billing/sales question that mentions a calendar year (or "year") must use fkdat.
+    has_calendar_year = bool(re.search(r"\b((?:19|20)\d{2})\b", q))
+    asks_year_billing = (
+        has_calendar_year
+        or any(tok in q for tok in ("year", "fiscal year", "in 20", "in 19"))
+    ) and any(tok in q for tok in ("invoice", "billing", "sales", "revenue", "vbrk", "customer", "industry"))
+    if (asks_year_billing or has_calendar_year) and (
         re.search(r'"vbrk"\s*\.\s*"gjahr"', s_lower)
         or re.search(r'\b[a-zA-Z_][a-zA-Z0-9_]*\s*\.\s*"gjahr"', s_lower)
         or re.search(r'(?<![a-zA-Z0-9_])gjahr(?![a-zA-Z0-9_])', s_lower)
     ):
         violations.append(
-            'Do not use "VBRK"."gjahr" for billing-year filtering. Use SUBSTRING(TRIM("VBRK"."fkdat"), 1, 4).'
+            'Do not use "VBRK"."gjahr" for billing-year filtering (values are unreliable / often 0000). '
+            'Use SUBSTRING(TRIM("VBRK"."fkdat"), 1, 4).'
         )
+
+    # R3: default sales/revenue grain is VBRK header — do not silently sum vbrp.netwr.
+    asks_header_sales = any(
+        tok in q for tok in ("sales", "revenue", "turnover", "highest sales", "lowest sales", "total sales")
+    ) or (plan is not None and plan.metric == "sales" and plan.grain != "line")
+    asks_line_grain = asks_line_level or any(
+        tok in q
+        for tok in (
+            "line item", "line items", "item level", "product level", "material level",
+            "by product", "per product", "by material", "per material", "quantity",
+        )
+    ) or (plan is not None and plan.grain == "line")
+    if asks_header_sales and not asks_line_grain:
+        has_vbrp_table = '"vbrp"' in s_lower or re.search(r'\bfrom\s+vbrp\b', s_lower) or re.search(r'\bjoin\s+vbrp\b', s_lower)
+        sums_vbrp_netwr = bool(
+            re.search(r'\bsum\s*\([\s\S]{0,80}vbrp[\s\S]{0,40}netwr', s_lower)
+            or (
+                has_vbrp_table
+                and re.search(r'\bsum\s*\([\s\S]{0,60}netwr', s_lower)
+                and not re.search(r'\bsum\s*\([\s\S]{0,80}vbrk[\s\S]{0,40}netwr', s_lower)
+            )
+        )
+        if sums_vbrp_netwr:
+            violations.append(
+                "Sales/revenue questions default to VBRK header grain (VBRK.netwr). "
+                "Do not aggregate vbrp.netwr unless the user explicitly asks for line/product/material detail."
+            )
+        if has_vbrp_table and "customer" in q and "product" not in q and "material" not in q:
+            # Customer ranking for sales should not require item table
+            if re.search(r'\bsum\s*\([\s\S]{0,80}(vbrp|[a-z]\.)[\s\S]{0,40}netwr', s_lower) or sums_vbrp_netwr:
+                violations.append(
+                    "Customer sales ranking must use VBRK.netwr (header), not vbrp line amounts."
+                )
+
+    # R3: customer industry must come from KNA1→T016T, never MARA.mbrsh.
+    asks_industry = any(tok in q for tok in ("industry", "sector", "brsch")) or (
+        plan is not None and "industry" in (plan.dimensions or [])
+    )
+    if asks_industry:
+        uses_mara_industry = bool(
+            re.search(r'\bmara\b[\s\S]{0,80}\bmbrsh\b', s_lower)
+            or re.search(r'\bmbrsh\b', s_lower)
+        )
+        if uses_mara_industry:
+            violations.append(
+                "Customer/industry questions must use VBRK → KNA1.brsch → T016T.brtxt. "
+                "Do not use MARA.mbrsh (material industry sector)."
+            )
+        if '"t016t"' in s_lower and '"kna1"' not in s_lower:
+            violations.append(
+                "T016T industry text must be joined through KNA1.brsch (customer master), not alone."
+            )
 
     # Accuracy critical: never SUM(vbrp.netwr) without explicit TEXT->NUMERIC cast.
     if re.search(r"sum\s*\(\s*(?:p\.)?\"?netwr\"?\s*\)", s_lower):
@@ -1240,7 +1514,9 @@ def _sql_guardrail_violations(question: str, sql: str) -> List[str]:
                 'SUM on NETWR must cast TEXT to NUMERIC using CAST(NULLIF(TRIM(CAST(... AS TEXT)), \'\') AS NUMERIC).'
             )
 
-    asks_industry = any(tok in q for tok in ("industry", "sector", "brsch"))
+    asks_industry = any(tok in q for tok in ("industry", "sector", "brsch")) or (
+        plan is not None and "industry" in (plan.dimensions or [])
+    )
     if ('"t016t"' in s_lower) and not asks_industry:
         violations.append(
             "T016T is industry-only; do not include industry table unless user explicitly asks industry/sector."
@@ -1450,19 +1726,32 @@ def _sql_guardrail_violations(question: str, sql: str) -> List[str]:
                 'Omitting bukrs or gjahr returns wrong cross-company or cross-year accounting line matches.'
             )
 
-    # ── NEW GUARDRAIL 3: Text/description table joins must filter language ────
-    # MAKT, T016T, CSKT etc. store one row per language. Without spras='E' the
-    # LEFT JOIN multiplies every matched row N times (one per language loaded),
-    # inflating row counts and corrupting all SUM/COUNT aggregates.
-    _text_tables_with_lang = ('"makt"', '"t016t"', '"cskt"', '"t005t"', '"lfa1t"', '"t001t"')
-    if any(t in s_lower for t in _text_tables_with_lang) and re.search(r'\bjoin\b', s_lower):
-        if 'spras' not in s_lower:
-            table_hit = next(t.strip('"') for t in _text_tables_with_lang if t in s_lower)
-            violations.append(
-                f'Text/description table join ({table_hit.upper()}) is missing language filter '
-                "(spras = 'E'). Without it each joined row is duplicated once per language loaded "
-                'in SAP, inflating row counts and corrupting SUM/COUNT results.'
-            )
+    # ── NEW GUARDRAIL 3: Text/description language filter — SCHEMA-AWARE ────
+    # Only require spras when the column exists on that table in the loaded schema.
+    # Live DB / tables_columns.csv: T016T has brsch+brtxt only (NO spras).
+    _text_tables_lang = (
+        ("makt", "MAKT"),
+        ("t016t", "T016T"),
+        ("cskt", "CSKT"),
+        ("t005t", "T005T"),
+        ("t001t", "T001T"),
+    )
+    if re.search(r"\bjoin\b", s_lower):
+        for tbl_key, tbl_disp in _text_tables_lang:
+            if f'"{tbl_key}"' not in s_lower and f'"{tbl_disp.lower()}"' not in s_lower:
+                # also match unquoted rare forms
+                if not re.search(rf'\b{re.escape(tbl_key)}\b', s_lower):
+                    continue
+            if not _table_has_column(tbl_disp, "spras") and not _table_has_column(tbl_key, "spras"):
+                # Schema has no spras — do not require it; inventing spras fails schema validation
+                continue
+            # spras exists → require language filter to avoid multi-language row inflation
+            if "spras" not in s_lower:
+                violations.append(
+                    f'Text/description table join ({tbl_disp}) is missing language filter '
+                    "(spras = 'E'). Without it each joined row is duplicated once per language "
+                    "loaded in SAP, inflating row counts and corrupting SUM/COUNT results."
+                )
 
     # ── NEW GUARDRAIL 4: Active/open PO queries must check deletion flags ─────
     # EKKO.loekz = 'L' means the PO header is cancelled; EKPO.loekz = 'L' means
@@ -1593,6 +1882,7 @@ def _universal_query(
     db: Session,
     use_sap: bool,
     max_retries: int = 3,
+    plan: Optional[QueryPlan] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Main engine: send full schema + question to GPT-4o, execute result,
@@ -1607,7 +1897,9 @@ def _universal_query(
     model = os.getenv("OPENAI_MODEL", "gpt-4o")
     fast_model = os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini")
 
-    full_system = _SYSTEM_PROMPT_CORE + "\n\n" + schema
+    active_plan = plan or extract_query_plan(question)
+    plan_block = plan_prompt_directive(active_plan)
+    full_system = _SYSTEM_PROMPT_CORE + "\n\n" + plan_block + "\n\n" + schema
     messages = [
         {"role": "system", "content": full_system},
         {"role": "user", "content": f"Question: {question}\n\nGenerate the SQL:"},
@@ -1630,7 +1922,7 @@ def _universal_query(
                 continue
 
             logger.info(f"[universal] attempt {attempt+1}: {sql[:200]}")
-            guardrail_violations = _sql_guardrail_violations(question, sql)
+            guardrail_violations = _sql_guardrail_violations(question, sql, plan=active_plan)
             if guardrail_violations:
                 logger.warning(
                     "[universal] guardrail rejected SQL attempt %d: %s",
@@ -1718,14 +2010,25 @@ def _universal_query(
                 except Exception:
                     pass
             else:
-                summary = (
-                    f"The query executed successfully but returned **0 rows**. "
-                    f"This may mean no data matches your criteria, or the database "
-                    f"may not have data for the specified period.\n\n"
-                    f"**SQL executed:**\n```sql\n{sql}\n```"
-                )
+                try:
+                    summary = _diagnose_empty_result(question, sql, active_plan, db)
+                except Exception:
+                    summary = (
+                        f"The query executed successfully but returned **0 rows**. "
+                        f"This may mean no data matches your criteria, or the database "
+                        f"may not have data for the specified period.\n\n"
+                        f"**SQL executed:**\n```sql\n{sql}\n```"
+                    )
 
-            result: Dict[str, Any] = {"sql": sql, "rowCount": len(data), "data": data, "summary": summary}
+            result: Dict[str, Any] = {
+                "sql": sql,
+                "rowCount": len(data),
+                "data": data,
+                "summary": summary,
+                "query_plan": active_plan.to_dict(),
+                "plan_fingerprint": active_plan.fingerprint(),
+                "answer_status": "SUCCESS",
+            }
             if charts:
                 result["charts"] = charts
             return result
@@ -1758,6 +2061,7 @@ def _compose_drilldown_user_message(
     prev_q: str,
     prev_sql: str,
     rows: List[Dict],
+    plan: Optional[QueryPlan] = None,
 ) -> str:
     sample = rows[:12] if rows else []
     prev_sql_clip = (prev_sql or "")[:1800]
@@ -1768,6 +2072,8 @@ def _compose_drilldown_user_message(
     prev_has_t016t = 't016t' in (prev_sql_clip or "").lower()
     new_q_lower = question.lower()
     new_asks_industry = any(tok in new_q_lower for tok in ("industry", "sector", "brsch"))
+    if plan is not None and "industry" in (plan.dimensions or []):
+        new_asks_industry = True
     scope_notes: List[str] = []
     if prev_has_t016t and not new_asks_industry:
         scope_notes.append(
@@ -1778,7 +2084,7 @@ def _compose_drilldown_user_message(
     new_asks_product = any(tok in new_q_lower for tok in (
         "product", "material", "matnr", "line item", "product level", "item level",
         "description", "breakdown", "drill", "by product", "by material",
-    ))
+    )) or (plan is not None and plan.grain == "line")
     if new_asks_product:
         scope_notes.append(
             "PRODUCT DRILL-DOWN: Join vbrp → MARA (matnr) → MAKT (matnr + spras='E') → "
@@ -1786,18 +2092,19 @@ def _compose_drilldown_user_message(
             "vbrp.netwr = line item value. VBRK.netwr = invoice header total. Never confuse them."
         )
     scope_block = ("\n".join(f"⚠ {n}" for n in scope_notes) + "\n") if scope_notes else ""
+    plan_block = ("\n" + plan_prompt_directive(plan) + "\n") if plan is not None else ""
 
-    return f"""This is a CONTINUATION of an analysis session. The user already ran a query; now they want to go deeper (same business thread — keep filters, time range, and entities consistent unless they explicitly change them).
-{scope_block}
+    return f"""This is a CONTINUATION of an analysis session. The user already ran a query; now they want a NEW SQL query that applies their follow-up delta while preserving prior filters unless they explicitly change them.
+{scope_block}{plan_block}
 Previous question:
 {prev_q_clip}
 
-Previous SQL (for context — you may REPLACE it entirely if the new question is on a different topic):
+Previous SQL (reference for filters — REPLACE/extend as required by the SEMANTIC QUERY PLAN):
 ```sql
 {prev_sql_clip}
 ```
 
-Sample of prior result rows (for filter hints — do not assume all data is here):
+Sample of prior result rows (hints only — NEVER answer solely from this sample; always run fresh SQL for plan changes):
 {sample_json}
 
 New request (generate ONE new PostgreSQL SELECT for this):
@@ -1805,13 +2112,76 @@ New request (generate ONE new PostgreSQL SELECT for this):
 
 Rules:
 - Preserve year/customer/document filters from the previous question ONLY if still relevant to this new question.
-- If the new question changes topic, write a FRESH SQL — do NOT inherit tables just because they were in the previous query.
-- NEVER include T016T (industry) unless the user explicitly says "industry" or "sector" in THIS new question.
-- For product/line detail: "vbrp" → LEFT JOIN "MARA", "MAKT" (spras='E'), "MARC", "MVKE", "MEAN" as needed.
-- For invoice zero/negative: WHERE CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)),'') AS NUMERIC) <= 0 on "VBRK" — not vbrp.
+- If the SEMANTIC QUERY PLAN adds industry/customer/currency/ranking/filters, the SQL MUST implement those changes.
+- NEVER include T016T (industry) unless the plan/dimensions include industry or the user explicitly says industry/sector.
+- Customer industry: VBRK → KNA1 → T016T only. Never MARA.mbrsh.
+- Sales/revenue default grain: VBRK.netwr (header) unless plan.grain=line.
+- Year filters: SUBSTRING(TRIM("VBRK"."fkdat"),1,4) — NEVER gjahr.
+- Monetary queries MUST include currency (waerk) and GROUP BY it — never mix EUR+USD into one total.
+- Missing masters: COALESCE(name1,'Unknown / unmapped'), COALESCE(brtxt,'Not available').
+- For invoice zero/negative questions ONLY: WHERE on "VBRK"."netwr" — not vbrp.
+- T016T: join on brsch via KNA1; add spras='E' ONLY if spras exists in schema (this DB often has brsch/brtxt only).
 - For invoice counts: COUNT(DISTINCT k."vbeln") on "VBRK" — never GROUP BY vbrp.posnr.
-- Monetary queries MUST include currency column (waerk/waers) and GROUP BY it.
 """
+
+
+def _diagnose_empty_result(
+    question: str,
+    sql: str,
+    plan: Optional[QueryPlan] = None,
+    db: Optional[Session] = None,
+) -> str:
+    """Explain likely causes of zero rows; optionally probe year availability."""
+    q = (question or "").lower()
+    s = (sql or "").lower()
+    reasons: List[str] = []
+    years = re.findall(r"\b((?:19|20)\d{2})\b", question or "")
+    if "gjahr" in s:
+        reasons.append(
+            "The SQL used VBRK.gjahr, which is unreliable in this database (often '0000'). "
+            "Billing year must use SUBSTRING(TRIM(VBRK.fkdat),1,4)."
+        )
+    if years and db is not None:
+        try:
+            y = years[0]
+            probe = db.execute(
+                text(
+                    'SELECT COUNT(*) FROM "VBRK" '
+                    "WHERE SUBSTRING(TRIM(\"fkdat\"),1,4) = :y"
+                ),
+                {"y": y},
+            ).scalar()
+            if probe == 0:
+                reasons.append(
+                    f"No billing documents found with fkdat year {y}. "
+                    "Available years may differ — try another year or remove the year filter."
+                )
+            else:
+                reasons.append(
+                    f"Year {y} has {probe} billing header row(s) in VBRK; "
+                    "zero result is likely due to an over-restrictive join/filter "
+                    "(customer, industry, currency, or wrong grain), not a missing year."
+                )
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    if plan and plan.filters.get("industry"):
+        reasons.append(
+            f"Industry filter '{plan.filters.get('industry')}' may not match T016T.brtxt text; "
+            "try ILIKE '%...%' or verify the industry label exists."
+        )
+    if plan and plan.grain == "header" and "vbrp" in s and "netwr" in s:
+        reasons.append(
+            "Query may be mixing header and line grain incorrectly."
+        )
+    if not reasons:
+        reasons.append(
+            "No rows matched the generated filters/joins. "
+            "Check year (fkdat), customer key join (kunag=kunnr), industry (KNA1→T016T), and currency scope."
+        )
+    return "The query returned no rows. Likely cause(s): " + " ".join(reasons)
 
 
 def _followup_analysis(question: str, prev_q: str, prev_sql: str,
@@ -1934,7 +2304,15 @@ async def post_query_adaptive(
     user_id = int(current_user.id) if current_user is not None else None
 
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Attach thread_id and persist via existing chat_thread_store when possible."""
+        """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
+        payload = _annotate_answer_status(dict(payload or {}))
+        sql_l = (payload.get("sql") or "").lower()
+        if payload.get("answer_status") == "CANNOT_ANSWER" and (
+            "invoice_v2_business_data" in sql_l and "total_rows" in sql_l
+        ):
+            payload["sql"] = ""
+            payload["data"] = []
+            payload["rowCount"] = 0
         if thread_id:
             payload = {**payload, "thread_id": thread_id}
         if not (user_id and thread_id):
@@ -1964,6 +2342,11 @@ async def post_query_adaptive(
             rows = payload.get("data") or payload.get("rows") or []
             charts = payload.get("charts") or []
             cols = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else None
+            sql_to_store = payload.get("sql") or ""
+            if payload.get("answer_status") == "CANNOT_ANSWER":
+                sql_to_store = ""
+                rows = []
+                charts = []
             save_turn(
                 db,
                 user_id=user_id,
@@ -1971,12 +2354,12 @@ async def post_query_adaptive(
                 turn_index=idx + 1,
                 role="assistant",
                 content=str(summary)[:10000],
-                sql_executed=payload.get("sql") or "",
+                sql_executed=sql_to_store,
                 result_rows=rows if isinstance(rows, list) else None,
                 result_columns=cols,
                 charts=charts,
                 query_mode="new",
-                action=payload.get("pipeline") or "adaptive",
+                action=payload.get("pipeline") or payload.get("answer_status") or "adaptive",
             )
             try:
                 db.commit()
@@ -2036,42 +2419,85 @@ async def post_query_adaptive(
             "summary": summary, "tableHint": tableHint, "charts": charts,
         })
 
-    # ── Path 2: Follow-up — either fresh SQL (drill-down) or narrative analysis ──
+    # ── Path 2: Follow-up — semantic plan delta → fresh SQL, else narrative ──
     if contextData and isinstance(contextData, dict):
         prev_q   = str(contextData.get("previousQuestion") or "").strip()
         prev_sql = str(contextData.get("previousSQL") or "").strip()
+        prev_plan_raw = contextData.get("previousPlan") or contextData.get("queryPlan")
+        prev_plan_dict = prev_plan_raw if isinstance(prev_plan_raw, dict) else None
+        prev_status = str(contextData.get("previousAnswerStatus") or "").strip().upper()
         rows_raw = contextData.get("data")
         rows_list: List[Dict[str, Any]] = rows_raw if isinstance(rows_raw, list) else []
 
-        if follow_up_requires_fresh_sql(q):
-            augmented = _compose_drilldown_user_message(q, prev_q, prev_sql, rows_list)
-            logger.info("[universal] follow-up drill-down → fresh SQL (was analysis-only path)")
+        # Failed prior turn must not contaminate follow-up with stale SQL/rows
+        if prev_status == "CANNOT_ANSWER" or (
+            "invoice_v2_business_data" in prev_sql.lower() and "total_rows" in prev_sql.lower()
+        ):
+            prev_sql = ""
+            rows_list = []
+            logger.info("[adaptive] cleared contaminated prior SQL/rows before follow-up")
+
+        needs_sql, merged_plan = resolve_follow_up_sql_need(
+            q, previous_question=prev_q, previous_sql=prev_sql, previous_plan=prev_plan_dict
+        )
+        # Keep backward-compatible boolean helper in sync for logs/tests
+        if needs_sql or follow_up_requires_fresh_sql(
+            q, previous_question=prev_q, previous_sql=prev_sql, previous_plan=prev_plan_dict
+        ):
+            augmented = _compose_drilldown_user_message(
+                q, prev_q, prev_sql, rows_list, plan=merged_plan
+            )
+            logger.info(
+                "[universal] follow-up → fresh SQL deltas=%s fingerprint=%s",
+                merged_plan.delta_ops,
+                merged_plan.fingerprint(),
+            )
             try:
                 use_sap = bool(USE_SAP_DB_FOR_AI)
-                result = _universal_query(augmented, api_key, db, use_sap, max_retries=3)
+                result = _universal_query(
+                    augmented, api_key, db, use_sap, max_retries=3, plan=merged_plan
+                )
                 if result:
                     result["follow_up_mode"] = "drill_down_sql"
+                    result["query_plan"] = merged_plan.to_dict()
+                    result["plan_fingerprint"] = merged_plan.fingerprint()
                     result["tableHint"] = tableHint
                     result["charts"] = _ensure_charts(
                         q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
                     )
+                    if not (result.get("data") or []):
+                        result["summary"] = _diagnose_empty_result(
+                            q, result.get("sql") or "", merged_plan, db
+                        )
                     return _persist_and_return(result)
             except Exception as drill_err:
                 logger.warning("[universal] drill-down SQL path failed: %s", drill_err)
-            try:
-                answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
-                return _persist_and_return({"type": "analysis", "answer": answer})
-            except Exception as e:
-                raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
+            # Never narrate prior rows / suggest EDI SQL as if it answered the semantic delta
+            return _persist_and_return(
+                _cannot_answer_payload(
+                    q,
+                    reason="follow-up required fresh SQL but generation failed after retries",
+                    plan=merged_plan,
+                    follow_up_mode="sql_failed",
+                )
+            )
 
         try:
             answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
-            return _persist_and_return({"type": "analysis", "answer": answer})
+            return _persist_and_return({
+                "type": "analysis",
+                "answer": answer,
+                "summary": answer,
+                "query_plan": merged_plan.to_dict(),
+                "follow_up_mode": "narrative",
+                "answer_status": "PARTIAL",
+            })
         except Exception as e:
             raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
 
     from ..services.operational_query_resolver import _extract_user_question
     clean_q = _extract_user_question(q)
+    sap_locked = _is_sap_erp_intent(clean_q)
 
     # ── Path 2.5: Year/period compare — BEFORE router/analyst intercept ─────
     # Reuses compare_query_router + orchestrator compare action (no duplicated logic).
@@ -2134,25 +2560,67 @@ async def post_query_adaptive(
         if reason and reason != "no_match":
             rows_out = router_payload.get("rows_preview") or []
             sql_out = router_payload.get("sql") or ""
-            charts = _ensure_charts(clean_q, sql_out, rows_out, router_payload.get("charts"))
-            logger.info("[adaptive] scalable router: %s — %d rows, %d charts", reason, len(rows_out), len(charts))
-            return _persist_and_return({
-                "sql": sql_out,
-                "rowCount": len(rows_out),
-                "data": rows_out,
-                "summary": router_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
-                "tableHint": tableHint,
-                "charts": charts,
-                "pipeline": reason,
-            })
+            sql_l = (sql_out or "").lower()
+            if sap_locked and "invoice_v2_business_data" in sql_l:
+                logger.warning("[adaptive] blocked SAP→EDI router contamination for: %s", clean_q[:80])
+            else:
+                charts = _ensure_charts(clean_q, sql_out, rows_out, router_payload.get("charts"))
+                logger.info("[adaptive] scalable router: %s — %d rows, %d charts", reason, len(rows_out), len(charts))
+                return _persist_and_return({
+                    "sql": sql_out,
+                    "rowCount": len(rows_out),
+                    "data": rows_out,
+                    "summary": router_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
+                    "tableHint": tableHint,
+                    "charts": charts,
+                    "pipeline": reason,
+                    "query_plan": extract_query_plan(clean_q).to_dict(),
+                })
+        elif sap_locked and reason == "no_match":
+            logger.warning("[adaptive] SAP domain locked; refusing EDI analyst after router no_match")
+            return _persist_and_return(
+                _cannot_answer_payload(
+                    clean_q,
+                    reason="SAP SQL generation exhausted (catalog/intent/universal) without a valid ERP query",
+                    plan=extract_query_plan(clean_q),
+                )
+            )
     except Exception as router_err:
         logger.warning("[adaptive] scalable router failed: %s", router_err)
         try:
             db.rollback()
         except Exception:
             pass
+        if sap_locked:
+            try:
+                result = _universal_query(clean_q, api_key, db, USE_SAP_DB_FOR_AI, max_retries=3)
+                if result:
+                    result["tableHint"] = tableHint
+                    result["charts"] = _ensure_charts(
+                        clean_q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
+                    )
+                    return _persist_and_return(result)
+            except Exception:
+                pass
+            return _persist_and_return(
+                _cannot_answer_payload(
+                    clean_q,
+                    reason=f"SAP router/universal failed: {router_err}",
+                    plan=extract_query_plan(clean_q),
+                )
+            )
 
-    # ── Path 4: Multi-Stage AI Analyst Pipeline (fallback) ─────────────────
+    # ── Path 4: Analyst pipeline — blocked for SAP/ERP domain continuity ─────
+    if sap_locked:
+        return _persist_and_return(
+            _cannot_answer_payload(
+                clean_q,
+                reason="SAP/ERP domain question could not be answered; EDI analyst fallback blocked",
+                plan=extract_query_plan(clean_q),
+            )
+        )
+
+    # ── Path 4b: Multi-Stage AI Analyst Pipeline (non-SAP / EDI-capable) ─────
     logger.info(f"[analyst-pipeline] question: {q[:120]}")
     try:
         from ..services.analyst_pipeline import run_analyst_pipeline
@@ -2160,6 +2628,12 @@ async def post_query_adaptive(
         try:
             result = run_analyst_pipeline(question=q, db_session=analyst_db)
             if result:
+                sql_l = (result.get("sql") or "").lower()
+                if result.get("degraded_fallback") or (
+                    "invoice_v2_business_data" in sql_l and "total_rows" in sql_l
+                ):
+                    result["answer_status"] = "CANNOT_ANSWER"
+                    result["type"] = "cannot_answer"
                 result["tableHint"] = tableHint
                 result["charts"] = _ensure_charts(
                     q, result.get("sql") or "", result.get("data") or [], result.get("charts"),

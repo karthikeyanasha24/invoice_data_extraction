@@ -20,8 +20,12 @@ from sqlalchemy import case
 from sqlalchemy.orm import Session
 from .ai_analysis_constraint_validator import extract_user_constraints
 from .ai_intent_classifier import classify_intent
+from .ai_query_plan import extract_query_plan, fingerprints_compatible
 
 logger = logging.getLogger(__name__)
+
+# Fuzzy reuse floor — score alone is insufficient; plan fingerprints must also match (R5).
+MEMORY_REUSE_SCORE_THRESHOLD = 24
 
 # Safe SQL: only allow SELECT, JOIN, GROUP BY, ORDER BY, LIMIT
 DANGEROUS_PATTERNS = [
@@ -257,6 +261,35 @@ def _validate_sql_safe(sql: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _plan_fingerprint_for_question(question: str, sql: str = "") -> str:
+    return extract_query_plan(question or "", sql or "").fingerprint()
+
+
+def _memory_entry_is_suspicious(question: str, sql: str) -> bool:
+    """
+    Soft-classify contaminated memory without deleting rows.
+    Suspicious entries must never be reused.
+    """
+    q = (question or "").strip()
+    s = (sql or "").strip().lower()
+    if not q or not s:
+        return True
+    # Raw SQL stored as the "question"
+    if re.match(r"^\s*select\b", q, re.I):
+        return True
+    # Known contaminated industry mapping via material master
+    if "mara" in s and "mbrsh" in s and any(
+        t in q.lower() for t in ("industry", "sector", "customer")
+    ):
+        return True
+    if "gjahr" in s and re.search(r"\b((?:19|20)\d{2})\b", q):
+        return True
+    # Extremely long instructional blobs are not reusable questions
+    if len(q) > 500 and "select" in q.lower():
+        return True
+    return False
+
+
 def _sql_is_poisoned_for_question(question: str, sql: str) -> bool:
     """
     Return True if this cached SQL contains patterns incompatible with the current question.
@@ -319,6 +352,19 @@ def _sql_is_poisoned_for_question(question: str, sql: str) -> bool:
             logger.info("Cache poison: zero/negative query missing VBRK.netwr WHERE filter. Rejecting.")
             return True
 
+    # 6. Contaminated / suspicious memory entries
+    if _memory_entry_is_suspicious(question, sql):
+        logger.info("Cache poison: suspicious memory entry rejected.")
+        return True
+
+    # 7. Plan fingerprint mismatch (metric/dims/years/grain/operation)
+    try:
+        q_fp = _plan_fingerprint_for_question(question)
+        # Fingerprint the stored SQL's implied question using both texts when available
+        # Compatibility is checked in find_similar against record question fingerprint.
+    except Exception:
+        q_fp = ""
+
     return False
 
 
@@ -330,11 +376,12 @@ def find_similar_stored_query(
 ) -> Optional[str]:
     """
     Find a stored SQL for a similar question. Shared across all users.
-    Uses conservative business-shape matching:
+    Uses conservative business-shape matching + R5 plan fingerprints:
     - Exact normalized match first
     - Otherwise require compatible years, time scope, entities, and metrics
-    - Then score candidates using token overlap plus usage/source preference
-    - Poison-check: cached SQL that has business logic incompatible with this question is rejected
+    - Plan fingerprints must match (metric/dimensions/filters/grain/operation)
+    - Then score candidates; reuse only if score >= MEMORY_REUSE_SCORE_THRESHOLD
+    - Poison-check: cached SQL incompatible with this question is rejected
     """
     try:
         from ..models.ai_query_memory import AiQueryMemory
@@ -344,6 +391,8 @@ def find_similar_stored_query(
     q_norm = _normalize_question(question)
     if not q_norm:
         return None
+
+    question_fp = _plan_fingerprint_for_question(question)
 
     # 1) Exact match — shared globally; prefer user-approved SQL, then use_count, then most recent
     records = db.query(AiQueryMemory).filter(
@@ -357,11 +406,17 @@ def find_similar_stored_query(
     if records:
         rec = records[0]
         candidate_sql = rec.sql_query or ""
-        # Poison-check: even exact-match cached SQL is rejected if it contains wrong logic
-        # for this question (e.g. T016T industry table when not asked, wrong year).
+        record_q = rec.original_question or rec.question_pattern or ""
+        record_fp = _plan_fingerprint_for_question(record_q, candidate_sql)
         if _sql_is_poisoned_for_question(question, candidate_sql):
             logger.warning(
                 "Exact-match cache hit rejected by poison-check for question: %r", q_norm[:80]
+            )
+        elif not fingerprints_compatible(question_fp, record_fp):
+            logger.warning(
+                "Exact-match cache hit rejected by plan fingerprint mismatch: %s vs %s",
+                question_fp,
+                record_fp,
             )
         else:
             if mark_used:
@@ -381,8 +436,10 @@ def find_similar_stored_query(
     for rec in all_records:
         record_question = rec.original_question or rec.question_pattern or ""
         candidate_sql = rec.sql_query or ""
-        # Skip poisoned entries before scoring — don't waste cycles on wrong SQL
         if _sql_is_poisoned_for_question(question, candidate_sql):
+            continue
+        record_fp = _plan_fingerprint_for_question(record_question, candidate_sql)
+        if not fingerprints_compatible(question_fp, record_fp):
             continue
         score = _similarity_score(
             question=question,
@@ -395,19 +452,38 @@ def find_similar_stored_query(
             best_score = score
             best_record = rec
 
-    # Require stronger overlap so different filters (year, category, currency) rarely reuse wrong SQL.
-    if best_record is not None and best_score >= 24:
+    if best_record is not None and best_score >= MEMORY_REUSE_SCORE_THRESHOLD:
         if mark_used:
             best_record.mark_used()
             db.commit()
         logger.info(
-            "Reused stored SQL with scored match: score=%s pattern=%r",
+            "Reused stored SQL with scored+fingerprint match: score=%s pattern=%r fp=%s",
             best_score,
             (best_record.question_pattern or "")[:80],
+            question_fp,
         )
         return best_record.sql_query
 
     return None
+
+
+def classify_memory_entry(question: str, sql: str) -> str:
+    """
+    Classify a memory row for cleanup tooling: valid | suspicious | incompatible | raw_sql.
+    Non-destructive — does not delete.
+    """
+    q = (question or "").strip()
+    s = (sql or "").strip()
+    if re.match(r"^\s*select\b", q, re.I):
+        return "raw_sql"
+    if _memory_entry_is_suspicious(q, s):
+        return "suspicious"
+    if _sql_is_poisoned_for_question(q, s):
+        return "incompatible"
+    is_valid, _err = _validate_sql_safe(s)
+    if not is_valid:
+        return "incompatible"
+    return "valid"
 
 
 def store_approved_query(

@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "description": "Generative AI evaluation cases for System A (Adaptive Query). Semantic plans are expected; SQL may vary.",
+  "ground_truth": {
+    "sales_2004_header_top_eur": {
+      "customer": "Motomarkt Stuttgart GmbH",
+      "industry": "Trading & Distribution",
+      "sales": 6099225.0,
+      "currency": "EUR",
+      "year": "2004",
+      "grain": "header"
+    }
+  },
+  "single_turn": [
+    {"id": "st01", "question": "What are total sales?", "expected_plan": {"metric": "sales", "grain": "header", "operation": "total"}},
+    {"id": "st02", "question": "What are total sales for 2004?", "expected_plan": {"metric": "sales", "grain": "header", "years": ["2004"]}},
+    {"id": "st03", "question": "What was the highest-selling customer?", "expected_plan": {"metric": "sales", "dimensions_include": ["customer"], "operation": "top", "grain": "header"}},
+    {"id": "st04", "question": "What was the lowest-selling customer?", "expected_plan": {"metric": "sales", "dimensions_include": ["customer"], "operation": "bottom", "grain": "header"}},
+    {"id": "st05", "question": "What is the average sales value?", "expected_plan": {"metric": "average", "grain": "header"}},
+    {"id": "st06", "question": "Show highest sales by customer.", "expected_plan": {"metric": "sales", "dimensions_include": ["customer"], "operation": "top", "grain": "header"}},
+    {"id": "st07", "question": "Show top 10 customers.", "expected_plan": {"metric": "sales", "dimensions_include": ["customer"], "limit": 10, "operation": "top"}},
+    {"id": "st08", "question": "Which customer generated the most revenue in 2004?", "expected_plan": {"metric": "sales", "dimensions_include": ["customer"], "years": ["2004"], "operation": "top", "grain": "header"}},
+    {"id": "st09", "question": "Show customer and industry together for highest sales in 2004.", "expected_plan": {"metric": "sales", "dimensions_include": ["customer", "industry"], "years": ["2004"], "grain": "header"}},
+    {"id": "st10", "question": "Show me highest sales for the year 2004 with customer and industry", "expected_plan": {"metric": "sales", "dimensions_include": ["customer", "industry"], "years": ["2004"], "grain": "header"}, "ground_truth_ref": "sales_2004_header_top_eur"},
+    {"id": "st11", "question": "Who had the highest sales in 2004?", "expected_plan": {"metric": "sales", "years": ["2004"], "operation": "top", "grain": "header"}},
+    {"id": "st12", "question": "Which customer sold the most in 2004?", "expected_plan": {"metric": "sales", "dimensions_include": ["customer"], "years": ["2004"], "operation": "top"}},
+    {"id": "st13", "question": "Show the top customer for 2004.", "expected_plan": {"metric": "sales", "years": ["2004"], "operation": "top", "limit": 1}},
+    {"id": "st14", "question": "Who generated the most revenue during 2004?", "expected_plan": {"metric": "sales", "years": ["2004"], "operation": "top"}},
+    {"id": "st15", "question": "Show sales by industry.", "expected_plan": {"metric": "sales", "dimensions_include": ["industry"], "grain": "header"}},
+    {"id": "st16", "question": "Which industry generated the highest sales?", "expected_plan": {"metric": "sales", "dimensions_include": ["industry"], "operation": "top"}},
+    {"id": "st17", "question": "Show the top customers in the Trading industry.", "expected_plan": {"metric": "sales", "dimensions_include": ["customer", "industry"], "industry_filter": true}},
+    {"id": "st18", "question": "Show sales in 2004.", "expected_plan": {"metric": "sales", "years": ["2004"], "grain": "header"}},
+    {"id": "st19", "question": "Show sales by year.", "expected_plan": {"metric": "sales", "dimensions_include": ["year"], "grain": "header"}},
+    {"id": "st20", "question": "Compare 2003 vs 2004.", "expected_plan": {"operation": "compare", "years_include": ["2003", "2004"]}},
+    {"id": "st21", "question": "Show the highest-sales month.", "expected_plan": {"metric": "sales", "dimensions_include": ["month"], "operation": "top"}},
+    {"id": "st22", "question": "Number of customers.", "expected_plan": {"metric": "count"}},
+    {"id": "st23", "question": "Number of invoices.", "expected_plan": {"metric": "count"}},
+    {"id": "st24", "question": "Top 5 customers.", "expected_plan": {"limit": 5, "operation": "top", "dimensions_include": ["customer"]}},
+    {"id": "st25", "question": "Bottom 5 customers.", "expected_plan": {"limit": 5, "operation": "bottom"}},
+    {"id": "st26", "question": "Top 10 products.", "expected_plan": {"dimensions_include": ["product"], "limit": 10, "grain": "line"}},
+    {"id": "st27", "question": "Show sales for EUR currency.", "expected_plan": {"metric": "sales", "currency": "EUR"}},
+    {"id": "st28", "question": "Show invoices above a specific amount.", "expected_plan": {"metric": "sales"}},
+    {"id": "st29", "question": "Show sales by customer and industry.", "expected_plan": {"dimensions_include": ["customer", "industry"], "grain": "header"}},
+    {"id": "st30", "question": "Give me the top customer.", "expected_plan": {"operation": "top", "dimensions_include": ["customer"]}},
+    {"id": "st31", "question": "Show product-level sales for 2004.", "expected_plan": {"years": ["2004"], "grain": "line", "dimensions_include": ["product"]}},
+    {"id": "st32", "question": "How many invoices per customer?", "expected_plan": {"metric": "count", "dimensions_include": ["customer"]}}
+  ],
+  "multi_turn": [
+    {
+      "id": "mt01",
+      "turns": [
+        "Show highest sales in 2004.",
+        "Show me the industry.",
+        "Only Trading.",
+        "Now show the top 5.",
+        "Compare that with 2003."
+      ],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"], "grain": "header"},
+        {"fresh_sql": true, "dimensions_include": ["industry"], "years": ["2004"]},
+        {"fresh_sql": true, "industry_filter": true, "years": ["2004"]},
+        {"fresh_sql": true, "limit": 5, "years": ["2004"]},
+        {"fresh_sql": true, "operation": "compare", "years_include": ["2003", "2004"]}
+      ]
+    },
+    {
+      "id": "mt02",
+      "turns": [
+        "Show me highest sales for the year 2004 with customer",
+        "Show me the industry",
+        "Only the Trading industry",
+        "Now show the top 5"
+      ],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"], "dimensions_include": ["customer"]},
+        {"fresh_sql": true, "dimensions_include": ["industry"]},
+        {"fresh_sql": true, "industry_filter": true},
+        {"fresh_sql": true, "limit": 5}
+      ]
+    },
+    {
+      "id": "mt03",
+      "turns": ["Total sales for 2004", "Show by currency", "thanks"],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"]},
+        {"fresh_sql": true, "dimensions_include": ["currency"]},
+        {"fresh_sql": false}
+      ]
+    },
+    {
+      "id": "mt04",
+      "turns": ["Highest sales by customer in 2003", "Now 2004", "Top 10"],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2003"]},
+        {"fresh_sql": true, "years": ["2004"]},
+        {"fresh_sql": true, "limit": 10}
+      ]
+    },
+    {
+      "id": "mt05",
+      "turns": ["Show sales by industry", "Only Trading industry", "Add customer"],
+      "expectations": [
+        {"fresh_sql": true, "dimensions_include": ["industry"]},
+        {"fresh_sql": true, "industry_filter": true},
+        {"fresh_sql": true, "dimensions_include": ["customer"]}
+      ]
+    },
+    {
+      "id": "mt06",
+      "turns": ["Top customers 2004", "Show invoice count instead", "By customer"],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"]},
+        {"fresh_sql": true, "metric": "count"},
+        {"fresh_sql": true, "dimensions_include": ["customer"]}
+      ]
+    },
+    {
+      "id": "mt07",
+      "turns": ["Highest sales 2004", "Remove industry", "Just give me the totals"],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"]},
+        {"fresh_sql": true},
+        {"fresh_sql": true}
+      ]
+    },
+    {
+      "id": "mt08",
+      "turns": ["Sales by customer 2004", "Bottom 5", "Show currency"],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"]},
+        {"fresh_sql": true, "operation": "bottom", "limit": 5},
+        {"fresh_sql": true, "dimensions_include": ["currency"]}
+      ]
+    },
+    {
+      "id": "mt09",
+      "turns": ["Show highest sales for 2004 with customer and industry", "Filter to Trading", "Compare with 2003"],
+      "expectations": [
+        {"fresh_sql": true, "years": ["2004"], "dimensions_include": ["customer", "industry"]},
+        {"fresh_sql": true, "industry_filter": true},
+        {"fresh_sql": true, "operation": "compare"}
+      ]
+    },
+    {
+      "id": "mt10",
+      "turns": ["Total revenue overall", "By year", "Only 2004", "By customer"],
+      "expectations": [
+        {"fresh_sql": true, "metric": "sales"},
+        {"fresh_sql": true, "dimensions_include": ["year"]},
+        {"fresh_sql": true, "years": ["2004"]},
+        {"fresh_sql": true, "dimensions_include": ["customer"]}
+      ]
+    }
+  ]
+}

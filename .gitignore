@@ -1,1 +1,44 @@
+# Root ignore rules for BridgeEDI / invoice_data_extraction
+# Preserve existing entries; nested package gitignores still apply.
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+dist/
+build/
+coverage/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local / temp artifacts
+*.log
+uploads/
+converted/
+*.sqlite3
+
+# Legacy tracked bytecode path (keep ignore)
 zodiac/zodiac-api/app/schemas/__pycache__/user.cpython-311.pyc
