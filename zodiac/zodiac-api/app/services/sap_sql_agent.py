@@ -624,6 +624,9 @@ def _lookup_sql_catalog(question: str) -> Optional[str]:
         return None
     if re.search(_entity_filter_phrases, q_lower):
         return None
+    from .adaptive_nl_sql_hardening import extract_named_customer
+    if extract_named_customer(question):
+        return None
     # SAP compound codes like DE01, US10, AT03, CC01 → specific entity → LLM
     if re.search(r"\b[A-Z]{1,3}\d{2,4}\b", question):
         return None

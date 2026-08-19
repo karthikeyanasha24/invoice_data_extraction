@@ -103,6 +103,10 @@ def try_intent_dashboard_fast_path(
     q = _user_question_from_client_message(raw)
     if not q or not is_intent_pipeline_appropriate(q):
         return None
+    from .adaptive_nl_sql_hardening import extract_named_customer, apply_ranking_discipline
+    if extract_named_customer(q):
+        logger.info("intent_fast_path: skip (named customer filter)")
+        return None
 
     try:
         intent_schema = load_schema_from_mapping_file(max_columns_per_table=None)
@@ -115,6 +119,16 @@ def try_intent_dashboard_fast_path(
             sql = _qct(sql)
         except Exception:
             pass
+        from .adaptive_nl_sql_hardening import (
+            extract_named_customer,
+            apply_ranking_discipline,
+            inject_year_filters_from_question,
+            inject_lpad_join_keys,
+            apply_statement_timeout,
+        )
+        sql = inject_year_filters_from_question(sql, q)
+        sql = inject_lpad_join_keys(sql)
+        sql = apply_ranking_discipline(sql, q)
 
         ok, reason = _sql_covers_question(q, sql)
         if not ok:
@@ -128,6 +142,7 @@ def try_intent_dashboard_fast_path(
         except Exception:
             safe_sql = sql
 
+        apply_statement_timeout(db)
         rows_raw = db.execute(text(safe_sql)).mappings().all()
         result_rows = [dict(r) for r in rows_raw]
 
@@ -158,6 +173,8 @@ def try_intent_dashboard_fast_path(
             "warnings": [],
             "confidence": "high",
             "confidence_note": "Deterministic intent SQL (no generative schema/SQL loop).",
+            "sql_generation_method": "intent_sql_fast",
+            "llm_calls": 0,
             "node_log": [
                 {
                     "service": "intent_fast_path",

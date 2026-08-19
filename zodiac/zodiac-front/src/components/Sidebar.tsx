@@ -35,7 +35,7 @@ const ENV_COLOR = IS_LOCAL
   : 'bg-slate-100 text-slate-600 border-slate-200';
 const ENV_DOT   = IS_LOCAL ? 'bg-amber-400' : 'bg-emerald-400';
 const ENV_TIP   = IS_LOCAL
-  ? `Connecting to: ${API_URL || 'localhost:8000'}\n⚠ LOCAL database — no SAP/production data.\nChange NEXT_PUBLIC_API_URL to the production backend.`
+  ? `Connecting to: ${API_URL || 'localhost:8000'}\nLocal API. The database behind this API may still contain SAP demo data.`
   : `Connecting to: ${API_URL}\n✓ Production database — real SAP data.`;
 
 interface SidebarProps {
@@ -187,7 +187,7 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
           </div>
           {IS_LOCAL && (
             <p className="text-[10px] text-amber-700 mt-1 px-1 leading-tight">
-              No production data. Switch to prod API.
+              Connecting to local API. SAP demo data may still be present in the configured database.
             </p>
           )}
         </div>

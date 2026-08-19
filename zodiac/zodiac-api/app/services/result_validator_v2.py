@@ -18,20 +18,23 @@ def validate_result(intent: Dict[str, Any], sql: str, rows: List[Dict[str, Any]]
     errors: List[str] = []
     warnings: List[str] = []
 
-    for d in dims:
-        logical = str(d.get("alias") or d.get("logical") or "")
-        if not logical:
-            continue
-        # Adaptive: accept if the logical name itself OR any column whose name
-        # contains or starts with the logical name is present in the result.
-        # This works without any hardcoded map: "product" matches "product",
-        # "product_name", "product_id", etc. automatically.
-        found = any(
-            col == logical or col.startswith(logical + "_") or col.endswith("_" + logical)
-            for col in cols
-        )
-        if not found:
-            errors.append(f"Missing required dimension column: {logical}")
+    # 0 rows is a valid answer (e.g. year 2099). Do not fail dimension checks
+    # solely because there are no column keys to inspect.
+    if rows:
+        for d in dims:
+            logical = str(d.get("alias") or d.get("logical") or "")
+            if not logical:
+                continue
+            # Adaptive: accept if the logical name itself OR any column whose name
+            # contains or starts with the logical name is present in the result.
+            # This works without any hardcoded map: "product" matches "product",
+            # "product_name", "product_id", etc. automatically.
+            found = any(
+                col == logical or col.startswith(logical + "_") or col.endswith("_" + logical)
+                for col in cols
+            )
+            if not found:
+                errors.append(f"Missing required dimension column: {logical}")
 
     if metric_alias and metric_alias not in cols and rows:
         errors.append(f"Missing required metric column: {metric_alias}")

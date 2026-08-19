@@ -190,30 +190,24 @@ def _default_top_n_from_env() -> int:
 
 
 def _has_explicit_rank_count(question: str) -> bool:
-    """
-    True when the user specifies how many rows to return (top N, first N, 5 largest …).
-    Must stay in sync with patterns in _extract_top_n that consume a numeric N.
-    """
-    q = (question or "").lower()
-    patterns = (
-        r"\b(?:top|first)\s+(\d+)\b",
-        r"\b(?:best|worst|bottom)\s+(\d+)\b",
-        r"\b(\d+)\s+(?:largest|biggest|highest|top)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
-        r"\b(?:largest|biggest|highest|top)\s+(\d+)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
-    )
-    return any(re.search(p, q) for p in patterns)
+    """True when the user specifies how many rows to return (top N, five biggest, …)."""
+    from .adaptive_nl_sql_hardening import extract_requested_limit
+    return extract_requested_limit(question) is not None
 
 
 def _extract_top_n(question: str, default: Optional[int] = None) -> int:
     """Explicit top/best/first N from the question; otherwise TOP_N_DEFAULT env (default 5). Hard cap 50."""
+    from .adaptive_nl_sql_hardening import extract_requested_limit
     cap = 50
     d = _default_top_n_from_env() if default is None else default
     d = max(1, min(d, cap))
+    n = extract_requested_limit(question)
+    if n is not None:
+        return max(1, min(n, cap))
     q = (question or "").lower()
     patterns = (
         r"\b(?:top|first)\s+(\d+)\b",
         r"\b(?:best|worst|bottom)\s+(\d+)\b",
-        # "5 largest invoices", "10 biggest billing documents in 2004"
         r"\b(\d+)\s+(?:largest|biggest|highest|top)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
         r"\b(?:largest|biggest|highest|top)\s+(\d+)\s+(?:invoice|invoices|billing\s+docs?|billing\s+documents?)\b",
     )
@@ -242,7 +236,7 @@ def _detect_intent_type(question: str) -> str:
         return "raw_inspection"
     if re.search(r"\b(compare|vs\.?|versus|difference|changed?\b|from\b.+?\bto\b)\b", q) or len(_extract_years(q)) >= 2:
         return "comparison"
-    if re.search(r"\b(top|bottom|highest|lowest|largest|smallest|rank|best|worst)\b", q):
+    if re.search(r"\b(top|bottom|highest|lowest|largest|biggest|smallest|rank|best|worst)\b", q):
         return "ranking"
     # "Who bought the most", "customer with least revenue" — superlative without top/highest wording.
     if re.search(r"\b(most|least)\b", q) and re.search(
@@ -735,7 +729,8 @@ def is_intent_pipeline_appropriate(question: str) -> bool:
         r'\bby\s+(customers?|countr|products?|materials?|year|month|region|currency|vendor|supplier)\b',
         # superlatives on billing amounts ("sales" plural must match)
         # Wider window: users often say "highest … for the year 2004 … sales"
-        r'\b(highest|lowest|largest|biggest|maximum|peak|best|worst).{0,120}\b(sales?|revenue|amount|billing|invoice)',
+        r'\b(highest|lowest|largest|biggest|maximum|peak|best|worst).{0,120}\b(sales?|revenue|amount|billing|invoice|customers?|products?)',
+        r'\b(top|biggest|largest)\s+\d*\s*(customers?|products?|materials?)\b',
         # totals / sums
         r'\btotal\s+(revenue|sales|billing|invoice|amount)',
         r'\bsum\s+of\s+(revenue|sales|netwr|amount)\b',

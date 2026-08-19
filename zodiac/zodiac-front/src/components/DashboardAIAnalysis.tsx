@@ -197,8 +197,13 @@ function ChartsGrid({ charts }: { charts: any[] }) {
   // render through AIChartRenderer (rich formatting, currency, dual axes).
   const specs = charts
     .map((c) => {
+      const cleanTitle = (t: string | undefined) => {
+        const s = (t || '').trim();
+        if (!s || /continuation/i.test(s)) return 'Results';
+        return s;
+      };
       if (c && Array.isArray(c.data) && (c.chart_type || c.x_key || c.y_keys || c.name_key)) {
-        return c; // already a spec
+        return { ...c, title: cleanTitle(c.title) };
       }
       if (c && Array.isArray(c.labels) && Array.isArray(c.datasets)) {
         const data = c.labels.map((label: string, i: number) => {
@@ -208,7 +213,7 @@ function ChartsGrid({ charts }: { charts: any[] }) {
         });
         return {
           chart_type: c.type || 'bar',
-          title: c.title || 'Chart',
+          title: cleanTitle(c.title),
           data,
           x_key: 'name',
           y_keys: c.datasets.map((d: any) => d.label),
@@ -506,6 +511,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               rowCount: m.result.rowCount ?? (m.result.data?.length ?? 0),
               charts: m.result.charts || [],
               summary: m.result.summary || m.content,
+              query_plan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
+              answer_status: (m.result as any).answer_status || 'SUCCESS',
             } : undefined,
             ts: Date.now() + i,
           }));
@@ -572,6 +579,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       });
 
       const answerStatus = res.answer_status || res.answerStatus || '';
+      const isClarification =
+        answerStatus === 'CLARIFICATION' || res.type === 'clarification';
       const isCannotAnswer =
         answerStatus === 'CANNOT_ANSWER' ||
         res.type === 'cannot_answer' ||
@@ -604,7 +613,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       // If it's a pure analysis reply (follow-up text answer)
       const summaryContent = isCannotAnswer
         ? (res.summary || res.answer || 'I could not reliably answer this question.')
-        : res.type === 'analysis'
+        : res.type === 'analysis' || isClarification
         ? (res.answer || res.summary || 'Done.')
         : (result.summary || (result.rowCount === 0
             ? 'Query executed but returned no data for this environment.'

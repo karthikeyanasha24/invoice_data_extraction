@@ -131,4 +131,82 @@ def run_startup() -> Dict[str, Any]:
         logger.error("[startup] config validation failed: %s", exc)
         report["config"] = {"ok": False, "errors": [str(exc)], "warnings": []}
 
+    try:
+        report["adaptive_warmup"] = warmup_adaptive_runtime()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[startup] adaptive warmup failed (non-fatal): %s", exc)
+        report["adaptive_warmup"] = {"ok": False, "error": str(exc)}
+
     return report
+
+
+def warmup_adaptive_runtime() -> Dict[str, Any]:
+    """
+    Pay schema-file and SAP pool costs before the first client request.
+
+    Cold adaptive queries were spending ~20s on first CSV/index load + first
+    DB connect. Warming here keeps the live p95 sample under the 15s gate
+    without discarding the first benchmark question.
+    """
+    import time
+
+    from sqlalchemy import text
+
+    info: Dict[str, Any] = {"ok": True}
+    t0 = time.perf_counter()
+    try:
+        from ..api.adaptive_query import _load_schema
+
+        info["schema_tables"] = len(_load_schema() or {})
+    except Exception as exc:  # noqa: BLE001
+        info["schema_error"] = str(exc)[:240]
+        info["ok"] = False
+    try:
+        from ..services.schema_loader import load_schema_from_mapping_file
+
+        info["mapping_tables"] = len(load_schema_from_mapping_file() or {})
+    except Exception as exc:  # noqa: BLE001
+        info["mapping_error"] = str(exc)[:240]
+    try:
+        from ..database import engine, get_sap_engine
+
+        sap_eng = get_sap_engine()
+        for label, eng in (("sap", sap_eng), ("app", engine)):
+            if eng is None:
+                continue
+            with eng.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                for tbl, key in (
+                    ('SELECT 1 FROM "VBRK" LIMIT 1', "vbrk"),
+                    ('SELECT 1 FROM "vbrp" LIMIT 1', "vbrp"),
+                ):
+                    try:
+                        conn.execute(text(tbl))
+                        info[f"{label}_{key}"] = True
+                    except Exception:
+                        info[f"{label}_{key}"] = False
+        try:
+            from ..api.adaptive_query import _build_schema_prompt
+
+            info["schema_prompt_chars"] = len(_build_schema_prompt() or "")
+        except Exception as exc:  # noqa: BLE001
+            info["schema_prompt_error"] = str(exc)[:160]
+        try:
+            from ..database import SessionLocal
+            from ..services.chat_thread_store import ensure_chat_tables
+
+            chat_db = SessionLocal()
+            try:
+                ensure_chat_tables(chat_db)
+                info["chat_tables"] = True
+            finally:
+                chat_db.close()
+        except Exception as exc:  # noqa: BLE001
+            info["chat_tables_error"] = str(exc)[:160]
+        info["db_ok"] = True
+    except Exception as exc:  # noqa: BLE001
+        info["db_error"] = str(exc)[:240]
+        info["ok"] = False
+    info["warmup_ms"] = int((time.perf_counter() - t0) * 1000)
+    logger.info("[startup] adaptive warmup %s", info)
+    return info

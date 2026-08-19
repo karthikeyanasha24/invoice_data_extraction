@@ -506,6 +506,63 @@ def apply_followup_delta(previous: QueryPlan, followup_question: str) -> QueryPl
     return base
 
 
+def compose_nl_from_plan(plan: QueryPlan) -> str:
+    """Rebuild a standalone business question from a merged QueryPlan.
+
+    Follow-ups can then reuse intent_sql_fast instead of a CONTINUATION GPT prompt.
+    This is a reconstruction of intent, not a hardcoded benchmark answer.
+    """
+    parts: List[str] = []
+    years = plan.filters.get("years") or []
+    if isinstance(years, (str, int)):
+        years = [str(years)]
+    else:
+        years = [str(y) for y in years if str(y).strip()]
+    cmp_years = [str(y) for y in (plan.comparison_years or []) if str(y).strip()]
+    if plan.operation == "compare" or (len(cmp_years) >= 2):
+        ys = cmp_years or years
+        if len(ys) >= 2:
+            parts.append(f"Compare {ys[0]} vs {ys[1]} sales")
+        elif ys:
+            parts.append(f"Compare {ys[0]} sales")
+        else:
+            parts.append("Compare sales by year")
+    elif plan.metric == "count":
+        if plan.limit:
+            parts.append(f"top {plan.limit} invoice count")
+        else:
+            parts.append("invoice count")
+    elif plan.operation == "bottom":
+        parts.append("lowest sales")
+    elif plan.limit:
+        parts.append(f"top {plan.limit} sales")
+    elif plan.operation in {"top", "highest"}:
+        parts.append("highest sales")
+    else:
+        parts.append("highest sales" if plan.metric == "sales" else f"{plan.metric}")
+
+    if plan.operation != "compare" and years:
+        if len(years) == 1:
+            parts.append(f"for the year {years[0]}")
+        else:
+            parts.append("for years " + " and ".join(years))
+
+    dims = [d for d in (plan.dimensions or []) if d not in ("year", "month", "currency")]
+    if dims:
+        parts.append("with " + " and ".join(dims))
+
+    industry = str(plan.filters.get("industry") or "").strip()
+    if industry:
+        parts.append(f"only the {industry} industry")
+    currency = str(plan.filters.get("currency") or "").strip()
+    if currency:
+        parts.append(f"{currency} currency")
+    customer = str(plan.filters.get("customer") or "").strip()
+    if customer:
+        parts.append(f"for customer {customer}")
+    return " ".join(p for p in parts if p).strip()
+
+
 def merge_followup_plan(
     previous_question: str,
     followup_question: str,

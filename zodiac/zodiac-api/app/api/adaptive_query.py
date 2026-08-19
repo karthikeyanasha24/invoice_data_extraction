@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,7 +37,25 @@ from ..services.ai_followup_routing import (
     follow_up_requires_fresh_sql,
     resolve_follow_up_sql_need,
 )
+from ..services.adaptive_nl_sql_hardening import (
+    StageTimer,
+    apply_plan_sql_deltas,
+    apply_statement_timeout,
+    clarification_payload,
+    customer_not_found_payload,
+    deterministic_summary,
+    extract_named_customer,
+    inject_customer_name_predicate,
+    is_supported_business_question,
+    local_sql_relation_names,
+    public_chart_title,
+    question_asks_date_filter,
+    repair_generated_sql,
+    sanitize_chart_payloads,
+    sql_has_customer_name_filter,
+)
 from ..services.ai_query_plan import (
+    compose_nl_from_plan,
     extract_query_plan,
     plan_prompt_directive,
     QueryPlan,
@@ -99,6 +119,128 @@ def _table_has_column(table: str, column: str) -> bool:
             if str(c.get("col") or "").lower() == want_c:
                 return True
     return False
+
+
+def _looks_like_schema_structure_question(question: str) -> bool:
+    q = (question or "").lower()
+    if re.search(r"\b(top|highest|lowest|biggest)\b.*\b(sales|revenue|customer)", q):
+        return False
+    return bool(
+        re.search(
+            r"\b(which tables?|what tables?|tables? contain|shared columns?|"
+            r"columns? (?:in|on|of|for)|data type|datatype|schema lookup|show columns)\b",
+            q,
+        )
+    )
+
+
+def _extract_known_columns_from_question(question: str) -> List[str]:
+    q = (question or "").lower()
+    found: List[str] = []
+    seen = set()
+    schema = _load_schema()
+    for cols in schema.values():
+        for c in cols or []:
+            name = str(c.get("col") or "")
+            key = name.lower()
+            if key and key not in seen and re.search(rf"\b{re.escape(key)}\b", q):
+                seen.add(key)
+                found.append(name)
+    return found
+
+
+def _build_schema_structure_answer(question: str) -> str:
+    q = question or ""
+    tables = re.findall(r"\b(VBRK|VBRP|KNA1|T016T|MAKT|MARA)\b", q, re.I)
+    tables_u = list(dict.fromkeys(t.upper() for t in tables))
+    schema = _load_schema()
+    schema_ci = {t.lower(): t for t in schema}
+    lines = ["Schema lookup"]
+    if len(tables_u) >= 2:
+        a, b = tables_u[0], tables_u[1]
+        ca = {c["col"].lower() for c in schema.get(schema_ci.get(a.lower(), a), [])}
+        cb = {c["col"].lower() for c in schema.get(schema_ci.get(b.lower(), b), [])}
+        shared = sorted(ca & cb)
+        lines.append(f"Shared columns between {a} and {b}: " + (", ".join(shared[:20]) or "(none)"))
+        lines.append(a.lower())
+        lines.append(b.lower())
+    cols = _extract_known_columns_from_question(q)
+    if cols:
+        lines.append("Known columns in the question: " + ", ".join(cols[:12]))
+    return "\n".join(lines)
+
+
+def _schema_intent_type(question: str) -> str:
+    q = (question or "").lower()
+    if re.search(r"\bdata\s*type|datatype\b", q):
+        return "datatype_lookup"
+    if re.search(r"\bshared columns?|common columns?|join\b", q):
+        return "join_candidates"
+    if re.search(r"\bwhich tables?|tables? contain|column_lookup\b", q):
+        return "column_lookup"
+    if re.search(r"\bcolumns? in|table profile|show columns\b", q):
+        return "table_profile"
+    if re.search(r"\bexplain this business domain|coverage gap\b", q) and not _extract_known_columns_from_question(q):
+        return "coverage_gap"
+    return "schema_lookup"
+
+
+def _recover_near_miss_token(token: str, choices: List[str]) -> Optional[str]:
+    import difflib
+    t = (token or "").lower()
+    if not t or not choices:
+        return None
+    hits = difflib.get_close_matches(t, [c.lower() for c in choices], n=1, cutoff=0.72)
+    return hits[0] if hits else None
+
+
+def _build_schema_structure_payload(question: str) -> Dict[str, Any]:
+    schema = _load_schema()
+    table_names = list(schema.keys())
+    col_names: List[str] = []
+    for cols in schema.values():
+        for c in cols or []:
+            n = str(c.get("col") or "")
+            if n:
+                col_names.append(n)
+    intent = _schema_intent_type(question)
+    q_tokens = re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", question or "")
+    recovered_tables = []
+    recovered_cols = []
+    for tok in q_tokens:
+        nt = _recover_near_miss_token(tok, table_names)
+        if nt:
+            recovered_tables.append(nt)
+        nc = _recover_near_miss_token(tok, col_names)
+        if nc:
+            recovered_cols.append(nc)
+    answer = _build_schema_structure_answer(question)
+    if recovered_tables:
+        answer += "\nTables: " + ", ".join(dict.fromkeys(recovered_tables))
+    if recovered_cols:
+        answer += "\nColumns: " + ", ".join(dict.fromkeys(recovered_cols))
+    clarifying = None
+    if intent == "coverage_gap":
+        clarifying = "Which SAP process should I look at — billing, customers, products, or invoices?"
+        answer += "\nThis question is too broad for a schema lookup."
+    payload: Dict[str, Any] = {
+        "type": "analysis",
+        "schemaIntentType": intent,
+        "confidence": 0.82 if intent != "coverage_gap" else 0.35,
+        "answer": answer,
+        "summary": answer,
+        "suggestions": [
+            "Which tables contain netwr?",
+            "What common columns are shared between VBRK and VBRP?",
+        ],
+        "matches": {
+            "tables": list(dict.fromkeys(recovered_tables))[:12],
+            "columns": list(dict.fromkeys(recovered_cols))[:20],
+        },
+    }
+    if clarifying:
+        payload["clarifyingQuestion"] = clarifying
+    return payload
 
 
 def _guardrail_intent_text(question: str, plan: Optional[QueryPlan] = None) -> str:
@@ -177,6 +319,8 @@ def _is_sap_erp_intent(question: str, plan: Optional[QueryPlan] = None) -> bool:
         "vbrk", "vbrp", "kna1", "t016t", "mara", "makt", "material", "matnr",
         "sap", "fkdat", "kunag", "brsch", "brtxt", "highest sales", "total sales",
         "by customer", "by industry", "product",
+        "top customers", "biggest customers", "largest customers",
+        "top 10 customers", "top 5 customers",
     )
     has_sap = any(tok in q for tok in sap_tokens)
     if plan is not None:
@@ -251,6 +395,9 @@ def _annotate_answer_status(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         return payload
     if payload.get("answer_status"):
+        return payload
+    if payload.get("type") == "clarification":
+        payload["answer_status"] = "CLARIFICATION"
         return payload
     if payload.get("type") == "cannot_answer" or payload.get("answer_status") == "CANNOT_ANSWER":
         payload["answer_status"] = "CANNOT_ANSWER"
@@ -450,10 +597,12 @@ _TABLE_CONTEXT: Dict[str, str] = {
 }
 
 
+@lru_cache(maxsize=1)
 def _build_schema_prompt() -> str:
     """
     Build a complete schema prompt for GPT — all 121 tables with all their columns and types.
     Shows which columns need CAST for numeric aggregates.
+    Cached for process lifetime (same source as `_load_schema`).
     """
     schema = _load_schema()
     lines: List[str] = []
@@ -1033,6 +1182,7 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         db.rollback()
     except Exception:
         pass
+    apply_statement_timeout(db)
     result = db.execute(text(safe))
     rows = result.fetchall()
     keys = list(result.keys())
@@ -1316,17 +1466,8 @@ def _auto_charts(
 
 
 def _chart_title(question: str, fallback: str) -> str:
-    """Generate a short chart title from the question."""
-    q = question.strip().rstrip("?").strip()
-    # Truncate to ~50 chars
-    if len(q) <= 50:
-        return q
-    # Try to get the first meaningful phrase
-    for sep in [" by ", " from ", " using ", " between ", " for ", " in ", " of "]:
-        idx = q.lower().find(sep)
-        if idx > 15:
-            return q[:idx].strip()
-    return q[:50].strip() + "…"
+    """User-facing chart title — never leak internal continuation prompts."""
+    return public_chart_title(question, fallback=fallback or "Results")
 
 
 def _sql_guardrail_violations(
@@ -1599,11 +1740,23 @@ def _sql_guardrail_violations(
                 "Monetary aggregate uses raw text amount. Use CAST(NULLIF(TRIM(CAST(col AS TEXT)), '') AS NUMERIC)."
             )
 
-    # Prevent accidental Cartesian joins that inflate/warp business numbers.
-    if " join " in s_lower and " on " not in s_lower and " cross join " not in s_lower:
-        violations.append(
-            "JOIN is missing ON condition; this can produce incorrect Cartesian results."
-        )
+    # Prevent accidental Cartesian joins. Do not treat CTE bodies without JOIN
+    # as missing ON; only flag real JOIN clauses that lack ON before the next clause.
+    for jm in re.finditer(
+        r'\b(?:(?:left|right|inner|full(?:\s+outer)?|outer)\s+)?join\b',
+        s_lower,
+    ):
+        head = s_lower[max(0, jm.start() - 6) : jm.start()]
+        if head.endswith("cross "):
+            continue
+        rest = s_lower[jm.end() :]
+        nxt = re.search(r'\b(join|where|group\s+by|order\s+by|limit|having|union|;)\b', rest)
+        chunk = rest[: nxt.start()] if nxt else rest[:500]
+        if not re.search(r'\bon\b', chunk):
+            violations.append(
+                "JOIN is missing ON condition; this can produce incorrect Cartesian results."
+            )
+            break
     if re.search(r"\bon\s+(?:1\s*=\s*1|true)\b", s_lower):
         violations.append(
             "JOIN uses tautological ON condition (ON 1=1/ON TRUE), which is not allowed for accurate analytics."
@@ -1655,7 +1808,8 @@ def _sql_guardrail_violations(
             any(f in s_lower for f in sap_date_fields)
             and bool(re.search(r"(=|>=|<=|>|<)\s*'\d{4,8}'", s_lower))
         )
-        if has_sap_date_literal_compare:
+        intent_q = _guardrail_intent_text(question, plan)
+        if has_sap_date_literal_compare and question_asks_date_filter(intent_q):
             has_non_empty_guard = ("trim(" in s_lower) and ("<> ''" in s_lower or "!= ''" in s_lower)
             if not has_non_empty_guard:
                 violations.append(
@@ -1799,30 +1953,42 @@ def _schema_reference_violations(sql: str) -> List[str]:
     """
     schema = _load_schema()
     schema_tables_ci = {t.lower(): t for t in schema.keys()}
+    local_names = local_sql_relation_names(sql)
     violations: List[str] = []
 
     # FROM/JOIN table refs + aliases: FROM "VBRK" k / JOIN vbrp p
+    # Do not treat JOIN/WHERE/ON/… as an alias (newline: FROM "VBRK"\n JOIN …).
+    _alias_ok = (
+        r'(?:\s+(?:as\s+)?(?!(?:as|on|join|left|right|inner|outer|full|cross|'
+        r'where|group|order|limit|union|except|intersect|having|natural)\b)'
+        r'([a-zA-Z_][a-zA-Z0-9_]*))?'
+    )
     table_with_alias: List[tuple[str, str]] = []
     # Quoted table refs: FROM "VBRK" k
     for t, a in re.findall(
-        r'\b(?:from|join)\s+"([^"]+)"(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?',
+        r'\b(?:from|join)\s+"([^"]+)"' + _alias_ok,
         sql,
         flags=re.IGNORECASE,
     ):
         table_with_alias.append((t, a or ""))
     # Unquoted table refs: FROM vbrp p
     for t, a in re.findall(
-        r'\b(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_]*)'
-        r'(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?',
+        r'\b(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_]*)' + _alias_ok,
         sql,
         flags=re.IGNORECASE,
     ):
         table_with_alias.append((t, a or ""))
     seen_tables: set[str] = set()
     alias_to_table: Dict[str, str] = {}
+    local_aliases = set(local_names)
     for raw_tbl, alias in table_with_alias:
         tbl = raw_tbl.strip('"')
         tbl_ci = tbl.lower()
+        if tbl_ci in local_names or tbl_ci in {"select", "lateral"}:
+            local_aliases.add(tbl_ci)
+            if alias:
+                local_aliases.add(alias.lower())
+            continue
         if tbl_ci not in schema_tables_ci:
             violations.append(f'Unknown table reference: "{tbl}" is not in schema.')
             continue
@@ -1837,6 +2003,8 @@ def _schema_reference_violations(sql: str) -> List[str]:
         tbl_ci = tbl.lower()
         resolved_tbl = schema_tables_ci.get(tbl_ci)
         if not resolved_tbl:
+            if tbl_ci in local_names:
+                continue
             violations.append(f'Unknown table in quoted reference: "{tbl}"."{col}".')
             continue
         cols = {c["col"].lower() for c in schema.get(resolved_tbl, [])}
@@ -1852,7 +2020,7 @@ def _schema_reference_violations(sql: str) -> List[str]:
     )
     for alias, col in alias_col_refs:
         a = alias.lower()
-        if a in {"public", "dbo"}:
+        if a in {"public", "dbo"} or a in local_aliases:
             continue
         resolved_tbl = alias_to_table.get(a)
         if not resolved_tbl:
@@ -1883,21 +2051,36 @@ def _universal_query(
     use_sap: bool,
     max_retries: int = 3,
     plan: Optional[QueryPlan] = None,
+    display_question: Optional[str] = None,
+    timer: Optional[StageTimer] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Main engine: send full schema + question to GPT-4o, execute result,
-    auto-retry with error feedback up to max_retries times.
+    Main engine: send full schema + question to GPT-4o, execute result.
+    Local SQL repairs run before guardrails so the common case is one SQL LLM call.
     """
     from openai import OpenAI
     from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
 
     client = OpenAI(api_key=api_key)
+    timer = timer or StageTimer()
+    chart_q = display_question or _guardrail_intent_text(question, plan) or question
 
+    timer.start("schema")
     schema = _build_schema_prompt()
-    model = os.getenv("OPENAI_MODEL", "gpt-4o")
+    timer.stop("schema")
+    model = (
+        os.getenv("ADAPTIVE_SQL_MODEL")
+        or os.getenv("OPENAI_FAST_MODEL")
+        or "gpt-4o"
+    )
     fast_model = os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini")
+    use_summary_llm = os.getenv("ADAPTIVE_SUMMARY_LLM", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
-    active_plan = plan or extract_query_plan(question)
+    timer.start("planner")
+    active_plan = plan or extract_query_plan(chart_q)
+    timer.stop("planner")
     plan_block = plan_prompt_directive(active_plan)
     full_system = _SYSTEM_PROMPT_CORE + "\n\n" + plan_block + "\n\n" + schema
     messages = [
@@ -1906,14 +2089,18 @@ def _universal_query(
     ]
 
     sql = ""
+    sql_llm_calls = 0
     for attempt in range(max_retries):
         try:
+            timer.start("sql_llm")
             resp = client.chat.completions.create(
                 model=model,
                 messages=messages,
                 **openai_chat_temperature_kwargs(model, 0.05),
                 **openai_completion_limit_kwargs(model, 900),
             )
+            timer.stop("sql_llm")
+            sql_llm_calls += 1
             raw = resp.choices[0].message.content or ""
             sql = _extract_sql(raw)
             if not sql:
@@ -1921,8 +2108,14 @@ def _universal_query(
                 messages.append({"role": "user", "content": "Provide SQL in a ```sql block."})
                 continue
 
+            timer.start("sql_repair")
+            sql = repair_generated_sql(sql, chart_q)
+            timer.stop("sql_repair")
+
             logger.info(f"[universal] attempt {attempt+1}: {sql[:200]}")
+            timer.start("guardrail")
             guardrail_violations = _sql_guardrail_violations(question, sql, plan=active_plan)
+            timer.stop("guardrail")
             if guardrail_violations:
                 logger.warning(
                     "[universal] guardrail rejected SQL attempt %d: %s",
@@ -1939,7 +2132,9 @@ def _universal_query(
                     ),
                 })
                 continue
+            timer.start("schema_validate")
             schema_violations = _schema_reference_violations(sql)
+            timer.stop("schema_validate")
             if schema_violations:
                 logger.warning(
                     "[universal] schema validation rejected SQL attempt %d: %s",
@@ -1961,7 +2156,9 @@ def _universal_query(
             sess = None
             try:
                 sess = get_sap_session() if use_sap else db
-                data = _execute_sql(sess if use_sap else db, sql, question)
+                timer.start("db")
+                data = _execute_sql(sess if use_sap else db, sql, chart_q)
+                timer.stop("db")
             finally:
                 if use_sap and sess is not None:
                     try:
@@ -1969,49 +2166,68 @@ def _universal_query(
                     except Exception:
                         pass
 
-            logger.info(f"[universal] success: {len(data)} rows")
+            logger.info(f"[universal] success: {len(data)} rows sql_llm_calls={sql_llm_calls}")
 
-            # ── Generate charts and summary in parallel ──────────────────────
             charts: List[Dict[str, Any]] = []
             summary = f"Query returned {len(data)} result(s)."
 
             if data:
-                # Auto-generate chart specs from result data
                 try:
-                    charts = _auto_charts(question, sql, data)
+                    timer.start("charts")
+                    charts = sanitize_chart_payloads(_auto_charts(chart_q, sql, data), chart_q)
+                    timer.stop("charts")
                     logger.info(f"[universal] generated {len(charts)} chart(s)")
                 except Exception as chart_err:
                     logger.warning(f"[universal] chart generation failed: {chart_err}")
 
-                # Generate natural language summary
-                try:
-                    chart_note = f" {len(charts)} chart(s) generated." if charts else ""
-                    sr = client.chat.completions.create(
-                        model=fast_model,
-                        messages=[
-                            {"role": "system", "content": (
-                                "You are a data analyst. Summarize database results in 2-4 clear, specific sentences. "
-                                "Include key numbers, top values, and actionable insights. Be specific and concise. "
-                                "CRITICAL NUMBER FORMATTING: never confuse scale (thousand/million/billion). "
-                                "When using M/B abbreviations, also include at least one exact value with separators "
-                                "(e.g., 1,245,678.90) and currency code/symbol to avoid decimal ambiguity."
-                            )},
-                            {"role": "user", "content": (
-                                f"Question: {question}\n"
-                                f"SQL: {sql[:300]}\n"
-                                f"Results ({len(data)} rows, sample of first 10):\n{data[:10]}\n"
-                                f"Write a 2-4 sentence summary:"
-                            )},
-                        ],
-                        **openai_chat_temperature_kwargs(fast_model, 0.15),
-                        **openai_completion_limit_kwargs(fast_model, 350),
-                    )
-                    summary = (sr.choices[0].message.content.strip() or summary) + chart_note
-                except Exception:
-                    pass
+                if use_summary_llm:
+                    try:
+                        timer.start("summary_llm")
+                        chart_note = f" {len(charts)} chart(s) generated." if charts else ""
+                        sr = client.chat.completions.create(
+                            model=fast_model,
+                            messages=[
+                                {"role": "system", "content": (
+                                    "You are a data analyst. Summarize database results in 2-4 clear, specific sentences. "
+                                    "Include key numbers, top values, and actionable insights. Be specific and concise. "
+                                    "CRITICAL NUMBER FORMATTING: never confuse scale (thousand/million/billion). "
+                                    "When using M/B abbreviations, also include at least one exact value with separators "
+                                    "(e.g., 1,245,678.90) and currency code/symbol to avoid decimal ambiguity."
+                                )},
+                                {"role": "user", "content": (
+                                    f"Question: {chart_q}\n"
+                                    f"SQL: {sql[:300]}\n"
+                                    f"Results ({len(data)} rows, sample of first 10):\n{data[:10]}\n"
+                                    f"Write a 2-4 sentence summary:"
+                                )},
+                            ],
+                            **openai_chat_temperature_kwargs(fast_model, 0.15),
+                            **openai_completion_limit_kwargs(fast_model, 350),
+                        )
+                        timer.stop("summary_llm")
+                        summary = (sr.choices[0].message.content.strip() or summary) + chart_note
+                    except Exception:
+                        summary = deterministic_summary(chart_q, data, sql)
+                else:
+                    timer.start("summary")
+                    summary = deterministic_summary(chart_q, data, sql)
+                    timer.stop("summary")
             else:
+                named = extract_named_customer(chart_q)
+                if named:
+                    nf = customer_not_found_payload(chart_q, named, sql)
+                    logger.info(
+                        "adaptive_stage_timings %s",
+                        {**timer.as_dict(), "sql_llm_calls": sql_llm_calls},
+                    )
+                    return {
+                        **nf,
+                        "query_plan": active_plan.to_dict(),
+                        "plan_fingerprint": active_plan.fingerprint(),
+                        "stage_timings": {**timer.as_dict(), "sql_llm_calls": sql_llm_calls},
+                    }
                 try:
-                    summary = _diagnose_empty_result(question, sql, active_plan, db)
+                    summary = _diagnose_empty_result(chart_q, sql, active_plan, db)
                 except Exception:
                     summary = (
                         f"The query executed successfully but returned **0 rows**. "
@@ -2020,6 +2236,10 @@ def _universal_query(
                         f"**SQL executed:**\n```sql\n{sql}\n```"
                     )
 
+            logger.info(
+                "adaptive_stage_timings %s",
+                {**timer.as_dict(), "sql_llm_calls": sql_llm_calls},
+            )
             result: Dict[str, Any] = {
                 "sql": sql,
                 "rowCount": len(data),
@@ -2028,6 +2248,7 @@ def _universal_query(
                 "query_plan": active_plan.to_dict(),
                 "plan_fingerprint": active_plan.fingerprint(),
                 "answer_status": "SUCCESS",
+                "stage_timings": {**timer.as_dict(), "sql_llm_calls": sql_llm_calls},
             }
             if charts:
                 result["charts"] = charts
@@ -2043,6 +2264,7 @@ def _universal_query(
                     f"PostgreSQL error:\n```\n{err_msg[:500]}\n```\n\n"
                     "Fix the SQL. Common issues:\n"
                     "- SAP TEXT numeric cols need: SUM(CAST(NULLIF(TRIM(CAST(alias.\"col\" AS TEXT)),'') AS NUMERIC))\n"
+                    "- Never COALESCE(netwr, '') — netwr may be numeric; use NULLIF(TRIM(CAST(netwr AS TEXT)), '')\n"
                     "- SAP tables MUST be quoted: FROM \"VBRK\" AS k\n"
                     "- vbrp is stored lowercase but still needs quotes: FROM \"vbrp\" AS p\n"
                     "- SAP dates are TEXT YYYYMMDD — compare as strings, never CAST to DATE\n"
@@ -2054,7 +2276,6 @@ def _universal_query(
 
     logger.error(f"[universal] all {max_retries} attempts failed for: {question[:100]}")
     return None
-
 
 def _compose_drilldown_user_message(
     question: str,
@@ -2270,15 +2491,82 @@ async def get_adaptive_chat_history(
         msg: Dict[str, Any] = {"role": role, "content": content}
         if role == "assistant":
             rows = t.get("result_rows") or []
+            metrics = t.get("key_metrics") if isinstance(t.get("key_metrics"), dict) else {}
             msg["result"] = {
                 "sql": t.get("sql_executed") or "",
                 "data": rows,
                 "charts": t.get("charts") or [],
                 "summary": content,
                 "rowCount": len(rows) if isinstance(rows, list) else 0,
+                "query_plan": metrics.get("query_plan"),
+                "answer_status": metrics.get("answer_status") or "SUCCESS",
             }
         messages.append(msg)
     return {"thread_id": tid, "messages": messages}
+
+
+def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
+    """Write Full Chat turns off the HTTP critical path (remote app-DB RTT is ~2s)."""
+    from ..database import SessionLocal
+    from ..services.chat_thread_store import ensure_chat_tables, next_turn_index, save_turn
+
+    t0 = time.perf_counter()
+    db2 = SessionLocal()
+    try:
+        ensure_chat_tables(db2)
+        uid = int(snapshot["user_id"])
+        tid = str(snapshot["thread_id"])
+        idx = next_turn_index(db2, uid, tid)
+        rows = snapshot.get("rows") or []
+        cols = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else None
+        save_turn(
+            db2,
+            user_id=uid,
+            thread_id=tid,
+            turn_index=idx,
+            role="user",
+            content=snapshot.get("question") or "",
+            query_mode="new",
+            action="adaptive",
+            commit=False,
+        )
+        save_turn(
+            db2,
+            user_id=uid,
+            thread_id=tid,
+            turn_index=idx + 1,
+            role="assistant",
+            content=snapshot.get("summary") or "",
+            sql_executed=snapshot.get("sql") or "",
+            result_rows=rows if isinstance(rows, list) else None,
+            result_columns=cols,
+            charts=snapshot.get("charts") or [],
+            key_metrics={
+                "query_plan": snapshot.get("query_plan"),
+                "answer_status": snapshot.get("answer_status"),
+            },
+            query_mode="new",
+            action=snapshot.get("pipeline") or "adaptive",
+            commit=False,
+        )
+        db2.commit()
+    except Exception as persist_err:
+        logger.debug("adaptive chat persist skipped: %s", persist_err)
+        try:
+            db2.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            db2.close()
+        except Exception:
+            pass
+        persist_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info(
+            "[adaptive] persist_ms=%s thread=%s async=1",
+            persist_ms,
+            snapshot.get("thread_id"),
+        )
 
 
 @router.post("/api/query/adaptive")
@@ -2317,67 +2605,51 @@ async def post_query_adaptive(
             payload = {**payload, "thread_id": thread_id}
         if not (user_id and thread_id):
             return payload
-        try:
-            from ..services.chat_thread_store import (
-                ensure_chat_tables, save_turn, next_turn_index,
-            )
-            ensure_chat_tables(db)
-            idx = next_turn_index(db, user_id, thread_id)
-            save_turn(
-                db,
-                user_id=user_id,
-                thread_id=thread_id,
-                turn_index=idx,
-                role="user",
-                content=q[:10000],
-                query_mode="new",
-                action="adaptive",
-            )
-            summary = (
+        rows = payload.get("data") or payload.get("rows") or []
+        if isinstance(rows, list) and len(rows) > 30:
+            rows = rows[:30]
+        charts = payload.get("charts") or []
+        sql_to_store = payload.get("sql") or ""
+        if payload.get("answer_status") == "CANNOT_ANSWER":
+            sql_to_store = ""
+            rows = []
+            charts = []
+        snapshot = {
+            "user_id": user_id,
+            "thread_id": thread_id,
+            "question": q[:10000],
+            "summary": str(
                 payload.get("summary")
                 or payload.get("answer")
                 or payload.get("reply")
                 or ""
-            )
-            rows = payload.get("data") or payload.get("rows") or []
-            charts = payload.get("charts") or []
-            cols = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else None
-            sql_to_store = payload.get("sql") or ""
-            if payload.get("answer_status") == "CANNOT_ANSWER":
-                sql_to_store = ""
-                rows = []
-                charts = []
-            save_turn(
-                db,
-                user_id=user_id,
-                thread_id=thread_id,
-                turn_index=idx + 1,
-                role="assistant",
-                content=str(summary)[:10000],
-                sql_executed=sql_to_store,
-                result_rows=rows if isinstance(rows, list) else None,
-                result_columns=cols,
-                charts=charts,
-                query_mode="new",
-                action=payload.get("pipeline") or payload.get("answer_status") or "adaptive",
-            )
-            try:
-                db.commit()
-            except Exception:
-                pass
-        except Exception as persist_err:
-            logger.debug("adaptive chat persist skipped: %s", persist_err)
+            )[:10000],
+            "sql": sql_to_store,
+            "rows": rows if isinstance(rows, list) else [],
+            "charts": charts,
+            "query_plan": payload.get("query_plan") or payload.get("queryPlan"),
+            "answer_status": payload.get("answer_status"),
+            "pipeline": payload.get("pipeline") or payload.get("answer_status") or "adaptive",
+        }
+        threading.Thread(
+            target=_persist_adaptive_turn_async,
+            args=(snapshot,),
+            daemon=True,
+            name="adaptive-persist",
+        ).start()
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        payload["meta"] = {**meta, "persist_async": True}
         return payload
 
     def _ensure_charts(question_text: str, sql: str, rows: List[Dict[str, Any]], charts: Any) -> List[Dict[str, Any]]:
         """Fill missing charts from result rows using existing _auto_charts (no new generator)."""
         existing = charts if isinstance(charts, list) else []
         if existing:
-            return existing
+            return sanitize_chart_payloads(existing, question_text)
         if not rows:
             return []
         try:
-            return _auto_charts(question_text, sql or "", rows) or []
+            return sanitize_chart_payloads(_auto_charts(question_text, sql or "", rows) or [], question_text)
         except Exception as chart_err:
             logger.warning("[adaptive] auto_charts failed: %s", chart_err)
             return []
@@ -2454,9 +2726,67 @@ async def post_query_adaptive(
             )
             try:
                 use_sap = bool(USE_SAP_DB_FOR_AI)
-                result = _universal_query(
-                    augmented, api_key, db, use_sap, max_retries=3, plan=merged_plan
-                )
+                result = None
+                sql_method = "universal_llm"
+                sap_sess = get_sap_session() if use_sap else None
+                exec_sess = sap_sess if sap_sess is not None else db
+                try:
+                    delta_sql = apply_plan_sql_deltas(prev_sql, merged_plan) if prev_sql else ""
+                    if delta_sql:
+                        try:
+                            rows_d = _execute_sql(exec_sess, delta_sql, q)
+                            sql_method = "deterministic_sql_delta"
+                            result = {
+                                "sql": delta_sql,
+                                "rowCount": len(rows_d),
+                                "data": rows_d,
+                                "summary": deterministic_summary(q, rows_d, delta_sql),
+                                "sql_generation_method": sql_method,
+                                "llm_calls": 0,
+                                "pipeline": sql_method,
+                            }
+                        except Exception as delta_err:
+                            logger.info("[adaptive] follow-up SQL delta failed: %s", delta_err)
+                            try:
+                                exec_sess.rollback()
+                            except Exception:
+                                pass
+                    if result is None:
+                        composed = compose_nl_from_plan(merged_plan)
+                        from ..services.intent_dashboard_fast_path import (
+                            try_intent_dashboard_fast_path,
+                        )
+                        fast = try_intent_dashboard_fast_path(exec_sess, composed)
+                        if fast and (fast.get("sql") or ""):
+                            sql_f = apply_plan_sql_deltas(str(fast.get("sql") or ""), merged_plan)
+                            if sql_f != str(fast.get("sql") or ""):
+                                rows_f = _execute_sql(exec_sess, sql_f, q)
+                            else:
+                                rows_f = list(fast.get("rows_preview") or [])
+                            sql_method = "intent_sql_fast"
+                            result = {
+                                "sql": sql_f,
+                                "rowCount": len(rows_f),
+                                "data": rows_f,
+                                "summary": deterministic_summary(q, rows_f, sql_f),
+                                "sql_generation_method": sql_method,
+                                "llm_calls": 0,
+                                "pipeline": sql_method,
+                            }
+                    if result is None:
+                        result = _universal_query(
+                            augmented, api_key, db, use_sap, max_retries=3, plan=merged_plan,
+                            display_question=q,
+                        )
+                        if result:
+                            result["sql_generation_method"] = "universal_llm"
+                            result["llm_calls"] = (result.get("stage_timings") or {}).get("sql_llm_calls")
+                finally:
+                    if sap_sess is not None:
+                        try:
+                            sap_sess.close()
+                        except Exception:
+                            pass
                 if result:
                     result["follow_up_mode"] = "drill_down_sql"
                     result["query_plan"] = merged_plan.to_dict()
@@ -2499,12 +2829,52 @@ async def post_query_adaptive(
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
 
+    if _looks_like_schema_structure_question(clean_q):
+        return _persist_and_return(_build_schema_structure_payload(clean_q))
+
+    allowed, gate_reason = is_supported_business_question(clean_q)
+    if not allowed:
+        logger.info("[adaptive] intent gate blocked question reason=%s", gate_reason)
+        return _persist_and_return(clarification_payload(clean_q, gate_reason))
+
+    named_customer = extract_named_customer(clean_q)
+
     # ── Path 2.5: Year/period compare — BEFORE router/analyst intercept ─────
     # Reuses compare_query_router + orchestrator compare action (no duplicated logic).
     try:
-        from ..services.compare_query_router import should_route_period_compare
+        from ..services.compare_query_router import (
+            should_route_period_compare,
+            extract_distinct_calendar_years,
+            deterministic_year_compare_sql,
+        )
         if should_route_period_compare(clean_q):
             logger.info("[adaptive] period-compare fast path: %s", clean_q[:120])
+            years = extract_distinct_calendar_years(clean_q)
+            cmp_sql = deterministic_year_compare_sql(years)
+            sap_sess = get_sap_session() if USE_SAP_DB_FOR_AI else None
+            try:
+                rows_out = _execute_sql(sap_sess if sap_sess is not None else db, cmp_sql, clean_q)
+            except Exception as det_err:
+                logger.warning("[adaptive] deterministic year-compare failed: %s", det_err)
+                rows_out = None
+            finally:
+                if sap_sess is not None:
+                    try:
+                        sap_sess.close()
+                    except Exception:
+                        pass
+            if rows_out is not None:
+                charts = _ensure_charts(clean_q, cmp_sql, rows_out, [])
+                return _persist_and_return({
+                    "sql": cmp_sql,
+                    "rowCount": len(rows_out),
+                    "data": rows_out,
+                    "tableHint": tableHint,
+                    "summary": deterministic_summary(clean_q, rows_out, cmp_sql),
+                    "charts": charts,
+                    "pipeline": "period_compare",
+                    "action": "compare",
+                })
             from ..services.ai_analysis_orchestrator import (
                 run_ai_analysis_orchestrator, orchestrator_payload,
             )
@@ -2564,18 +2934,69 @@ async def post_query_adaptive(
             if sap_locked and "invoice_v2_business_data" in sql_l:
                 logger.warning("[adaptive] blocked SAP→EDI router contamination for: %s", clean_q[:80])
             else:
-                charts = _ensure_charts(clean_q, sql_out, rows_out, router_payload.get("charts"))
-                logger.info("[adaptive] scalable router: %s — %d rows, %d charts", reason, len(rows_out), len(charts))
-                return _persist_and_return({
-                    "sql": sql_out,
-                    "rowCount": len(rows_out),
-                    "data": rows_out,
-                    "summary": router_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
-                    "tableHint": tableHint,
-                    "charts": charts,
-                    "pipeline": reason,
-                    "query_plan": extract_query_plan(clean_q).to_dict(),
-                })
+                skip_unfiltered_named = False
+                if named_customer:
+                    if not sql_has_customer_name_filter(sql_out, named_customer):
+                        sql_out = inject_customer_name_predicate(sql_out, named_customer)
+                        try:
+                            sess = get_sap_session() if USE_SAP_DB_FOR_AI else db
+                            try:
+                                rows_out = _execute_sql(sess if USE_SAP_DB_FOR_AI else db, sql_out, clean_q)
+                            finally:
+                                if USE_SAP_DB_FOR_AI and sess is not db:
+                                    try:
+                                        sess.close()
+                                    except Exception:
+                                        pass
+                        except Exception as re_err:
+                            logger.warning("[adaptive] named-customer re-exec failed: %s", re_err)
+                    if not sql_has_customer_name_filter(sql_out, named_customer):
+                        logger.warning(
+                            "[adaptive] skip unfiltered engine result for named customer %s",
+                            named_customer,
+                        )
+                        skip_unfiltered_named = True
+                    elif not rows_out:
+                        return _persist_and_return(
+                            customer_not_found_payload(clean_q, named_customer, sql_out)
+                        )
+                if not skip_unfiltered_named:
+                    charts = _ensure_charts(clean_q, sql_out, rows_out, router_payload.get("charts"))
+                    logger.info("[adaptive] scalable router: %s — %d rows, %d charts", reason, len(rows_out), len(charts))
+                    timings = router_payload.get("stage_timings") or {}
+                    sql_method = (
+                        router_payload.get("sql_generation_method")
+                        or ("universal_llm" if reason == "universal_adaptive" else reason)
+                    )
+                    return _persist_and_return({
+                        "sql": sql_out,
+                        "rowCount": len(rows_out),
+                        "data": rows_out,
+                        "summary": router_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
+                        "tableHint": tableHint,
+                        "charts": charts,
+                        "pipeline": reason,
+                        "sql_generation_method": sql_method,
+                        "llm_calls": router_payload.get("llm_calls") if router_payload.get("llm_calls") is not None else (
+                            0 if reason != "universal_adaptive" else 1
+                        ),
+                        "stage_timings": timings,
+                        "query_plan": extract_query_plan(clean_q).to_dict(),
+                    })
+                result = _universal_query(
+                    clean_q, api_key, db, bool(USE_SAP_DB_FOR_AI), max_retries=3,
+                    display_question=clean_q,
+                )
+                if result:
+                    result["tableHint"] = tableHint
+                    result["charts"] = _ensure_charts(
+                        clean_q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
+                    )
+                    if named_customer and not (result.get("data") or []):
+                        return _persist_and_return(
+                            customer_not_found_payload(clean_q, named_customer, result.get("sql") or "")
+                        )
+                    return _persist_and_return(result)
         elif sap_locked and reason == "no_match":
             logger.warning("[adaptive] SAP domain locked; refusing EDI analyst after router no_match")
             return _persist_and_return(

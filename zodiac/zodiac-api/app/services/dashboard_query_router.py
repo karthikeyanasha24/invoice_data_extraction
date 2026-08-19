@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -121,8 +122,17 @@ def _should_skip_operational_for_sap(question: str) -> bool:
         "cost center", "faglflexa", "customers by revenue", "billed amount",
         "billing document", "vendor spend", "cepc", "csks", "material master",
         "gl account", "accounting document", "by customer", "by industry",
+        "invoice count", "how many invoices", "top products", "product sales",
+        "product-level", "top customers", "top 10 customers", "top 5 customers",
+        "biggest customers", "largest customers",
     )
-    return any(s in ql for s in sap_signals)
+    if any(s in ql for s in sap_signals):
+        return True
+    if re.search(r"\b(19|20)\d{2}\b", ql) and re.search(
+        r"\b(invoice|sales|revenue|customer|billing|product|material)\b", ql
+    ):
+        return True
+    return False
 
 
 def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, Any]]:
@@ -130,9 +140,11 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         prepare_sql_for_sqlalchemy_text_execution as _prep,
         sanitize_generated_sap_sql as _sanitize,
     )
+    from .adaptive_nl_sql_hardening import apply_statement_timeout
 
     safe = _sanitize(sql, question or None)
     safe = _prep(safe)
+    apply_statement_timeout(db)
     rows_raw = db.execute(text(safe)).mappings().all()
     return _serialize_rows(rows_raw)
 
@@ -225,11 +237,12 @@ def _try_operational(
 
 def _try_sql_catalog(db: Session, query: str) -> Optional[Tuple[str, List[Dict[str, Any]], List[str]]]:
     from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
+    from .adaptive_nl_sql_hardening import apply_ranking_discipline
 
     catalog_sql = _lookup_sql_catalog(query or "")
     if not catalog_sql:
         return None
-    sql = _quote_catalog_sql_tables(catalog_sql)
+    sql = apply_ranking_discipline(_quote_catalog_sql_tables(catalog_sql), query or "")
     rows = _execute_sql(db, sql, query)
     tables = []
     import re
@@ -260,14 +273,16 @@ def _try_universal(
 ) -> Optional[Dict[str, Any]]:
     from ..api.adaptive_query import _universal_query
 
-    result = _universal_query(query or "", api_key, db, use_sap, max_retries=3)
+    result = _universal_query(
+        query or "", api_key, db, use_sap, max_retries=3, display_question=query,
+    )
     if not result:
         return None
     rows = result.get("data") or []
     sql = result.get("sql") or ""
     reply = result.get("summary") or f"Query returned {len(rows)} row(s)."
     charts = result.get("charts") or []
-    return _build_payload(
+    payload = _build_payload(
         query=query,
         pipeline="universal_adaptive",
         reason="universal_adaptive",
@@ -286,6 +301,11 @@ def _try_universal(
         ],
         elapsed_ms=0,
     )
+    if result.get("stage_timings"):
+        payload["stage_timings"] = result["stage_timings"]
+        payload["llm_calls"] = (result.get("stage_timings") or {}).get("sql_llm_calls")
+        payload["sql_generation_method"] = "universal_llm"
+    return payload
 
 
 def run_dashboard_query(

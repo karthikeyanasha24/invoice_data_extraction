@@ -36,7 +36,9 @@ A modern Next.js frontend for the Zodiac Invoice Management System.
    npm run dev
    ```
 
-4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+   Next.js defaults to **port 3000**. If that port is already in use, the local app may bind to **3001** (or the next free port). Staging/production frontends use the platform hostname (not a local port) — a 3000/3001 collision is local-only.
+
+4. Open [http://localhost:3000](http://localhost:3000) (or the port printed by `npm run dev`) in your browser. The API is expected on `http://localhost:8000` (`NEXT_PUBLIC_API_URL`).
 
 ## Project Structure
 

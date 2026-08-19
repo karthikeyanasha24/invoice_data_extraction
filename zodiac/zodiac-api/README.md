@@ -110,7 +110,7 @@ Once the server is running, visit:
 - `API_HOST` - API host (default: 0.0.0.0)
 - `API_PORT` - API port (default: 8000)
 - `API_DEBUG` - Debug mode (default: True)
-- `CORS_ORIGINS` - Comma-separated list of allowed origins
+- `CORS_ORIGINS` - Comma-separated list of allowed origins. Live frontends (`https://www.bridgeedi.com`, `https://bridgeedi.com`, `https://zodiac-front.vercel.app`) are always unioned in. `CORS_ALLOW_ALL=true` is local debug only; staging/production must leave it false.
 - `SECRET_KEY` - Secret key for security
 
 ## Development

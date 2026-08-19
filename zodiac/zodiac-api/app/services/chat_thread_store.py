@@ -26,6 +26,17 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# CREATE INDEX IF NOT EXISTS on a remote Postgres can take seconds and was being
+# paid on every adaptive persist (ensure_chat_tables → save_turn ×2). Cache after
+# the first successful apply so authenticated Full Chat stays on the query path.
+_chat_tables_ready = False
+
+
+def reset_chat_tables_cache_for_tests() -> None:
+    """Test-only: force the next ensure_chat_tables call to run DDL again."""
+    global _chat_tables_ready
+    _chat_tables_ready = False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Schema
@@ -71,8 +82,11 @@ CREATE TABLE IF NOT EXISTS ai_chat_threads (
 """
 
 
-def ensure_chat_tables(db: Any) -> None:
-    """Idempotent — safe to call on every startup."""
+def ensure_chat_tables(db: Any, *, force: bool = False) -> None:
+    """Idempotent DDL. After the first success in this process, further calls are no-ops."""
+    global _chat_tables_ready
+    if _chat_tables_ready and not force:
+        return
     from sqlalchemy import text
     try:
         db.execute(text(_CREATE_THREADS_TABLE))
@@ -96,6 +110,7 @@ def ensure_chat_tables(db: Any) -> None:
                 db.rollback()
             except Exception:
                 pass
+        _chat_tables_ready = True
     except Exception as exc:
         logger.debug("chat_thread_store.ensure_chat_tables: %s", exc)
         try:
@@ -137,6 +152,7 @@ def save_turn(
     dominant_year: Optional[str] = None,
     query_mode: Optional[str] = None,
     action: Optional[str] = None,
+    commit: bool = True,
 ) -> bool:
     """Upsert one turn.  Returns True on success."""
     from sqlalchemy import text
@@ -198,7 +214,8 @@ def save_turn(
             "title": (content or "")[:100], "now": now,
         })
 
-        db.commit()
+        if commit:
+            db.commit()
         return True
     except Exception as exc:
         logger.warning("chat_thread_store.save_turn failed: %s", exc)

@@ -51,27 +51,19 @@ app = FastAPI(
     version="1.0.0"
 )
 
+from .core.cors_origins import parse_cors_allow_all, resolve_cors_origins, REQUIRED_CORS
+
 # CORS middleware — honor CORS_ORIGINS (Phase 10 hardening).
 # Set CORS_ALLOW_ALL=true only for ephemeral local debugging (not production).
-_DEFAULT_CORS = (
-    "https://www.bridgeedi.com,https://bridgeedi.com,"
-    "https://zodiac-front.vercel.app,http://localhost:3000"
-)
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", _DEFAULT_CORS)
-CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "false").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-origins = [origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()]
-if not origins:
-    origins = [o.strip() for o in _DEFAULT_CORS.split(",")]
-_cors_origins = ["*"] if CORS_ALLOW_ALL else origins
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "")
+CORS_ALLOW_ALL = parse_cors_allow_all(os.getenv("CORS_ALLOW_ALL", "false"))
+origins = resolve_cors_origins(CORS_ORIGINS or "", allow_all=False)  # union list for logs
+_cors_origins = resolve_cors_origins(CORS_ORIGINS or "", allow_all=CORS_ALLOW_ALL)
+_REQUIRED_CORS = REQUIRED_CORS
 logger.info(
     "[CORS] allow_all=%s origins=%s",
     CORS_ALLOW_ALL,
-    _cors_origins if CORS_ALLOW_ALL else origins,
+    _cors_origins,
 )
 
 app.add_middleware(

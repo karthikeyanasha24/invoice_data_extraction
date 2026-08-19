@@ -56,7 +56,8 @@ let aiSchemaFetchPromise: Promise<{
     table_count: number;
 }> | null = null;
 
-// Add request interceptor to include auth token and log requests
+// Attach auth token. Do not log request/response bodies — they include SQL
+// result rows and can freeze the UI for seconds on the Full Chat path.
 api.interceptors.request.use(
     (config) => {
         if (typeof window !== 'undefined') {
@@ -65,50 +66,19 @@ api.interceptors.request.use(
                 config.headers.Authorization = `Bearer ${token}`;
             }
         }
-
-        // Log request details
-        console.group(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`);
-        console.log('Headers:', config.headers);
-        console.log('Data:', config.data);
-        console.log('Params:', config.params);
-        console.log('Base URL:', config.baseURL);
-        console.log('Full URL:', `${config.baseURL}${config.url}`);
-        console.groupEnd();
-
         return config;
     },
-    (error) => {
-        console.error('❌ Request interceptor error:', error);
-        return Promise.reject(error);
-    }
+    (error) => Promise.reject(error)
 );
 
-// Add response interceptor for better error handling and logging
 api.interceptors.response.use(
-    (response) => {
-        // Log successful responses
-        console.group(`✅ API Response: ${response.config.method?.toUpperCase()} ${response.config.url}`);
-        console.log('Status:', response.status);
-        console.log('Headers:', response.headers);
-        console.log('Data:', response.data);
-        console.groupEnd();
-
-        return response;
-    },
+    (response) => response,
     (error) => {
-        // Log error responses
-        console.group(`❌ API Error: ${error.config?.method?.toUpperCase()} ${error.config?.url}`);
-        console.log('Status:', error.response?.status);
-        console.log('Status Text:', error.response?.statusText);
-        console.log('Headers:', error.response?.headers);
-        console.log('Error Data:', error.response?.data);
-        console.log('Error Message:', error.message);
-        console.log('Error Code:', error.code);
-        console.log('Error Config:', error.config);
-        console.log('Error Request:', error.request);
-        console.log('Full Error Object:', error);
-        console.log('Full Error:', error);
-        console.groupEnd();
+        console.error(
+            `API ${error.config?.method?.toUpperCase()} ${error.config?.url} failed:`,
+            error.response?.status,
+            error.message
+        );
 
         // 401 on login/signup is "wrong credentials" / validation — not an expired session. Do not redirect.
         const reqPath = String(error.config?.url || '');
@@ -1731,16 +1701,16 @@ export const dashboardApi = {
         }
     },
 
-    getV2Inbound: async (days: number = 0) => {
-        const response = await api.get(`/api/v1/dashboard/v2/inbound?days=${days}`);
+    getV2Inbound: async (days: number = 0, config?: { signal?: AbortSignal }) => {
+        const response = await api.get(`/api/v1/dashboard/v2/inbound?days=${days}`, config);
         return response.data;
     },
-    getV2InboundRecent: async (limit: number = 10) => {
-        const response = await api.get(`/api/v1/dashboard/v2/inbound/recent?limit=${limit}`);
+    getV2InboundRecent: async (limit: number = 10, config?: { signal?: AbortSignal }) => {
+        const response = await api.get(`/api/v1/dashboard/v2/inbound/recent?limit=${limit}`, config);
         return response.data;
     },
-    getV2Outbound: async (days: number = 30) => {
-        const response = await api.get(`/api/v1/dashboard/v2/outbound?days=${days}`);
+    getV2Outbound: async (days: number = 30, config?: { signal?: AbortSignal }) => {
+        const response = await api.get(`/api/v1/dashboard/v2/outbound?days=${days}`, config);
         return response.data;
     },
     getV2FailedInvoicesAnalysis: async (days: number = 30, demo?: boolean) => {

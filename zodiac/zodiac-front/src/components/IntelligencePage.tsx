@@ -385,21 +385,35 @@ export default function IntelligencePage() {
   const [outbound, setOutbound] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const dashAbortRef = useRef<AbortController | null>(null);
   const fetchData = useCallback(async () => {
+    dashAbortRef.current?.abort();
+    const ac = new AbortController();
+    dashAbortRef.current = ac;
     try {
       setLoading(true);
       const [inbRes, outRes] = await Promise.all([
-        dashboardApi.getV2Inbound(days),
-        dashboardApi.getV2Outbound(days),
+        dashboardApi.getV2Inbound(days, { signal: ac.signal }),
+        dashboardApi.getV2Outbound(days, { signal: ac.signal }),
       ]);
+      if (ac.signal.aborted) return;
       setInbound(inbRes);
       setOutbound(outRes);
       setLastRefresh(new Date());
-    } catch { /* silent */ }
-    finally { setLoading(false); }
+    } catch (err: any) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+    } finally {
+      if (!ac.signal.aborted) setLoading(false);
+    }
   }, [days]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    if (tab === 'chat') {
+      dashAbortRef.current?.abort();
+      return;
+    }
+    fetchData();
+  }, [fetchData, tab]);
   useEffect(() => {
     if (tab !== 'realtime') return;
     const id = setInterval(fetchData, 60_000);

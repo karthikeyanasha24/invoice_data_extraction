@@ -46,12 +46,31 @@ def should_route_period_compare(user_query: str) -> bool:
             q,
         )
     )
+    if compare_cues and len(years) >= 2:
+        return True
     if compare_cues and is_billing_revenue_question(user_query):
         return True
     # Two explicit years + revenue wording often means period comparison even without "compare"
     if is_billing_revenue_question(user_query):
         return True
     return False
+
+
+def deterministic_year_compare_sql(years: List[str]) -> str:
+    """Header-grain VBRK totals by calendar year — no LLM."""
+    ys = [y for y in years if re.fullmatch(r"(?:19|20)\d{2}", str(y))][:4]
+    quoted = ", ".join(f"'{y}'" for y in ys)
+    return f"""
+SELECT
+  SUBSTRING(TRIM(k."fkdat"), 1, 4) AS calendar_year,
+  k."waerk" AS currency,
+  SUM(CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC)) AS total_sales
+FROM "VBRK" k
+WHERE TRIM(CAST(k."fkdat" AS TEXT)) <> ''
+  AND SUBSTRING(TRIM(k."fkdat"), 1, 4) IN ({quoted})
+GROUP BY SUBSTRING(TRIM(k."fkdat"), 1, 4), k."waerk"
+ORDER BY calendar_year, total_sales DESC
+""".strip()
 
 
 def build_billing_revenue_subqueries_for_years(years: List[str]) -> List[str]:

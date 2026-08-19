@@ -15,6 +15,7 @@ Every document distinguishes **Current (implemented in repo)** from **Proposed (
 | 05 | [Configuration Architecture](05_CONFIGURATION_ARCHITECTURE.md) | Engineers, DevOps |
 | 06 | [Deployment and Scalability](06_DEPLOYMENT_AND_SCALABILITY.md) | Engineers, DevOps |
 | 07 | [AI Architecture](07_AI_ARCHITECTURE.md) | Engineers, product |
+| — | [Adaptive query engines](adaptive-query-engines.md) | Engineers (NL→SQL routing; consolidation deferred) |
 | 08 | [Sequence Diagrams](08_SEQUENCE_DIAGRAMS.md) | Engineers, architects |
 | 09 | [Database Architecture](09_DATABASE_ARCHITECTURE.md) | Engineers, data |
 | 10 | [Client Presentation](10_CLIENT_PRESENTATION.md) | Customers, business |

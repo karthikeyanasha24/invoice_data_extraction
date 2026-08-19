@@ -340,11 +340,14 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
     vbrk_actual = next((t for t in (schema or {}) if t.upper() == "VBRK"), "VBRK")
     makt_actual = next((t for t in (schema or {}) if t.upper() == "MAKT"), "MAKT")
     kna1_actual = next((t for t in (schema or {}) if t.upper() == "KNA1"), "KNA1")
+    t016t_actual = next((t for t in (schema or {}) if t.upper() == "T016T"), "T016T")
     has_kna1_table = _schema_has_table(schema or {}, "KNA1")
+    has_t016t_table = _schema_has_table(schema or {}, "T016T")
     vbrp_ref = _quote_table(vbrp_actual)
     vbrk_ref = _quote_table(vbrk_actual)
     makt_ref = _quote_table(makt_actual)
     kna1_ref = _quote_table(kna1_actual) if has_kna1_table else ""
+    t016t_ref = _quote_table(t016t_actual) if has_t016t_table else ""
 
     metric_alias = str(metric.get("alias") or "total_sales")
 
@@ -357,6 +360,10 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
             yrs = [str(x) for x in (val or []) if str(x)]
             if yrs:
                 year_filter_parts.append(yrs)
+    if not year_filter_parts:
+        dbg_years = [str(x) for x in ((intent.get("debug") or {}).get("years") or []) if str(x)]
+        if dbg_years:
+            year_filter_parts.append(dbg_years)
 
     # Ranking with no dimension: with a calendar-year filter, default to billing document
     # (largest single invoice in SAP — VBRK/VBELN); otherwise default to product.
@@ -385,7 +392,66 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
     # full-scan CTE (which joins vbrp+VBRK across ALL years before filtering).
     # Each case queries only the tables it actually needs.
     single_dim = dim_cols[0] if len(dim_cols) == 1 else None
-    single_logical = logical_dims[0] if len(logical_dims) == 1 else None
+    if len(logical_dims) == 1:
+        single_logical = logical_dims[0]
+    elif len(dim_cols) <= 1 and "customer" in logical_dims:
+        # industry is mapped onto customer_id, so dim_cols collapses to 1
+        single_logical = "customer"
+    elif len(logical_dims) == 0:
+        single_logical = None
+    else:
+        single_logical = None
+
+    # Product + optional year/month/currency must NOT fall through to the CTE.
+    # "Top products 2004" previously scanned all VBRP×VBRK years and hung the SAP pool.
+    _product_fast_ok = (
+        "product" in logical_dims
+        and not any(
+            d in logical_dims for d in ("customer", "country", "industry", "billing_document")
+        )
+    )
+
+    def _year_where_sql() -> str:
+        if not year_filter_parts:
+            return ""
+        y_list = ", ".join("'" + y + "'" for y in year_filter_parts[0])
+        return f"\n  AND SUBSTRING(TRIM(CAST(v.\"fkdat\" AS TEXT)), 1, 4) IN ({y_list})"
+
+    if _product_fast_ok:
+        if metric_logical == "count":
+            metric_sql = f'COUNT(DISTINCT TRIM(p."vbeln")) AS {metric_alias}'
+        else:
+            metric_sql = (
+                f'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
+            )
+        order_by = f"ORDER BY {metric_alias} {ord_dir}"
+        limit_clause = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
+        # Filter VBRK by year first, then join line items. TRIM-only vbeln joins
+        # cannot use indexes and previously ran unbounded on product+year.
+        sql = f"""
+SELECT
+    TRIM(p."matnr")                                                          AS material_number,
+    COALESCE(NULLIF(TRIM(m."maktx"), ''), TRIM(p."matnr"))                  AS product,
+    TRIM(v."waerk")                                                          AS currency,
+    {metric_sql},
+    SUM(CAST(NULLIF(TRIM(CAST(p."fkimg" AS TEXT)), '') AS NUMERIC))          AS total_quantity,
+    COUNT(DISTINCT TRIM(p."vbeln"))                                          AS invoice_count
+FROM {vbrk_ref} v
+JOIN {vbrp_ref} p
+  ON LPAD(TRIM(CAST(p."vbeln" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v."vbeln" AS TEXT)), 10, '0')
+LEFT JOIN {makt_ref} m
+    ON TRIM(p."matnr") = TRIM(m."matnr")
+    AND (m."spras" = 'E' OR m."spras" IS NULL)
+WHERE v."fkdat" IS NOT NULL
+  AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''
+  AND p."matnr" IS NOT NULL
+  AND TRIM(p."matnr") <> ''
+  AND p."netwr" IS NOT NULL
+  AND v."waerk" IS NOT NULL{_year_where_sql()}
+GROUP BY TRIM(p."matnr"), TRIM(m."maktx"), TRIM(v."waerk")
+{order_by}
+{limit_clause}""".strip()
+        return sql
 
     if len(dim_cols) <= 1:
         # ── PRODUCT ranking/aggregate: vbrp + MAKT only (no VBRK needed) ──
@@ -395,15 +461,8 @@ def _build_sales_analytics_sql_if_possible(intent: Dict[str, Any], schema: Dict[
             else:
                 metric_sql = f'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
 
-            year_where = ""
-            if year_filter_parts:
-                y_list = ", ".join("'" + y + "'" for y in year_filter_parts[0])
-                year_where = f"\n  AND TRIM(CAST(p.\"fkdat\" AS TEXT)) IS NOT NULL"  # fallback; fkdat may not be on vbrp
-
             if single_logical == "product":
-                # Product fast path: join MAKT for description + VBRK for currency.
-                # Includes material number, currency, quantity and invoice count so
-                # the result table is as rich as a hand-written analytical query.
+                # Unreachable when _product_fast_ok; kept as a safe fallback.
                 order_by = f"ORDER BY {metric_alias} {ord_dir}"
                 limit_clause = f"LIMIT {lim_i}" if ranking.get("enabled") else ""
                 sql = f"""
@@ -414,24 +473,37 @@ SELECT
     SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC))          AS {metric_alias},
     SUM(CAST(NULLIF(TRIM(CAST(p."fkimg" AS TEXT)), '') AS NUMERIC))          AS total_quantity,
     COUNT(DISTINCT TRIM(p."vbeln"))                                          AS invoice_count
-FROM {vbrp_ref} p
-JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")
+FROM {vbrk_ref} v
+JOIN {vbrp_ref} p
+  ON LPAD(TRIM(CAST(p."vbeln" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v."vbeln" AS TEXT)), 10, '0')
 LEFT JOIN {makt_ref} m
     ON TRIM(p."matnr") = TRIM(m."matnr")
     AND (m."spras" = 'E' OR m."spras" IS NULL)
-WHERE p."matnr" IS NOT NULL
+WHERE v."fkdat" IS NOT NULL
+  AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''
+  AND p."matnr" IS NOT NULL
   AND TRIM(p."matnr") <> ''
   AND p."netwr" IS NOT NULL
-  AND v."waerk" IS NOT NULL
+  AND v."waerk" IS NOT NULL{_year_where_sql()}
 GROUP BY TRIM(p."matnr"), TRIM(m."maktx"), TRIM(v."waerk")
 {order_by}
 {limit_clause}""".strip()
             else:
-                # No dimension: total aggregate
+                if metric_logical == "count":
+                    tot_metric = f'COUNT(DISTINCT TRIM(v."vbeln")) AS {metric_alias}'
+                else:
+                    tot_metric = (
+                        f'SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
+                    )
                 sql = f"""
-SELECT {metric_sql}
-FROM {vbrp_ref} p
-WHERE p."netwr" IS NOT NULL""".strip()
+SELECT
+    TRIM(v."waerk") AS currency,
+    {tot_metric}
+FROM {vbrk_ref} v
+WHERE v."fkdat" IS NOT NULL
+  AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''{_year_where_sql()}
+GROUP BY TRIM(v."waerk")
+""".strip()
             return sql
 
         # ── LARGEST SINGLE BILLING DOCUMENT (SAP SE16 / VBRK-VBELN grain) ───────────
@@ -473,9 +545,13 @@ GROUP BY TRIM(v."vbeln"), TRIM(CAST(v."fkdat" AS TEXT)), TRIM(v."waerk")
                 metric_sql = f'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
 
             if single_logical == "customer":
+                metric_sql = (
+                    f'SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), \'\') AS NUMERIC)) AS {metric_alias}'
+                    if metric_logical != "count"
+                    else f'COUNT(DISTINCT TRIM(v."vbeln")) AS {metric_alias}'
+                )
                 dim_expr = 'TRIM(v."kunag")'
                 dim_alias = "customer"
-                # will add name join below
             elif single_logical == "country":
                 dim_expr = 'TRIM(v."land1")'
                 dim_alias = "country"
@@ -523,21 +599,32 @@ GROUP BY TRIM(v."vbeln"), TRIM(CAST(v."fkdat" AS TEXT)), TRIM(v."waerk")
                         f"{dim_expr})"
                     )
                     join_kna1 = f"\nLEFT JOIN {kna1_ref} k ON TRIM(k.\"kunnr\") = {dim_expr}"
+                    industry_select = ""
+                    industry_group = ""
+                    if "industry" in logical_dims and t016t_ref:
+                        join_kna1 += (
+                            f"\nLEFT JOIN {t016t_ref} t "
+                            "ON TRIM(CAST(k.\"brsch\" AS TEXT)) = TRIM(CAST(t.\"brsch\" AS TEXT))"
+                        )
+                        industry_select = ',\n    COALESCE(NULLIF(TRIM(t."brtxt"), \'\'), \'Not available\') AS industry'
+                        industry_group = ', COALESCE(NULLIF(TRIM(t."brtxt"), \'\'), \'Not available\')'
                 else:
                     intent["has_customer_names"] = False
                     cust_display = f"{dim_expr} AS customer_name"
                     cust_group = dim_expr
                     join_kna1 = ""
+                    industry_select = ""
+                    industry_group = ""
                 sql = f"""
 SELECT
     {dim_expr} AS {dim_alias},
-    {cust_display},
+    {cust_display}{industry_select},
+    TRIM(v."waerk") AS currency,
     {metric_sql}
-FROM {vbrp_ref} p
-JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln"){join_kna1}
+FROM {vbrk_ref} v{join_kna1}
 WHERE v."fkdat" IS NOT NULL
   AND TRIM(CAST(v."fkdat" AS TEXT)) <> ''{dim_notnull_guard}{year_where}
-GROUP BY {dim_expr}, {cust_group}
+GROUP BY {dim_expr}, {cust_group}{industry_group}, TRIM(v."waerk")
 {order_clause}
 {limit_clause}""".strip()
             else:
@@ -600,11 +687,13 @@ GROUP BY {dim_expr}
     cte_join = ""
     if needs_vbrk:
         cte_join = f"""
-    JOIN {vbrk_ref} v ON TRIM(p."vbeln") = TRIM(v."vbeln")"""
+    JOIN {vbrk_ref} v
+      ON LPAD(TRIM(CAST(p."vbeln" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v."vbeln" AS TEXT)), 10, '0')"""
         if "customer" in logical_dims and has_kna1_table and kna1_ref:
             intent["has_customer_names"] = True
             cte_join += f"""
-    LEFT JOIN {kna1_ref} k_cust ON TRIM(k_cust."kunnr") = TRIM(v."kunag")"""
+    LEFT JOIN {kna1_ref} k_cust
+      ON LPAD(TRIM(CAST(k_cust."kunnr" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v."kunag" AS TEXT)), 10, '0')"""
         elif "customer" in logical_dims:
             intent["has_customer_names"] = False
 

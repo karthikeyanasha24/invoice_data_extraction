@@ -359,12 +359,16 @@ def get_sap_engine():
     try:
         _sap_engine = create_engine(
             sap_url,
-            pool_size=2,
+            pool_size=5,
             max_overflow=5,
             pool_pre_ping=True,
             pool_recycle=1800,
             echo=False,
-            connect_args={"connect_timeout": 15},
+            connect_args={
+                "connect_timeout": 15,
+                # Safety net; per-query SET LOCAL statement_timeout still applies.
+                "options": "-c statement_timeout=20000",
+            },
         )
         _sap_session_factory = sessionmaker(autocommit=False, autoflush=False, bind=_sap_engine)
         return _sap_engine
