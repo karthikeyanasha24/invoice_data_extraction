@@ -5,7 +5,20 @@
 
 Entry point: `POST /api/query/adaptive` (`app/api/adaptive_query.py`).
 
-## Order of engines (new question)
+## Turn intent (before any engine)
+
+`contextData` means prior analytical state is available. It does **not** mean the user wants a continuation.
+
+```text
+USER MESSAGE → classify_turn() →
+  NON_BUSINESS / CLARIFICATION_REQUIRED → CLARIFICATION (no SQL, no charts, no narration)
+  FOLLOWUP_DELTA → deterministic_sql_delta (then intent_sql_fast / universal)
+  NEW_ANALYTICAL_QUERY / NEW_ANALYTICAL_QUERY_WITH_CONTEXT → fresh SQL engines
+```
+
+`classify_turn` lives in `app/services/ai_followup_routing.py`. `_followup_analysis` is not a fallback for unrecognized deltas.
+
+## Order of engines (new analytical question)
 
 | Order | Engine id (`reason` / `pipeline`) | When it wins | LLM SQL? | Guardrails in this pass |
 |------|-------------------------------------|--------------|----------|-------------------------|

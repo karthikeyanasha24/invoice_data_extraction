@@ -34,7 +34,8 @@ from ..database import get_db
 from ..config.config import OPENAI_API_KEY, USE_SAP_DB_FOR_AI
 from ..database import get_sap_session
 from ..services.ai_followup_routing import (
-    follow_up_requires_fresh_sql,
+    TurnIntent,
+    classify_turn,
     resolve_follow_up_sql_need,
 )
 from ..services.adaptive_nl_sql_hardening import (
@@ -46,7 +47,6 @@ from ..services.adaptive_nl_sql_hardening import (
     deterministic_summary,
     extract_named_customer,
     inject_customer_name_predicate,
-    is_supported_business_question,
     local_sql_relation_names,
     public_chart_title,
     question_asks_date_filter,
@@ -2407,6 +2407,11 @@ def _diagnose_empty_result(
 
 def _followup_analysis(question: str, prev_q: str, prev_sql: str,
                        rows: List[Dict], api_key: str) -> str:
+    """Prior-result narration helper.
+
+    Not a routing fallback. Unrecognized deltas and non-business turns must not
+    call this; they go to fresh SQL or CLARIFICATION instead.
+    """
     from openai import OpenAI
     from ..services.schema_context_builder import build_schema_context
     from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
@@ -2591,9 +2596,14 @@ async def post_query_adaptive(
         thread_id = None  # ignore non-adaptive thread ids
     user_id = int(current_user.id) if current_user is not None else None
 
+    routing_meta: Dict[str, Any] = {}
+
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
+        if routing_meta.get("turn_intent"):
+            meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+            payload["meta"] = {**meta, "turn_intent": routing_meta["turn_intent"]}
         sql_l = (payload.get("sql") or "").lower()
         if payload.get("answer_status") == "CANNOT_ANSWER" and (
             "invoice_v2_business_data" in sql_l and "total_rows" in sql_l
@@ -2698,150 +2708,147 @@ async def post_query_adaptive(
     if _looks_like_schema_structure_question(clean_q):
         return _persist_and_return(_build_schema_structure_payload(clean_q))
 
-    # Intent gate must run on every message, including continuation/follow-up.
-    # Path 2 previously skipped it and narrated the prior result set for chit-chat.
-    allowed, gate_reason = is_supported_business_question(clean_q)
-    if not allowed:
-        logger.info(
-            "[adaptive] intent gate blocked question reason=%s continuation=%s",
-            gate_reason,
-            bool(contextData),
-        )
-        return _persist_and_return(clarification_payload(clean_q, gate_reason))
-
-    # ── Path 2: Follow-up — semantic plan delta → fresh SQL, else narrative ──
+    # Previous context is an input to classification, never proof of continuation.
+    prev_q = ""
+    prev_sql = ""
+    prev_plan_dict = None
+    prev_status = ""
+    rows_list: List[Dict[str, Any]] = []
     if contextData and isinstance(contextData, dict):
-        prev_q   = str(contextData.get("previousQuestion") or "").strip()
+        prev_q = str(contextData.get("previousQuestion") or "").strip()
         prev_sql = str(contextData.get("previousSQL") or "").strip()
         prev_plan_raw = contextData.get("previousPlan") or contextData.get("queryPlan")
         prev_plan_dict = prev_plan_raw if isinstance(prev_plan_raw, dict) else None
         prev_status = str(contextData.get("previousAnswerStatus") or "").strip().upper()
         rows_raw = contextData.get("data")
-        rows_list: List[Dict[str, Any]] = rows_raw if isinstance(rows_raw, list) else []
-
-        # Failed prior turn must not contaminate follow-up with stale SQL/rows
+        rows_list = rows_raw if isinstance(rows_raw, list) else []
         if prev_status == "CANNOT_ANSWER" or (
             "invoice_v2_business_data" in prev_sql.lower() and "total_rows" in prev_sql.lower()
         ):
             prev_sql = ""
+            prev_plan_dict = None
             rows_list = []
-            logger.info("[adaptive] cleared contaminated prior SQL/rows before follow-up")
+            logger.info("[adaptive] cleared contaminated prior SQL/rows before turn classification")
 
-        needs_sql, merged_plan = resolve_follow_up_sql_need(
-            q, previous_question=prev_q, previous_sql=prev_sql, previous_plan=prev_plan_dict
+    turn = classify_turn(
+        clean_q,
+        previous_question=prev_q,
+        previous_sql=prev_sql,
+        previous_plan=prev_plan_dict,
+        previous_status=prev_status,
+    )
+    routing_meta["turn_intent"] = turn.intent
+    logger.info(
+        "[adaptive] turn_intent=%s reason=%s has_context=%s",
+        turn.intent,
+        turn.reason,
+        bool(prev_sql or prev_plan_dict),
+    )
+
+    if turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}:
+        return _persist_and_return(clarification_payload(clean_q, turn.reason))
+
+    # ── Path 2: recognized follow-up delta only (never "contextData exists") ──
+    if turn.intent == TurnIntent.FOLLOWUP_DELTA:
+        merged_plan = turn.plan
+        if merged_plan is None:
+            _needs, merged_plan = resolve_follow_up_sql_need(
+                q, previous_question=prev_q, previous_sql=prev_sql, previous_plan=prev_plan_dict
+            )
+        augmented = _compose_drilldown_user_message(
+            q, prev_q, prev_sql, rows_list, plan=merged_plan
         )
-        # Keep backward-compatible boolean helper in sync for logs/tests
-        if needs_sql or follow_up_requires_fresh_sql(
-            q, previous_question=prev_q, previous_sql=prev_sql, previous_plan=prev_plan_dict
-        ):
-            augmented = _compose_drilldown_user_message(
-                q, prev_q, prev_sql, rows_list, plan=merged_plan
-            )
-            logger.info(
-                "[universal] follow-up → fresh SQL deltas=%s fingerprint=%s",
-                merged_plan.delta_ops,
-                merged_plan.fingerprint(),
-            )
+        logger.info(
+            "[universal] follow-up → fresh SQL deltas=%s fingerprint=%s",
+            merged_plan.delta_ops,
+            merged_plan.fingerprint(),
+        )
+        try:
+            use_sap = bool(USE_SAP_DB_FOR_AI)
+            result = None
+            sql_method = "universal_llm"
+            sap_sess = get_sap_session() if use_sap else None
+            exec_sess = sap_sess if sap_sess is not None else db
             try:
-                use_sap = bool(USE_SAP_DB_FOR_AI)
-                result = None
-                sql_method = "universal_llm"
-                sap_sess = get_sap_session() if use_sap else None
-                exec_sess = sap_sess if sap_sess is not None else db
-                try:
-                    delta_sql = apply_plan_sql_deltas(prev_sql, merged_plan) if prev_sql else ""
-                    if delta_sql:
+                delta_sql = apply_plan_sql_deltas(prev_sql, merged_plan) if prev_sql else ""
+                if delta_sql:
+                    try:
+                        rows_d = _execute_sql(exec_sess, delta_sql, q)
+                        sql_method = "deterministic_sql_delta"
+                        result = {
+                            "sql": delta_sql,
+                            "rowCount": len(rows_d),
+                            "data": rows_d,
+                            "summary": deterministic_summary(q, rows_d, delta_sql),
+                            "sql_generation_method": sql_method,
+                            "llm_calls": 0,
+                            "pipeline": sql_method,
+                        }
+                    except Exception as delta_err:
+                        logger.info("[adaptive] follow-up SQL delta failed: %s", delta_err)
                         try:
-                            rows_d = _execute_sql(exec_sess, delta_sql, q)
-                            sql_method = "deterministic_sql_delta"
-                            result = {
-                                "sql": delta_sql,
-                                "rowCount": len(rows_d),
-                                "data": rows_d,
-                                "summary": deterministic_summary(q, rows_d, delta_sql),
-                                "sql_generation_method": sql_method,
-                                "llm_calls": 0,
-                                "pipeline": sql_method,
-                            }
-                        except Exception as delta_err:
-                            logger.info("[adaptive] follow-up SQL delta failed: %s", delta_err)
-                            try:
-                                exec_sess.rollback()
-                            except Exception:
-                                pass
-                    if result is None:
-                        composed = compose_nl_from_plan(merged_plan)
-                        from ..services.intent_dashboard_fast_path import (
-                            try_intent_dashboard_fast_path,
-                        )
-                        fast = try_intent_dashboard_fast_path(exec_sess, composed)
-                        if fast and (fast.get("sql") or ""):
-                            sql_f = apply_plan_sql_deltas(str(fast.get("sql") or ""), merged_plan)
-                            if sql_f != str(fast.get("sql") or ""):
-                                rows_f = _execute_sql(exec_sess, sql_f, q)
-                            else:
-                                rows_f = list(fast.get("rows_preview") or [])
-                            sql_method = "intent_sql_fast"
-                            result = {
-                                "sql": sql_f,
-                                "rowCount": len(rows_f),
-                                "data": rows_f,
-                                "summary": deterministic_summary(q, rows_f, sql_f),
-                                "sql_generation_method": sql_method,
-                                "llm_calls": 0,
-                                "pipeline": sql_method,
-                            }
-                    if result is None:
-                        result = _universal_query(
-                            augmented, api_key, db, use_sap, max_retries=3, plan=merged_plan,
-                            display_question=q,
-                        )
-                        if result:
-                            result["sql_generation_method"] = "universal_llm"
-                            result["llm_calls"] = (result.get("stage_timings") or {}).get("sql_llm_calls")
-                finally:
-                    if sap_sess is not None:
-                        try:
-                            sap_sess.close()
+                            exec_sess.rollback()
                         except Exception:
                             pass
-                if result:
-                    result["follow_up_mode"] = "drill_down_sql"
-                    result["query_plan"] = merged_plan.to_dict()
-                    result["plan_fingerprint"] = merged_plan.fingerprint()
-                    result["tableHint"] = tableHint
-                    result["charts"] = _ensure_charts(
-                        q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
+                if result is None:
+                    composed = compose_nl_from_plan(merged_plan)
+                    from ..services.intent_dashboard_fast_path import (
+                        try_intent_dashboard_fast_path,
                     )
-                    if not (result.get("data") or []):
-                        result["summary"] = _diagnose_empty_result(
-                            q, result.get("sql") or "", merged_plan, db
-                        )
-                    return _persist_and_return(result)
-            except Exception as drill_err:
-                logger.warning("[universal] drill-down SQL path failed: %s", drill_err)
-            # Never narrate prior rows / suggest EDI SQL as if it answered the semantic delta
-            return _persist_and_return(
-                _cannot_answer_payload(
-                    q,
-                    reason="follow-up required fresh SQL but generation failed after retries",
-                    plan=merged_plan,
-                    follow_up_mode="sql_failed",
+                    fast = try_intent_dashboard_fast_path(exec_sess, composed)
+                    if fast and (fast.get("sql") or ""):
+                        sql_f = apply_plan_sql_deltas(str(fast.get("sql") or ""), merged_plan)
+                        if sql_f != str(fast.get("sql") or ""):
+                            rows_f = _execute_sql(exec_sess, sql_f, q)
+                        else:
+                            rows_f = list(fast.get("rows_preview") or [])
+                        sql_method = "intent_sql_fast"
+                        result = {
+                            "sql": sql_f,
+                            "rowCount": len(rows_f),
+                            "data": rows_f,
+                            "summary": deterministic_summary(q, rows_f, sql_f),
+                            "sql_generation_method": sql_method,
+                            "llm_calls": 0,
+                            "pipeline": sql_method,
+                        }
+                if result is None:
+                    result = _universal_query(
+                        augmented, api_key, db, use_sap, max_retries=3, plan=merged_plan,
+                        display_question=q,
+                    )
+                    if result:
+                        result["sql_generation_method"] = "universal_llm"
+                        result["llm_calls"] = (result.get("stage_timings") or {}).get("sql_llm_calls")
+            finally:
+                if sap_sess is not None:
+                    try:
+                        sap_sess.close()
+                    except Exception:
+                        pass
+            if result:
+                result["follow_up_mode"] = "drill_down_sql"
+                result["query_plan"] = merged_plan.to_dict()
+                result["plan_fingerprint"] = merged_plan.fingerprint()
+                result["tableHint"] = tableHint
+                result["charts"] = _ensure_charts(
+                    q, result.get("sql") or "", result.get("data") or [], result.get("charts"),
                 )
+                if not (result.get("data") or []):
+                    result["summary"] = _diagnose_empty_result(
+                        q, result.get("sql") or "", merged_plan, db
+                    )
+                return _persist_and_return(result)
+        except Exception as drill_err:
+            logger.warning("[universal] drill-down SQL path failed: %s", drill_err)
+        return _persist_and_return(
+            _cannot_answer_payload(
+                q,
+                reason="follow-up required fresh SQL but generation failed after retries",
+                plan=merged_plan,
+                follow_up_mode="sql_failed",
             )
-
-        try:
-            answer = _followup_analysis(q, prev_q, prev_sql, rows_list, api_key)
-            return _persist_and_return({
-                "type": "analysis",
-                "answer": answer,
-                "summary": answer,
-                "query_plan": merged_plan.to_dict(),
-                "follow_up_mode": "narrative",
-                "answer_status": "PARTIAL",
-            })
-        except Exception as e:
-            raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
+        )
 
     named_customer = extract_named_customer(clean_q)
 

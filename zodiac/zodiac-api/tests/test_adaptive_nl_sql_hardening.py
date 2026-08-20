@@ -376,7 +376,8 @@ def test_intent_gate_allows_short_business_blocks_chit_chat():
     for q in ("sales 2004", "top customers", "invoice count", "highest industry"):
         ok, _reason = is_supported_business_question(q)
         assert ok, q
-    for q in ("meaning of life", "weather today", "tell me a joke", "who is the president", "hello"):
+    for q in ("meaning of life", "weather today", "tell me a joke", "who is the president", "hello",
+              "what's your favorite color?", "who invented the telephone", "who is the ceo of microsoft"):
         ok, _reason = is_supported_business_question(q)
         assert not ok, q
 

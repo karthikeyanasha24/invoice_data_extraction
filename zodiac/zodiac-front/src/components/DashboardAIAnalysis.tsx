@@ -133,6 +133,32 @@ type Message = {
   ts: number;
 };
 
+function lastSuccessfulAnalyticalContext(messages: Message[]) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'assistant' || !m.result) continue;
+    const st = String((m.result as any).answer_status || '').toUpperCase();
+    if (st === 'CLARIFICATION' || st === 'CANNOT_ANSWER' || st === 'ERROR') continue;
+    const sql = (m.result.sql || '').trim();
+    if (!sql) continue;
+    let previousQuestion = '';
+    for (let j = i - 1; j >= 0; j--) {
+      if (messages[j].role === 'user') {
+        previousQuestion = messages[j].content;
+        break;
+      }
+    }
+    return {
+      previousQuestion,
+      previousSQL: sql,
+      previousPlan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
+      previousAnswerStatus: (m.result as any).answer_status || 'SUCCESS',
+      data: m.result.data?.slice(0, 20) || [],
+    };
+  }
+  return null;
+}
+
 // ─── Copy hook ────────────────────────────────────────────────────────────────
 function useCopy() {
   const [copied, setCopied] = useState(false);
@@ -557,18 +583,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
 
-    // build contextData only when the user is following up (not starting a new question)
-    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.result);
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
-    const contextData = (!isNewQuestion && lastAssistant?.result)
-      ? {
-          previousQuestion: lastUser?.content || lastAssistant.content,
-          previousSQL:      lastAssistant.result.sql || '',
-          previousPlan:     (lastAssistant.result as any).query_plan || (lastAssistant.result as any).queryPlan || null,
-          previousAnswerStatus: (lastAssistant.result as any).answer_status || null,
-          data:             lastAssistant.result.data?.slice(0, 20) || [],
-        }
-      : null;
+    // Context is prior analytical state, not "this message is a continuation".
+    // Skip CLARIFICATION / empty-SQL turns so nonsense does not replace active state.
+    const analytical = lastSuccessfulAnalyticalContext(messages);
+    const contextData = (!isNewQuestion && analytical) ? analytical : null;
     setIsNewQuestion(false); // reset after each send
 
     try {

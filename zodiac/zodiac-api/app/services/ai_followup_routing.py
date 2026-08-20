@@ -5,13 +5,96 @@ Used by adaptive_query (Dashboard adaptive panel) and ai_analysis_orchestrator (
 
 R1: Prefer semantic QueryPlan deltas (ai_query_plan) over brittle token lists.
 Legacy drill-down tokens remain as a safety net.
+
+Turn classification (internal): previous context is an input, never proof of continuation.
 """
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 from .ai_query_plan import QueryPlan, follow_up_needs_fresh_sql
+from .adaptive_nl_sql_hardening import is_supported_business_question
+
+
+class TurnIntent:
+    """Internal route labels — never shown in user-facing copy."""
+
+    NEW_ANALYTICAL_QUERY = "NEW_ANALYTICAL_QUERY"
+    FOLLOWUP_DELTA = "FOLLOWUP_DELTA"
+    NEW_ANALYTICAL_QUERY_WITH_CONTEXT = "NEW_ANALYTICAL_QUERY_WITH_CONTEXT"
+    NON_BUSINESS = "NON_BUSINESS"
+    CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
+
+
+@dataclass
+class TurnClassification:
+    intent: str
+    reason: str
+    plan: Optional[QueryPlan] = None
+
+
+_TRUE_DELTA_PREFIXES = (
+    "add_filter:",
+    "remove_filter:",
+    "change_ranking:",
+    "change_time:",
+    "change_metric:",
+    "change_grain:",
+    "add_dimension:",
+    "remove_dimension:",
+    "ensure_dimension:",
+)
+
+_FOLLOWUP_UTTERANCE = re.compile(
+    r"(?x)^\s*("
+    r"(now\s+|then\s+)?(only|just)\b.*"
+    r"|(now\s+|then\s+)?((show|give)\s+(me\s+)?)?(the\s+)?(top|bottom)\s+\d+\b.*"
+    r"|compare\s+(with|to|vs|versus)\b.*"
+    r"|(remove|clear|drop)\b.{0,40}\b(filter|trading|industry)\b.*"
+    r"|.*\binstead\b.*"
+    r"|(the\s+)?(top|bottom)\s+\d+(\s+(only|please))?"
+    r"|trading"
+    r"|count"
+    r"|sales"
+    r"|invoice\s+count"
+    r"|highest\s+industry"
+    r"|lowest\s+sales"
+    r"|remove\s+trading"
+    r"|(19|20)\d{2}"
+    r"|filter\s+(to|by)\b.*"
+    r")\s*\??\s*$",
+    re.IGNORECASE,
+)
+
+_STANDALONE_VERB = re.compile(
+    r"\b(show|what (are|were|is|was)|who|which|how many|list|give me)\b",
+    re.IGNORECASE,
+)
+_STANDALONE_METRIC = re.compile(
+    r"\b(sales|revenue|invoice count|invoices|customers?|products?)\b",
+    re.IGNORECASE,
+)
+_AMBIGUOUS_TURN = re.compile(
+    r"(?x)^\s*("
+    r"what\s+about\b(?!.*\b(trading|industry|customer|sales|invoice|year|20\d{2})\b).*"
+    r"|(and|also)\s+(that|this|those)\??"
+    r")\s*$",
+    re.IGNORECASE,
+)
+_NON_ANALYTICAL_TOPIC = re.compile(
+    r"(?x)"
+    r"\bmeaning of life\b"
+    r"|\btell me a joke\b"
+    r"|\bfavorite color\b"
+    r"|\bweather\b"
+    r"|\bwho invented the telephone\b"
+    r"|\bceo of microsoft\b"
+    r"|^(explain(\s+what)?\s+sap(\s+is|\s+means)?)\s*\??$"
+    r"|\bwho is the president\b",
+    re.IGNORECASE,
+)
 
 _DRILL_DOWN_OR_FRESH_SQL = re.compile(
     r"\b("
@@ -128,3 +211,117 @@ def follow_up_requires_fresh_sql(
     if needs:
         return True
     return _legacy_follow_up_requires_fresh_sql(question)
+
+
+def looks_like_followup_utterance(question: str) -> bool:
+    q = (question or "").strip()
+    if not q:
+        return False
+    return bool(_FOLLOWUP_UTTERANCE.match(q))
+
+
+def looks_like_standalone_analytical(question: str) -> bool:
+    """Complete restatement that must replace active analytical state, not patch it."""
+    q = (question or "").strip()
+    if not q or looks_like_followup_utterance(q):
+        return False
+    has_verb = bool(_STANDALONE_VERB.search(q))
+    has_year = bool(re.search(r"\b(19|20)\d{2}\b", q))
+    has_metric = bool(_STANDALONE_METRIC.search(q))
+    if has_verb and has_year and has_metric:
+        return True
+    if has_verb and has_metric and len(q) >= 24:
+        return True
+    return False
+
+
+def has_active_analysis_state(
+    previous_sql: str = "",
+    previous_plan: Optional[Dict[str, Any]] = None,
+    previous_status: str = "",
+) -> bool:
+    """True when there is a prior successful analytical query to modify.
+
+    CLARIFICATION / CANNOT_ANSWER are not active analysis. Presence of context
+    payload is not enough — the prior turn must have been an analytical success.
+    """
+    status = (previous_status or "").strip().upper()
+    if status in {"CLARIFICATION", "CANNOT_ANSWER", "ERROR"}:
+        return False
+    sql = (previous_sql or "").strip()
+    if sql and re.search(r"\bselect\b", sql, re.I):
+        return True
+    if isinstance(previous_plan, dict) and (
+        previous_plan.get("delta_ops")
+        or previous_plan.get("filters")
+        or previous_plan.get("dimensions")
+        or previous_plan.get("limit")
+        or previous_plan.get("comparison_years")
+    ):
+        return True
+    return False
+
+
+def _is_true_followup_delta(plan: QueryPlan) -> bool:
+    for op in plan.delta_ops or []:
+        if op in {"narrative", "initial"}:
+            continue
+        if op == "legacy_drill_token":
+            return True
+        if any(str(op).startswith(p) for p in _TRUE_DELTA_PREFIXES):
+            return True
+    return False
+
+
+def classify_turn(
+    question: str,
+    previous_question: str = "",
+    previous_sql: str = "",
+    previous_plan: Optional[Dict[str, Any]] = None,
+    previous_status: str = "",
+) -> TurnClassification:
+    """Classify this user turn before any SQL, delta, narration, or chart path.
+
+    Previous context informs the decision; it never forces FOLLOWUP_DELTA by itself.
+    """
+    q = (question or "").strip()
+    ql = q.lower()
+    has_active = has_active_analysis_state(previous_sql, previous_plan, previous_status)
+
+    if _NON_ANALYTICAL_TOPIC.search(ql):
+        return TurnClassification(TurnIntent.NON_BUSINESS, "non_analytical_topic")
+
+    allowed, gate_reason = is_supported_business_question(
+        q, has_active_analysis=has_active
+    )
+    if not allowed:
+        if gate_reason == "non_business" or gate_reason == "unsafe_or_non_business":
+            return TurnClassification(TurnIntent.NON_BUSINESS, gate_reason)
+        if _AMBIGUOUS_TURN.match(q):
+            return TurnClassification(TurnIntent.CLARIFICATION_REQUIRED, "ambiguous")
+        return TurnClassification(TurnIntent.CLARIFICATION_REQUIRED, gate_reason)
+
+    if _AMBIGUOUS_TURN.match(q):
+        return TurnClassification(TurnIntent.CLARIFICATION_REQUIRED, "ambiguous")
+
+    if not has_active:
+        return TurnClassification(TurnIntent.NEW_ANALYTICAL_QUERY, "fresh_turn")
+
+    if looks_like_standalone_analytical(q):
+        return TurnClassification(TurnIntent.NEW_ANALYTICAL_QUERY, "standalone_restatement")
+
+    needs_sql, plan = resolve_follow_up_sql_need(
+        q,
+        previous_question=previous_question,
+        previous_sql=previous_sql,
+        previous_plan=previous_plan,
+    )
+    followup_shape = looks_like_followup_utterance(q)
+    if followup_shape or (needs_sql and _is_true_followup_delta(plan)):
+        return TurnClassification(TurnIntent.FOLLOWUP_DELTA, "recognized_delta", plan)
+
+    return TurnClassification(
+        TurnIntent.NEW_ANALYTICAL_QUERY_WITH_CONTEXT,
+        "business_with_context_not_delta",
+        plan,
+    )

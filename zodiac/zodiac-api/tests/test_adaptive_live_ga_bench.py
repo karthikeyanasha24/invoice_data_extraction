@@ -156,3 +156,82 @@ def test_live_six_step_followup_under_warm_latency():
             "data": (payload.get("data") or [])[:20],
         }
     assert len(rows) == 6
+
+
+def _context_from_payload(question: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "previousQuestion": question,
+        "previousSQL": payload.get("sql") or "",
+        "previousPlan": payload.get("query_plan"),
+        "previousAnswerStatus": payload.get("answer_status"),
+        "data": (payload.get("data") or [])[:20],
+    }
+
+
+def test_live_golden_context_switch_conversation():
+    """Nine-turn production regression: 6-step chain, nonsense, fresh 2005, then top 3."""
+    steps = [
+        "Show me highest sales for the year 2004 with customer and industry",
+        "Only the Trading industry",
+        "Now show the top 5",
+        "Compare with 2003",
+        "Remove the Trading filter",
+        "Show invoice count instead",
+        "Meaning of life",
+        "Show sales for 2005",
+        "Top 3",
+    ]
+    ctx: Dict[str, Any] | None = None
+    last_analytical: Dict[str, Any] | None = None
+    times: List[float] = []
+    for i, q in enumerate(steps, start=1):
+        t0 = time.perf_counter()
+        payload = _post_adaptive(q, ctx)
+        elapsed = time.perf_counter() - t0
+        times.append(elapsed)
+        status = str(payload.get("answer_status") or "")
+        method = str(payload.get("sql_generation_method") or payload.get("pipeline") or "")
+        sql = payload.get("sql") or ""
+        rows = payload.get("data") or []
+        blob = str(payload).lower()
+        print(
+            f"golden_turn {i} q={q!r} s={elapsed:.2f} status={status} method={method} "
+            f"rows={len(rows)} intent={(payload.get('meta') or {}).get('turn_intent')}"
+        )
+        if i == 1:
+            names = " ".join(str(r.get("customer_name") or r.get("name1") or "") for r in rows).lower()
+            blob_rows = str(rows)
+            assert "motomarkt" in names or "motomarkt" in blob_rows.lower(), rows[:3]
+            assert any("6099225" in str(r).replace(",", "") or "6,099,225" in str(r) or
+                       abs(float(str(r.get("total_sales") or r.get("netwr") or 0).replace(",", "") or 0) - 6099225) < 1
+                       for r in rows), rows[:5]
+        if i == 3:
+            assert len(rows) == 5, {"rows": len(rows), "sql": sql[:300]}
+        if i == 4:
+            joined = sql + str(rows)
+            assert "2003" in joined and "2004" in joined
+        if i == 6:
+            assert "count" in sql.lower() and "vbeln" in sql.lower()
+        if i == 7:
+            assert status == "CLARIFICATION"
+            assert not str(sql).strip()
+            assert "cbd" not in blob
+            assert "from your result set" not in blob
+            assert elapsed < P95_TARGET_S
+            ctx = last_analytical
+            continue
+        if i == 8:
+            assert status != "CLARIFICATION"
+            assert "2005" in sql
+            assert "invoice_count" not in sql.lower() or "2005" in sql
+        if i == 9:
+            assert len(rows) <= 3 or "limit 3" in sql.lower()
+            assert "2005" in sql or "2005" in str(rows)
+        if i >= 2 and i <= 6:
+            assert method != "universal_llm", {"step": i, "method": method}
+            assert elapsed < P95_TARGET_S
+        ctx = _context_from_payload(q, payload)
+        if status not in {"CLARIFICATION", "CANNOT_ANSWER"} and sql:
+            last_analytical = ctx
+    print(f"golden_times={ [round(t, 2) for t in times] }")
+    assert len(times) == 9

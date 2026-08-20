@@ -56,8 +56,16 @@ _NONSENSE_HINTS = (
     "meaning of life", "drop all tables", "write a poem", "tell me a joke",
     "what is 2+2", "hello world", "lorem ipsum", "sing a song",
     "how are you", "what's your name", "who are you",
-    "favorite color", "what's the weather", "who is the president",
+    "favorite color", "what's the weather", "weather today",
+    "who is the president", "who invented the telephone",
+    "ceo of microsoft",
 )
+
+_SHORT_FOLLOWUP_TOKENS = {
+    "trading", "top", "bottom", "count", "sales", "remove", "filter",
+    "compare", "instead", "highest", "lowest", "industry", "invoice",
+    "rank",
+}
 
 
 class StageTimer:
@@ -586,10 +594,14 @@ def repair_generated_sql(sql: str, question: str = "") -> str:
     return out
 
 
-def is_supported_business_question(question: str) -> Tuple[bool, str]:
+def is_supported_business_question(
+    question: str,
+    has_active_analysis: bool = False,
+) -> Tuple[bool, str]:
     """
     Gate before SQL generation, result narration, and continuation handling.
     Runs on every incoming message, including follow-ups that carry prior context.
+    Short analytical follow-ups stay allowed when active analysis exists.
     Returns (allowed, reason).
     """
     q = (question or "").strip()
@@ -608,6 +620,8 @@ def is_supported_business_question(question: str) -> Tuple[bool, str]:
         return True, "business_token"
     if re.search(r"\b(20\d{2}|19\d{2})\b", q):
         return True, "year"
+    if has_active_analysis and tokens.intersection(_SHORT_FOLLOWUP_TOKENS):
+        return True, "followup_context"
     if len(q) < 12:
         return False, "too_short"
     return False, "no_business_signal"
