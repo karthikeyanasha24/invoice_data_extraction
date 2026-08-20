@@ -14,6 +14,13 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { dashboardApi } from '@/lib/api';
+import {
+  ADAPTIVE_CONTEXT_POLICY,
+  buildFollowupContextData,
+  lastSuccessfulAnalyticalContext,
+  updateLastSuccessfulAnalyticalContext,
+  type LastSuccessfulAnalyticalContext,
+} from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -132,32 +139,6 @@ type Message = {
   result?: QueryResult;
   ts: number;
 };
-
-function lastSuccessfulAnalyticalContext(messages: Message[]) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== 'assistant' || !m.result) continue;
-    const st = String((m.result as any).answer_status || '').toUpperCase();
-    if (st === 'CLARIFICATION' || st === 'CANNOT_ANSWER' || st === 'ERROR') continue;
-    const sql = (m.result.sql || '').trim();
-    if (!sql) continue;
-    let previousQuestion = '';
-    for (let j = i - 1; j >= 0; j--) {
-      if (messages[j].role === 'user') {
-        previousQuestion = messages[j].content;
-        break;
-      }
-    }
-    return {
-      previousQuestion,
-      previousSQL: sql,
-      previousPlan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
-      previousAnswerStatus: (m.result as any).answer_status || 'SUCCESS',
-      data: m.result.data?.slice(0, 20) || [],
-    };
-  }
-  return null;
-}
 
 // ─── Copy hook ────────────────────────────────────────────────────────────────
 function useCopy() {
@@ -511,6 +492,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef    = useRef<HTMLTextAreaElement>(null);
   const initialSentRef = useRef<string | null>(null);
+  const lastSuccessfulAnalyticalRef = useRef<LastSuccessfulAnalyticalContext | null>(null);
 
   // Resolve / restore adaptive thread id once on mount
   useEffect(() => {
@@ -538,12 +520,17 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               charts: m.result.charts || [],
               summary: m.result.summary || m.content,
               query_plan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
-              answer_status: (m.result as any).answer_status || 'SUCCESS',
+              answer_status: (m.result as any).answer_status
+                || ((m.result.sql || '').trim() ? 'SUCCESS' : 'CLARIFICATION'),
             } : undefined,
             ts: Date.now() + i,
           }));
         if (restored.length > 0) {
-          setMessages((prev) => (prev.length === 0 ? restored : prev));
+          setMessages((prev) => {
+            if (prev.length !== 0) return prev;
+            lastSuccessfulAnalyticalRef.current = lastSuccessfulAnalyticalContext(restored);
+            return restored;
+          });
         }
       } catch {
         /* history optional */
@@ -583,10 +570,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
 
-    // Context is prior analytical state, not "this message is a continuation".
-    // Skip CLARIFICATION / empty-SQL turns so nonsense does not replace active state.
-    const analytical = lastSuccessfulAnalyticalContext(messages);
-    const contextData = (!isNewQuestion && analytical) ? analytical : null;
+    // Follow-up context is the last successful analytical state, not the latest
+    // chat turn. Clarification / non-business replies do not update this ref.
+    const contextData = buildFollowupContextData(
+      lastSuccessfulAnalyticalRef.current,
+      isNewQuestion,
+    );
     setIsNewQuestion(false); // reset after each send
 
     try {
@@ -645,6 +634,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         result: res.type === 'analysis' && !isCannotAnswer ? undefined : result,
         ts: Date.now(),
       };
+      if (!isClarification && !isCannotAnswer) {
+        lastSuccessfulAnalyticalRef.current = updateLastSuccessfulAnalyticalContext(
+          lastSuccessfulAnalyticalRef.current,
+          q,
+          result,
+        );
+      }
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err: any) {
       setError(err.message || 'Query failed. Please try rephrasing.');
@@ -677,6 +673,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
   const clearAll = () => {
     setMessages([]);
+    lastSuccessfulAnalyticalRef.current = null;
     setError(null);
     // Start a fresh adaptive thread so cleared UI does not reload old turns
     if (typeof window !== 'undefined') {
@@ -688,7 +685,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-50">
+    <div
+      className="flex flex-col h-full bg-slate-50"
+      data-adaptive-context-policy={ADAPTIVE_CONTEXT_POLICY}
+    >
 
       {/* ── Header ── */}
       <div className="flex-none bg-gradient-to-r from-indigo-50/80 via-white to-violet-50/60 border-b border-slate-200 px-5 py-3.5">

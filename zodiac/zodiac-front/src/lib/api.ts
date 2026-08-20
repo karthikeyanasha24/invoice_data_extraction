@@ -1819,6 +1819,8 @@ export const dashboardApi = {
         contextData?: {
             previousQuestion?: string;
             previousSQL?: string;
+            previousPlan?: unknown;
+            previousAnswerStatus?: string;
             data?: any[];
         } | null;
         overrideSql?: string | null;
