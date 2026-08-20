@@ -56,6 +56,7 @@ _NONSENSE_HINTS = (
     "meaning of life", "drop all tables", "write a poem", "tell me a joke",
     "what is 2+2", "hello world", "lorem ipsum", "sing a song",
     "how are you", "what's your name", "who are you",
+    "favorite color", "what's the weather", "who is the president",
 )
 
 
@@ -587,7 +588,8 @@ def repair_generated_sql(sql: str, question: str = "") -> str:
 
 def is_supported_business_question(question: str) -> Tuple[bool, str]:
     """
-    Gate before SQL generation. Follow-ups should skip this (they have context).
+    Gate before SQL generation, result narration, and continuation handling.
+    Runs on every incoming message, including follow-ups that carry prior context.
     Returns (allowed, reason).
     """
     q = (question or "").strip()

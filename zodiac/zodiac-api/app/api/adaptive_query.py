@@ -2691,6 +2691,24 @@ async def post_query_adaptive(
             "summary": summary, "tableHint": tableHint, "charts": charts,
         })
 
+    from ..services.operational_query_resolver import _extract_user_question
+    clean_q = _extract_user_question(q)
+    sap_locked = _is_sap_erp_intent(clean_q)
+
+    if _looks_like_schema_structure_question(clean_q):
+        return _persist_and_return(_build_schema_structure_payload(clean_q))
+
+    # Intent gate must run on every message, including continuation/follow-up.
+    # Path 2 previously skipped it and narrated the prior result set for chit-chat.
+    allowed, gate_reason = is_supported_business_question(clean_q)
+    if not allowed:
+        logger.info(
+            "[adaptive] intent gate blocked question reason=%s continuation=%s",
+            gate_reason,
+            bool(contextData),
+        )
+        return _persist_and_return(clarification_payload(clean_q, gate_reason))
+
     # ── Path 2: Follow-up — semantic plan delta → fresh SQL, else narrative ──
     if contextData and isinstance(contextData, dict):
         prev_q   = str(contextData.get("previousQuestion") or "").strip()
@@ -2824,18 +2842,6 @@ async def post_query_adaptive(
             })
         except Exception as e:
             raise HTTPException(status_code=500, detail={"error_code": "follow_up_failed", "message": str(e)})
-
-    from ..services.operational_query_resolver import _extract_user_question
-    clean_q = _extract_user_question(q)
-    sap_locked = _is_sap_erp_intent(clean_q)
-
-    if _looks_like_schema_structure_question(clean_q):
-        return _persist_and_return(_build_schema_structure_payload(clean_q))
-
-    allowed, gate_reason = is_supported_business_question(clean_q)
-    if not allowed:
-        logger.info("[adaptive] intent gate blocked question reason=%s", gate_reason)
-        return _persist_and_return(clarification_payload(clean_q, gate_reason))
 
     named_customer = extract_named_customer(clean_q)
 

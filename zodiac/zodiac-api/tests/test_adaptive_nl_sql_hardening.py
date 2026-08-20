@@ -381,6 +381,116 @@ def test_intent_gate_allows_short_business_blocks_chit_chat():
         assert not ok, q
 
 
+_PRIOR_INVOICE_COUNT_ROWS = [
+    {
+        "year": "2004",
+        "customer": "0000001172",
+        "customer_name": "CBD Computer Based Design",
+        "industry": "High Technology & Electronics",
+        "currency": "EUR",
+        "invoice_count": 53,
+    }
+]
+_PRIOR_INVOICE_COUNT_CONTEXT = {
+    "previousQuestion": "Show invoice count instead",
+    "previousSQL": (
+        'SELECT COUNT(DISTINCT TRIM(v."vbeln")) AS invoice_count '
+        'FROM "VBRK" v WHERE SUBSTRING(TRIM(CAST(v."fkdat" AS TEXT)),1,4) IN (\'2003\',\'2004\')'
+    ),
+    "previousAnswerStatus": "SUCCESS",
+    "data": _PRIOR_INVOICE_COUNT_ROWS,
+}
+_SIX_STEP_FOLLOWUPS = (
+    "Show me highest sales for the year 2004 with customer and industry",
+    "Only the Trading industry",
+    "Now show the top 5",
+    "Compare with 2003",
+    "Remove the Trading filter",
+    "Show invoice count instead",
+)
+
+
+def _assert_clarification_not_prior_result(payload: dict) -> None:
+    assert payload.get("answer_status") == "CLARIFICATION"
+    assert payload.get("type") == "clarification"
+    assert not (payload.get("sql") or "").strip()
+    assert payload.get("charts") in ([], None)
+    assert (payload.get("data") or []) == []
+    assert payload.get("rowCount", 0) == 0
+    blob = json.dumps(payload).lower()
+    assert "cbd" not in blob
+    assert "computer based" not in blob
+    assert "invoice_count" not in blob
+    assert "from your result set" not in blob
+
+
+async def _adaptive_direct(question: str, context=None):
+    from unittest.mock import MagicMock, patch
+    from app.api.adaptive_query import post_query_adaptive
+
+    with patch(
+        "app.api.adaptive_query._followup_analysis",
+        side_effect=AssertionError("continuation narrative must not run for gated questions"),
+    ):
+        return await post_query_adaptive(
+            question=question,
+            tableHint=None,
+            contextData=context,
+            overrideSql=None,
+            threadId=None,
+            db=MagicMock(),
+            current_user=None,
+        )
+
+
+def test_intent_gate_blocks_nonsense_after_followup_chain():
+    """Test A: valid → follow-up → … → 'Meaning of life' must not re-summarize prior rows."""
+    import asyncio
+
+    payload = asyncio.run(_adaptive_direct("Meaning of life", _PRIOR_INVOICE_COUNT_CONTEXT))
+    _assert_clarification_not_prior_result(payload)
+
+
+def test_intent_gate_blocks_nonsense_after_single_valid_query():
+    """Test B: one valid query then nonsense, with continuation context attached."""
+    import asyncio
+
+    ctx = {
+        "previousQuestion": "Show me highest sales for the year 2004 with customer and industry",
+        "previousSQL": 'SELECT 1 AS total_sales FROM "VBRK"',
+        "previousAnswerStatus": "SUCCESS",
+        "data": [{"customer_name": "Motomarkt Stuttgart GmbH", "total_sales": 6099225}],
+    }
+    payload = asyncio.run(_adaptive_direct("Meaning of life", ctx))
+    _assert_clarification_not_prior_result(payload)
+    assert "motomarkt" not in json.dumps(payload).lower()
+    assert "6099225" not in json.dumps(payload)
+
+
+def test_intent_gate_blocks_nonsense_as_first_message():
+    """Test C: fresh session, no prior context — original gate must still fire."""
+    import asyncio
+
+    payload = asyncio.run(_adaptive_direct("Meaning of life", None))
+    _assert_clarification_not_prior_result(payload)
+
+
+def test_intent_gate_blocks_joke_and_favorite_color_after_followup():
+    """Test D: continuation context must not bypass the gate for other chit-chat."""
+    import asyncio
+
+    for q in ("Tell me a joke", "What's your favorite color?"):
+        payload = asyncio.run(_adaptive_direct(q, _PRIOR_INVOICE_COUNT_CONTEXT))
+        _assert_clarification_not_prior_result(payload)
+
+
+def test_intent_gate_still_allows_six_step_followups():
+    """Test E: legitimate 6-step follow-ups must remain business-allowed."""
+    for q in _SIX_STEP_FOLLOWUPS:
+        ok, reason = is_supported_business_question(q)
+        assert ok is True, f"{q} gated as {reason}"
+
+
 def _intent_sql(question: str) -> str:
     from app.services.schema_loader import load_schema_from_mapping_file
     from app.services.intent_extractor import extract_intent
