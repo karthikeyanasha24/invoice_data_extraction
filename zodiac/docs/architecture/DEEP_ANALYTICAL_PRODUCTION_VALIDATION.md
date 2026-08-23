@@ -31,6 +31,8 @@ Not net profit. Not logistics cost amounts.
 
 Billing item (`vbrp` ⋈ `VBRK`) is the monetary fact grain. Dimension joins group by dimension keys so amounts are not fan-out multiplied.
 
+PostgreSQL requires quoted uppercase SAP tables (`"VBRK"`, `"KNA1"`, …). Adaptive `_execute_sql` applies `_quote_catalog_sql_tables`; deep SQL also emits quoted identifiers and TEXT casts for numeric-or-text amounts (`wavwr`/`netwr`).
+
 ## Data gaps (honest)
 
 | Request | Status |
@@ -40,67 +42,45 @@ Billing item (`vbrp` ⋈ `VBRK`) is the monetary fact grain. Dimension joins gro
 | Budget / target | DATA GAP |
 | Expiry by industry | PARTIAL (MARA shelf-life + billing industry bridge) |
 | Purchase duration | PARTIAL — billing history only (`VBRK.FKDAT`) |
+| Compare 2024 vs 2025 | **Empty on current extract** — billing years ≈ through 2018; answer explains and suggests 2004/2005 |
 
-## Live / Full Chat / deploy checklist (operator)
+## Local SAP DB acceptance (this branch, real Postgres)
 
-Run against API with SAP session (`USE_SAP_DB_FOR_AI`) and Full Chat UI:
+| Scenario | Pipeline | SQL | Real Data | Accuracy | Context | UI | Status |
+|----------|----------|-----|-----------|----------|---------|-----|--------|
+| Highest profit products | deep_multidim | PASS | PASS | PASS (indep. GP match) | PASS | — | PASS |
+| Lowest margins | deep_multidim | PASS + HAVING | PASS | PASS | PASS | — | PASS |
+| COGS | deep_multidim | PASS WAVWR | PASS | PASS | PASS | — | PASS |
+| Cost components | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| Product → customer | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| Customer → industry | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| Industry → region | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| 2024 → 2025 | deep_multidim | PASS | empty | explained | PASS | — | PARTIAL |
+| 2004 → 2005 | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| Margin decline | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| Margin explanation | deep_multidim | PASS | PASS | drivers from data | PASS | — | PASS |
+| Purchase history | deep_multidim | PASS | PASS | FKDAT duration | PASS | — | PASS |
+| Expiry | deep_multidim | PASS | PASS | PARTIAL schema | preserved | — | PARTIAL |
+| Logistics cost | deep_multidim | none | — | — | kept | — | DATA GAP |
+| Net profit | deep_multidim | none | — | — | kept | — | DATA GAP |
+| Buying / selling process | deep_multidim | PASS | stage counts | counts only | PASS | — | PARTIAL |
+| Full chained analysis | deep_multidim | PASS | PASS | PASS | PASS | — | PASS |
+| Basic 2004 regression | intent_sql_fast | PASS | PASS | PASS | PASS | — | PASS |
 
-1. Andy exact question list (verbatim)
-2. 13-step chained drill-down
-3. GA regression: `2004 → Meaning of life → Top 5` and `2004 → Meaning of life → Show sales for 2005 → Top 3`
-4. Capture plan, SQL, row samples, explanation, suggested follow-ups per turn
-5. Measure p50/p95/max for basic / deep single / deep multi / multi-turn
-6. Confirm deployed commit matches git HEAD after push
+Latency (16-step local chain): **p50 ≈ 1.6s**, **max ≈ 6.5s** (cold first call).
 
-**Script (when API is up):**
+## Live Full Chat / zodiac-back deploy
 
-```bash
-# Local
-set ADAPTIVE_API=http://127.0.0.1:8000/api/query/adaptive
-python zodiac/zodiac-api/scripts/live_deep_dive_chain.py
+**Blocked for this agent:** Vercel CLI is logged in as `karthikeyanasha24` (team `ashas-projects-a0fae821` only). Production `zodiac-back.vercel.app` is Andy’s team. A mistaken deploy to `zodiac-api-nu.vercel.app` is **not** bridgeedi.
 
-# Production backend (if authorized)
-set ADAPTIVE_API=https://zodiac-back.vercel.app/api/query/adaptive
-python zodiac/zodiac-api/scripts/live_deep_dive_chain.py
-```
-
-## Acceptance matrix status (closure pass)
-
-Statuses below reflect **code + automated chain**. Cells marked *UNVERIFIED LIVE* need a DB-backed API run on the **deployed** commit before claiming production DONE.
-
-| Scenario | Plan | SQL | Data | Accuracy | Follow-up | Status |
-|----------|------|-----|------|----------|-----------|--------|
-| Highest profit products | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| Lowest margins | PASS | PASS (HAVING) | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| COGS | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| Cost breakdown | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| Product → customer | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| Customer → industry | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| Industry → region | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| 2024 → 2025 | PASS | PASS | UNVERIFIED LIVE | UNVERIFIED LIVE | PASS | PARTIAL |
-| Expiry | PASS | PASS | UNVERIFIED LIVE | PARTIAL schema | — | PARTIAL |
-| Buying process | PASS | PASS | UNVERIFIED LIVE | counts only | — | PARTIAL |
-| Selling process | PASS | PASS | UNVERIFIED LIVE | counts only | — | PARTIAL |
-| Logistics | PASS | no fake SQL | — | — | context kept | DATA GAP |
-| Net profit | PASS | no fake SQL | — | — | context kept | DATA GAP |
-
-## Production probe (2026-08-23, pre-deploy of `e957c7f`)
-
-Against `https://zodiac-back.vercel.app/api/query/adaptive` **before** this commit was confirmed deployed:
-
-| Question | Observed |
-|----------|----------|
-| Show me products with highest profits | `SUCCESS` via **`sql_catalog`** (not `deep_multidim`) |
-| Highest sales 2004 + customer + industry | `SUCCESS` via `intent_sql_fast` (protected basic path OK) |
-| Show me the logistics cost | `CLARIFICATION` (old behavior; new code returns `CANNOT_ANSWER`) |
-
-**Conclusion:** GitHub has `e957c7f`, but production API has **not** been verified to run that commit. Deploy + smoke must be completed by an operator with Vercel access:
+Live probe still shows profit → `deep_multidim` + `relation "vbrk" does not exist` until Andy deploys this branch:
 
 ```bash
 cd zodiac/zodiac-api
-npx vercel --prod   # requires Andy team login / token
-# then:
-set ADAPTIVE_API=https://zodiac-back.vercel.app/api/query/adaptive
+npx vercel link --scope <andy-team> --project zodiac-back
+npx vercel --prod
+# Verify: highest profits → pipeline=deep_multidim AND rows > 0
 python scripts/live_deep_dive_chain.py
-# Expect pipeline=deep_multidim for profit / COGS / margin paraphrases
 ```
+
+Then re-run Full Chat on https://www.bridgeedi.com/dashboard.
