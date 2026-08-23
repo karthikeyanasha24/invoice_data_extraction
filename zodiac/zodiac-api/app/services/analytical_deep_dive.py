@@ -372,38 +372,46 @@ def build_analytical_plan(
     if prior_ctx and prior_ctx.get("deep_analysis"):
         if wants_logistics and "cost" in ql:
             plan.intent = "logistics_cost_gap"
+        elif wants_expiry and wants_industry:
+            plan.intent = "product_expiry_by_industry"
+        elif wants_expiry:
+            plan.intent = "product_expiry"
         elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
-        elif wants_customers and not wants_profit and not wants_history:
-            plan.intent = "customers_of_selection"
-        elif wants_history:
-            plan.intent = "purchase_history"
-        elif wants_monthly:
-            plan.intent = "monthly_trend"
-        elif wants_inventory:
-            plan.intent = "inventory_analysis"
-        elif wants_industry and wants_region:
-            plan.intent = "product_industry_region"
-        elif wants_industry:
-            plan.intent = "industry_breakdown"
-        elif wants_region:
-            plan.intent = "country_breakdown"
-        elif wants_cogs and not wants_profit:
-            plan.intent = "cogs_by_product"
-        elif wants_margin and not wants_profit:
-            plan.intent = "margin_by_product"
         elif wants_compare:
             plan.intent = "period_compare_selection"
-        elif wants_components:
-            plan.intent = "profit_components"
+        elif wants_history:
+            plan.intent = "purchase_history"
+        elif wants_process_sell and wants_process_buy:
+            plan.intent = "process_sell_and_buy"
         elif wants_process_sell:
             plan.intent = "process_sell"
         elif wants_process_buy:
             plan.intent = "process_buy"
         elif wants_logistics:
             plan.intent = "process_sell"
-        elif wants_expiry:
-            plan.intent = "product_expiry"
+        elif wants_monthly:
+            plan.intent = "monthly_trend"
+        elif wants_inventory:
+            plan.intent = "inventory_analysis"
+        elif wants_cogs and not wants_profit:
+            plan.intent = "cogs_by_product"
+        elif wants_margin and any(x in ql for x in ("lowest", "worst", "poor", "least")):
+            plan.intent = "lowest_margin_products"
+        elif wants_margin and not wants_profit:
+            plan.intent = "margin_by_product"
+        elif wants_customers and wants_industry and wants_region:
+            plan.intent = "customer_industry_region"
+        elif wants_customers and not wants_profit:
+            plan.intent = "customers_of_selection"
+        elif wants_industry and wants_region:
+            plan.intent = "product_industry_region"
+        elif wants_industry:
+            plan.intent = "industry_breakdown"
+        elif wants_region:
+            plan.intent = "country_breakdown"
+        elif wants_components:
+            plan.intent = "profit_components"
         elif wants_profit:
             plan.intent = "product_profitability"
         else:
@@ -652,19 +660,19 @@ LIMIT {limit}"""
         sql_comp = f"""
 SELECT
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
-  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit,
+  CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) > 0 THEN
     ROUND(100.0 * (
-      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
-    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+      SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+      - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
+    ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
   ELSE NULL END AS gross_margin_pct
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
   {pfilter}
 GROUP BY vk.waerk
@@ -701,15 +709,15 @@ SELECT
   vk.waerk AS currency,
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS quantity,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) AS quantity,
   MIN(vk.fkdat) AS first_billing_date,
   MAX(vk.fkdat) AS last_billing_date
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "KNA1" k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
   {pfilter}
 GROUP BY TRIM(vk.kunag), vk.waerk, TRIM(v.matnr)
@@ -734,13 +742,13 @@ SELECT
     - CAST(NULLIF(TRIM(CAST(MIN(vk."fkdat") AS TEXT)), '') AS DATE)
   ) AS purchase_duration_days,
   COUNT(DISTINCT TRIM(CAST(vk."vbeln" AS TEXT))) AS purchase_count,
-  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS quantity,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) AS quantity,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "KNA1" k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   AND vk.fkdat IS NOT NULL
   {yfilter}
   {pfilter}
@@ -763,16 +771,16 @@ LIMIT {max(limit, 40)}
 SELECT
   COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown') AS industry,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit,
   COUNT(DISTINCT vk.kunag) AS customer_count
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "KNA1" k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN "T016T" t ON TRIM(k.brsch) = TRIM(t.brsch)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
   {pfilter}
 GROUP BY COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown'), vk.waerk
@@ -786,13 +794,13 @@ LIMIT {max(limit, 20)}
 SELECT
   COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown') AS country,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
   {pfilter}
 GROUP BY COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown'), vk.waerk
@@ -812,16 +820,16 @@ SELECT
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS quantity,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) AS quantity,
   MIN(vk.fkdat) AS first_billing_date,
   MAX(vk.fkdat) AS last_billing_date
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "KNA1" k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN "T016T" t ON TRIM(k.brsch) = TRIM(t.brsch)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
 GROUP BY TRIM(vk.kunag), TRIM(v.matnr), vk.waerk
 ORDER BY revenue DESC NULLS LAST
@@ -836,13 +844,13 @@ SELECT
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "KNA1" k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN "T016T" t ON TRIM(k.brsch) = TRIM(t.brsch)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
 GROUP BY COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown'),
          TRIM(v.matnr), vk.waerk
@@ -852,7 +860,7 @@ LIMIT {max(limit, 50)}
         queries.append({"id": "product_by_industry", "sql": sql})
 
     elif plan.intent == "period_compare_selection":
-        ylist = years if len(years) >= 2 else sorted(set(years + [2024, 2025]))[:2]
+        ylist = years if len(years) >= 2 else sorted(set(years + [2004, 2005]))[:2]
         yfilter2 = _year_filter_sql(ylist)
         sql = f"""
 SELECT
@@ -860,21 +868,21 @@ SELECT
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
-  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit,
+  CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) > 0 THEN
     ROUND(100.0 * (
-      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
-    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+      SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+      - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
+    ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
   ELSE NULL END AS gross_margin_pct
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
 WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
-  AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  AND CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter2}
   {pfilter}
 GROUP BY {_year_predicate('vk')}, TRIM(v.matnr), vk.waerk
@@ -884,31 +892,32 @@ LIMIT 200
         queries.append({"id": "period_compare", "sql": sql})
 
     elif plan.intent == "margin_decline_drivers":
-        ylist = years if len(years) >= 2 else [2024, 2025]
-        y1, y2 = ylist[0], ylist[1]
+        ylist = years if len(years) >= 2 else [2004, 2005]
+        y1, y2 = int(ylist[0]), int(ylist[1])
         sql_decline = f"""
 WITH yearly AS (
   SELECT
     {_year_predicate('vk')} AS year,
-    TRIM(v.matnr) AS product,
-    COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
-    vk.waerk AS currency,
-    SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-    SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-    CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+    TRIM(CAST(v."matnr" AS TEXT)) AS product,
+    COALESCE(MAX(m."maktx"), TRIM(CAST(v."matnr" AS TEXT))) AS product_name,
+    vk."waerk" AS currency,
+    SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+    SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+    CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) > 0 THEN
       ROUND(100.0 * (
-        SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-        - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
-      ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+        SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+        - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
+      ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
     ELSE NULL END AS gross_margin_pct
-  FROM vbrp v
-  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-  LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
-    AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
-    AND {_year_predicate('vk')} IN ({y1}, {y2})
+  FROM "vbrp" v
+  JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+  LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+    AND (m."spras" = 'E' OR m."spras" IS NULL)
+  WHERE v."matnr" IS NOT NULL AND TRIM(CAST(v."matnr" AS TEXT)) <> ''
+    AND CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
+    AND {_year_predicate('vk')} IN ('{y1}', '{y2}')
     {pfilter}
-  GROUP BY {_year_predicate('vk')}, TRIM(v.matnr), vk.waerk
+  GROUP BY {_year_predicate('vk')}, TRIM(CAST(v."matnr" AS TEXT)), vk."waerk"
 )
 SELECT
   a.product,
@@ -924,7 +933,7 @@ SELECT
 FROM yearly a
 JOIN yearly b
   ON a.product = b.product AND a.currency = b.currency
- AND a.year = {y1} AND b.year = {y2}
+ AND a.year = '{y1}' AND b.year = '{y2}'
 ORDER BY margin_change_pp ASC NULLS LAST
 LIMIT {limit}
 """.strip()
@@ -932,21 +941,21 @@ LIMIT {limit}
         # Driver slice: customer mix for declining set (same product filter if present)
         sql_cust = f"""
 SELECT
-  TRIM(vk.kunag) AS customer,
-  MAX(k.name1) AS customer_name,
-  MAX(k.brsch) AS industry,
-  MAX(vk.land1) AS country,
+  TRIM(CAST(vk."kunag" AS TEXT)) AS customer,
+  MAX(k."name1") AS customer_name,
+  MAX(k."brsch") AS industry,
+  MAX(vk."land1") AS country,
   {_year_predicate('vk')} AS year,
-  vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
-  AND {_year_predicate('vk')} IN ({y1}, {y2})
+  vk."waerk" AS currency,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+LEFT JOIN "KNA1" k ON TRIM(CAST(vk."kunag" AS TEXT)) = TRIM(CAST(k."kunnr" AS TEXT))
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
+  AND {_year_predicate('vk')} IN ('{y1}', '{y2}')
   {pfilter}
-GROUP BY TRIM(vk.kunag), {_year_predicate('vk')}, vk.waerk
+GROUP BY TRIM(CAST(vk."kunag" AS TEXT)), {_year_predicate('vk')}, vk."waerk"
 ORDER BY revenue DESC NULLS LAST
 LIMIT 40
 """.strip()
@@ -958,19 +967,19 @@ SELECT
   EXTRACT(YEAR FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)) AS year,
   EXTRACT(MONTH FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)) AS month,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
-  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit,
+  CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) > 0 THEN
     ROUND(100.0 * (
-      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
-    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+      SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+      - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
+    ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
   ELSE NULL END AS gross_margin_pct
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
   {pfilter}
 GROUP BY EXTRACT(YEAR FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)),
@@ -989,22 +998,22 @@ SELECT
   COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown') AS industry,
   COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown') AS country,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
-  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit,
+  CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) > 0 THEN
     ROUND(100.0 * (
-      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
-    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+      SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+      - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
+    ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
   ELSE NULL END AS gross_margin_pct
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "KNA1" k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN "T016T" t ON TRIM(k.brsch) = TRIM(t.brsch)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
   {yfilter}
   {pfilter}
 GROUP BY TRIM(v.matnr),
@@ -1028,7 +1037,7 @@ SELECT
   CAST(NULLIF(TRIM(COALESCE(b.lbkum, '0')), '') AS NUMERIC) AS stock_qty,
   CAST(NULLIF(TRIM(COALESCE(b.stprs, '0')), '') AS NUMERIC) AS standard_price
 FROM MBEW b
-LEFT JOIN MAKT m ON TRIM(b.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+LEFT JOIN "MAKT" m ON TRIM(b.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
 WHERE CAST(NULLIF(TRIM(COALESCE(b.salk3, '0')), '') AS NUMERIC) IS NOT NULL
 ORDER BY stock_value DESC NULLS LAST
 LIMIT {max(limit, 30)}
@@ -1040,11 +1049,11 @@ LIMIT {max(limit, 30)}
 SELECT
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
-  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS billed_qty,
+  SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) AS billed_qty,
   COUNT(DISTINCT vk.vbeln) AS invoice_count
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
 WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
   {yfilter}
 GROUP BY TRIM(v.matnr)
@@ -1109,22 +1118,22 @@ ORDER BY stage
                 "id": "product_expiry_by_industry",
                 "sql": """
 SELECT
-  TRIM(a.matnr) AS product,
-  COALESCE(mx.maktx, a.matnr) AS product_name,
-  a.mhdhb AS total_shelf_life_days,
-  a.mhdrz AS remaining_shelf_life_days,
-  COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown') AS industry,
-  COUNT(DISTINCT vk.kunag) AS customer_count
-FROM MARA a
-LEFT JOIN MAKT mx ON TRIM(a.matnr) = TRIM(mx.matnr) AND (mx.spras = 'E' OR mx.spras IS NULL)
-LEFT JOIN vbrp v ON TRIM(v.matnr) = TRIM(a.matnr)
-LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
-LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
-WHERE a.mhdhb IS NOT NULL OR a.mhdrz IS NOT NULL OR a.sled_bbd IS NOT NULL
-GROUP BY TRIM(a.matnr), mx.maktx, a.mhdhb, a.mhdrz,
-         COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown')
-ORDER BY CAST(NULLIF(TRIM(COALESCE(a.mhdrz, a.mhdhb, '0')), '') AS NUMERIC) ASC NULLS LAST
+  TRIM(CAST(a."matnr" AS TEXT)) AS product,
+  COALESCE(MAX(mx."maktx"), TRIM(CAST(a."matnr" AS TEXT))) AS product_name,
+  MAX(a."mhdhb") AS total_shelf_life_days,
+  MAX(a."mhdrz") AS remaining_shelf_life_days,
+  COALESCE(NULLIF(TRIM(CAST(MAX(t."brtxt") AS TEXT)), ''), NULLIF(TRIM(CAST(MAX(k."brsch") AS TEXT)), ''), 'Unknown') AS industry,
+  COUNT(DISTINCT vk."kunag") AS customer_count
+FROM "MARA" a
+LEFT JOIN "MAKT" mx ON TRIM(CAST(a."matnr" AS TEXT)) = TRIM(CAST(mx."matnr" AS TEXT))
+  AND (mx."spras" = 'E' OR mx."spras" IS NULL)
+LEFT JOIN "vbrp" v ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(a."matnr" AS TEXT))
+LEFT JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+LEFT JOIN "KNA1" k ON TRIM(CAST(vk."kunag" AS TEXT)) = TRIM(CAST(k."kunnr" AS TEXT))
+LEFT JOIN "T016T" t ON TRIM(CAST(k."brsch" AS TEXT)) = TRIM(CAST(t."brsch" AS TEXT))
+WHERE a."mhdhb" IS NOT NULL OR a."mhdrz" IS NOT NULL OR a."sled_bbd" IS NOT NULL
+GROUP BY TRIM(CAST(a."matnr" AS TEXT))
+ORDER BY CAST(NULLIF(TRIM(CAST(COALESCE(MAX(a."mhdrz"), MAX(a."mhdhb"), '0') AS TEXT)), '') AS NUMERIC) ASC NULLS LAST
 LIMIT 50
 """.strip(),
             })
@@ -1133,15 +1142,16 @@ LIMIT 50
                 "id": "product_shelf_life",
                 "sql": """
 SELECT
-  TRIM(a.matnr) AS product,
-  COALESCE(m.maktx, a.matnr) AS product_name,
-  a.mhdhb AS total_shelf_life_days,
-  a.mhdrz AS remaining_shelf_life_days,
-  a.sled_bbd AS sled_bbd_indicator
-FROM MARA a
-LEFT JOIN MAKT m ON TRIM(a.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE a.mhdhb IS NOT NULL OR a.mhdrz IS NOT NULL OR a.sled_bbd IS NOT NULL
-ORDER BY CAST(NULLIF(TRIM(COALESCE(a.mhdrz, a.mhdhb, '0')), '') AS NUMERIC) ASC NULLS LAST
+  TRIM(CAST(a."matnr" AS TEXT)) AS product,
+  COALESCE(m."maktx", TRIM(CAST(a."matnr" AS TEXT))) AS product_name,
+  a."mhdhb" AS total_shelf_life_days,
+  a."mhdrz" AS remaining_shelf_life_days,
+  a."sled_bbd" AS sled_bbd_indicator
+FROM "MARA" a
+LEFT JOIN "MAKT" m ON TRIM(CAST(a."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+  AND (m."spras" = 'E' OR m."spras" IS NULL)
+WHERE a."mhdhb" IS NOT NULL OR a."mhdrz" IS NOT NULL OR a."sled_bbd" IS NOT NULL
+ORDER BY CAST(NULLIF(TRIM(CAST(COALESCE(a."mhdrz", a."mhdhb", '0') AS TEXT)), '') AS NUMERIC) ASC NULLS LAST
 LIMIT 50
 """.strip(),
             })
@@ -1372,6 +1382,7 @@ def try_deep_multidim_analysis(
             "inventory_analysis",
             "monthly_trend",
             "margin_decline_drivers",
+            "period_compare_selection",
             "product_expiry",
             "product_expiry_by_industry",
         }
@@ -1389,14 +1400,82 @@ def try_deep_multidim_analysis(
             )
         return None
 
-    # Update selection from primary product rows
-    if primary_rows and (primary_rows[0].get("product") or primary_rows[0].get("matnr")):
+    # Empty year-compare / margin-decline: keep deep answer (do not fall through)
+    if (
+        not primary_rows
+        and plan.intent in {"period_compare_selection", "margin_decline_drivers"}
+        and bundled
+    ):
+        yrs = plan.filters.get("years") or plan.years or [2024, 2025]
+        plan.data_gaps.append(
+            f"No billing rows found for year(s) {yrs} on the current product selection. "
+            "This loaded SAP extract is historical (billing years roughly through ~2018); "
+            "2024/2025 comparisons need those periods present in the database."
+        )
+        primary_sql = bundled[0].get("sql") or ""
+        summary = (
+            f"**Deep analysis** — intent `{plan.intent}`\n\n"
+            f"No rows for years {yrs} with the current filters.\n\n"
+            "### Data limitations\n"
+            + "\n".join(f"- {g}" for g in plan.data_gaps)
+            + "\n\nTry: *Compare 2004 and 2005* or remove the year filter and ask again."
+        )
+        ctx = plan.to_context()
+        return {
+            "sql": primary_sql,
+            "rowCount": 0,
+            "data": [],
+            "summary": summary,
+            "keyFindings": plan.data_gaps[:4],
+            "charts": [],
+            "answer_status": "SUCCESS",
+            "query_plan": {
+                "analytical_context": ctx,
+                "deep_analysis": True,
+                "intent": plan.intent,
+                "metrics": plan.metrics,
+                "dimensions": plan.dimensions,
+                "selected_products": plan.selected_products,
+                "years": list(yrs),
+            },
+            "suggested_followups": [
+                "Compare 2004 and 2005",
+                "Show COGS",
+                "Show their customers",
+            ],
+            "meta": {
+                "deep_analysis": True,
+                "analytical_plan": ctx,
+                "query_count": len(bundled),
+                "data_gaps": plan.data_gaps,
+                "empty_year_compare": True,
+            },
+            "pipeline": "deep_multidim",
+            "sql_generation_method": "deep_multidim",
+            "llm_calls": 0,
+        }
+
+    # Update selection from primary product rows (do not let process/expiry
+    # stage outputs wipe the monetary product selection used for follow-ups).
+    _preserve_product_selection = plan.intent in {
+        "process_sell",
+        "process_buy",
+        "process_sell_and_buy",
+        "product_expiry",
+        "product_expiry_by_industry",
+        "inventory_analysis",
+    }
+    if (
+        primary_rows
+        and (primary_rows[0].get("product") or primary_rows[0].get("matnr"))
+        and not _preserve_product_selection
+    ):
         plan.selected_products = [
             str(r.get("product") or r.get("matnr")).strip()
             for r in primary_rows[:20]
             if r.get("product") or r.get("matnr")
         ]
-    if primary_rows and primary_rows[0].get("customer"):
+    if primary_rows and primary_rows[0].get("customer") and not _preserve_product_selection:
         plan.selected_customers = [
             str(r.get("customer")).strip()
             for r in primary_rows[:20]
