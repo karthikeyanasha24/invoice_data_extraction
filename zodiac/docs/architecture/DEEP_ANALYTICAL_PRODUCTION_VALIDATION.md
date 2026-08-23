@@ -66,7 +66,7 @@ python zodiac/zodiac-api/scripts/live_deep_dive_chain.py
 
 ## Acceptance matrix status (closure pass)
 
-Statuses below reflect **code + automated chain**. Cells marked *UNVERIFIED LIVE* need a DB-backed API run before claiming production DONE.
+Statuses below reflect **code + automated chain**. Cells marked *UNVERIFIED LIVE* need a DB-backed API run on the **deployed** commit before claiming production DONE.
 
 | Scenario | Plan | SQL | Data | Accuracy | Follow-up | Status |
 |----------|------|-----|------|----------|-----------|--------|
@@ -83,3 +83,24 @@ Statuses below reflect **code + automated chain**. Cells marked *UNVERIFIED LIVE
 | Selling process | PASS | PASS | UNVERIFIED LIVE | counts only | — | PARTIAL |
 | Logistics | PASS | no fake SQL | — | — | context kept | DATA GAP |
 | Net profit | PASS | no fake SQL | — | — | context kept | DATA GAP |
+
+## Production probe (2026-08-23, pre-deploy of `e957c7f`)
+
+Against `https://zodiac-back.vercel.app/api/query/adaptive` **before** this commit was confirmed deployed:
+
+| Question | Observed |
+|----------|----------|
+| Show me products with highest profits | `SUCCESS` via **`sql_catalog`** (not `deep_multidim`) |
+| Highest sales 2004 + customer + industry | `SUCCESS` via `intent_sql_fast` (protected basic path OK) |
+| Show me the logistics cost | `CLARIFICATION` (old behavior; new code returns `CANNOT_ANSWER`) |
+
+**Conclusion:** GitHub has `e957c7f`, but production API has **not** been verified to run that commit. Deploy + smoke must be completed by an operator with Vercel access:
+
+```bash
+cd zodiac/zodiac-api
+npx vercel --prod   # requires Andy team login / token
+# then:
+set ADAPTIVE_API=https://zodiac-back.vercel.app/api/query/adaptive
+python scripts/live_deep_dive_chain.py
+# Expect pipeline=deep_multidim for profit / COGS / margin paraphrases
+```
