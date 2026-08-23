@@ -549,14 +549,19 @@ def build_analytical_plan(
 
 
 def _year_predicate(alias: str = "vk") -> str:
-    return f"EXTRACT(YEAR FROM CAST(NULLIF(TRIM({alias}.fkdat), '') AS DATE))"
+    # Match intent_sql_fast: fkdat is TEXT in this DB — never EXTRACT(YEAR FROM date).
+    return f'SUBSTRING(TRIM(CAST({alias}."fkdat" AS TEXT)), 1, 4)'
 
 
 def _year_filter_sql(years: Sequence[int], alias: str = "vk") -> str:
     if not years:
         return ""
-    ys = ", ".join(str(y) for y in years)
-    return f" AND {_year_predicate(alias)} IN ({ys})"
+    ys = ", ".join(f"'{int(y)}'" for y in years)
+    return (
+        f' AND {alias}."fkdat" IS NOT NULL'
+        f" AND TRIM(CAST({alias}.\"fkdat\" AS TEXT)) <> ''"
+        f" AND {_year_predicate(alias)} IN ({ys})"
+    )
 
 
 def _product_in_sql(products: Sequence[str]) -> str:
@@ -564,7 +569,12 @@ def _product_in_sql(products: Sequence[str]) -> str:
     if not clean:
         return ""
     vals = ", ".join(f"'{p}'" for p in clean[:50])
-    return f" AND TRIM(v.matnr) IN ({vals})"
+    return f' AND TRIM(CAST(v."matnr" AS TEXT)) IN ({vals})'
+
+
+def _num(expr: str) -> str:
+    """Governed TEXT→NUMERIC cast used across adaptive SAP SQL."""
+    return f"CAST(NULLIF(TRIM(CAST({expr} AS TEXT)), '') AS NUMERIC)"
 
 
 def compile_queries(plan: AnalyticalPlan) -> Tuple[List[Dict[str, str]], List[str]]:
@@ -588,30 +598,32 @@ def compile_queries(plan: AnalyticalPlan) -> Tuple[List[Dict[str, str]], List[st
         "cogs": "cogs",
     }.get(rank_metric, "gross_profit")
 
+    rev = _num('v."netwr"')
+    cogs = _num('COALESCE(v."wavwr", \'0\')')
+    qty = _num('v."fkimg"')
+
+    # Quoted SAP identifiers: "VBRK"/"MAKT"/… uppercase; vbrp stays lowercase.
     base_select = f"""
 SELECT
-  TRIM(v.matnr) AS product,
-  COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
-  vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
-  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
-    ROUND(100.0 * (
-      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
-      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
-    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+  TRIM(CAST(v."matnr" AS TEXT)) AS product,
+  COALESCE(MAX(m."maktx"), TRIM(CAST(v."matnr" AS TEXT))) AS product_name,
+  vk."waerk" AS currency,
+  SUM({rev}) AS revenue,
+  SUM({cogs}) AS cogs,
+  SUM({rev}) - SUM({cogs}) AS gross_profit,
+  CASE WHEN SUM({rev}) > 0 THEN
+    ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
   ELSE NULL END AS gross_margin_pct,
-  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS quantity
-FROM vbrp v
-JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
-  AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  SUM({qty}) AS quantity
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+  AND (m."spras" = 'E' OR m."spras" IS NULL)
+WHERE v."matnr" IS NOT NULL AND TRIM(CAST(v."matnr" AS TEXT)) <> ''
+  AND {rev} IS NOT NULL
   {yfilter}
   {pfilter}
-GROUP BY TRIM(v.matnr), vk.waerk
+GROUP BY TRIM(CAST(v."matnr" AS TEXT)), vk."waerk"
 """.strip()
 
     if plan.intent in {"product_profitability", "lowest_margin_products", "dimensional_extend"}:
@@ -624,7 +636,7 @@ GROUP BY TRIM(v.matnr), vk.waerk
                 min_rev_n = 1000.0
             # Avoid tiny-denominator margin rankings; require meaningful revenue.
             having = (
-                f"\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) >= {min_rev_n}"
+                f"\nHAVING SUM({rev}) >= {min_rev_n}"
             )
         sql = f"""{base_select}{having}
 ORDER BY {order_col} {direction} NULLS LAST
@@ -674,7 +686,7 @@ LIMIT {limit}"""
         except (TypeError, ValueError):
             min_rev_n = 1000.0
         sql = f"""{base_select}
-HAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) >= {min_rev_n}
+HAVING SUM({rev}) >= {min_rev_n}
 ORDER BY gross_margin_pct ASC NULLS LAST
 LIMIT {limit}"""
         queries.append({"id": "margin_by_product", "sql": sql})
@@ -715,10 +727,13 @@ SELECT
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
   vk.waerk AS currency,
-  MIN(vk.fkdat) AS first_purchase_date,
-  MAX(vk.fkdat) AS last_purchase_date,
-  (MAX(vk.fkdat)::date - MIN(vk.fkdat)::date) AS purchase_duration_days,
-  COUNT(DISTINCT TRIM(vk.vbeln)) AS purchase_count,
+  MIN(vk."fkdat") AS first_purchase_date,
+  MAX(vk."fkdat") AS last_purchase_date,
+  (
+    CAST(NULLIF(TRIM(CAST(MAX(vk."fkdat") AS TEXT)), '') AS DATE)
+    - CAST(NULLIF(TRIM(CAST(MIN(vk."fkdat") AS TEXT)), '') AS DATE)
+  ) AS purchase_duration_days,
+  COUNT(DISTINCT TRIM(CAST(vk."vbeln" AS TEXT))) AS purchase_count,
   SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS quantity,
   SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue
 FROM vbrp v

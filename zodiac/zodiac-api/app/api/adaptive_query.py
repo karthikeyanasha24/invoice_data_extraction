@@ -1176,7 +1176,15 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         sanitize_generated_sap_sql,
         prepare_sql_for_sqlalchemy_text_execution,
     )
+    from ..services.sap_sql_agent import _quote_catalog_sql_tables
+
     sanitized = sanitize_generated_sap_sql(sql, question or None)
+    # PostgreSQL stores uppercase SAP tables as quoted identifiers ("VBRK");
+    # bare VBRK folds to vbrk and fails. Catalog/deep SQL must be quoted.
+    try:
+        sanitized = _quote_catalog_sql_tables(sanitized)
+    except Exception:
+        pass
     safe = prepare_sql_for_sqlalchemy_text_execution(sanitized)
     try:
         db.rollback()
