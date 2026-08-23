@@ -456,7 +456,20 @@ def relationship_summary() -> List[Dict[str, Any]]:
     ]
 
 
-def data_gap_payload(requested: str, reason: str, can_answer: Optional[List[str]] = None) -> Dict[str, Any]:
+def data_gap_payload(
+    requested: str,
+    reason: str,
+    can_answer: Optional[List[str]] = None,
+    prior_analytical_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    qp: Dict[str, Any] = {"deep_analysis": True, "data_gap": True}
+    if prior_analytical_context:
+        # Preserve prior selection so a data-gap turn does not wipe the chain.
+        qp["analytical_context"] = {
+            **prior_analytical_context,
+            "deep_analysis": True,
+            "last_data_gap": reason,
+        }
     return {
         "type": "cannot_answer",
         "answer_status": "CANNOT_ANSWER",
@@ -464,6 +477,7 @@ def data_gap_payload(requested: str, reason: str, can_answer: Optional[List[str]
         "data": [],
         "rowCount": 0,
         "charts": [],
+        "query_plan": qp,
         "summary": (
             f"I cannot accurately answer «{requested}» with the currently linked datasets.\n\n"
             f"**Why:** {reason}\n\n"

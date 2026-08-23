@@ -24,6 +24,7 @@ USER MESSAGE → classify_turn() →
 |------|-------------------------------------|--------------|----------|-------------------------|
 | 0 | Schema structure | “which tables / columns / data type / shared columns” | No | N/A — catalog lookup only |
 | 0b | Intent gate | Non-business / nonsense (`meaning of life`) | No | Clarification payload, empty SQL |
+| **1.5** | **`deep_multidim`** | Semantic multi-dim profit/COGS/margin/process/expiry/history (or prior deep context follow-ups) | No | Governed metrics; ≤6 SQL; CANNOT_ANSWER for unavailable metrics; does **not** steal basic sales/Top-N |
 | 1 | `period_compare` | Year vs year compare phrases | Orchestrator | Compare router |
 | 2 | `operational_*` | EDI / app-ops patterns (failed invoices, SAT, pipeline) | No | Intentionally **not** SAP VBRK counts |
 | 3 | `intent_sql_fast` | Deterministic intent planner (billing/revenue, no named customer) | No | `apply_ranking_discipline` (LIMIT N, single currency, skip named customer → universal) |

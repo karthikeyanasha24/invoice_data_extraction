@@ -9,13 +9,16 @@ from app.services.analytical_deep_dive import (
 
 
 ANDY_CASES = [
+    ("And how long have they been buying them?", {"purchase_history"}),
+    ("Show how long customers have been buying them", {"purchase_history"}),
+    ("Which products are actually making us the most money and why?", {"product_profitability", "profit_components"}),
+    ("Show me the logistics cost", {"logistics_cost_gap"}),
     ("Show me product with highest profits and show me the breakdown of components", {"profit_components", "product_profitability"}),
     ("Show me cost of goods sold", {"cogs_by_product"}),
     ("Show me products with lowest margins", {"lowest_margin_products"}),
     ("Show me products expiring by industry", {"product_expiry_by_industry", "product_expiry"}),
     ("Show customers with industry data and regions", {"customer_industry_region"}),
     ("What type of products are bought by which customers?", {"customer_product_mix"}),
-    ("Show how long customers have been buying them", {"period_compare_selection", "customers_of_selection", "unsupported_deep"}),
     ("Show the process involved behind selling it", {"process_sell"}),
     ("Show the process involved in buying it", {"process_buy"}),
     ("Show the buying process and selling process", {"process_sell_and_buy"}),
@@ -25,9 +28,8 @@ ANDY_CASES = [
 def test_andy_failure_case_intents():
     for q, allowed in ANDY_CASES:
         prior = None
-        if "buying them" in q.lower():
-            prior = {"deep_analysis": True, "selected_products": ["P1"]}
-        if "behind selling" in q.lower() or "in buying" in q.lower():
+        ql = q.lower()
+        if "buying them" in ql or "behind selling" in ql or "in buying" in ql or "logistics cost" in ql:
             prior = {"deep_analysis": True, "selected_products": ["P1"]}
         plan = build_analytical_plan(q, prior)
         assert plan.intent in allowed, f"{q!r} → {plan.intent} not in {allowed}"

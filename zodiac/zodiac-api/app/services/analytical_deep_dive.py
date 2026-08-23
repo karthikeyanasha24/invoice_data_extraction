@@ -76,62 +76,165 @@ def _ql(q: str) -> str:
     return (q or "").strip().lower()
 
 
-def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]] = None) -> bool:
-    """Heuristic gate — deep engine only for multi-dim / profit / process / COGS style asks.
+def _is_basic_engine_query(ql: str) -> bool:
+    """True when existing intent_sql/catalog/universal should keep the question.
 
-    Must NOT steal ordinary sales/ranking questions (e.g. highest sales 2004 + industry)
-    from intent_sql_fast / sql_catalog / universal.
+    Protects GA golden paths like highest sales + customer + industry.
+    """
+    if any(
+        x in ql
+        for x in (
+            "profit",
+            "margin",
+            "cogs",
+            "cost of goods",
+            "wavwr",
+            "making us",
+            "most money",
+            "money and why",
+            "expir",
+            "shelf life",
+            "process behind",
+            "selling process",
+            "buying process",
+            "process involved",
+            "logistics cost",
+            "freight",
+            "net profit",
+            "component",
+            "breakdown",
+            "break down",
+            "slow-moving",
+            "fast-moving",
+            "inventory age",
+            "how long",
+            "purchase history",
+            "type of products bought",
+            "products bought by",
+            "customers buy",
+            "customers buying",
+        )
+    ):
+        return False
+    # Classic sales / ranking / invoice count without cost/profit semantics
+    basic_patterns = (
+        r"\bhighest sales\b",
+        r"\btotal sales\b",
+        r"\bsales for\b",
+        r"\binvoice count\b",
+        r"\btop\s+\d+\s+customers\b",
+        r"\bfive biggest customers\b",
+        r"\bshow top\s+\d+\s+customers\b",
+        r"\bsales by industry\b",
+        r"\bsales by country\b",
+        r"\bcompare\s+20\d{2}\s+(vs|versus|and|with)\s+20\d{2}\b",
+    )
+    if any(re.search(p, ql) for p in basic_patterns):
+        return True
+    # "Top 5" alone is a follow-up delta, not deep — unless prior deep context
+    if re.fullmatch(r"(now\s+)?(show\s+)?(the\s+)?top\s+\d+\b.*", ql):
+        return True
+    if re.fullmatch(r"(only|just|filter).{0,40}industry\b.*", ql):
+        return True
+    return False
+
+
+def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]] = None) -> bool:
+    """Semantic gate for multi-dimensional analysis.
+
+    Uses meaning signals (profit/COGS/process/expiry/history) rather than exact
+    canned phrases. Prior deep analytical_context always qualifies follow-ups.
+    Must NOT steal basic sales/ranking questions from existing engines.
     """
     if prior_ctx and prior_ctx.get("deep_analysis"):
         return True
     ql = _ql(question)
-    deep_keys = (
+    if not ql:
+        return False
+    if _is_basic_engine_query(ql):
+        return False
+
+    # Metric / profitability semantics (including paraphrases)
+    profit_signals = (
         "profit",
+        "profitable",
+        "profitability",
         "margin",
         "cogs",
         "cost of goods",
-        "cost component",
-        "breakdown of component",
-        "break down the cost",
-        "break down component",
-        "components of",
-        "expir",
-        "shelf life",
-        "process behind",
-        "selling process",
-        "buying process",
-        "process involved",
-        "upstream of billing",
-        "order to cash",
-        "procurement process",
-        "gross profit",
-        "lowest margin",
-        "highest profit",
-        "which customers buy",
+        "making us the most money",
+        "making the most money",
+        "most money",
+        "making money",
+        "money and why",
+        "actually making",
+    )
+    structure_signals = (
+        "component",
+        "breakdown",
+        "break down",
+        "break-down",
+        "why did",
+        "why is the margin",
+        "why are margins",
+        "decline",
+        "erosion",
+    )
+    dim_chain_signals = (
+        "customers buying",
         "customers buy",
         "bought by which",
-        "products bought by",
         "type of products",
-        "product mix",
+        "products bought",
+        "industry data",
+        "with industry",
+        "and regions",
+        "and region",
         "how long",
         "purchase history",
-        "margin decline",
-        "declining margin",
-        "biggest margin",
-        "why did the margin",
-        "why did margin",
-        "profitability",
-        "customers with industry",
-        "industry data and region",
+        "buying them",
+        "buying those",
+    )
+    process_signals = (
+        "process",
+        "upstream",
+        "order to cash",
+        "procure",
+        "selling",
+        "buying",
+        "delivery",
+        "logistics",
+    )
+    lifecycle_signals = (
+        "expir",
+        "shelf life",
         "slow-moving",
         "fast-moving",
         "inventory age",
         "stock value",
-        "monthly trend",
-        "year-over-year",
-        "yoy margin",
     )
-    return any(k in ql for k in deep_keys)
+
+    score = 0
+    if any(s in ql for s in profit_signals):
+        score += 3
+    if any(s in ql for s in structure_signals) and (
+        any(s in ql for s in profit_signals) or "cost" in ql
+    ):
+        score += 2
+    if any(s in ql for s in dim_chain_signals):
+        score += 2
+    if any(s in ql for s in process_signals) and (
+        "process" in ql or "upstream" in ql or "logistics" in ql
+    ):
+        score += 2
+    if any(s in ql for s in lifecycle_signals):
+        score += 2
+    # Multi-dimension ask without saying "profit"
+    if ("product" in ql and "customer" in ql) or (
+        "customer" in ql and "industry" in ql and "region" in ql
+    ):
+        score += 2
+    return score >= 2
 
 
 def _extract_years(q: str) -> List[int]:
@@ -194,7 +297,20 @@ def build_analytical_plan(
         a in ql for a in METRICS["cogs"].aliases
     )
     wants_margin = any(a in ql for a in METRICS["gross_margin_pct"].aliases) or "lowest margin" in ql
-    wants_profit = any(a in ql for a in ("profit", "gross profit", "highest profit", "lowest profit", "profitability"))
+    wants_profit = any(
+        a in ql
+        for a in (
+            "profit",
+            "gross profit",
+            "highest profit",
+            "lowest profit",
+            "profitability",
+            "profitable",
+            "most money",
+            "making money",
+            "making us",
+        )
+    )
     wants_components = any(x in ql for x in ("component", "breakdown", "break down", "break-down"))
     wants_customers = "customer" in ql
     wants_industry = "industry" in ql
@@ -219,6 +335,7 @@ def build_analytical_plan(
             "buying process",
             "purchase process",
             "process involved in buy",
+            "process involved behind buy",
             "involved in buying",
             "behind buying",
             "to buy",
@@ -227,7 +344,10 @@ def build_analytical_plan(
     )
     wants_expiry = any(x in ql for x in ("expir", "shelf life"))
     wants_compare = any(x in ql for x in ("compare", "vs", "versus", "yoy", "year over year")) or len(years) >= 2
-    wants_history = any(x in ql for x in ("how long", "purchase history", "buying them"))
+    wants_history = any(
+        x in ql for x in ("how long", "purchase history", "been buying", "buying them")
+    )
+    wants_logistics = "logistics" in ql or "freight" in ql
     wants_margin_decline = any(
         x in ql
         for x in (
@@ -237,6 +357,8 @@ def build_analytical_plan(
             "margin erosion",
             "why did the margin",
             "why did margin",
+            "why is the margin",
+            "why are margins",
             "yoy margin",
         )
     )
@@ -248,14 +370,18 @@ def build_analytical_plan(
 
     # Follow-up shorthand against prior deep context
     if prior_ctx and prior_ctx.get("deep_analysis"):
-        if wants_margin_decline or (wants_why and wants_margin):
+        if wants_logistics and "cost" in ql:
+            plan.intent = "logistics_cost_gap"
+        elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
+        elif wants_customers and not wants_profit and not wants_history:
+            plan.intent = "customers_of_selection"
+        elif wants_history:
+            plan.intent = "purchase_history"
         elif wants_monthly:
             plan.intent = "monthly_trend"
         elif wants_inventory:
             plan.intent = "inventory_analysis"
-        elif wants_customers and not wants_profit:
-            plan.intent = "customers_of_selection"
         elif wants_industry and wants_region:
             plan.intent = "product_industry_region"
         elif wants_industry:
@@ -266,7 +392,7 @@ def build_analytical_plan(
             plan.intent = "cogs_by_product"
         elif wants_margin and not wants_profit:
             plan.intent = "margin_by_product"
-        elif wants_compare or wants_history:
+        elif wants_compare:
             plan.intent = "period_compare_selection"
         elif wants_components:
             plan.intent = "profit_components"
@@ -274,6 +400,8 @@ def build_analytical_plan(
             plan.intent = "process_sell"
         elif wants_process_buy:
             plan.intent = "process_buy"
+        elif wants_logistics:
+            plan.intent = "process_sell"
         elif wants_expiry:
             plan.intent = "product_expiry"
         elif wants_profit:
@@ -282,8 +410,12 @@ def build_analytical_plan(
             plan.intent = "dimensional_extend"
 
     if plan.intent == "generic":
-        if wants_margin_decline or (wants_why and wants_margin):
+        if wants_logistics and "cost" in ql:
+            plan.intent = "logistics_cost_gap"
+        elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
+        elif wants_history and (wants_customers or wants_product or prior_ctx):
+            plan.intent = "purchase_history"
         elif wants_monthly:
             plan.intent = "monthly_trend"
         elif wants_inventory:
@@ -335,6 +467,7 @@ def build_analytical_plan(
         if plan.intent == "lowest_margin_products":
             metric = "gross_margin_pct"
             direction = "asc"
+            plan.filters["min_revenue"] = 1000
         if plan.intent == "margin_decline_drivers":
             plan.comparisons = ["yoy_margin"]
             plan.dimensions.extend(["year", "customer", "industry"])
@@ -351,6 +484,14 @@ def build_analytical_plan(
         plan.entities = ["customer", "product"]
         plan.dimensions = ["customer", "product", "currency"]
         plan.relationships = ["billing→customer", "billing→product"]
+    elif plan.intent == "purchase_history":
+        plan.metrics = ["revenue", "quantity", "invoice_count"]
+        plan.entities = ["customer", "product"]
+        plan.dimensions = ["customer", "product", "time"]
+        plan.relationships = ["billing→customer", "billing→product"]
+    elif plan.intent == "logistics_cost_gap":
+        plan.metrics = ["logistics_cost"]
+        plan.data_gaps.append(METRICS["logistics_cost"].caveats)
     elif plan.intent == "industry_breakdown":
         plan.metrics = ["revenue", "gross_profit"]
         plan.dimensions = ["industry", "currency"]
@@ -474,7 +615,18 @@ GROUP BY TRIM(v.matnr), vk.waerk
 """.strip()
 
     if plan.intent in {"product_profitability", "lowest_margin_products", "dimensional_extend"}:
-        sql = f"""{base_select}
+        having = ""
+        min_rev = plan.filters.get("min_revenue")
+        if plan.intent == "lowest_margin_products" or min_rev:
+            try:
+                min_rev_n = float(min_rev if min_rev is not None else 1000)
+            except (TypeError, ValueError):
+                min_rev_n = 1000.0
+            # Avoid tiny-denominator margin rankings; require meaningful revenue.
+            having = (
+                f"\nHAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) >= {min_rev_n}"
+            )
+        sql = f"""{base_select}{having}
 ORDER BY {order_col} {direction} NULLS LAST
 LIMIT {limit}"""
         queries.append({"id": "product_profitability", "sql": sql})
@@ -516,7 +668,13 @@ LIMIT {limit}"""
         queries.append({"id": "cogs_by_product", "sql": sql})
 
     elif plan.intent == "margin_by_product":
+        min_rev = plan.filters.get("min_revenue") or 1000
+        try:
+            min_rev_n = float(min_rev)
+        except (TypeError, ValueError):
+            min_rev_n = 1000.0
         sql = f"""{base_select}
+HAVING SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) >= {min_rev_n}
 ORDER BY gross_margin_pct ASC NULLS LAST
 LIMIT {limit}"""
         queries.append({"id": "margin_by_product", "sql": sql})
@@ -547,6 +705,43 @@ ORDER BY revenue DESC NULLS LAST
 LIMIT {max(limit, 30)}
 """.strip()
         queries.append({"id": "customers_of_products", "sql": sql})
+
+    elif plan.intent == "purchase_history":
+        # How long have they been buying: first/last date, duration, purchase count.
+        sql = f"""
+SELECT
+  TRIM(vk.kunag) AS customer,
+  MAX(k.name1) AS customer_name,
+  TRIM(v.matnr) AS product,
+  COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
+  vk.waerk AS currency,
+  MIN(vk.fkdat) AS first_purchase_date,
+  MAX(vk.fkdat) AS last_purchase_date,
+  (MAX(vk.fkdat)::date - MIN(vk.fkdat)::date) AS purchase_duration_days,
+  COUNT(DISTINCT TRIM(vk.vbeln)) AS purchase_count,
+  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS quantity,
+  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue
+FROM vbrp v
+JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  AND vk.fkdat IS NOT NULL
+  {yfilter}
+  {pfilter}
+GROUP BY TRIM(vk.kunag), TRIM(v.matnr), vk.waerk
+ORDER BY purchase_duration_days DESC NULLS LAST, revenue DESC NULLS LAST
+LIMIT {max(limit, 40)}
+""".strip()
+        queries.append({"id": "purchase_history", "sql": sql})
+        gaps.append(
+            "Purchase duration is derived from billing dates (VBRK.FKDAT), not order creation. "
+            "Coverage is limited to loaded billing history."
+        )
+
+    elif plan.intent == "logistics_cost_gap":
+        gaps.append(METRICS["logistics_cost"].caveats)
+        # No monetary logistics SQL — intentional empty compile for CANNOT_ANSWER path.
 
     elif plan.intent == "industry_breakdown":
         sql = f"""
@@ -1015,6 +1210,18 @@ def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str
                 lines.append(
                     f"  - {r.get('preceding_type')} → {r.get('subsequent_type')}: {r.get('link_count')}"
                 )
+        elif "first_purchase_date" in top or "purchase_duration_days" in top:
+            lines.append(
+                f"- Example: {top.get('customer_name') or top.get('customer')} × "
+                f"{top.get('product_name') or top.get('product')}: "
+                f"first={top.get('first_purchase_date')} last={top.get('last_purchase_date')} "
+                f"duration_days={top.get('purchase_duration_days')} "
+                f"purchases={top.get('purchase_count')} "
+                f"revenue={_fmt_num(top.get('revenue'))} {top.get('currency')}"
+            )
+            findings.append(
+                "Purchase duration = last billing date − first billing date (VBRK.FKDAT)."
+            )
         elif "first_billing_date" in top:
             lines.append(
                 f"- Example: {top.get('customer_name')} bought {top.get('product_name')} "
@@ -1080,6 +1287,7 @@ def try_deep_multidim_analysis(
 
     # Hard data-gap for unavailable metrics when that is the only ask
     ql = _ql(question)
+    prior_for_gap = prior_ctx if isinstance(prior_ctx, dict) else None
     if "net profit" in ql or "ebit" in ql:
         return data_gap_payload(
             question,
@@ -1089,22 +1297,38 @@ def try_deep_multidim_analysis(
                 "Gross margin %",
                 "Revenue and invoice COGS by product/customer/industry/country/year",
             ],
+            prior_analytical_context=prior_for_gap,
         )
-    if "logistics cost" in ql or "freight cost" in ql:
+    if (
+        plan.intent == "logistics_cost_gap"
+        or "logistics cost" in ql
+        or "freight cost" in ql
+        or (("logistics" in ql or "freight" in ql) and "cost" in ql)
+    ):
         return data_gap_payload(
             question,
             METRICS["logistics_cost"].caveats,
-            can_answer=["Delivery document counts (LIKP)", "Order→delivery→billing document flow (VBFA)"],
+            can_answer=[
+                "Delivery/logistics activity (LIKP/LIPS document flow)",
+                "Order→delivery→billing flow (VBFA)",
+                "Invoice COGS proxy (WAVWR) — not freight",
+            ],
+            prior_analytical_context=prior_for_gap,
         )
 
     queries, gaps = compile_queries(plan)
     plan.data_gaps = list(dict.fromkeys((plan.data_gaps or []) + gaps))
     if not queries:
         if plan.data_gaps:
-            return data_gap_payload(question, "; ".join(plan.data_gaps), can_answer=[
-                "Billing revenue by product/customer/industry/country",
-                "Gross profit proxy via WAVWR where populated",
-            ])
+            return data_gap_payload(
+                question,
+                "; ".join(plan.data_gaps),
+                can_answer=[
+                    "Billing revenue by product/customer/industry/country",
+                    "Gross profit proxy via WAVWR where populated",
+                ],
+                prior_analytical_context=prior_for_gap,
+            )
         return None
 
     bundled: List[Dict[str, Any]] = []
@@ -1139,10 +1363,15 @@ def try_deep_multidim_analysis(
     ):
         # fall through if we produced nothing useful
         if plan.data_gaps and not primary_rows:
-            return data_gap_payload(question, "; ".join(plan.data_gaps[:3]), can_answer=[
-                "Product revenue from billing",
-                "Customer / industry / country sales cuts",
-            ])
+            return data_gap_payload(
+                question,
+                "; ".join(plan.data_gaps[:3]),
+                can_answer=[
+                    "Product revenue from billing",
+                    "Customer / industry / country sales cuts",
+                ],
+                prior_analytical_context=prior_for_gap,
+            )
         return None
 
     # Update selection from primary product rows

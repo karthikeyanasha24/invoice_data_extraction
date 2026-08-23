@@ -128,6 +128,53 @@ def test_basic_sales_not_forced_into_deep_engine():
     assert plan.intent == "unsupported_deep"
 
 
+def test_paraphrase_profit_questions_are_deep_candidates():
+    assert is_deep_analysis_candidate(
+        "Which products are actually making us the most money and why?"
+    )
+    assert is_deep_analysis_candidate(
+        "Show me the products with the highest profits and break down the components."
+    )
+    assert is_deep_analysis_candidate("And how long have they been buying them?", {"deep_analysis": True})
+
+
+def test_lowest_margin_applies_revenue_threshold():
+    plan = build_analytical_plan("Show me products with lowest margins")
+    assert plan.intent == "lowest_margin_products"
+    assert plan.filters.get("min_revenue") == 1000
+    queries, _ = compile_queries(plan)
+    assert "HAVING" in queries[0]["sql"]
+    assert "gross_margin_pct" in queries[0]["sql"].lower()
+
+
+def test_purchase_history_compiles_duration():
+    plan = build_analytical_plan(
+        "How long have they been buying them?",
+        {"deep_analysis": True, "selected_products": ["MAT-A"]},
+    )
+    assert plan.intent == "purchase_history"
+    queries, gaps = compile_queries(plan)
+    assert queries
+    sql = queries[0]["sql"].lower()
+    assert "first_purchase_date" in sql
+    assert "purchase_duration_days" in sql
+    assert "mat-a" in sql
+
+
+def test_logistics_cost_cannot_answer():
+    def boom(*_a, **_k):
+        raise AssertionError("should not execute SQL for logistics cost")
+
+    payload = try_deep_multidim_analysis(
+        "Show me the logistics cost",
+        db=None,
+        execute_sql=boom,
+        prior_plan={"analytical_context": {"deep_analysis": True, "selected_products": ["P1"]}},
+    )
+    assert payload is not None
+    assert payload["answer_status"] == "CANNOT_ANSWER"
+
+
 def test_mock_execute_profitability_payload_shape():
     rows = [
         {

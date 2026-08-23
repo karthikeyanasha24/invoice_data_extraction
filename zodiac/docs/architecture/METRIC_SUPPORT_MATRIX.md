@@ -58,22 +58,33 @@ Generated from live schema inventory (`schema_full.json`, `schema_ai_config.json
 
 | Intent | Supported |
 |--------|-----------|
-| product_profitability / lowest_margin / COGS / components | yes (WAVWR) |
+| product_profitability / lowest_margin / COGS / components | yes (WAVWR); lowest margin uses min revenue HAVING (≥1000) |
 | customers_of_selection / industry / country | yes |
 | product × industry × region | yes |
+| purchase_history (how long buying) | yes — first/last FKDAT, duration days, purchase count (billing history only) |
 | period compare / monthly trend | yes |
 | margin decline + customer drivers | yes (YoY margin Δ) |
 | inventory analysis | partial (MBEW + velocity proxy) |
 | expiry / expiry by industry | partial |
 | process sell / buy | stage counts + VBFA |
-| net profit / logistics cost / budget | data gap |
+| net profit / logistics **cost** / budget | data gap (delivery activity ≠ logistics cost) |
+
+## Routing (semantic, not phrase-gated)
+
+Deep path activates on semantic score ≥ 2 from profit/COGS/margin paraphrases, component/why structure, customer–industry–region chains, process/logistics, expiry/inventory — **or** any prior `deep_analysis` context.
+
+Basic GA queries (`highest sales`, `top N customers`, sales-by-industry/country, lone `Top 5`) stay on existing engines.
 
 ## Engine path
 
 ```text
 classify_turn → (NON_BUSINESS / CLARIFICATION)
-             → try deep_multidim (governed plan→SQL)
+             → try deep_multidim (semantic gate → governed plan → SQL ≤6)
              → FOLLOWUP_DELTA / intent_sql_fast / sql_catalog / universal
 ```
 
 Adaptive follow-up / clarification hardening remains intact.
+
+## Grain / join rule
+
+Monetary metrics aggregate at **billing item grain** (`vbrp` + `VBRK`) **before** dimension enrichment. Customer/industry joins are on already-aggregated paths or `GROUP BY` includes dimension keys so NETWR/WAVWR are not multiplied by fan-out.
