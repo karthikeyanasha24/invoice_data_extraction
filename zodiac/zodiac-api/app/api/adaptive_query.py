@@ -2748,6 +2748,38 @@ async def post_query_adaptive(
     if turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}:
         return _persist_and_return(clarification_payload(clean_q, turn.reason))
 
+    # ── Path 1.5: governed multi-dimensional deep analysis (schema-backed) ──
+    # After classify_turn only. Falls through when not a deep candidate / unsafe.
+    try:
+        from ..services.analytical_deep_dive import try_deep_multidim_analysis
+
+        deep_db = db
+        if USE_SAP_DB_FOR_AI:
+            try:
+                sap_for_deep = get_sap_session()
+                if sap_for_deep is not None:
+                    deep_db = sap_for_deep
+            except Exception:
+                pass
+        deep = try_deep_multidim_analysis(
+            clean_q,
+            deep_db,
+            _execute_sql,
+            prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+            prior_rows=rows_list,
+        )
+        if deep:
+            meta = deep.get("meta") if isinstance(deep.get("meta"), dict) else {}
+            deep["meta"] = {**routing_meta, **meta, "turn_intent": turn.intent}
+            logger.info(
+                "[adaptive] deep_multidim hit intent=%s queries=%s",
+                (meta.get("analytical_plan") or {}).get("intent"),
+                meta.get("query_count"),
+            )
+            return _persist_and_return(deep)
+    except Exception as deep_err:
+        logger.info("[adaptive] deep_multidim skipped: %s", deep_err)
+
     # ── Path 2: recognized follow-up delta only (never "contextData exists") ──
     if turn.intent == TurnIntent.FOLLOWUP_DELTA:
         merged_plan = turn.plan

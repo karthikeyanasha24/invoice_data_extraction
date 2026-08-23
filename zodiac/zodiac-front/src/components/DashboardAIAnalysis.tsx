@@ -124,12 +124,14 @@ type QueryResult = {
   keyFindings?: string[];
   kpis?: KPI[];
   charts?: Chart[];
+  suggested_followups?: string[];
   meta?: {
     domain?: string;
     intent?: string;
     schema_tables?: string[];
     pipeline_ms?: number;
     warnings?: string[];
+    deep_analysis?: boolean;
   };
 };
 type Message = {
@@ -451,15 +453,22 @@ function PipelineProgress({ elapsed }: { elapsed: number }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Full result renderer (Power BI-style dashboard)
 // ═══════════════════════════════════════════════════════════════════════════════
-function ResultDashboard({ result }: { result: QueryResult }) {
+function ResultDashboard({
+  result,
+  onAskFollowup,
+}: {
+  result: QueryResult;
+  onAskFollowup?: (q: string) => void;
+}) {
   if (!result) return null;
-  const { kpis, charts, summary, keyFindings, data, totalCount, sql, sqlStrategy, rowCount, meta } = result;
+  const { kpis, charts, summary, keyFindings, data, totalCount, sql, sqlStrategy, rowCount, meta, suggested_followups } = result;
 
   const hasKpis    = (kpis?.length ?? 0) > 0;
   const hasCharts  = (charts?.length ?? 0) > 0;
   const hasData    = (data?.length ?? 0) > 0;
   const hasSummary = !!summary;
   const hasInsights = (keyFindings?.length ?? 0) > 0 && keyFindings?.[0] !== 'No results found.';
+  const followups = (suggested_followups || []).filter(Boolean).slice(0, 8);
 
   return (
     <div className="space-y-0">
@@ -471,6 +480,25 @@ function ResultDashboard({ result }: { result: QueryResult }) {
       {hasSummary && <SummaryCard summary={summary!} />}
       {hasInsights && <InsightsPanel findings={keyFindings!} />}
       {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} />}
+      {followups.length > 0 && onAskFollowup && (
+        <div className="mt-3 mb-1 px-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            Explore further
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {followups.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => onAskFollowup(f)}
+                className="text-left text-xs px-2.5 py-1.5 rounded-lg border border-indigo-100 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors"
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <MetaStrip meta={meta} sqlStrategy={sqlStrategy} rowCount={rowCount} totalCount={totalCount} />
     </div>
   );
@@ -604,6 +632,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         keyFindings: res.keyFindings || res.key_findings || [],
         kpis:        isCannotAnswer ? [] : (res.kpis || []),
         charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
+        suggested_followups: res.suggested_followups || res.suggestedFollowups || [],
         meta:        res.meta || {
           domain:        res.domain,
           intent:        res.intent,
@@ -777,7 +806,15 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                     </div>
                   )}
                   {/* Power BI-style dashboard output */}
-                  {msg.result && <ResultDashboard result={msg.result} />}
+                  {msg.result && (
+                    <ResultDashboard
+                      result={msg.result}
+                      onAskFollowup={(fq) => {
+                        setIsNewQuestion(false);
+                        void sendQuestion(fq);
+                      }}
+                    />
+                  )}
                 </>
               )}
             </div>
