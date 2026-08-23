@@ -50,6 +50,11 @@ _BUSINESS_TOKENS = (
     "vbrk", "vbrp", "kna1", "t016t", "makt", "edi", "failed", "count", "total",
     "bought", "buyer", "sold", "order", "orders", "currency", "eur", "usd",
     "trading", "motomarkt", "rank",
+    # Deep analytical metrics / dimensions
+    "cogs", "margin", "margins", "profit", "profits", "cost", "goods", "region",
+    "regions", "country", "countries", "component", "components", "breakdown",
+    "decline", "process", "delivery", "logistics", "freight", "expiry", "expir",
+    "history", "buying", "selling", "purchase", "supplier", "inventory",
 )
 
 _NONSENSE_HINTS = (
@@ -64,7 +69,10 @@ _NONSENSE_HINTS = (
 _SHORT_FOLLOWUP_TOKENS = {
     "trading", "top", "bottom", "count", "sales", "remove", "filter",
     "compare", "instead", "highest", "lowest", "industry", "invoice",
-    "rank",
+    "rank", "cogs", "margin", "margins", "profit", "cost", "goods",
+    "region", "regions", "country", "customer", "customers", "product",
+    "components", "breakdown", "decline", "process", "delivery", "why",
+    "history", "buying", "selling", "purchase", "year", "years",
 }
 
 
@@ -597,6 +605,7 @@ def repair_generated_sql(sql: str, question: str = "") -> str:
 def is_supported_business_question(
     question: str,
     has_active_analysis: bool = False,
+    previous_plan: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
     """
     Gate before SQL generation, result narration, and continuation handling.
@@ -615,6 +624,15 @@ def is_supported_business_question(
     # Schema questions are business-adjacent and allowed (answered without SAP fact SQL).
     if re.search(r"\b(which tables?|what columns?|data type|schema|shared columns)\b", ql):
         return True, "schema"
+    # Governed deep-analytical follow-ups bypass the generic NL length gate.
+    if previous_plan is not None:
+        try:
+            from .analytical_followup_resolver import is_deep_followup_allowed
+
+            if is_deep_followup_allowed(q, previous_plan):
+                return True, "deep_analytical_followup"
+        except Exception:
+            pass
     tokens = set(re.findall(r"[a-z0-9]+", ql))
     if tokens.intersection({t.lower() for t in _BUSINESS_TOKENS}):
         return True, "business_token"

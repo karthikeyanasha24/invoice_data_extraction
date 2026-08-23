@@ -69,6 +69,20 @@ PostgreSQL requires quoted uppercase SAP tables (`"VBRK"`, `"KNA1"`, …). Adapt
 
 Latency (16-step local chain): **p50 ≈ 1.6s**, **max ≈ 6.5s** (cold first call).
 
+## Follow-up resolver (deterministic)
+
+Short follow-ups (`Show COGS`, `Show the regions`, `How long have they been buying them?`) are resolved by `analytical_followup_resolver.py` against persisted `query_plan.analytical_context` **before** the NL clarification gate.
+
+| Follow-up class | Example | Resolved intent |
+|-----------------|---------|-----------------|
+| METRIC_CHANGE | Show COGS / Show margins | `cogs_by_product` / `margin_by_product` |
+| DIMENSION_EXPANSION | Show regions / Break by industry | `country_breakdown` / `industry_breakdown` |
+| HISTORY_EXPANSION | How long have they been buying them? | `purchase_history` |
+| CAUSE_ANALYSIS | Why did margins fall? | `margin_decline_drivers` |
+| DATA_GAP_REQUEST | Logistics cost / net profit | `CANNOT_ANSWER` (context preserved) |
+
+Local Andy verify (25 scenarios): **23 PASS / 2 DATA GAP / 0 FAIL** including full 17-step chain.
+
 ## Live Full Chat / zodiac-back deploy
 
 **Blocked for this agent:** Vercel CLI is logged in as `karthikeyanasha24` (team `ashas-projects-a0fae821` only). Production `zodiac-back.vercel.app` is Andy’s team. A mistaken deploy to `zodiac-api-nu.vercel.app` is **not** bridgeedi.

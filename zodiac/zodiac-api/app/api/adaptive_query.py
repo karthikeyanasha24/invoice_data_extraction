@@ -2730,7 +2730,15 @@ async def post_query_adaptive(
         prev_status = str(contextData.get("previousAnswerStatus") or "").strip().upper()
         rows_raw = contextData.get("data")
         rows_list = rows_raw if isinstance(rows_raw, list) else []
-        if prev_status == "CANNOT_ANSWER" or (
+        if prev_status == "CANNOT_ANSWER":
+            # Preserve deep analytical chain after governed data-gap turns.
+            ac = (prev_plan_dict or {}).get("analytical_context") if isinstance(prev_plan_dict, dict) else None
+            if not (isinstance(ac, dict) and ac.get("deep_analysis")):
+                prev_sql = ""
+                prev_plan_dict = None
+                rows_list = []
+                logger.info("[adaptive] cleared prior context after CANNOT_ANSWER without deep context")
+        elif (
             "invoice_v2_business_data" in prev_sql.lower() and "total_rows" in prev_sql.lower()
         ):
             prev_sql = ""

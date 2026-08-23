@@ -247,7 +247,7 @@ METRICS: Dict[str, MetricDef] = {
     "cogs": MetricDef(
         name="cogs",
         description="Document cost from billing item WAVWR (invoice-level COGS proxy)",
-        aliases=("cogs", "cost of goods", "cost of goods sold", "cost of goods sold (cogs)"),
+        aliases=("cogs", "cost of goods", "cost of goods sold", "cost of goods sold (cogs)", "goods cost", "product cost"),
         status="supported",
         formula_sql="SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))",
         base_tables=("vbrp", "VBRK"),
@@ -285,7 +285,7 @@ METRICS: Dict[str, MetricDef] = {
     "gross_margin_pct": MetricDef(
         name="gross_margin_pct",
         description="Gross profit / revenue * 100",
-        aliases=("margin", "gross margin", "margin %", "lowest margins", "highest margins"),
+        aliases=("margin", "margins", "gross margin", "margin %", "lowest margins", "highest margins"),
         status="supported",
         formula_sql=(
             "CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN "

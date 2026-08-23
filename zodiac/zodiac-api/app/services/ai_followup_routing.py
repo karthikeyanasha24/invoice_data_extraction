@@ -242,11 +242,19 @@ def has_active_analysis_state(
 ) -> bool:
     """True when there is a prior successful analytical query to modify.
 
-    CLARIFICATION / CANNOT_ANSWER are not active analysis. Presence of context
-    payload is not enough — the prior turn must have been an analytical success.
+    CLARIFICATION / ERROR are not active analysis. CANNOT_ANSWER with preserved
+    deep analytical_context still counts — data-gap turns must not break chains.
     """
+    if isinstance(previous_plan, dict):
+        ac = previous_plan.get("analytical_context")
+        if isinstance(ac, dict) and ac.get("deep_analysis"):
+            return True
+        if previous_plan.get("deep_analysis"):
+            return True
     status = (previous_status or "").strip().upper()
-    if status in {"CLARIFICATION", "CANNOT_ANSWER", "ERROR"}:
+    if status in {"CLARIFICATION", "ERROR"}:
+        return False
+    if status == "CANNOT_ANSWER":
         return False
     sql = (previous_sql or "").strip()
     if sql and re.search(r"\bselect\b", sql, re.I):
@@ -260,6 +268,19 @@ def has_active_analysis_state(
     ):
         return True
     return False
+
+
+def has_preserved_deep_context(
+    previous_plan: Optional[Dict[str, Any]] = None,
+    previous_status: str = "",
+) -> bool:
+    """Deep analytical context survives data-gap turns."""
+    if not isinstance(previous_plan, dict):
+        return False
+    ac = previous_plan.get("analytical_context")
+    if isinstance(ac, dict) and ac.get("deep_analysis"):
+        return True
+    return bool(previous_plan.get("deep_analysis"))
 
 
 def _is_true_followup_delta(plan: QueryPlan) -> bool:
@@ -287,12 +308,13 @@ def classify_turn(
     q = (question or "").strip()
     ql = q.lower()
     has_active = has_active_analysis_state(previous_sql, previous_plan, previous_status)
+    has_deep = has_preserved_deep_context(previous_plan, previous_status)
 
     if _NON_ANALYTICAL_TOPIC.search(ql):
         return TurnClassification(TurnIntent.NON_BUSINESS, "non_analytical_topic")
 
     allowed, gate_reason = is_supported_business_question(
-        q, has_active_analysis=has_active
+        q, has_active_analysis=has_active or has_deep, previous_plan=previous_plan
     )
     if not allowed:
         if gate_reason == "non_business" or gate_reason == "unsafe_or_non_business":

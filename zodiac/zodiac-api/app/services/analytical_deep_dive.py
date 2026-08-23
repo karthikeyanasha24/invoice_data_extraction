@@ -26,6 +26,7 @@ from .business_semantic_layer import (
     data_gap_payload,
     resolve_metric,
 )
+from .analytical_followup_resolver import resolve_analytical_followup
 
 logger = logging.getLogger("zodiac-api.analytical-deep-dive")
 
@@ -282,6 +283,34 @@ def build_analytical_plan(
     limit = _extract_limit(question, 10)
     plan = AnalyticalPlan(intent="generic", base_question=question, years=years)
 
+    # Deterministic follow-up resolver (general — not phrase patches)
+    if prior_ctx and prior_ctx.get("deep_analysis"):
+        follow = resolve_analytical_followup(question, prior_ctx)
+        if follow.resolved and follow.intent:
+            plan.intent = follow.intent
+            if follow.metrics:
+                plan.metrics = list(follow.metrics)
+            if follow.years:
+                plan.years = follow.years
+                plan.filters["years"] = follow.years
+            if follow.comparisons:
+                plan.comparisons = list(follow.comparisons)
+            for d in follow.add_dimensions:
+                if d not in plan.dimensions:
+                    plan.dimensions.append(d)
+            for d in follow.remove_dimensions:
+                plan.dimensions = [x for x in plan.dimensions if x != d]
+            if follow.replace_dimensions:
+                plan.dimensions = list(follow.replace_dimensions)
+            if follow.data_gap_metric:
+                plan.data_gaps.append(METRICS[follow.data_gap_metric].caveats)
+            plan = _merge_prior(plan, prior_ctx)
+            # Apply intent-specific metrics/dimensions below via shared block
+            if plan.intent not in {"generic", "unsupported_deep"}:
+                pass  # fall through to metrics/dimensions assignment
+            else:
+                return plan
+
     # Detect unavailable metrics early
     if any(x in ql for x in ("net profit", "ebit", "bottom line")):
         plan.data_gaps.append(
@@ -368,8 +397,8 @@ def build_analytical_plan(
     )
     wants_why = ql.startswith("why ") or " why " in ql or ql.startswith("explain why")
 
-    # Follow-up shorthand against prior deep context
-    if prior_ctx and prior_ctx.get("deep_analysis"):
+    # Follow-up shorthand against prior deep context (legacy keyword path — resolver runs first)
+    if prior_ctx and prior_ctx.get("deep_analysis") and plan.intent == "generic":
         if wants_logistics and "cost" in ql:
             plan.intent = "logistics_cost_gap"
         elif wants_expiry and wants_industry:
@@ -1313,7 +1342,8 @@ def try_deep_multidim_analysis(
     # Hard data-gap for unavailable metrics when that is the only ask
     ql = _ql(question)
     prior_for_gap = prior_ctx if isinstance(prior_ctx, dict) else None
-    if "net profit" in ql or "ebit" in ql:
+    follow_gap = resolve_analytical_followup(question, prior_for_gap)
+    if follow_gap.data_gap_metric == "net_profit" or "net profit" in ql or "ebit" in ql:
         return data_gap_payload(
             question,
             METRICS["net_profit"].caveats,
@@ -1325,7 +1355,8 @@ def try_deep_multidim_analysis(
             prior_analytical_context=prior_for_gap,
         )
     if (
-        plan.intent == "logistics_cost_gap"
+        plan.intent in {"logistics_cost_gap", "net_profit_gap"}
+        or follow_gap.data_gap_metric == "logistics_cost"
         or "logistics cost" in ql
         or "freight cost" in ql
         or (("logistics" in ql or "freight" in ql) and "cost" in ql)
