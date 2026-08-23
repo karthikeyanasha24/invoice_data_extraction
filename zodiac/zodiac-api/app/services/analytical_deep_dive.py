@@ -100,6 +100,7 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         "process behind",
         "selling process",
         "buying process",
+        "process involved",
         "upstream of billing",
         "order to cash",
         "procurement process",
@@ -110,14 +111,25 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         "customers buy",
         "bought by which",
         "products bought by",
+        "type of products",
         "product mix",
         "how long",
         "purchase history",
         "margin decline",
         "declining margin",
+        "biggest margin",
+        "why did the margin",
+        "why did margin",
         "profitability",
         "customers with industry",
         "industry data and region",
+        "slow-moving",
+        "fast-moving",
+        "inventory age",
+        "stock value",
+        "monthly trend",
+        "year-over-year",
+        "yoy margin",
     )
     return any(k in ql for k in deep_keys)
 
@@ -188,16 +200,64 @@ def build_analytical_plan(
     wants_industry = "industry" in ql
     wants_region = any(x in ql for x in ("region", "country"))
     wants_product = any(x in ql for x in ("product", "material"))
-    wants_process_sell = any(x in ql for x in ("selling process", "process behind sell", "process involved behind sell", "order to cash", "upstream of billing", "to sell"))
-    wants_process_buy = any(x in ql for x in ("buying process", "purchase process", "to buy", "procurement"))
+    wants_process_sell = any(
+        x in ql
+        for x in (
+            "selling process",
+            "process behind sell",
+            "process involved behind sell",
+            "process involved behind selling",
+            "behind selling",
+            "order to cash",
+            "upstream of billing",
+            "to sell",
+        )
+    )
+    wants_process_buy = any(
+        x in ql
+        for x in (
+            "buying process",
+            "purchase process",
+            "process involved in buy",
+            "involved in buying",
+            "behind buying",
+            "to buy",
+            "procurement",
+        )
+    )
     wants_expiry = any(x in ql for x in ("expir", "shelf life"))
     wants_compare = any(x in ql for x in ("compare", "vs", "versus", "yoy", "year over year")) or len(years) >= 2
     wants_history = any(x in ql for x in ("how long", "purchase history", "buying them"))
+    wants_margin_decline = any(
+        x in ql
+        for x in (
+            "margin decline",
+            "declining margin",
+            "biggest margin decline",
+            "margin erosion",
+            "why did the margin",
+            "why did margin",
+            "yoy margin",
+        )
+    )
+    wants_monthly = "monthly" in ql or "by month" in ql or "month trend" in ql
+    wants_inventory = any(
+        x in ql for x in ("inventory", "stock value", "slow-moving", "fast-moving", "inventory age")
+    )
+    wants_why = ql.startswith("why ") or " why " in ql or ql.startswith("explain why")
 
     # Follow-up shorthand against prior deep context
     if prior_ctx and prior_ctx.get("deep_analysis"):
-        if wants_customers and not wants_profit:
+        if wants_margin_decline or (wants_why and wants_margin):
+            plan.intent = "margin_decline_drivers"
+        elif wants_monthly:
+            plan.intent = "monthly_trend"
+        elif wants_inventory:
+            plan.intent = "inventory_analysis"
+        elif wants_customers and not wants_profit:
             plan.intent = "customers_of_selection"
+        elif wants_industry and wants_region:
+            plan.intent = "product_industry_region"
         elif wants_industry:
             plan.intent = "industry_breakdown"
         elif wants_region:
@@ -219,16 +279,23 @@ def build_analytical_plan(
         elif wants_profit:
             plan.intent = "product_profitability"
         else:
-            # dimensional extension default
             plan.intent = "dimensional_extend"
 
     if plan.intent == "generic":
-        if wants_process_sell and wants_process_buy:
+        if wants_margin_decline or (wants_why and wants_margin):
+            plan.intent = "margin_decline_drivers"
+        elif wants_monthly:
+            plan.intent = "monthly_trend"
+        elif wants_inventory:
+            plan.intent = "inventory_analysis"
+        elif wants_process_sell and wants_process_buy:
             plan.intent = "process_sell_and_buy"
         elif wants_process_sell:
             plan.intent = "process_sell"
         elif wants_process_buy:
             plan.intent = "process_buy"
+        elif wants_expiry and wants_industry:
+            plan.intent = "product_expiry_by_industry"
         elif wants_expiry:
             plan.intent = "product_expiry"
         elif wants_components and (wants_profit or wants_cogs or prior_ctx):
@@ -237,6 +304,8 @@ def build_analytical_plan(
             plan.intent = "cogs_by_product"
         elif wants_margin and "lowest" in ql:
             plan.intent = "lowest_margin_products"
+        elif wants_profit and wants_industry and wants_region:
+            plan.intent = "product_industry_region"
         elif wants_profit or wants_margin:
             plan.intent = "product_profitability"
         elif wants_customers and wants_product:
@@ -250,7 +319,13 @@ def build_analytical_plan(
             return plan
 
     # Metrics / dimensions
-    if plan.intent in {"product_profitability", "lowest_margin_products", "profit_components"}:
+    if plan.intent in {
+        "product_profitability",
+        "lowest_margin_products",
+        "profit_components",
+        "margin_decline_drivers",
+        "product_industry_region",
+    }:
         plan.metrics = ["revenue", "cogs", "gross_profit", "gross_margin_pct"]
         plan.entities = ["product", "billing_item", "billing_header"]
         plan.dimensions = ["product", "currency"]
@@ -260,6 +335,11 @@ def build_analytical_plan(
         if plan.intent == "lowest_margin_products":
             metric = "gross_margin_pct"
             direction = "asc"
+        if plan.intent == "margin_decline_drivers":
+            plan.comparisons = ["yoy_margin"]
+            plan.dimensions.extend(["year", "customer", "industry"])
+        if plan.intent == "product_industry_region":
+            plan.dimensions.extend(["industry", "country"])
         plan.ranking = {"metric": metric, "direction": direction, "limit": limit}
     elif plan.intent == "cogs_by_product":
         plan.metrics = ["cogs", "revenue"]
@@ -291,6 +371,22 @@ def build_analytical_plan(
         plan.metrics = plan.metrics or ["revenue", "gross_profit", "gross_margin_pct"]
         plan.dimensions = ["product", "year", "currency"]
         plan.comparisons = ["yoy"]
+    elif plan.intent == "monthly_trend":
+        plan.metrics = ["revenue", "gross_profit", "gross_margin_pct"]
+        plan.dimensions = ["month", "currency"]
+        plan.comparisons = ["mom"]
+    elif plan.intent == "inventory_analysis":
+        plan.metrics = ["quantity"]
+        plan.entities = ["inventory", "product"]
+        plan.dimensions = ["product", "plant"]
+        plan.data_gaps.append(
+            "Inventory uses MBEW/MARD stock value/qty — not equated to COGS or logistics cost."
+        )
+    elif plan.intent in {"product_expiry", "product_expiry_by_industry"}:
+        plan.metrics = ["product_expiry"]
+        plan.dimensions = ["product"]
+        if plan.intent == "product_expiry_by_industry":
+            plan.dimensions.append("industry")
     elif plan.intent.startswith("process_"):
         plan.entities = ["sales_order", "delivery", "billing_header", "purchase", "document_flow"]
         plan.metrics = ["invoice_count"]
@@ -577,6 +673,179 @@ LIMIT 200
 """.strip()
         queries.append({"id": "period_compare", "sql": sql})
 
+    elif plan.intent == "margin_decline_drivers":
+        ylist = years if len(years) >= 2 else [2024, 2025]
+        y1, y2 = ylist[0], ylist[1]
+        sql_decline = f"""
+WITH yearly AS (
+  SELECT
+    {_year_predicate('vk')} AS year,
+    TRIM(v.matnr) AS product,
+    COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
+    vk.waerk AS currency,
+    SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
+    SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
+    CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+      ROUND(100.0 * (
+        SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
+        - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
+      ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+    ELSE NULL END AS gross_margin_pct
+  FROM vbrp v
+  JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+  LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+  WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
+    AND CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+    AND {_year_predicate('vk')} IN ({y1}, {y2})
+    {pfilter}
+  GROUP BY {_year_predicate('vk')}, TRIM(v.matnr), vk.waerk
+)
+SELECT
+  a.product,
+  a.product_name,
+  a.currency,
+  a.revenue AS revenue_{y1},
+  b.revenue AS revenue_{y2},
+  a.cogs AS cogs_{y1},
+  b.cogs AS cogs_{y2},
+  a.gross_margin_pct AS margin_{y1},
+  b.gross_margin_pct AS margin_{y2},
+  (b.gross_margin_pct - a.gross_margin_pct) AS margin_change_pp
+FROM yearly a
+JOIN yearly b
+  ON a.product = b.product AND a.currency = b.currency
+ AND a.year = {y1} AND b.year = {y2}
+ORDER BY margin_change_pp ASC NULLS LAST
+LIMIT {limit}
+""".strip()
+        queries.append({"id": "margin_decline", "sql": sql_decline})
+        # Driver slice: customer mix for declining set (same product filter if present)
+        sql_cust = f"""
+SELECT
+  TRIM(vk.kunag) AS customer,
+  MAX(k.name1) AS customer_name,
+  MAX(k.brsch) AS industry,
+  MAX(vk.land1) AS country,
+  {_year_predicate('vk')} AS year,
+  vk.waerk AS currency,
+  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs
+FROM vbrp v
+JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  AND {_year_predicate('vk')} IN ({y1}, {y2})
+  {pfilter}
+GROUP BY TRIM(vk.kunag), {_year_predicate('vk')}, vk.waerk
+ORDER BY revenue DESC NULLS LAST
+LIMIT 40
+""".strip()
+        queries.append({"id": "margin_decline_customer_drivers", "sql": sql_cust})
+
+    elif plan.intent == "monthly_trend":
+        sql = f"""
+SELECT
+  EXTRACT(YEAR FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)) AS year,
+  EXTRACT(MONTH FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)) AS month,
+  vk.waerk AS currency,
+  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
+  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+    ROUND(100.0 * (
+      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
+      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
+    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+  ELSE NULL END AS gross_margin_pct
+FROM vbrp v
+JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  {yfilter}
+  {pfilter}
+GROUP BY EXTRACT(YEAR FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)),
+         EXTRACT(MONTH FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)),
+         vk.waerk
+ORDER BY year, month
+LIMIT 120
+""".strip()
+        queries.append({"id": "monthly_trend", "sql": sql})
+
+    elif plan.intent == "product_industry_region":
+        sql = f"""
+SELECT
+  TRIM(v.matnr) AS product,
+  COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
+  COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown') AS industry,
+  COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown') AS country,
+  vk.waerk AS currency,
+  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue,
+  SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS cogs,
+  SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
+    - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC)) AS gross_profit,
+  CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN
+    ROUND(100.0 * (
+      SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC))
+      - SUM(CAST(NULLIF(TRIM(COALESCE(v.wavwr, '0')), '') AS NUMERIC))
+    ) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2)
+  ELSE NULL END AS gross_margin_pct
+FROM vbrp v
+JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
+LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL
+  {yfilter}
+  {pfilter}
+GROUP BY TRIM(v.matnr),
+         COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown'),
+         COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown'),
+         vk.waerk
+ORDER BY gross_profit DESC NULLS LAST
+LIMIT {max(limit, 30)}
+""".strip()
+        queries.append({"id": "product_industry_region", "sql": sql})
+
+    elif plan.intent == "inventory_analysis":
+        queries.append({
+            "id": "stock_value_by_material",
+            "sql": f"""
+SELECT
+  TRIM(b.matnr) AS product,
+  COALESCE(m.maktx, b.matnr) AS product_name,
+  b.bwkey AS valuation_area,
+  CAST(NULLIF(TRIM(COALESCE(b.salk3, '0')), '') AS NUMERIC) AS stock_value,
+  CAST(NULLIF(TRIM(COALESCE(b.lbkum, '0')), '') AS NUMERIC) AS stock_qty,
+  CAST(NULLIF(TRIM(COALESCE(b.stprs, '0')), '') AS NUMERIC) AS standard_price
+FROM MBEW b
+LEFT JOIN MAKT m ON TRIM(b.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE CAST(NULLIF(TRIM(COALESCE(b.salk3, '0')), '') AS NUMERIC) IS NOT NULL
+ORDER BY stock_value DESC NULLS LAST
+LIMIT {max(limit, 30)}
+""".strip(),
+        })
+        queries.append({
+            "id": "billing_velocity_proxy",
+            "sql": f"""
+SELECT
+  TRIM(v.matnr) AS product,
+  COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
+  SUM(CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS billed_qty,
+  COUNT(DISTINCT vk.vbeln) AS invoice_count
+FROM vbrp v
+JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN MAKT m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
+WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
+  {yfilter}
+GROUP BY TRIM(v.matnr)
+ORDER BY billed_qty ASC NULLS LAST
+LIMIT {max(limit, 30)}
+""".strip(),
+        })
+        gaps.append(
+            "Slow/fast-moving uses billed quantity as a proxy; true inventory age needs movement history (MSEG not in schema_full)."
+        )
+
     elif plan.intent in {"process_sell", "process_sell_and_buy", "process_buy"}:
         if plan.intent in {"process_sell", "process_sell_and_buy"}:
             queries.append({
@@ -620,14 +889,39 @@ ORDER BY stage
 """.strip(),
             })
 
-    elif plan.intent == "product_expiry":
+    elif plan.intent in {"product_expiry", "product_expiry_by_industry"}:
         gaps.append(
             "Product expiry BI is partial: MARA shelf-life and LIPS.VFDAT exist, "
             "but batch expiry completeness varies."
         )
-        queries.append({
-            "id": "product_shelf_life",
-            "sql": """
+        if plan.intent == "product_expiry_by_industry":
+            queries.append({
+                "id": "product_expiry_by_industry",
+                "sql": """
+SELECT
+  TRIM(a.matnr) AS product,
+  COALESCE(mx.maktx, a.matnr) AS product_name,
+  a.mhdhb AS total_shelf_life_days,
+  a.mhdrz AS remaining_shelf_life_days,
+  COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown') AS industry,
+  COUNT(DISTINCT vk.kunag) AS customer_count
+FROM MARA a
+LEFT JOIN MAKT mx ON TRIM(a.matnr) = TRIM(mx.matnr) AND (mx.spras = 'E' OR mx.spras IS NULL)
+LEFT JOIN vbrp v ON TRIM(v.matnr) = TRIM(a.matnr)
+LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
+LEFT JOIN KNA1 k ON TRIM(vk.kunag) = TRIM(k.kunnr)
+LEFT JOIN T016T t ON TRIM(k.brsch) = TRIM(t.brsch)
+WHERE a.mhdhb IS NOT NULL OR a.mhdrz IS NOT NULL OR a.sled_bbd IS NOT NULL
+GROUP BY TRIM(a.matnr), mx.maktx, a.mhdhb, a.mhdrz,
+         COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown')
+ORDER BY CAST(NULLIF(TRIM(COALESCE(a.mhdrz, a.mhdhb, '0')), '') AS NUMERIC) ASC NULLS LAST
+LIMIT 50
+""".strip(),
+            })
+        else:
+            queries.append({
+                "id": "product_shelf_life",
+                "sql": """
 SELECT
   TRIM(a.matnr) AS product,
   COALESCE(m.maktx, a.matnr) AS product_name,
@@ -640,7 +934,14 @@ WHERE a.mhdhb IS NOT NULL OR a.mhdrz IS NOT NULL OR a.sled_bbd IS NOT NULL
 ORDER BY CAST(NULLIF(TRIM(COALESCE(a.mhdrz, a.mhdhb, '0')), '') AS NUMERIC) ASC NULLS LAST
 LIMIT 50
 """.strip(),
-        })
+            })
+
+    elif plan.intent == "dimensional_extend":
+        # Reuse profitability grain when follow-up is ambiguous but context is deep
+        sql = f"""{base_select}
+ORDER BY {order_col} {direction} NULLS LAST
+LIMIT {limit}"""
+        queries.append({"id": "dimensional_extend", "sql": sql})
 
     else:
         gaps.append(f"No governed SQL compiler path for intent={plan.intent}")
@@ -685,16 +986,25 @@ def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str
             continue
         lines.append(f"### {qid} ({len(rows)} rows)")
         top = rows[0]
-        if "gross_profit" in top or "revenue" in top:
+        if "gross_profit" in top or "revenue" in top or "margin_change_pp" in top:
             pname = top.get("product_name") or top.get("product") or top.get("industry") or top.get("country") or top.get("customer_name")
-            lines.append(
-                f"- Top row: **{pname}** | revenue={_fmt_num(top.get('revenue'))} "
-                f"| cogs={_fmt_num(top.get('cogs'))} | gross_profit={_fmt_num(top.get('gross_profit'))} "
-                f"| margin%={_fmt_num(top.get('gross_margin_pct'))} | currency={top.get('currency')}"
-            )
-            findings.append(
-                f"{pname}: gross profit {_fmt_num(top.get('gross_profit'))} {top.get('currency') or ''}".strip()
-            )
+            if "margin_change_pp" in top:
+                lines.append(
+                    f"- Top decline/change: **{pname}** | margin_change_pp={_fmt_num(top.get('margin_change_pp'))} "
+                    f"| currency={top.get('currency')}"
+                )
+                findings.append(
+                    f"{pname}: margin change {_fmt_num(top.get('margin_change_pp'))} pp"
+                )
+            else:
+                lines.append(
+                    f"- Top row: **{pname}** | revenue={_fmt_num(top.get('revenue'))} "
+                    f"| cogs={_fmt_num(top.get('cogs'))} | gross_profit={_fmt_num(top.get('gross_profit'))} "
+                    f"| margin%={_fmt_num(top.get('gross_margin_pct'))} | currency={top.get('currency')}"
+                )
+                findings.append(
+                    f"{pname}: gross profit {_fmt_num(top.get('gross_profit'))} {top.get('currency') or ''}".strip()
+                )
         elif "stage" in top:
             for r in rows[:8]:
                 lines.append(f"- {r.get('stage')}: {r.get('doc_count')}")
@@ -813,7 +1123,20 @@ def try_deep_multidim_analysis(
             primary_rows = rows
             primary_sql = sql
 
-    if not bundled or (not primary_rows and plan.intent not in {"process_sell", "process_buy", "process_sell_and_buy"}):
+    if not bundled or (
+        not primary_rows
+        and plan.intent
+        not in {
+            "process_sell",
+            "process_buy",
+            "process_sell_and_buy",
+            "inventory_analysis",
+            "monthly_trend",
+            "margin_decline_drivers",
+            "product_expiry",
+            "product_expiry_by_industry",
+        }
+    ):
         # fall through if we produced nothing useful
         if plan.data_gaps and not primary_rows:
             return data_gap_payload(question, "; ".join(plan.data_gaps[:3]), can_answer=[
@@ -839,6 +1162,17 @@ def try_deep_multidim_analysis(
     plan.drilldowns = available_drilldowns(set(plan.dimensions), set(plan.metrics))
     summary, findings = _interpret(plan, bundled)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    logger.info(
+        "[deep] analysis_complete intent=%s metrics=%s dims=%s query_count=%s "
+        "row_count=%s gaps=%s elapsed_ms=%s status=SUCCESS",
+        plan.intent,
+        plan.metrics,
+        plan.dimensions,
+        len(bundled),
+        len(primary_rows),
+        plan.data_gaps[:3],
+        elapsed_ms,
+    )
 
     ctx = plan.to_context()
     query_plan = {
@@ -852,7 +1186,12 @@ def try_deep_multidim_analysis(
 
     # Simple chart from primary rows when numeric
     charts: List[Dict[str, Any]] = []
-    if primary_rows and ("gross_profit" in primary_rows[0] or "revenue" in primary_rows[0]):
+    if primary_rows and (
+        "gross_profit" in primary_rows[0]
+        or "revenue" in primary_rows[0]
+        or "margin_change_pp" in primary_rows[0]
+        or "stock_value" in primary_rows[0]
+    ):
         label_key = "product_name" if "product_name" in primary_rows[0] else (
             "customer_name" if "customer_name" in primary_rows[0] else (
                 "industry" if "industry" in primary_rows[0] else (
@@ -860,7 +1199,15 @@ def try_deep_multidim_analysis(
                 )
             )
         )
-        value_key = "gross_profit" if "gross_profit" in primary_rows[0] else "revenue"
+        value_key = (
+            "margin_change_pp"
+            if "margin_change_pp" in primary_rows[0]
+            else (
+                "gross_profit"
+                if "gross_profit" in primary_rows[0]
+                else ("stock_value" if "stock_value" in primary_rows[0] else "revenue")
+            )
+        )
         charts.append({
             "type": "bar",
             "title": question[:120],

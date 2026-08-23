@@ -48,11 +48,25 @@ Generated from live schema inventory (`schema_full.json`, `schema_ai_config.json
 | Stage | Tables | BI support |
 |-------|--------|------------|
 | Purchase | EKKO, EKPO, LFA1 | counts / PO value |
-| Inventory | MBEW, MARD | stock value / qty |
+| Inventory | MBEW, MARD | stock value / qty; slow/fast via billed qty proxy |
 | Sales order | VBAK, VBAP | orders |
 | Delivery | LIKP, LIPS | counts; cost limited |
 | Billing | VBRK, vbrp | full revenue/COGS proxy |
 | Finance GL | FAGLFLEXA, BSEG | PC/cost center — not product net profit |
+
+## Deep intents (analytical_deep_dive)
+
+| Intent | Supported |
+|--------|-----------|
+| product_profitability / lowest_margin / COGS / components | yes (WAVWR) |
+| customers_of_selection / industry / country | yes |
+| product × industry × region | yes |
+| period compare / monthly trend | yes |
+| margin decline + customer drivers | yes (YoY margin Δ) |
+| inventory analysis | partial (MBEW + velocity proxy) |
+| expiry / expiry by industry | partial |
+| process sell / buy | stage counts + VBFA |
+| net profit / logistics cost / budget | data gap |
 
 ## Engine path
 
