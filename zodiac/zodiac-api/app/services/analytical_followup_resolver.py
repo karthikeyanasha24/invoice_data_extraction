@@ -131,6 +131,14 @@ _SHORT_DIMENSION_PHRASES: Dict[str, str] = {
     "delivery": "delivery",
     "expiry": "expiry",
     "inventory": "inventory",
+    "stock": "inventory",
+    "supplier": "supplier",
+    "suppliers": "supplier",
+    "vendor": "supplier",
+    "vendors": "supplier",
+    "product group": "product_group",
+    "product groups": "product_group",
+    "category": "product_group",
 }
 
 # Intent mapping from resolved follow-up kind + signals.
@@ -152,6 +160,10 @@ _INTENT_BY_RESOLUTION: Dict[str, str] = {
     "period_compare": "period_compare_selection",
     "logistics_cost": "logistics_cost_gap",
     "net_profit": "net_profit_gap",
+    "supplier": "suppliers_of_selection",
+    "inventory": "inventory_analysis",
+    "product_group": "product_group_breakdown",
+    "avg_selling_price": "product_profitability",
 }
 
 
@@ -495,7 +507,7 @@ def resolve_analytical_followup(
             res.kind = KIND_DIMENSION_EXPANSION
             res.add_dimensions = [dim_key]
             # Multi-dimension combos
-            if dim_key == "customer" and "industry" in ql and "region" in ql or "country" in ql:
+            if dim_key == "customer" and "industry" in ql and ("region" in ql or "country" in ql):
                 res.intent = "customer_industry_region"
             elif dim_key == "customer":
                 res.intent = "customers_of_selection"
@@ -503,6 +515,12 @@ def resolve_analytical_followup(
                 res.intent = "industry_breakdown"
             elif dim_key == "country":
                 res.intent = "country_breakdown"
+            elif dim_key == "supplier":
+                res.intent = "suppliers_of_selection"
+            elif dim_key == "inventory":
+                res.intent = "inventory_analysis"
+            elif dim_key == "product_group":
+                res.intent = "product_group_breakdown"
             else:
                 res.intent = _INTENT_BY_RESOLUTION.get(dim_key, "dimensional_extend")
             res.resolved = True

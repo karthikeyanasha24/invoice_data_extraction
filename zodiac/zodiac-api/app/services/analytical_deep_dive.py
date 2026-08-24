@@ -27,6 +27,8 @@ from .business_semantic_layer import (
     resolve_metric,
 )
 from .analytical_followup_resolver import resolve_analytical_followup
+from .business_intelligence_inventory import compose_intent
+from .sql_grain_guard import grain_contract, sql_has_unsafe_monetary_fanout
 
 logger = logging.getLogger("zodiac-api.analytical-deep-dive")
 
@@ -52,6 +54,7 @@ class AnalyticalPlan:
     selected_customers: List[str] = field(default_factory=list)
     base_question: str = ""
     drilldowns: List[Dict[str, str]] = field(default_factory=list)
+    grain: Dict[str, Any] = field(default_factory=dict)
 
     def to_context(self) -> Dict[str, Any]:
         return {
@@ -304,6 +307,8 @@ def build_analytical_plan(
                 plan.dimensions = list(follow.replace_dimensions)
             if follow.data_gap_metric:
                 plan.data_gaps.append(METRICS[follow.data_gap_metric].caveats)
+            if follow.add_dimensions and plan.intent in {"generic", "dimensional_extend"}:
+                plan.intent = compose_intent(follow.add_dimensions)
             plan = _merge_prior(plan, prior_ctx)
             # Apply intent-specific metrics/dimensions below via shared block
             if plan.intent not in {"generic", "unsupported_deep"}:
@@ -395,6 +400,9 @@ def build_analytical_plan(
     wants_inventory = any(
         x in ql for x in ("inventory", "stock value", "slow-moving", "fast-moving", "inventory age")
     )
+    wants_supplier = any(x in ql for x in ("supplier", "vendor", "procurement"))
+    wants_product_group = any(x in ql for x in ("product group", "material group", "category"))
+    wants_asp = any(x in ql for x in ("average selling price", "unit price", "asp"))
     wants_why = ql.startswith("why ") or " why " in ql or ql.startswith("explain why")
 
     # Follow-up shorthand against prior deep context (legacy keyword path — resolver runs first)
@@ -423,6 +431,10 @@ def build_analytical_plan(
             plan.intent = "monthly_trend"
         elif wants_inventory:
             plan.intent = "inventory_analysis"
+        elif wants_supplier:
+            plan.intent = "suppliers_of_selection"
+        elif wants_product_group:
+            plan.intent = "product_group_breakdown"
         elif wants_cogs and not wants_profit:
             plan.intent = "cogs_by_product"
         elif wants_margin and any(x in ql for x in ("lowest", "worst", "poor", "least")):
@@ -457,6 +469,10 @@ def build_analytical_plan(
             plan.intent = "monthly_trend"
         elif wants_inventory:
             plan.intent = "inventory_analysis"
+        elif wants_supplier:
+            plan.intent = "suppliers_of_selection"
+        elif wants_product_group:
+            plan.intent = "product_group_breakdown"
         elif wants_process_sell and wants_process_buy:
             plan.intent = "process_sell_and_buy"
         elif wants_process_sell:
@@ -560,6 +576,20 @@ def build_analytical_plan(
         plan.data_gaps.append(
             "Inventory uses MBEW/MARD stock value/qty — not equated to COGS or logistics cost."
         )
+    elif plan.intent == "suppliers_of_selection":
+        plan.metrics = ["purchase_value"]
+        plan.entities = ["supplier", "product", "purchase"]
+        plan.dimensions = ["supplier", "product"]
+        plan.relationships = ["purchase_header→vendor", "purchase_item→product (MATNR)"]
+        plan.data_gaps.append(
+            "Supplier analysis is at PO-item grain (EKPO.NETWR). It is not invoice COGS (WAVWR) "
+            "and uses a material bridge, so document-level attribution is partial."
+        )
+    elif plan.intent == "product_group_breakdown":
+        plan.metrics = ["revenue", "cogs", "gross_profit"]
+        plan.entities = ["product"]
+        plan.dimensions = ["product_group", "currency"]
+        plan.relationships = ["billing_item→product"]
     elif plan.intent in {"product_expiry", "product_expiry_by_industry"}:
         plan.metrics = ["product_expiry"]
         plan.dimensions = ["product"]
@@ -651,7 +681,8 @@ SELECT
   CASE WHEN SUM({rev}) > 0 THEN
     ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
   ELSE NULL END AS gross_margin_pct,
-  SUM({qty}) AS quantity
+    SUM({qty}) AS quantity,
+  CASE WHEN SUM({qty}) > 0 THEN ROUND(SUM({rev}) / SUM({qty}), 4) ELSE NULL END AS avg_selling_price
 FROM "vbrp" v
 JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
 LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
@@ -937,7 +968,12 @@ WITH yearly AS (
         SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
         - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
       ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
-    ELSE NULL END AS gross_margin_pct
+    ELSE NULL END AS gross_margin_pct,
+    SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) AS quantity,
+    CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) > 0 THEN
+      ROUND(SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
+        / SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)), 4)
+    ELSE NULL END AS avg_selling_price
   FROM "vbrp" v
   JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
   LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
@@ -1093,6 +1129,63 @@ LIMIT {max(limit, 30)}
         gaps.append(
             "Slow/fast-moving uses billed quantity as a proxy; true inventory age needs movement history (MSEG not in schema_full)."
         )
+
+    elif plan.intent == "suppliers_of_selection":
+        pfilter_po = ""
+        if products:
+            clean = [p.replace("'", "''") for p in products if p]
+            vals = ", ".join(f"'{p}'" for p in clean[:50])
+            pfilter_po = f' AND TRIM(CAST(p."matnr" AS TEXT)) IN ({vals})'
+        queries.append({
+            "id": "suppliers_of_selection",
+            "sql": f"""
+SELECT
+  TRIM(CAST(ek."lifnr" AS TEXT)) AS supplier,
+  MAX(l."name1") AS supplier_name,
+  TRIM(CAST(p."matnr" AS TEXT)) AS product,
+  COALESCE(MAX(m."maktx"), TRIM(CAST(p."matnr" AS TEXT))) AS product_name,
+  SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC)) AS purchase_value,
+  SUM(CAST(NULLIF(TRIM(CAST(p."menge" AS TEXT)), '') AS NUMERIC)) AS purchase_qty
+FROM "EKPO" p
+JOIN "EKKO" ek ON TRIM(CAST(p."ebeln" AS TEXT)) = TRIM(CAST(ek."ebeln" AS TEXT))
+LEFT JOIN "LFA1" l ON TRIM(CAST(ek."lifnr" AS TEXT)) = TRIM(CAST(l."lifnr" AS TEXT))
+LEFT JOIN "MAKT" m ON TRIM(CAST(p."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+  AND (m."spras" = 'E' OR m."spras" IS NULL)
+WHERE p."matnr" IS NOT NULL AND TRIM(CAST(p."matnr" AS TEXT)) <> ''
+  {pfilter_po}
+GROUP BY TRIM(CAST(ek."lifnr" AS TEXT)), TRIM(CAST(p."matnr" AS TEXT))
+ORDER BY purchase_value DESC NULLS LAST
+LIMIT {max(limit, 30)}
+""".strip(),
+        })
+        gaps.append(
+            "Purchase value is EKPO.NETWR at PO grain. Do not equate to billing WAVWR COGS."
+        )
+
+    elif plan.intent == "product_group_breakdown":
+        queries.append({
+            "id": "product_group_breakdown",
+            "sql": f"""
+SELECT
+  COALESCE(NULLIF(TRIM(CAST(a."matkl" AS TEXT)), ''), 'Unknown') AS product_group,
+  vk."waerk" AS currency,
+  SUM({rev}) AS revenue,
+  SUM({cogs}) AS cogs,
+  SUM({rev}) - SUM({cogs}) AS gross_profit,
+  CASE WHEN SUM({rev}) > 0 THEN
+    ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
+  ELSE NULL END AS gross_margin_pct
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+LEFT JOIN "MARA" a ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(a."matnr" AS TEXT))
+WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
+  {yfilter}
+  {pfilter}
+GROUP BY COALESCE(NULLIF(TRIM(CAST(a."matkl" AS TEXT)), ''), 'Unknown'), vk."waerk"
+ORDER BY gross_profit DESC NULLS LAST
+LIMIT {max(limit, 20)}
+""".strip(),
+        })
 
     elif plan.intent in {"process_sell", "process_sell_and_buy", "process_buy"}:
         if plan.intent in {"process_sell", "process_sell_and_buy"}:
@@ -1373,6 +1466,14 @@ def try_deep_multidim_analysis(
         )
 
     queries, gaps = compile_queries(plan)
+    plan.grain = grain_contract(plan.intent, plan.dimensions)
+    safe_queries = []
+    for q in queries:
+        if sql_has_unsafe_monetary_fanout(q.get("sql") or ""):
+            gaps.append("Rejected SQL that would fan-out billing amounts through an N:N join.")
+            continue
+        safe_queries.append(q)
+    queries = safe_queries
     plan.data_gaps = list(dict.fromkeys((plan.data_gaps or []) + gaps))
     if not queries:
         if plan.data_gaps:
