@@ -85,16 +85,27 @@ Local Andy verify (25 scenarios): **23 PASS / 2 DATA GAP / 0 FAIL** including fu
 
 ## Live Full Chat / zodiac-back deploy
 
-**Blocked for this agent:** Vercel CLI is logged in as `karthikeyanasha24` (team `ashas-projects-a0fae821` only). Production `zodiac-back.vercel.app` is Andy’s team. A mistaken deploy to `zodiac-api-nu.vercel.app` is **not** bridgeedi.
+**Status (2026-08-24):** Code at `0eefed1` is on `phase12-first-customer-ready` and locally proven (27/27 tests; local Andy verify **23 PASS / 2 DATA GAP / 0 FAIL**).
 
-Live probe still shows profit → `deep_multidim` + `relation "vbrk" does not exist` until Andy deploys this branch:
+**Production blocker:** Vercel CLI is `karthikeyanasha24` / team `ashas-projects-a0fae821` only (`zodiac-api` → `zodiac-api-nu.vercel.app`). Production `https://zodiac-back.vercel.app` is Andy’s team — not visible (`vercel inspect` fails under current scope). Do **not** deploy to `zodiac-api-nu`.
+
+**Live probe (build still missing follow-up resolver):**
+
+| Check | Result |
+|-------|--------|
+| Highest profits | `deep_multidim` SUCCESS, 10 rows (Ship Project GP = 973,700,000) |
+| Independent SQL SHIP_PROJECT | Matches live (rev/cogs/GP) |
+| Show COGS. with prior plan | **CLARIFICATION** |
+| `VERIFY_MODE=live andy_live_verify.py` | **12 PASS / 13 FAIL / 0 DATA GAP** |
+
+After Andy deploys `0eefed1` (or newer containing it) to project `zodiac-back`:
 
 ```bash
 cd zodiac/zodiac-api
 npx vercel link --scope <andy-team> --project zodiac-back
 npx vercel --prod
-# Verify: highest profits → pipeline=deep_multidim AND rows > 0
-python scripts/live_deep_dive_chain.py
+VERIFY_MODE=live python scripts/andy_live_verify.py
+# expected: 23 PASS / 2 DATA GAP / 0 FAIL
 ```
 
 Then re-run Full Chat on https://www.bridgeedi.com/dashboard.
