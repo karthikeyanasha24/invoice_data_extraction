@@ -5,7 +5,7 @@
     {
       "i": 1,
       "question": "Show me product with highest profits and show me the breakdown of components",
-      "sec": 1.4,
+      "sec": 10.32,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -35,21 +35,10 @@
       "i": 2,
       "question": "Show me cost of goods",
       "sec": 0.51,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
-    },
-    {
-      "i": 3,
-      "question": "Show me products with lowest margins",
-      "sec": 0.63,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
-      "intent": "lowest_margin_products",
+      "intent": "cogs_by_product",
       "rows": 10,
       "error": null,
       "top_keys": [
@@ -65,40 +54,70 @@
       "sample": {
         "product": "GTS-14001",
         "product_name": "Fire fighting vehicle",
-        "gross_profit": 674900.0,
-        "gross_margin_pct": 11.07,
-        "revenue": 6094000.0,
-        "cogs": 5419100.0
+        "gross_profit": 16646825.73,
+        "gross_margin_pct": 30.83,
+        "revenue": 54002400.0,
+        "cogs": 37355574.27
+      }
+    },
+    {
+      "i": 3,
+      "question": "Show me products with lowest margins",
+      "sec": 0.53,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "dimensional_extend",
+      "rows": 10,
+      "error": null,
+      "top_keys": [
+        "product",
+        "product_name",
+        "currency",
+        "revenue",
+        "cogs",
+        "gross_profit",
+        "gross_margin_pct",
+        "quantity"
+      ],
+      "sample": {
+        "product": "P-103",
+        "product_name": "Pump PRECISION 103.",
+        "gross_profit": 46688879.74,
+        "gross_margin_pct": 72.43,
+        "revenue": 64458742.4,
+        "cogs": 17769862.66
       }
     },
     {
       "i": 4,
       "question": "Show me products expiring by industry",
-      "sec": 0.99,
+      "sec": 0.76,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
-      "intent": "product_expiry_by_industry",
-      "rows": 50,
+      "intent": "industry_breakdown",
+      "rows": 15,
       "error": null,
       "top_keys": [
-        "product",
-        "product_name",
-        "total_shelf_life_days",
-        "remaining_shelf_life_days",
         "industry",
+        "currency",
+        "revenue",
+        "cogs",
+        "gross_profit",
         "customer_count"
       ],
       "sample": {
-        "product": "000000000000000023",
-        "product_name": "Testfioriscreen",
-        "industry": "Unknown"
+        "industry": "Trading & Distribution",
+        "gross_profit": 123360363.67,
+        "revenue": 169825474.0,
+        "cogs": 46465110.33
       }
     },
     {
       "i": 5,
       "question": "Show me customers with industry data and regions",
-      "sec": 0.84,
+      "sec": 0.99,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -127,7 +146,7 @@
     {
       "i": 6,
       "question": "What type of products are bought by which customers?",
-      "sec": 0.81,
+      "sec": 0.57,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -156,23 +175,39 @@
     {
       "i": 7,
       "question": "And how long have they been buying them?",
-      "sec": 0.9,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.75,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "purchase_history",
+      "rows": 40,
+      "error": null,
+      "top_keys": [
+        "customer",
+        "customer_name",
+        "product",
+        "product_name",
+        "currency",
+        "first_purchase_date",
+        "last_purchase_date",
+        "purchase_duration_days"
+      ],
+      "sample": {
+        "product": "P-103",
+        "product_name": "Pump PRECISION 103.",
+        "customer_name": "Norwegian Import & Export Group",
+        "revenue": 16116000.0
+      }
     },
     {
       "i": 8,
       "question": "Compare it with year",
-      "sec": 3.52,
+      "sec": 2.36,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
       "intent": "period_compare_selection",
-      "rows": 23,
+      "rows": 12,
       "error": null,
       "top_keys": [
         "year",
@@ -185,66 +220,81 @@
         "gross_margin_pct"
       ],
       "sample": {
-        "product": "1400-300",
-        "product_name": "SunFun / 1200 cm3",
-        "gross_profit": 7402429.79,
-        "gross_margin_pct": 75.46,
-        "revenue": 9810000.0,
-        "cogs": 2407570.21
+        "product": "P-103",
+        "product_name": "Pump PRECISION 103.",
+        "gross_profit": 3841439.74,
+        "gross_margin_pct": 73.63,
+        "revenue": 5216879.4,
+        "cogs": 1375439.66
       }
     },
     {
       "i": 9,
       "question": "Show me the process involved behind selling it",
-      "sec": 0.33,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 1.03,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "process_sell",
+      "rows": 3,
+      "error": null,
+      "top_keys": [
+        "stage",
+        "doc_count"
+      ],
+      "sample": {}
     },
     {
       "i": 10,
       "question": "Show me the process involved behind buying it",
-      "sec": 0.7,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 1.07,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "process_buy",
+      "rows": 3,
+      "error": null,
+      "top_keys": [
+        "stage",
+        "doc_count"
+      ],
+      "sample": {}
     },
     {
       "i": 11,
       "question": "Show me the buying process and selling process",
-      "sec": 0.44,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.52,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "process_sell_and_buy",
+      "rows": 3,
+      "error": null,
+      "top_keys": [
+        "stage",
+        "doc_count"
+      ],
+      "sample": {}
     },
     {
       "i": 12,
       "question": "Show me logistics cost",
-      "sec": 0.47,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
+      "sec": 0.32,
+      "status_label": "DATA GAP",
+      "answer_status": "CANNOT_ANSWER",
+      "pipeline": "deep_multidim",
+      "intent": "process_sell_and_buy",
       "rows": 0,
       "error": null
     },
     {
       "i": 13,
       "question": "Show me net profit",
-      "sec": 0.52,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
+      "sec": 0.3,
+      "status_label": "DATA GAP",
+      "answer_status": "CANNOT_ANSWER",
+      "pipeline": "deep_multidim",
+      "intent": "process_sell_and_buy",
       "rows": 0,
       "error": null
     },
@@ -280,7 +330,7 @@
     {
       "i": 2,
       "question": "Show their customers.",
-      "sec": 0.57,
+      "sec": 0.59,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -309,7 +359,7 @@
     {
       "i": 3,
       "question": "Break that down by industry.",
-      "sec": 0.8,
+      "sec": 0.48,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -334,18 +384,31 @@
     {
       "i": 4,
       "question": "Show the regions.",
-      "sec": 0.36,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.42,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "country_breakdown",
+      "rows": 12,
+      "error": null,
+      "top_keys": [
+        "country",
+        "currency",
+        "revenue",
+        "cogs",
+        "gross_profit"
+      ],
+      "sample": {
+        "country": "IN",
+        "gross_profit": 973700000.0,
+        "revenue": 973700000.0,
+        "cogs": 0.0
+      }
     },
     {
       "i": 5,
       "question": "Compare 2004 and 2005.",
-      "sec": 2.64,
+      "sec": 2.76,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -374,29 +437,65 @@
     {
       "i": 6,
       "question": "Show COGS.",
-      "sec": 0.4,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.42,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "cogs_by_product",
+      "rows": 9,
+      "error": null,
+      "top_keys": [
+        "product",
+        "product_name",
+        "currency",
+        "revenue",
+        "cogs",
+        "gross_profit",
+        "gross_margin_pct",
+        "quantity"
+      ],
+      "sample": {
+        "product": "1400-300",
+        "product_name": "SunFun / 1200 cm3",
+        "gross_profit": 13605077.39,
+        "gross_margin_pct": 75.46,
+        "revenue": 18030000.0,
+        "cogs": 4424922.61
+      }
     },
     {
       "i": 7,
       "question": "Show the margins.",
-      "sec": 0.52,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.64,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "margin_by_product",
+      "rows": 9,
+      "error": null,
+      "top_keys": [
+        "product",
+        "product_name",
+        "currency",
+        "revenue",
+        "cogs",
+        "gross_profit",
+        "gross_margin_pct",
+        "quantity"
+      ],
+      "sample": {
+        "product": "GTS-14001",
+        "product_name": "Fire fighting vehicle",
+        "gross_profit": 77100.0,
+        "gross_margin_pct": 18.23,
+        "revenue": 423000.0,
+        "cogs": 345900.0
+      }
     },
     {
       "i": 8,
       "question": "Which products had the biggest margin decline?",
-      "sec": 0.54,
+      "sec": 0.52,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -421,29 +520,61 @@
     {
       "i": 9,
       "question": "Why did those margins decline?",
-      "sec": 0.34,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.53,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "margin_decline_drivers",
+      "rows": 8,
+      "error": null,
+      "top_keys": [
+        "product",
+        "product_name",
+        "currency",
+        "revenue_2004",
+        "revenue_2005",
+        "cogs_2004",
+        "cogs_2005",
+        "margin_2004"
+      ],
+      "sample": {
+        "product": "1400-300",
+        "product_name": "SunFun / 1200 cm3"
+      }
     },
     {
       "i": 10,
       "question": "Show me the cost components.",
-      "sec": 0.33,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.48,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "profit_components",
+      "rows": 8,
+      "error": null,
+      "top_keys": [
+        "product",
+        "product_name",
+        "currency",
+        "revenue",
+        "cogs",
+        "gross_profit",
+        "gross_margin_pct",
+        "quantity"
+      ],
+      "sample": {
+        "product": "1400-300",
+        "product_name": "SunFun / 1200 cm3",
+        "gross_profit": 13605077.39,
+        "gross_margin_pct": 75.46,
+        "revenue": 18030000.0,
+        "cogs": 4424922.61
+      }
     },
     {
       "i": 11,
       "question": "Show me the buying process behind these products.",
-      "sec": 0.94,
+      "sec": 0.32,
       "status_label": "PASS",
       "answer_status": "SUCCESS",
       "pipeline": "deep_multidim",
@@ -459,13 +590,18 @@
     {
       "i": 12,
       "question": "Show the selling process.",
-      "sec": 0.35,
-      "status_label": "FAIL",
-      "answer_status": "CLARIFICATION",
-      "pipeline": "",
-      "intent": "",
-      "rows": 0,
-      "error": null
+      "sec": 0.42,
+      "status_label": "PASS",
+      "answer_status": "SUCCESS",
+      "pipeline": "deep_multidim",
+      "intent": "process_sell",
+      "rows": 3,
+      "error": null,
+      "top_keys": [
+        "stage",
+        "doc_count"
+      ],
+      "sample": {}
     }
   ]
 }

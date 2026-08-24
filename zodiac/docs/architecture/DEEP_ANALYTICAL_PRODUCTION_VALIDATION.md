@@ -85,20 +85,18 @@ Local Andy verify (25 scenarios): **23 PASS / 2 DATA GAP / 0 FAIL** including fu
 
 ## Live Full Chat / zodiac-back deploy
 
-**Status (2026-08-24):** Code at `0eefed1` is on `phase12-first-customer-ready` and locally proven (27/27 tests; local Andy verify **23 PASS / 2 DATA GAP / 0 FAIL**).
-
-**Production blocker:** Vercel CLI is `karthikeyanasha24` / team `ashas-projects-a0fae821` only (`zodiac-api` → `zodiac-api-nu.vercel.app`). Production `https://zodiac-back.vercel.app` is Andy’s team — not visible (`vercel inspect` fails under current scope). Do **not** deploy to `zodiac-api-nu`.
-
-**Live probe (build still missing follow-up resolver):**
+**Status (2026-08-24, post-deploy):** Andy deployed follow-up resolver to `zodiac-back`. Live acceptance:
 
 | Check | Result |
 |-------|--------|
-| Highest profits | `deep_multidim` SUCCESS, 10 rows (Ship Project GP = 973,700,000) |
-| Independent SQL SHIP_PROJECT | Matches live (rev/cogs/GP) |
-| Show COGS. with prior plan | **CLARIFICATION** |
-| `VERIFY_MODE=live andy_live_verify.py` | **12 PASS / 13 FAIL / 0 DATA GAP** |
+| Gate *highest profits* | `deep_multidim` SUCCESS, 10 rows |
+| `VERIFY_MODE=live andy_live_verify.py` | **23 PASS / 2 DATA GAP / 0 FAIL** |
+| 17-turn live chain | **15 PASS + 2 DATA GAP + COGS after gap PASS** |
+| Data-gap chain (logistics → COGS) | DATA GAP then SUCCESS |
+| Basic 2004 regression (live API) | preserved |
+| Live perf (17-turn) | p50 ≈ 646ms, max ≈ 2.7s |
 
-After Andy deploys `0eefed1` (or newer containing it) to project `zodiac-back`:
+**Previous blocker (resolved):** Vercel CLI here cannot inspect `zodiac-back` metadata, but live API behavior confirms deploy contains `0eefed1` resolver changes.
 
 ```bash
 cd zodiac/zodiac-api
