@@ -1095,15 +1095,17 @@ LIMIT {max(limit, 30)}
             "id": "stock_value_by_material",
             "sql": f"""
 SELECT
-  TRIM(b.matnr) AS product,
-  COALESCE(m.maktx, b.matnr) AS product_name,
-  b.bwkey AS valuation_area,
-  CAST(NULLIF(TRIM(COALESCE(b.salk3, '0')), '') AS NUMERIC) AS stock_value,
-  CAST(NULLIF(TRIM(COALESCE(b.lbkum, '0')), '') AS NUMERIC) AS stock_qty,
-  CAST(NULLIF(TRIM(COALESCE(b.stprs, '0')), '') AS NUMERIC) AS standard_price
-FROM MBEW b
-LEFT JOIN "MAKT" m ON TRIM(b.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE CAST(NULLIF(TRIM(COALESCE(b.salk3, '0')), '') AS NUMERIC) IS NOT NULL
+  TRIM(CAST(b."matnr" AS TEXT)) AS product,
+  COALESCE(MAX(m."maktx"), TRIM(CAST(b."matnr" AS TEXT))) AS product_name,
+  TRIM(CAST(b."bwkey" AS TEXT)) AS valuation_area,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b."salk3", '0') AS TEXT)), '') AS NUMERIC)) AS stock_value,
+  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b."lbkum", '0') AS TEXT)), '') AS NUMERIC)) AS stock_qty,
+  MAX(CAST(NULLIF(TRIM(CAST(COALESCE(b."stprs", '0') AS TEXT)), '') AS NUMERIC)) AS standard_price
+FROM "MBEW" b
+LEFT JOIN "MAKT" m ON TRIM(CAST(b."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+  AND (m."spras" = 'E' OR m."spras" IS NULL)
+WHERE b."matnr" IS NOT NULL AND TRIM(CAST(b."matnr" AS TEXT)) <> ''
+GROUP BY TRIM(CAST(b."matnr" AS TEXT)), TRIM(CAST(b."bwkey" AS TEXT))
 ORDER BY stock_value DESC NULLS LAST
 LIMIT {max(limit, 30)}
 """.strip(),

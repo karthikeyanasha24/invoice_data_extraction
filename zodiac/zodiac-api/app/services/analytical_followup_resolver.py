@@ -426,25 +426,47 @@ def resolve_analytical_followup(
         return res
 
     # ── Breakdown / components (dimension-specific breakdown wins over generic) ──
+    # Prefer multi-word dimensions (product group) before bare "product".
     dim_in_break = re.search(
-        r"\bby\s+(industry|region|country|customer|product|year|month)\b", ql
+        r"\bby\s+(product\s+groups?|material\s+groups?|industr(?:y|ies)|"
+        r"regions?|countries?|customers?|products?|years?|months?)\b",
+        ql,
     )
     if dim_in_break:
-        dim_word = dim_in_break.group(1)
-        canonical = DIMENSION_ALIASES.get(dim_word, dim_word)
+        dim_word = dim_in_break.group(1).strip()
+        if dim_word.startswith("product group") or dim_word.startswith("material group"):
+            canonical = "product_group"
+        else:
+            # Normalize common plural forms to alias keys.
+            plural_map = {
+                "industries": "industry",
+                "regions": "region",
+                "countries": "country",
+                "customers": "customer",
+                "products": "product",
+                "years": "year",
+                "months": "month",
+            }
+            key = plural_map.get(dim_word, dim_word)
+            canonical = DIMENSION_ALIASES.get(key, key)
         res.kind = KIND_DIMENSION_EXPANSION
         res.add_dimensions = [canonical]
         res.intent = _INTENT_BY_RESOLUTION.get(canonical, "dimensional_extend")
         res.resolved = True
         return res
     dim_break = re.search(
-        r"\b(industry|regional|region|country|customer|product)\s+breakdown\b", ql
+        r"\b(product\s+group|material\s+group|industry|regional|region|"
+        r"country|customer|product)\s+breakdown\b",
+        ql,
     )
     if dim_break:
         dim_word = dim_break.group(1)
-        if dim_word == "regional":
-            dim_word = "region"
-        canonical = DIMENSION_ALIASES.get(dim_word, dim_word)
+        if dim_word in {"product group", "material group"}:
+            canonical = "product_group"
+        elif dim_word == "regional":
+            canonical = "country"
+        else:
+            canonical = DIMENSION_ALIASES.get(dim_word, dim_word)
         res.kind = KIND_DIMENSION_EXPANSION
         res.add_dimensions = [canonical]
         res.intent = _INTENT_BY_RESOLUTION.get(canonical, "dimensional_extend")
@@ -452,7 +474,10 @@ def resolve_analytical_followup(
         return res
     if _BREAKDOWN_RE.search(ql):
         dim_key = _detect_dimension(ql)
-        if dim_key and "breakdown" in ql and "component" not in ql:
+        # "break ... down by X" (without the literal word "breakdown")
+        if dim_key and "component" not in ql and (
+            "breakdown" in ql or "break" in ql or "by " in ql
+        ):
             res.kind = KIND_DIMENSION_EXPANSION
             res.add_dimensions = [dim_key]
             res.intent = _INTENT_BY_RESOLUTION.get(dim_key, "dimensional_extend")
