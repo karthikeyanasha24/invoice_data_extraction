@@ -15,10 +15,14 @@ R4-2 NOT PRODUCTION COMPLETE
 
 ### Exact blockers
 
-1. **Absolute phrasing miss (Phase 4):** `Which products added the most revenue?` routes to `intent_sql_fast` (top revenue ranking), **not** `product_growth_decline` with absolute change. Closely related phrasing `Which products increased their revenue the most?` **does** pass R4-2.
-2. **Empty single-year handling (Phase 16):** `Which products grew in 2099?` still runs a **2004 vs 2005** YoY growth query (planner pads to two default years) and returns 10 rows — not an honest “no data for 2099” response.
+**Locally fixed (pending zodiac-back deploy + live re-probe):**
 
-Full Chat UI smoke check for `Which products grew the most?` **passed** (table with 2004/2005, `revenue_change_*`, `NEW_NO_PRIOR_BASE` / `CONTINUING`, drill-downs). Remaining Full Chat multi-turn operator chain was not fully exercised in UI (API chains were).
+1. `Which products added the most revenue?` → now `product_growth_decline` absolute (was `intent_sql_fast`).
+2. Single missing year (e.g. 2099) → YoY pair `(year-1, year)` + honest empty when current year has no extract data (no silent 2004/2005 pad).
+
+**Still required for PRODUCTION COMPLETE:** Andy deploy to `zodiac-back`, then live prove those two probes + R3 **23/2/0** + R4-1 **47/2/0**.
+
+Local unit/golden this pass: **55 PASS**. Full Chat smoke previously passed. R4-3 not started.
 
 
 ---
