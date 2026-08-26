@@ -502,6 +502,8 @@ def available_drilldowns(active_dimensions: Set[str], metrics: Set[str]) -> List
         ("industry", "Industry breakdown via customer BRSCH"),
         ("country", "Country / region (LAND1) breakdown"),
         ("year", "Year comparison / trend"),
+        ("month", "Monthly trend (YYYY-MM from VBRK.FKDAT)"),
+        ("quarter", "Quarterly trend (YYYY-Qn from VBRK.FKDAT)"),
         ("product", "Product breakdown"),
         ("cogs", "Invoice document cost (WAVWR) components"),
         ("gross_margin_pct", "Gross margin %"),

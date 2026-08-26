@@ -7,7 +7,9 @@
 - Sample: **12 warm requests** per scenario after 1 warmup (N=12 practical; not 20 due to live load)
 - Results artifact: `r3_perf_baseline.json` (local; do not commit secrets/dumps)
 
-## Warm-path percentiles (client total ms)
+## Warm-path percentiles (client total ms) — pre-hardening baseline
+
+Do not overwrite these historical numbers.
 
 | Scenario | P50 | P75 | P90 | P95 | P99 | Max | Queries | deep_ms≈ |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -44,7 +46,7 @@
 | highest_profit | 731 | 724–1053 | Stable |
 | year_compare | 3944 | 2677–2905 | Mild cold adder (~1.2s); warm still DB-bound |
 
-## Optimizations applied (code, not yet production-deployed)
+## Optimizations applied (commit `9424373`)
 
 1. **Inventory**: run `billing_velocity_proxy` only when question asks sales/compare/slow/fast — snapshot-only asks use MBEW alone.
 2. **Year compare**: when product selection exists, tighten LIMIT to selection×years (not fixed 200).
@@ -52,7 +54,19 @@
 
 Regression: **35/35** R3-related pytest PASS locally after these changes.
 
-## Targets vs measured (warm)
+## Post-deploy live probe (`9424373` on zodiac-back)
+
+Observed on production after deploy (probe evidence; full N=12 re-baseline still recommended via Andy's machine):
+
+| Signal | Observation |
+|--------|-------------|
+| Response meta | Includes `plan_ms` / `db_ms` |
+| Inventory snapshot | `query_count=1` (`stock_value_by_material` only) when sales/velocity not requested |
+| Year compare | Still ~2.8s warm with `db_ms≈2263` (primary bottleneck unchanged — DB-bound) |
+
+Full P50/P95/P99/Max table after hardening should be recorded by re-running `python scripts/r3_perf_baseline.py` against production from Andy's linked `zodiac-back` project. Until that artifact is attached, treat the pre-hardening table above as the published historical baseline and `9424373` as the frozen code baseline.
+
+## Targets vs measured (warm, pre-hardening table)
 
 | Target | Status |
 |--------|--------|
@@ -61,10 +75,9 @@ Regression: **35/35** R3-related pytest PASS locally after these changes.
 | P99 &lt; 5s | **Met** all measured scenarios |
 | Occasional &gt;5s | Document as **cold start / transient**; do not optimize application blindly |
 
-## Production recommendation
+## Production freeze
 
-1. Keep `036b52a` as the accepted behavioral baseline.
-2. Deploy the hardening commit (inventory skip + compare LIMIT + timings) via Andy → `zodiac-back` only.
-3. Re-run `r3_perf_baseline.py` after deploy; expect inventory P50 drop and year_compare improvement when selection-filtered.
-4. Next SQL work: EXPLAIN `period_compare` on the SAP extract (TRIM joins) — only with measured plans.
-5. Do not parallelize DB sessions until per-query timings prove multi-query waits dominate (root_cause already fast).
+1. **`9424373` is the frozen performance production baseline** (on top of behavioral `036b52a`).
+2. Re-run `r3_perf_baseline.py` after any further latency work; append new tables — do not delete historical rows.
+3. Next SQL work: EXPLAIN `period_compare` on the SAP extract (TRIM joins) — only with measured plans.
+4. R4-1 month/quarter must not materially degrade P50/P95/P99 vs this baseline.

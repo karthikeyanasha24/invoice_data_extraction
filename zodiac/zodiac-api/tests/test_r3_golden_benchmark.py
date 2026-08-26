@@ -70,6 +70,40 @@ SHORT_FOLLOWUPS = [
     ("Show product group.", "product_group_breakdown", "PASS"),
 ]
 
+R4_1_CASES = [
+    ("Show monthly sales.", "monthly_trend", "PASS"),
+    ("Show quarterly sales.", "quarterly_trend", "PASS"),
+    ("Show revenue by month.", "monthly_trend", "PASS"),
+    ("Show revenue by quarter.", "quarterly_trend", "PASS"),
+    ("Show monthly profit.", "monthly_trend", "PASS"),
+    ("Show quarterly profit.", "quarterly_trend", "PASS"),
+    ("Show monthly margins.", "monthly_trend", "PASS"),
+    ("Show quarterly margins.", "quarterly_trend", "PASS"),
+    ("Compare this month with last month.", "monthly_trend", "PASS"),
+    ("Compare this quarter with last quarter.", "quarterly_trend", "PASS"),
+    ("Which month had the highest revenue?", "monthly_trend", "PASS"),
+    ("Which quarter had the highest gross profit?", "quarterly_trend", "PASS"),
+    ("Show the monthly trend for these products.", "monthly_trend", "PASS"),
+    ("Show quarterly performance for these customers.", "quarterly_trend", "PASS"),
+    ("Compare monthly sales for 2004 and 2005.", "monthly_trend", "PASS"),
+    ("monthly sales", "monthly_trend", "PASS"),
+    ("sales each month", "monthly_trend", "PASS"),
+    ("revenue by month", "monthly_trend", "PASS"),
+    ("quarterly revenue", "quarterly_trend", "PASS"),
+    ("sales per quarter", "quarterly_trend", "PASS"),
+    ("which quarter performed best", "quarterly_trend", "PASS"),
+]
+
+R4_1_FOLLOWUPS = [
+    ("Show COGS.", "monthly_trend", "PASS"),
+    ("Show margins.", "monthly_trend", "PASS"),
+    ("Compare with last year.", "monthly_trend", "PASS"),
+    ("Show quarterly.", "quarterly_trend", "PASS"),
+    ("Which month was best?", "monthly_trend", "PASS"),
+    ("Which quarter was worst?", "quarterly_trend", "PASS"),
+    ("Why?", "monthly_trend", "PASS"),
+]
+
 
 def _expand() -> List[Dict]:
     cases: List[Dict] = []
@@ -79,8 +113,19 @@ def _expand() -> List[Dict]:
         cases.append({"question": q, "intent": intent, "status": status, "family": "paraphrase"})
     for q, intent, status in SHORT_FOLLOWUPS:
         cases.append({"question": q, "intent": intent, "status": status, "family": "short_followup", "followup": True})
+    for q, intent, status in R4_1_CASES:
+        cases.append({"question": q, "intent": intent, "status": status, "family": "r4_1_month_quarter"})
+    for q, intent, status in R4_1_FOLLOWUPS:
+        cases.append({
+            "question": q,
+            "intent": intent,
+            "status": status,
+            "family": "r4_1_followup",
+            "followup": True,
+            "prior_intent": "monthly_trend",
+        })
 
-    dims = ["product", "customer", "industry", "country", "year", "supplier", "product_group"]
+    dims = ["product", "customer", "industry", "country", "year", "supplier", "product_group", "month", "quarter"]
     metrics = ["revenue", "cogs", "gross_profit", "gross_margin_pct", "quantity", "avg_selling_price"]
     n = 0
     for d in dims:
@@ -142,6 +187,8 @@ def compose_family(dim: str) -> str:
         "industry": "industry_breakdown",
         "country": "country_breakdown",
         "year": "period_compare_selection",
+        "month": "monthly_trend",
+        "quarter": "quarterly_trend",
         "supplier": "suppliers_of_selection",
         "product_group": "product_group_breakdown",
         "region": "country_breakdown",
@@ -161,3 +208,8 @@ def test_golden_benchmark_size_and_baseline_coverage():
     texts = {c["question"] for c in GOLDEN_CASES}
     assert "Show COGS." in texts
     assert "Show me logistics cost." in texts
+    assert "Show monthly sales." in texts
+    assert "Show quarterly revenue." in texts or "quarterly revenue" in texts
+    r4 = [c for c in GOLDEN_CASES if c["family"].startswith("r4_1")]
+    assert len(r4) >= 20
+    assert all(c["status"] == "PASS" for c in r4)

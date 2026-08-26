@@ -127,6 +127,9 @@ _SHORT_DIMENSION_PHRASES: Dict[str, str] = {
     "year": "year",
     "years": "year",
     "month": "month",
+    "months": "month",
+    "quarter": "quarter",
+    "quarters": "quarter",
     "supplier": "supplier",
     "delivery": "delivery",
     "expiry": "expiry",
@@ -158,6 +161,8 @@ _INTENT_BY_RESOLUTION: Dict[str, str] = {
     "components": "profit_components",
     "margin_decline": "margin_decline_drivers",
     "period_compare": "period_compare_selection",
+    "month": "monthly_trend",
+    "quarter": "quarterly_trend",
     "logistics_cost": "logistics_cost_gap",
     "net_profit": "net_profit_gap",
     "supplier": "suppliers_of_selection",
@@ -165,6 +170,17 @@ _INTENT_BY_RESOLUTION: Dict[str, str] = {
     "product_group": "product_group_breakdown",
     "avg_selling_price": "product_profitability",
 }
+
+_TIME_GRAIN_INTENTS = frozenset({"monthly_trend", "quarterly_trend"})
+_MONTH_SIGNAL_RE = re.compile(
+    r"\b(monthly|by\s+month|each\s+month|per\s+month|months?|mom|month[\s-]over[\s-]month)\b",
+    re.I,
+)
+_QUARTER_SIGNAL_RE = re.compile(
+    r"\b(quarterly|by\s+quarter|each\s+quarter|per\s+quarter|quarters?|qoq|"
+    r"quarter[\s-]over[\s-]quarter)\b",
+    re.I,
+)
 
 
 @dataclass
@@ -221,8 +237,8 @@ def _detect_dimension(ql: str) -> Optional[str]:
     for token in _tokens(ql):
         if token in DIMENSION_ALIASES:
             return DIMENSION_ALIASES[token]
-    if re.search(r"\bby\s+(industry|region|country|customer|product|year|month)\b", ql):
-        m = re.search(r"\bby\s+(industry|region|country|customer|product|year|month)\b", ql)
+    if re.search(r"\bby\s+(industry|region|country|customer|product|year|month|quarter)\b", ql):
+        m = re.search(r"\bby\s+(industry|region|country|customer|product|year|month|quarter)\b", ql)
         if m:
             return DIMENSION_ALIASES.get(m.group(1), m.group(1))
     return None
@@ -362,15 +378,25 @@ def resolve_analytical_followup(
         return res
 
     # ── Why / cause analysis ──
-    if _WHY_RE.search(ql) and (
-        "margin" in ql or "decline" in ql or "fall" in ql or "fell" in ql
-        or prior_intent in {"margin_by_product", "margin_decline_drivers", "product_profitability"}
-    ):
-        res.kind = KIND_CAUSE_ANALYSIS
-        res.intent = "margin_decline_drivers"
-        res.comparisons = ["yoy_margin"]
-        res.resolved = True
-        return res
+    if _WHY_RE.search(ql) or ql.strip() in {"why", "why?", "why did it decline?", "why did it decline"}:
+        if prior_intent in _TIME_GRAIN_INTENTS:
+            res.kind = KIND_CAUSE_ANALYSIS
+            res.intent = prior_intent
+            res.comparisons = ["yoy", "mom" if prior_intent == "monthly_trend" else "qoq"]
+            res.resolved = True
+            return res
+        if (
+            "margin" in ql
+            or "decline" in ql
+            or "fall" in ql
+            or "fell" in ql
+            or prior_intent in {"margin_by_product", "margin_decline_drivers", "product_profitability"}
+        ):
+            res.kind = KIND_CAUSE_ANALYSIS
+            res.intent = "margin_decline_drivers"
+            res.comparisons = ["yoy_margin"]
+            res.resolved = True
+            return res
 
     # ── Process expansion (before history — "buying process" is not purchase history) ──
     if _PROCESS_RE.search(ql) or ql.strip() in {"show the process", "show process"}:
@@ -425,20 +451,57 @@ def resolve_analytical_followup(
         res.resolved = True
         return res
 
-    # ── Time comparison ──
     years = _extract_years(question)
-    if _COMPARE_RE.search(ql) or len(years) >= 2:
-        res.kind = KIND_COMPARISON
-        res.intent = "period_compare_selection"
+
+    # ── Time grain change (month / quarter) before bare year compare ──
+    if _QUARTER_SIGNAL_RE.search(ql) and (
+        res.has_pronoun_reference
+        or re.match(r"^(show|give|display|compare)\b", ql)
+        or "trend" in ql
+        or "performance" in ql
+        or len(_tokens(ql)) <= 8
+    ):
+        res.kind = KIND_TIME_CHANGE
+        res.intent = "quarterly_trend"
+        res.add_dimensions = ["quarter"]
         res.years = years
-        res.comparisons = ["yoy"]
+        if _COMPARE_RE.search(ql) or len(years) >= 2 or "last year" in ql:
+            res.comparisons = ["yoy", "qoq"]
+        else:
+            res.comparisons = ["qoq"]
         res.resolved = True
         return res
-    if years and any(x in ql for x in ("compare", "versus", "vs", "and")):
-        res.kind = KIND_COMPARISON
-        res.intent = "period_compare_selection"
+    if _MONTH_SIGNAL_RE.search(ql) and (
+        res.has_pronoun_reference
+        or re.match(r"^(show|give|display|compare)\b", ql)
+        or "trend" in ql
+        or len(_tokens(ql)) <= 8
+    ):
+        res.kind = KIND_TIME_CHANGE
+        res.intent = "monthly_trend"
+        res.add_dimensions = ["month"]
         res.years = years
-        res.comparisons = ["yoy"]
+        if _COMPARE_RE.search(ql) or len(years) >= 2 or "last year" in ql:
+            res.comparisons = ["yoy", "mom"]
+        else:
+            res.comparisons = ["mom"]
+        res.resolved = True
+        return res
+
+    # ── Time comparison ──
+    prior_time = prior_intent in _TIME_GRAIN_INTENTS
+    if _COMPARE_RE.search(ql) or len(years) >= 2 or (
+        years and any(x in ql for x in ("compare", "versus", "vs", "and", "last year"))
+    ):
+        res.kind = KIND_COMPARISON
+        if prior_time:
+            # Keep month/quarter grain when comparing years inside a trend context.
+            res.intent = prior_intent
+            res.comparisons = ["yoy", "mom" if prior_intent == "monthly_trend" else "qoq"]
+        else:
+            res.intent = "period_compare_selection"
+            res.comparisons = ["yoy"]
+        res.years = years
         res.resolved = True
         return res
 
@@ -446,7 +509,7 @@ def resolve_analytical_followup(
     # Prefer multi-word dimensions (product group) before bare "product".
     dim_in_break = re.search(
         r"\bby\s+(product\s+groups?|material\s+groups?|industr(?:y|ies)|"
-        r"regions?|countries?|customers?|products?|years?|months?)\b",
+        r"regions?|countries?|customers?|products?|years?|months?|quarters?)\b",
         ql,
     )
     if dim_in_break:
@@ -463,6 +526,7 @@ def resolve_analytical_followup(
                 "products": "product",
                 "years": "year",
                 "months": "month",
+                "quarters": "quarter",
             }
             key = plural_map.get(dim_word, dim_word)
             canonical = DIMENSION_ALIASES.get(key, key)
@@ -528,9 +592,13 @@ def resolve_analytical_followup(
         if metric_only and not dim_key:
             res.kind = KIND_METRIC_CHANGE
             res.metrics = [metric_key]
-            res.intent = _INTENT_BY_RESOLUTION.get(metric_key, "dimensional_extend")
-            if metric_key == "gross_profit" and prior_intent:
+            if prior_intent in _TIME_GRAIN_INTENTS:
+                # Keep month/quarter aggregation; only swap metrics.
                 res.intent = prior_intent
+            elif metric_key == "gross_profit" and prior_intent:
+                res.intent = prior_intent
+            else:
+                res.intent = _INTENT_BY_RESOLUTION.get(metric_key, "dimensional_extend")
             res.resolved = True
             return res
 
@@ -563,6 +631,10 @@ def resolve_analytical_followup(
                 res.intent = "inventory_analysis"
             elif dim_key == "product_group":
                 res.intent = "product_group_breakdown"
+            elif dim_key == "month":
+                res.intent = "monthly_trend"
+            elif dim_key == "quarter":
+                res.intent = "quarterly_trend"
             else:
                 res.intent = _INTENT_BY_RESOLUTION.get(dim_key, "dimensional_extend")
             res.resolved = True
@@ -578,7 +650,7 @@ def resolve_analytical_followup(
     # ── Fallback: inherit prior intent for short follow-ups (< 8 tokens) ──
     if len(_tokens(ql)) <= 8 and prior_intent:
         res.kind = KIND_DIMENSION_EXPANSION
-        res.intent = "dimensional_extend"
+        res.intent = prior_intent if prior_intent in _TIME_GRAIN_INTENTS else "dimensional_extend"
         res.resolved = True
         return res
 

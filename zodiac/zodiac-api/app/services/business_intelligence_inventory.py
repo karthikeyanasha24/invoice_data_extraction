@@ -245,8 +245,9 @@ DIMENSIONS: List[Dict[str, Any]] = [
     {"dimension": "customer", "status": "SUPPORTED", "source": "VBRK.KUNAG"},
     {"dimension": "industry", "status": "SUPPORTED", "source": "KNA1.BRSCH"},
     {"dimension": "country", "status": "SUPPORTED", "source": "KNA1.LAND1 / VBRK.LAND1"},
-    {"dimension": "year", "status": "SUPPORTED", "source": "VBRK.FKDAT substring"},
-    {"dimension": "month", "status": "PARTIAL", "source": "VBRK.FKDAT", "limitations": "FKDAT stored as text"},
+    {"dimension": "year", "status": "SUPPORTED", "source": "VBRK.FKDAT substring (YYYY)"},
+    {"dimension": "month", "status": "SUPPORTED", "source": "VBRK.FKDAT substring → YYYY-MM", "ordering": "chronological year_month"},
+    {"dimension": "quarter", "status": "SUPPORTED", "source": "VBRK.FKDAT substring → YYYY-Qn", "ordering": "chronological year_quarter"},
     {"dimension": "currency", "status": "SUPPORTED", "source": "VBRK.WAERK"},
     {"dimension": "supplier", "status": "PARTIAL", "source": "EKKO.LIFNR via MATNR bridge", "unsafe_with": ["invoice monetary fan-out"]},
     {"dimension": "warehouse", "status": "PARTIAL", "source": "MARD.LGORT / EKPO.WERKS"},
@@ -309,6 +310,8 @@ def compose_intent(add_dimensions: List[str]) -> str:
         return "country_breakdown"
     if "year" in dims:
         return "period_compare_selection"
+    if "quarter" in dims:
+        return "quarterly_trend"
     if "month" in dims:
         return "monthly_trend"
     return "dimensional_extend"

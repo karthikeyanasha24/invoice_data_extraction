@@ -28,6 +28,13 @@ from .business_semantic_layer import (
 )
 from .analytical_followup_resolver import resolve_analytical_followup
 from .business_intelligence_inventory import compose_intent
+from .fkdat_time import (
+    fkdat_valid_predicate,
+    year_filter_sql,
+    year_month_sql,
+    year_quarter_sql,
+    year_sql,
+)
 from .sql_grain_guard import grain_contract, sql_has_unsafe_monetary_fanout
 
 logger = logging.getLogger("zodiac-api.analytical-deep-dive")
@@ -52,6 +59,8 @@ class AnalyticalPlan:
     queries: List[Dict[str, str]] = field(default_factory=list)
     selected_products: List[str] = field(default_factory=list)
     selected_customers: List[str] = field(default_factory=list)
+    selected_industries: List[str] = field(default_factory=list)
+    selected_regions: List[str] = field(default_factory=list)
     base_question: str = ""
     drilldowns: List[Dict[str, str]] = field(default_factory=list)
     grain: Dict[str, Any] = field(default_factory=dict)
@@ -70,6 +79,8 @@ class AnalyticalPlan:
             "relationships": self.relationships,
             "selected_products": self.selected_products,
             "selected_customers": self.selected_customers,
+            "selected_industries": self.selected_industries,
+            "selected_regions": self.selected_regions,
             "base_question": self.base_question,
             "available_drilldowns": self.drilldowns,
             "data_gaps": self.data_gaps,
@@ -217,6 +228,26 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         "inventory age",
         "stock value",
     )
+    time_grain_signals = (
+        "monthly",
+        "quarterly",
+        "by month",
+        "by quarter",
+        "each month",
+        "per month",
+        "per quarter",
+        "each quarter",
+        "month over month",
+        "quarter over quarter",
+        "this month",
+        "last month",
+        "this quarter",
+        "last quarter",
+        "mom",
+        "qoq",
+        "year-month",
+        "year-quarter",
+    )
 
     score = 0
     if any(s in ql for s in profit_signals):
@@ -233,6 +264,8 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         score += 2
     if any(s in ql for s in lifecycle_signals):
         score += 2
+    if any(s in ql for s in time_grain_signals):
+        score += 3
     # Multi-dimension ask without saying "profit"
     if ("product" in ql and "customer" in ql) or (
         "customer" in ql and "industry" in ql and "region" in ql
@@ -264,6 +297,10 @@ def _merge_prior(plan: AnalyticalPlan, prior: Optional[Dict[str, Any]]) -> Analy
         plan.selected_products = list(prior.get("selected_products") or [])
     if prior.get("selected_customers") and not plan.selected_customers:
         plan.selected_customers = list(prior.get("selected_customers") or [])
+    if prior.get("selected_industries") and not plan.selected_industries:
+        plan.selected_industries = list(prior.get("selected_industries") or [])
+    if prior.get("selected_regions") and not plan.selected_regions:
+        plan.selected_regions = list(prior.get("selected_regions") or [])
     if prior.get("metrics") and not plan.metrics:
         plan.metrics = list(prior.get("metrics") or [])
     if prior.get("years") and not plan.years:
@@ -396,7 +433,48 @@ def build_analytical_plan(
             "yoy margin",
         )
     )
-    wants_monthly = "monthly" in ql or "by month" in ql or "month trend" in ql
+    wants_monthly = any(
+        x in ql
+        for x in (
+            "monthly",
+            "by month",
+            "month trend",
+            "each month",
+            "per month",
+            "sales each month",
+            "revenue by month",
+            "month over month",
+            "month-over-month",
+            "mom",
+            "this month",
+            "last month",
+        )
+    ) or bool(re.search(r"\bwhich month\b", ql)) or bool(
+        re.search(r"\bmonths?\b", ql) and any(
+            x in ql for x in ("sales", "revenue", "profit", "margin", "cogs", "trend", "compare")
+        )
+    )
+    wants_quarterly = any(
+        x in ql
+        for x in (
+            "quarterly",
+            "by quarter",
+            "quarter trend",
+            "each quarter",
+            "per quarter",
+            "revenue by quarter",
+            "sales per quarter",
+            "quarter over quarter",
+            "quarter-over-quarter",
+            "qoq",
+            "this quarter",
+            "last quarter",
+        )
+    ) or bool(re.search(r"\bwhich quarter\b", ql)) or bool(
+        re.search(r"\bquarters?\b", ql) and any(
+            x in ql for x in ("sales", "revenue", "profit", "margin", "cogs", "trend", "compare", "performance")
+        )
+    )
     wants_inventory = any(
         x in ql for x in ("inventory", "stock value", "slow-moving", "fast-moving", "inventory age")
     )
@@ -418,6 +496,15 @@ def build_analytical_plan(
         elif wants_inventory:
             # Inventory (+ optional sales/velocity) must win over bare "compare".
             plan.intent = "inventory_analysis"
+        elif wants_quarterly:
+            # Quarter grain wins over year compare when quarter is explicit.
+            plan.intent = "quarterly_trend"
+            if wants_compare or len(years) >= 2:
+                plan.comparisons = ["yoy", "qoq"]
+        elif wants_monthly:
+            plan.intent = "monthly_trend"
+            if wants_compare or len(years) >= 2:
+                plan.comparisons = ["yoy", "mom"]
         elif wants_compare:
             plan.intent = "period_compare_selection"
         elif wants_history:
@@ -430,10 +517,6 @@ def build_analytical_plan(
             plan.intent = "process_buy"
         elif wants_logistics:
             plan.intent = "process_sell"
-        elif wants_monthly:
-            plan.intent = "monthly_trend"
-        elif wants_inventory:
-            plan.intent = "inventory_analysis"
         elif wants_supplier:
             plan.intent = "suppliers_of_selection"
         elif wants_product_group:
@@ -468,8 +551,14 @@ def build_analytical_plan(
             plan.intent = "margin_decline_drivers"
         elif wants_history and (wants_customers or wants_product or prior_ctx):
             plan.intent = "purchase_history"
+        elif wants_quarterly:
+            plan.intent = "quarterly_trend"
+            if wants_compare or len(years) >= 2:
+                plan.comparisons = ["yoy", "qoq"]
         elif wants_monthly:
             plan.intent = "monthly_trend"
+            if wants_compare or len(years) >= 2:
+                plan.comparisons = ["yoy", "mom"]
         elif wants_inventory:
             plan.intent = "inventory_analysis"
         elif wants_supplier:
@@ -502,6 +591,8 @@ def build_analytical_plan(
             plan.intent = "product_by_industry"
         elif wants_customers and wants_industry:
             plan.intent = "customer_industry_region"
+        elif wants_compare and len(years) >= 2:
+            plan.intent = "period_compare_selection"
         else:
             plan.intent = "unsupported_deep"
             return plan
@@ -569,9 +660,59 @@ def build_analytical_plan(
         plan.dimensions = ["product", "year", "currency"]
         plan.comparisons = ["yoy"]
     elif plan.intent == "monthly_trend":
-        plan.metrics = ["revenue", "gross_profit", "gross_margin_pct"]
-        plan.dimensions = ["month", "currency"]
-        plan.comparisons = ["mom"]
+        plan.metrics = plan.metrics or [
+            "revenue",
+            "cogs",
+            "gross_profit",
+            "gross_margin_pct",
+            "quantity",
+            "invoice_count",
+            "avg_selling_price",
+        ]
+        plan.dimensions = list(dict.fromkeys([*(plan.dimensions or []), "month", "currency"]))
+        if "yoy" in (plan.comparisons or []) or len(plan.years or []) >= 2:
+            plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), "yoy", "mom"]))
+        else:
+            plan.comparisons = plan.comparisons or ["mom"]
+        rank_metric = "revenue"
+        if "margin" in ql:
+            rank_metric = "gross_margin_pct"
+        elif "cogs" in ql or "cost" in ql:
+            rank_metric = "cogs"
+        elif "profit" in ql or "gp" in ql:
+            rank_metric = "gross_profit"
+        rank_dir = "asc" if any(x in ql for x in ("lowest", "worst", "decline", "drop")) else "desc"
+        plan.ranking = {"metric": rank_metric, "direction": rank_dir, "limit": max(limit, 24)}
+        plan.entities = ["billing_item", "billing_header"]
+        plan.relationships = ["billing_item→billing_header"]
+        plan.grain = {"fact_grain": "billing_item", "join": "VBRP→VBRK"}
+    elif plan.intent == "quarterly_trend":
+        plan.metrics = plan.metrics or [
+            "revenue",
+            "cogs",
+            "gross_profit",
+            "gross_margin_pct",
+            "quantity",
+            "invoice_count",
+            "avg_selling_price",
+        ]
+        plan.dimensions = list(dict.fromkeys([*(plan.dimensions or []), "quarter", "currency"]))
+        if "yoy" in (plan.comparisons or []) or len(plan.years or []) >= 2:
+            plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), "yoy", "qoq"]))
+        else:
+            plan.comparisons = plan.comparisons or ["qoq"]
+        rank_metric = "revenue"
+        if "margin" in ql:
+            rank_metric = "gross_margin_pct"
+        elif "cogs" in ql or "cost" in ql:
+            rank_metric = "cogs"
+        elif "profit" in ql or "gp" in ql:
+            rank_metric = "gross_profit"
+        rank_dir = "asc" if any(x in ql for x in ("lowest", "worst", "decline", "drop")) else "desc"
+        plan.ranking = {"metric": rank_metric, "direction": rank_dir, "limit": max(limit, 16)}
+        plan.entities = ["billing_item", "billing_header"]
+        plan.relationships = ["billing_item→billing_header"]
+        plan.grain = {"fact_grain": "billing_item", "join": "VBRP→VBRK"}
     elif plan.intent == "inventory_analysis":
         plan.metrics = ["quantity"]
         plan.entities = ["inventory", "product"]
@@ -619,19 +760,32 @@ def build_analytical_plan(
 
 
 def _year_predicate(alias: str = "vk") -> str:
-    # Match intent_sql_fast: fkdat is TEXT in this DB — never EXTRACT(YEAR FROM date).
-    return f'SUBSTRING(TRIM(CAST({alias}."fkdat" AS TEXT)), 1, 4)'
+    """Governed FKDAT year expression (TEXT YYYYMMDD — never CAST AS DATE)."""
+    return year_sql(alias)
 
 
 def _year_filter_sql(years: Sequence[int], alias: str = "vk") -> str:
-    if not years:
+    return year_filter_sql(years, alias=alias)
+
+
+def _period_valid_sql(alias: str = "vk") -> str:
+    return f" AND {fkdat_valid_predicate(alias)}"
+
+
+def _customer_in_sql(customers: Sequence[str], alias: str = "vk") -> str:
+    clean = [c.replace("'", "''") for c in customers if c]
+    if not clean:
         return ""
-    ys = ", ".join(f"'{int(y)}'" for y in years)
-    return (
-        f' AND {alias}."fkdat" IS NOT NULL'
-        f" AND TRIM(CAST({alias}.\"fkdat\" AS TEXT)) <> ''"
-        f" AND {_year_predicate(alias)} IN ({ys})"
-    )
+    vals = ", ".join(f"'{c}'" for c in clean[:50])
+    return f' AND TRIM(CAST({alias}."kunag" AS TEXT)) IN ({vals})'
+
+
+def _region_in_sql(regions: Sequence[str], alias: str = "vk") -> str:
+    clean = [r.replace("'", "''") for r in regions if r]
+    if not clean:
+        return ""
+    vals = ", ".join(f"'{r}'" for r in clean[:50])
+    return f' AND TRIM(CAST({alias}."land1" AS TEXT)) IN ({vals})'
 
 
 def _product_in_sql(products: Sequence[str]) -> str:
@@ -655,6 +809,9 @@ def compile_queries(plan: AnalyticalPlan) -> Tuple[List[Dict[str, str]], List[st
     yfilter = _year_filter_sql(years)
     products = plan.selected_products
     pfilter = _product_in_sql(products)
+    cfilter = _customer_in_sql(plan.selected_customers)
+    rfilter = _region_in_sql(plan.selected_regions)
+    period_ok = yfilter if yfilter else _period_valid_sql()
     limit = int((plan.ranking or {}).get("limit") or 10)
     direction = str((plan.ranking or {}).get("direction") or "desc").upper()
     if direction not in {"ASC", "DESC"}:
@@ -1038,33 +1195,98 @@ LIMIT 40
         queries.append({"id": "margin_decline_customer_drivers", "sql": sql_cust})
 
     elif plan.intent == "monthly_trend":
+        ym = year_month_sql("vk")
+        yexpr = year_sql("vk")
+        rank_ask = any(
+            x in ql
+            for x in (
+                "highest",
+                "lowest",
+                "best",
+                "worst",
+                "biggest",
+                "which month",
+                "decline",
+            )
+        )
+        order_sql = (
+            f"ORDER BY {order_col} {direction} NULLS LAST, year_month"
+            if rank_ask
+            else "ORDER BY year_month, currency"
+        )
         sql = f"""
 SELECT
-  EXTRACT(YEAR FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)) AS year,
-  EXTRACT(MONTH FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)) AS month,
+  {ym} AS year_month,
+  {yexpr} AS year,
   vk.waerk AS currency,
-  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) AS revenue,
-  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS cogs,
-  SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
-    - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC)) AS gross_profit,
-  CASE WHEN SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) > 0 THEN
-    ROUND(100.0 * (
-      SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC))
-      - SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v."wavwr", '0') AS TEXT)), '') AS NUMERIC))
-    ) / SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)), 2)
-  ELSE NULL END AS gross_margin_pct
+  SUM({rev}) AS revenue,
+  SUM({cogs}) AS cogs,
+  SUM({rev}) - SUM({cogs}) AS gross_profit,
+  CASE WHEN SUM({rev}) > 0 THEN
+    ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
+  ELSE NULL END AS gross_margin_pct,
+  SUM({qty}) AS quantity,
+  COUNT(DISTINCT TRIM(CAST(vk."vbeln" AS TEXT))) AS invoice_count,
+  CASE WHEN SUM({qty}) > 0 THEN ROUND(SUM({rev}) / SUM({qty}), 4) ELSE NULL END AS avg_selling_price
 FROM "vbrp" v
-JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-WHERE CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC) IS NOT NULL
-  {yfilter}
+JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+WHERE {rev} IS NOT NULL
+  {period_ok}
   {pfilter}
-GROUP BY EXTRACT(YEAR FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)),
-         EXTRACT(MONTH FROM CAST(NULLIF(TRIM(vk.fkdat), '') AS DATE)),
-         vk.waerk
-ORDER BY year, month
+  {cfilter}
+  {rfilter}
+GROUP BY {ym}, {yexpr}, vk.waerk
+{order_sql}
 LIMIT 120
 """.strip()
         queries.append({"id": "monthly_trend", "sql": sql})
+
+    elif plan.intent == "quarterly_trend":
+        yq = year_quarter_sql("vk")
+        yexpr = year_sql("vk")
+        rank_ask = any(
+            x in ql
+            for x in (
+                "highest",
+                "lowest",
+                "best",
+                "worst",
+                "biggest",
+                "which quarter",
+                "decline",
+            )
+        )
+        order_sql = (
+            f"ORDER BY {order_col} {direction} NULLS LAST, year_quarter"
+            if rank_ask
+            else "ORDER BY year_quarter, currency"
+        )
+        sql = f"""
+SELECT
+  {yq} AS year_quarter,
+  {yexpr} AS year,
+  vk.waerk AS currency,
+  SUM({rev}) AS revenue,
+  SUM({cogs}) AS cogs,
+  SUM({rev}) - SUM({cogs}) AS gross_profit,
+  CASE WHEN SUM({rev}) > 0 THEN
+    ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
+  ELSE NULL END AS gross_margin_pct,
+  SUM({qty}) AS quantity,
+  COUNT(DISTINCT TRIM(CAST(vk."vbeln" AS TEXT))) AS invoice_count,
+  CASE WHEN SUM({qty}) > 0 THEN ROUND(SUM({rev}) / SUM({qty}), 4) ELSE NULL END AS avg_selling_price
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+WHERE {rev} IS NOT NULL
+  {period_ok}
+  {pfilter}
+  {cfilter}
+  {rfilter}
+GROUP BY {yq}, {yexpr}, vk.waerk
+{order_sql}
+LIMIT 80
+""".strip()
+        queries.append({"id": "quarterly_trend", "sql": sql})
 
     elif plan.intent == "product_industry_region":
         sql = f"""
@@ -1365,7 +1587,47 @@ def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str
             continue
         lines.append(f"### {qid} ({len(rows)} rows)")
         top = rows[0]
-        if "gross_profit" in top or "revenue" in top or "margin_change_pp" in top:
+        if top.get("year_month") or top.get("year_quarter"):
+            period = top.get("year_month") or top.get("year_quarter")
+            lines.append(
+                f"- Period **{period}** | revenue={_fmt_num(top.get('revenue'))} "
+                f"| cogs={_fmt_num(top.get('cogs'))} | gross_profit={_fmt_num(top.get('gross_profit'))} "
+                f"| margin%={_fmt_num(top.get('gross_margin_pct'))} | currency={top.get('currency')}"
+            )
+            findings.append(
+                f"{period}: revenue {_fmt_num(top.get('revenue'))} {top.get('currency') or ''}".strip()
+            )
+            if len(rows) >= 2 and ("decline" in _ql(plan.base_question or "") or "qoq" in (plan.comparisons or []) or "mom" in (plan.comparisons or [])):
+                # Observed period-to-period change (not causal certainty).
+                chron = sorted(
+                    rows,
+                    key=lambda r: str(r.get("year_month") or r.get("year_quarter") or ""),
+                )
+                if len(chron) >= 2:
+                    a, b = chron[-2], chron[-1]
+                    for metric_key, label in (
+                        ("revenue", "revenue"),
+                        ("gross_margin_pct", "margin %"),
+                        ("cogs", "COGS"),
+                        ("avg_selling_price", "ASP"),
+                        ("quantity", "quantity"),
+                    ):
+                        try:
+                            av = float(a.get(metric_key) or 0)
+                            bv = float(b.get(metric_key) or 0)
+                            delta = bv - av
+                        except (TypeError, ValueError):
+                            continue
+                        lines.append(
+                            f"- Observed contributor ({label}): "
+                            f"{a.get('year_month') or a.get('year_quarter')} → "
+                            f"{b.get('year_month') or b.get('year_quarter')}: "
+                            f"Δ={_fmt_num(delta)}"
+                        )
+                    findings.append(
+                        "Observed contributors are period deltas (COGS / ASP / quantity / revenue) — not proven causation."
+                    )
+        elif "gross_profit" in top or "revenue" in top or "margin_change_pp" in top:
             pname = top.get("product_name") or top.get("product") or top.get("industry") or top.get("country") or top.get("customer_name")
             if "margin_change_pp" in top:
                 lines.append(
@@ -1559,6 +1821,7 @@ def try_deep_multidim_analysis(
             "process_sell_and_buy",
             "inventory_analysis",
             "monthly_trend",
+            "quarterly_trend",
             "margin_decline_drivers",
             "period_compare_selection",
             "product_expiry",
@@ -1578,25 +1841,36 @@ def try_deep_multidim_analysis(
             )
         return None
 
-    # Empty year-compare / margin-decline: keep deep answer (do not fall through)
+    # Empty year-compare / margin-decline / period trend: keep deep answer (do not fall through)
     if (
         not primary_rows
-        and plan.intent in {"period_compare_selection", "margin_decline_drivers"}
+        and plan.intent
+        in {
+            "period_compare_selection",
+            "margin_decline_drivers",
+            "monthly_trend",
+            "quarterly_trend",
+        }
         and bundled
     ):
-        yrs = plan.filters.get("years") or plan.years or [2024, 2025]
+        yrs = plan.filters.get("years") or plan.years or []
+        period_note = (
+            f"year(s) {yrs}"
+            if yrs
+            else "the requested month/quarter period"
+        )
         plan.data_gaps.append(
-            f"No billing rows found for year(s) {yrs} on the current product selection. "
-            "This loaded SAP extract is historical (billing years roughly through ~2018); "
-            "2024/2025 comparisons need those periods present in the database."
+            f"No billing records are available for {period_note} in the current extract. "
+            "This loaded SAP extract is historical; periods outside the extract cannot be fabricated."
         )
         primary_sql = bundled[0].get("sql") or ""
         summary = (
             f"**Deep analysis** — intent `{plan.intent}`\n\n"
-            f"No rows for years {yrs} with the current filters.\n\n"
+            f"No billing records are available for that period in the current extract.\n\n"
             "### Data limitations\n"
             + "\n".join(f"- {g}" for g in plan.data_gaps)
-            + "\n\nTry: *Compare 2004 and 2005* or remove the year filter and ask again."
+            + "\n\nTry a period that exists in the extract (for example 2004–2005), "
+            "or remove the year filter and ask again."
         )
         ctx = plan.to_context()
         return {
@@ -1614,19 +1888,19 @@ def try_deep_multidim_analysis(
                 "metrics": plan.metrics,
                 "dimensions": plan.dimensions,
                 "selected_products": plan.selected_products,
-                "years": list(yrs),
+                "years": list(yrs) if yrs else [],
             },
             "suggested_followups": [
-                "Compare 2004 and 2005",
+                "Compare 2004 and 2005 by month",
+                "Show quarterly revenue",
                 "Show COGS",
-                "Show their customers",
             ],
             "meta": {
                 "deep_analysis": True,
                 "analytical_plan": ctx,
                 "query_count": len(bundled),
                 "data_gaps": plan.data_gaps,
-                "empty_year_compare": True,
+                "empty_period": True,
             },
             "pipeline": "deep_multidim",
             "sql_generation_method": "deep_multidim",
@@ -1642,6 +1916,8 @@ def try_deep_multidim_analysis(
         "product_expiry",
         "product_expiry_by_industry",
         "inventory_analysis",
+        "monthly_trend",
+        "quarterly_trend",
     }
     if (
         primary_rows
@@ -1658,6 +1934,18 @@ def try_deep_multidim_analysis(
             str(r.get("customer")).strip()
             for r in primary_rows[:20]
             if r.get("customer")
+        ]
+    if primary_rows and primary_rows[0].get("country"):
+        plan.selected_regions = [
+            str(r.get("country")).strip()
+            for r in primary_rows[:20]
+            if r.get("country") and str(r.get("country")).strip() not in {"", "Unknown"}
+        ]
+    if primary_rows and primary_rows[0].get("industry"):
+        plan.selected_industries = [
+            str(r.get("industry")).strip()
+            for r in primary_rows[:20]
+            if r.get("industry") and str(r.get("industry")).strip() not in {"", "Unknown"}
         ]
 
     plan.drilldowns = available_drilldowns(set(plan.dimensions), set(plan.metrics))

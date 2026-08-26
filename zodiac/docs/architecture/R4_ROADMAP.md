@@ -1,8 +1,8 @@
 # R4 roadmap (post-R3) — schema-backed only
 
-Status: **planning only**. Do not deploy R4 until R3 performance hardening is accepted and each capability has grain + golden tests.
+Frozen R3 baseline: commit `9424373` (perf) on `036b52a` (behavior) · live 23/2/0 · Full Chat verified.
 
-Frozen R3 baseline: commit `036b52a` · live 23/2/0 · Full Chat verified.
+Status: **R4-1 in implementation / deploy gate**. Do not declare R4-1 production complete until live + UI acceptance.
 
 ## Principles
 
@@ -22,7 +22,7 @@ Frozen R3 baseline: commit `036b52a` · live 23/2/0 · Full Chat verified.
 
 | Capability | Business value | Tables | Grain | Confidence | Complexity | Status |
 |---|---|---|---|---|---|---|
-| Month / quarter trends (billing) | High — seasonality & growth | VBRK.FKDAT | billing_item by period | High | Low | **R4-1 ready** (partial R3 monthly exists) |
+| Month / quarter trends (billing) | High — seasonality & growth | VBRK.FKDAT | billing_item by period | High | Low | **R4-1 implemented** (local; live acceptance pending) |
 | Product growth / decline ranking | High | VBRP/VBRK YoY | billing_item | High | Medium | **R4-2 ready** |
 | Inventory vs sales (snapshot×velocity) | High | MBEW + VBRP | snapshot ⋈ product (no fan-out of NETWR) | Medium | Medium | **R4-3 ready** (velocity already conditional) |
 | Supplier concentration by product | High | EKPO/EKKO/LFA1 | PO item | Medium | Medium | **R4-4 ready** (association only; no supplier profit) |

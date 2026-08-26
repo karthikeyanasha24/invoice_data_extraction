@@ -1,23 +1,26 @@
-# R3 production baseline (frozen 2026-08-26)
+# R3 production baseline (updated 2026-08-26)
 
-Do not regress this behavior when expanding multi-dimensional BI or starting R4.
+Do not regress this behavior when expanding multi-dimensional BI (R4-1+).
 
 ## Git / deploy
 
 | Item | Value |
 |------|--------|
 | Branch | `phase12-first-customer-ready` |
-| Production commit | **`036b52a`** — Fix R3 product-group follow-up routing and MBEW inventory SQL |
+| **Current production baseline** | **`9424373`** — Harden R3 latency: inventory query skip, compare LIMIT, split timings |
+| Prior behavioral baseline | `036b52a` — Fix R3 product-group follow-up routing and MBEW inventory SQL |
 | R3 feature commit | `5bd81a4` |
 | Follow-up resolver | `0eefed1` |
 | Production API | `https://zodiac-back.vercel.app` |
 | Frontend Full Chat | `https://www.bridgeedi.com/dashboard/ai` |
-| Live acceptance | **23 PASS / 2 DATA GAP / 0 FAIL** |
-| R3 unit / golden | **35/35** · **694 golden cases** · **17/17 short follow-ups** |
+| Live acceptance (behavioral) | **23 PASS / 2 DATA GAP / 0 FAIL** |
+| R3 unit / golden | **35/35** · **694+ golden cases** · **17/17 short follow-ups** |
+
+Historical note: `036b52a` remains the accepted R3 capability baseline. `9424373` freezes the performance-hardened release on top of that behavior (do not overwrite historical measurements below).
 
 ## Supported dimensions
 
-product, customer, industry, country/region, year, month, currency, supplier (PO grain), product_group (MATKL), warehouse/valuation_area (inventory snapshot), process_stage (partial)
+product, customer, industry, country/region, year, **month (YYYY-MM)**, **quarter (YYYY-Qn)** (R4-1), currency, supplier (PO grain), product_group (MATKL), warehouse/valuation_area (inventory snapshot), process_stage (partial)
 
 ## Supported metrics
 
@@ -40,10 +43,11 @@ product, customer, industry, country/region, year, month, currency, supplier (PO
 - Product group uses MARA.MATKL at billing grain without duplicating amounts.
 - Inventory is MBEW/MARD snapshot — **not** aging (MSEG absent).
 - `sql_grain_guard` rejects unsafe monetary fan-out SQL.
+- Month/quarter trends use governed `fkdat_time` SUBSTRING on TEXT FKDAT (never CAST AS DATE).
 
 ## Follow-up behavior
 
-Short follow-ups inherit `analytical_context` via `analytical_followup_resolver` (deterministic). Pronouns (`their`, `them`, `those`) preserve product/customer selection. `"by product group"` must not be stolen by bare `"by product"`.
+Short follow-ups inherit `analytical_context` via `analytical_followup_resolver` (deterministic). Pronouns (`their`, `them`, `those`) preserve product/customer selection. `"by product group"` must not be stolen by bare `"by product"`. Month/quarter TIME_CHANGE preserves selection and metric switches stay on the active time grain.
 
 ## DATA GAPs (genuine — do not fabricate)
 
@@ -64,7 +68,7 @@ Short follow-ups inherit `analytical_context` via `analytical_followup_resolver`
 | Max | ≈ 9.4 s (purchase history / cold start suspected) |
 | Prior pre-R3 reference | P50 ≈ 646 ms · P95 ≈ 2.7 s |
 
-Hardening goal (warm path): P50 &lt; 1s · P95 &lt; 3s · P99 &lt; 5s. Cold starts documented separately.
+See `R3_PERFORMANCE_HARDENING.md` for warm-path scenario table and post-`9424373` live probe notes.
 
 ## Golden 17-turn chain
 
@@ -76,4 +80,4 @@ Highest profits → suppliers (EKPO) → purchase history → product group (MAT
 
 ## Status
 
-**R3 PRODUCTION COMPLETE** — protect this baseline. Optimize latency and plan R4 without changing governed metrics or inventing unsupported financial facts.
+**R3 PRODUCTION COMPLETE** (behavioral `036b52a` + performance freeze `9424373`). Protect this baseline when shipping R4-1.
