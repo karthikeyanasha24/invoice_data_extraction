@@ -239,6 +239,12 @@ def wants_product_change(question_lower: str) -> bool:
             "perform better",
             "performed better",
             "biggest change",
+            # Absolute monetary add/loss language (R4-2)
+            "added",
+            "add the most",
+            "added the most",
+            "lost the most",
+            "lose the most",
         )
     )
     if productish and changeish:
@@ -247,6 +253,24 @@ def wants_product_change(question_lower: str) -> bool:
     if any(x in ql for x in ("grower", "growers", "loser", "losers", "gainer", "gainers")):
         return True
     return False
+
+
+def resolve_comparison_years(years: Optional[list]) -> Tuple[int, int]:
+    """
+    Governed YoY pair for product growth.
+
+    - 2+ years → first two sorted (explicit compare)
+    - 1 year → (year-1, year)  so "grew in 2005" / "grew in 2099" do not
+      silently replace the requested year with default 2004/2005
+    - 0 years → extract defaults 2004/2005
+    """
+    ys = sorted({int(y) for y in (years or []) if y is not None})
+    if len(ys) >= 2:
+        return int(ys[0]), int(ys[1])
+    if len(ys) == 1:
+        y = int(ys[0])
+        return y - 1, y
+    return 2004, 2005
 
 
 def order_col_for(metric: str, mode: ChangeMode, direction: Direction) -> Tuple[str, str]:

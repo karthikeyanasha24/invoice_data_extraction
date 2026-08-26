@@ -115,6 +115,7 @@ R4_2_CASES = [
     ("Show products whose margins declined.", "product_growth_decline", "PASS"),
     ("Which products grew the fastest?", "product_growth_decline", "PASS"),
     ("Which products increased their revenue the most?", "product_growth_decline", "PASS"),
+    ("Which products added the most revenue?", "product_growth_decline", "PASS"),
     ("Which products grew the most from 2004 to 2005?", "product_growth_decline", "PASS"),
     ("Which products grew month over month?", "product_growth_decline", "PASS"),
     ("Which products declined quarter over quarter?", "product_growth_decline", "PASS"),

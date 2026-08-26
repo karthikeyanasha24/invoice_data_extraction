@@ -1,181 +1,221 @@
 # R4-2 Production Acceptance Report
 
-## Verdict
+**Date:** 2026-08-26  
+**Branch:** `phase12-first-customer-ready`  
+**Acceptance scope:** Post-deploy verification of `911afed` (or later containing R4-2) on `zodiac-back`  
+**R4-3:** not started
+
+---
+
+## Final verdict
 
 ```text
 R4-2 NOT PRODUCTION COMPLETE
 ```
 
-**Live status (2026-08-26):** R4-2 code **is executing** on `zodiac-back` (behavioral fingerprint confirmed). Remaining blockers:
+### Exact blockers
 
-1. Redeploy commit **`abce857`** (product-group follow-up fix) — currently live may still be prior deploy.
-2. Re-run R4-2 live acceptance to clear the 1 real FAIL (`Show their product groups.`).
-3. Confirm independent SQL after script order-by fix (absolute growth already matched 0 mismatches).
+1. **Absolute phrasing miss (Phase 4):** `Which products added the most revenue?` routes to `intent_sql_fast` (top revenue ranking), **not** `product_growth_decline` with absolute change. Closely related phrasing `Which products increased their revenue the most?` **does** pass R4-2.
+2. **Empty single-year handling (Phase 16):** `Which products grew in 2099?` still runs a **2004 vs 2005** YoY growth query (planner pads to two default years) and returns 10 rows — not an honest “no data for 2099” response.
 
-### Live results so far
+Full Chat UI smoke check for `Which products grew the most?` **passed** (table with 2004/2005, `revenue_change_*`, `NEW_NO_PRIOR_BASE` / `CONTINUING`, drill-downs). Remaining Full Chat multi-turn operator chain was not fully exercised in UI (API chains were).
 
-| Suite | Result |
-|-------|--------|
-| Behavioral fingerprint `Which products grew the most?` | `product_growth_decline` + `revenue_change_abs` + `period_status` |
-| R3 | **23 PASS / 2 DATA GAP / 0 FAIL** |
-| R4-1 | **47 PASS / 2 DATA GAP / 0 FAIL** |
-| R4-2 live | **37 PASS / 1 DATA_GAP / 3 FAIL** (2 harness false fan-out on supplier/inventory fixed in harness; 1 product-group routing fixed in `abce857`) |
-| Latency (R4-2) | P50 901ms / P95 1503ms / Max 2237ms |
 
 ---
 
-## Implementation
-
-### Architecture changes
-
-- Added governed growth layer `product_growth.py` (absolute / % / period status / mode / metric / direction / period grain).
-- Extended deep planner with intent `product_growth_decline` after R4-1 time grain and R3 `margin_decline_drivers`.
-- YoY SQL: yearly CTE + `FULL OUTER JOIN` prev/curr years; MoM/QoQ: period LAG filtered to latest period.
-- Companion customer-mix query for observed drivers.
-- Follow-up resolver: growth/decline/why/metric preserve on `product_growth_decline`.
-- Interpret: observed-contributor language + approximate volume/price decomposition disclaimer.
-- Empty-period allowlist includes `product_growth_decline`.
-
-### Files changed
-
-| File | Change |
-|------|--------|
-| `app/services/product_growth.py` | **NEW** canonical growth helpers |
-| `app/services/analytical_deep_dive.py` | Intent, SQL, interpret, empty period, charts |
-| `app/services/analytical_followup_resolver.py` | Growth/decline follow-ups + ASP phrases |
-| `app/services/business_semantic_layer.py` | Drilldowns for quantity / ASP |
-| `tests/test_r4_2_product_growth_decline.py` | **NEW** suite |
-| `tests/test_r3_golden_benchmark.py` | R4-2 golden + routing assertions |
-| `scripts/r4_2_live_acceptance.py` | **NEW** live harness |
-| `scripts/r4_2_independent_sql.py` | **NEW** independent SQL harness |
-| `docs/architecture/R4_2_PRODUCT_GROWTH.md` | Architecture note |
-
-### Semantic / planner / SQL / context / UI
-
-- Semantic concepts: GROWTH, DECLINE, PERIOD_COMPARISON, PRODUCT_CHANGE, DRIVER_ANALYSIS (via filters + comparisons, not phrase patches).
-- Context fields: `growth_metric`, `growth_direction`, `change_mode`, `period_grain`.
-- UI: no dedicated Frontend change required; table/chart consume `revenue_change_abs` and existing product labels. Full Chat live proof pending deploy.
-
----
-
-## Metrics
-
-| Definition | Formula |
-|------------|---------|
-| Absolute change | `current − previous` |
-| Percentage growth | `((current − previous) / previous) * 100` when `previous ≠ 0`, else `NULL` |
-| Margin change | `margin_curr − margin_prev` (percentage points) |
-| NEW | prior ≈ 0 and current ≠ 0 → `NEW_NO_PRIOR_BASE` |
-| FULL DECLINE | current ≈ 0 and prior ≠ 0 → `FULL_DECLINE_NO_CURRENT` |
-
-Supported metrics: Revenue, COGS, Gross Profit, Margin %, Quantity, ASP, Invoice Count.
-
----
-
-## Growth analysis
-
-Supported: revenue / GP / COGS / quantity / ASP / margin improvement & decline; absolute vs percentage ranking; YoY / MoM / QoQ.
-
----
-
-## Driver analysis
-
-Observed contributors: ASP Δ, quantity Δ, COGS Δ, margin pp, customer mix sample. Language uses **observed contributor / associated change**, not causal certainty. Approximate volume + price decomposition labeled illustrative.
-
----
-
-## Accuracy
-
-Independent SQL script: `scripts/r4_2_independent_sql.py` (run after deploy against same SAP DB). **Not yet executed against live R4-2 code** (deploy pending).
-
----
-
-## Testing (local)
-
-| Suite | Result |
-|-------|--------|
-| `tests/test_r4_2_product_growth_decline.py` | PASS |
-| `tests/test_r4_1_month_quarter_trends.py` | PASS (R4-1 regression) |
-| `tests/test_r3_golden_benchmark.py` | PASS (incl. R4-2 routing) |
-| `tests/test_andy_deep_dive_cases.py` + R3 deep / follow-up | PASS |
-
-Expected production regression after deploy:
-
-```text
-R3:   23 PASS / 2 DATA GAP / 0 FAIL
-R4-1: 47 PASS / 2 DATA GAP / 0 FAIL
-R4-2: 0 unexpected FAIL
-```
-
-Live R3/R4-1/R4-2 and Full Chat: **pending Andy deploy**.
-
----
-
-## Performance
-
-Local harnesses do not replace production latency. After deploy run:
-
-```bash
-python scripts/r4_2_live_acceptance.py
-```
-
-and record P50 / P95 / P99 / Max from `r4_2_live_acceptance.json`.
-
----
-
-## Production
+## 1. Deployment
 
 | Item | Value |
-|------|-------|
-| Project | `zodiac-back` only (never `zodiac-api-nu`) |
-| Branch | `phase12-first-customer-ready` |
-| Deploy | **Blocked on Karth machine** — Andy must verify `.vercel/project.json` → `zodiac-back` then `npx vercel --prod` |
-| Behavioral proof | `Which products grew the most?` → intent `product_growth_decline` + SQL with `revenue_change_abs` / `period_status` |
+|------|--------|
+| Project | `zodiac-back` only |
+| URL | https://zodiac-back.vercel.app |
+| Local HEAD (after ff) | `a5699e5` |
+| Remote | `origin/phase12-first-customer-ready` @ `a5699e5` |
+| `911afed` ancestry | **YES** — `git merge-base --is-ancestor 911afed origin/phase12-first-customer-ready` |
+| R4-2 intro commit | `00d2759` Implement R4-2… |
+| Product-group fix | `abce857` (live: follow-up → `product_group_breakdown`) |
+
+### Behavioral proof (production is executing R4-2)
+
+| Question | Pipeline | Intent | Evidence |
+|----------|----------|--------|----------|
+| Which products grew the most? | `deep_multidim` | `product_growth_decline` | `revenue_change_abs`, `period_status`, VBRP→VBRK |
+| Which products grew the fastest? | `deep_multidim` | `product_growth_decline` | `change_mode=pct`, `ORDER BY revenue_change_pct` |
+| Show their product groups. (after growth) | `deep_multidim` | `product_group_breakdown` | proves ≥ `abce857` live |
+
+Vercel “deployment succeeded” alone was **not** used as proof.
 
 ---
 
-## Full Chat
+## 2. R4-2 implementation (live behavior)
 
-Pending deploy. Target: https://www.bridgeedi.com/dashboard/ai
+| Area | Status |
+|------|--------|
+| Growth / decline ranking | PASS |
+| Revenue / GP / qty / ASP / margin variants | PASS (see probes) |
+| Absolute vs % (`fastest` / `increased … most` / `%`) | PASS except **added the most revenue** |
+| YoY / MoM / QoQ product change | PASS (LAG / yearly FULL OUTER JOIN) |
+| Observed drivers + Why? | PASS (observed/contributor language) |
+| Context follow-ups | PASS (customers, ASP, COGS, product groups, …) |
+| DATA GAP recovery | PASS (logistics + net profit gaps; then revenue/COGS/customers) |
+| Grain | PASS for billing growth (no EKPO/VBFA/KONV fan-out) |
 
 ---
 
-## Remaining DATA GAPs
+## 3. Live probes — suite totals
 
-- Logistics cost / freight cost amounts
-- Product-level net profit / OPEX / EBITDA
-- Certified discount / tax / freight
-- Budget / target
-- True inventory aging
+### Canonical R4-2 harness (`scripts/r4_2_live_acceptance.py`)
+
+```text
+40 PASS / 1 DATA_GAP / 0 FAIL  (total 41)
+P50 796ms | P95 1130ms | P99 1430ms | Max 1430ms
+```
+
+### Extra post-deploy probes (`scripts/r4_2_post_deploy_extra_probes.py`)
+
+```text
+36 PASS / 2 DATA_GAP / 2 FAIL  (total 40)
+```
+
+Fails (blockers above):
+- `Which products added the most revenue?` → `intent_sql_fast`
+- `Which products grew in 2099?` → false 2004/2005 growth result
+
+### Abs vs % (mandatory)
+
+| Question | Intent | Mode | Result |
+|----------|--------|------|--------|
+| grew the fastest | `product_growth_decline` | pct | PASS |
+| added the most revenue | *(basic)* | — | **FAIL** |
+| increased revenue by the highest percentage | `product_growth_decline` | pct | PASS |
+| increased their revenue the most | `product_growth_decline` | absolute | PASS |
 
 ---
 
-## Acceptance matrix (local code)
+## 4. Independent SQL validation
+
+`scripts/r4_2_independent_sql.py` against same SAP DB:
+
+```text
+total_mismatches: 0
+cases: 6
+```
+
+Covered: top revenue growth, absolute increase, fastest %, decline, GP growth, margin improvement — AI vs independent ranking/values aligned.
+
+---
+
+## 5. Performance (R4-2 live harness)
+
+| Metric | ms |
+|--------|-----|
+| P50 | 796 |
+| P95 | 1130 |
+| P99 | 1430 |
+| Max | 1430 |
+
+R3 harness also recorded approx P50 701 / P95 1524 / Max 11620 on concurrent load.
+
+---
+
+## 6. R3 regression
+
+```text
+23 PASS / 2 DATA GAP / 0 FAIL
+```
+
+(`scripts/r3_post_deploy_live_acceptance.py` — `canonical_verdict`)
+
+---
+
+## 7. R4-1 regression
+
+First concurrent run hit SSL handshake timeout. **Retry alone:**
+
+```text
+47 PASS / 2 DATA GAP / 0 FAIL
+```
+
+(`scripts/r4_1_live_acceptance.py`)
+
+---
+
+## 8. Full Chat UI
+
+| Item | Status |
+|------|--------|
+| URL | https://www.bridgeedi.com/dashboard/ai |
+| Auth | Operator session available |
+| Smoke: `Which products grew the most?` | **PASS** — growth table with prev/curr years, abs/pct change, `NEW_NO_PRIOR_BASE` / `CONTINUING`, explore-further drills |
+| Full multi-turn UI chain (17 turns) | **PARTIAL** — not fully re-run in UI; equivalent API chains PASS |
+
+---
+
+## 9. DATA GAP behavior
+
+| Turn | Result |
+|------|--------|
+| Which products grew the most? | PASS |
+| Show logistics cost. | DATA_GAP / CANNOT_ANSWER |
+| Show net profit. | DATA_GAP / CANNOT_ANSWER |
+| Show revenue growth. | PASS (context kept) |
+| Show COGS. | PASS |
+| Show customers. | PASS |
+
+---
+
+## 10. Remaining genuine limitations
+
+- Unsupported: logistics cost amounts, product net profit/OPEX, budget/target, certified discount/tax/freight, true inventory aging
+- Phrasing gap: “added the most revenue” not entering R4-2 growth path
+- Single missing year (e.g. only 2099) padded to default 2004/2005 instead of honest empty
+- Full Chat operator UI acceptance still outstanding
+
+---
+
+## 11. Acceptance matrix
 
 | Capability | Pipeline | SQL | Data | Accuracy | Context | UI | Latency | Status |
-|------------|----------|-----|------|----------|---------|----|---------|--------|
-| Product revenue growth | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| Product revenue decline | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| GP growth / decline | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| Quantity / ASP growth | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| Margin improve / decline | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| Absolute vs % | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| YoY / MoM / QoQ | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| Drivers / customer mix | local OK | OK | — | pending live | OK | pending | pending | LOCAL |
-| DATA GAP recovery | local OK | — | gap | — | OK | pending | pending | LOCAL |
-| R3 / R4-1 regression | local OK | — | — | — | — | — | — | LOCAL |
-| Full Chat / Production | — | — | — | — | — | — | — | **BLOCKED** |
+|---|---|---|---|---|---|---|---|---|
+| Revenue growth | OK | OK | OK | OK | OK | — | OK | PASS |
+| Revenue decline | OK | OK | OK | OK | OK | — | OK | PASS |
+| GP growth / decline | OK | OK | OK | OK | OK | — | OK | PASS |
+| Quantity / ASP | OK | OK | OK | OK | OK | — | OK | PASS |
+| Margin improve / decline* | OK | OK | OK | OK | OK | — | OK | PASS |
+| Absolute growth | partial | — | — | — | — | — | — | **FAIL** (“added most”) |
+| Percentage growth | OK | OK | OK | OK | OK | — | OK | PASS |
+| YoY / MoM / QoQ | OK | OK | OK | OK | OK | — | OK | PASS |
+| Growth/decline drivers | OK | OK | OK | OK | OK | — | OK | PASS |
+| Customer mix / drills | OK | OK | OK | OK | OK | — | OK | PASS |
+| Product → supplier/inventory | OK | OK | OK | — | OK | — | OK | PASS |
+| DATA GAP recovery | OK | — | gap | — | OK | — | OK | PASS |
+| Empty period (single missing year) | — | — | — | — | — | — | — | **FAIL** |
+| R3 regression | — | — | — | — | — | — | — | **23/2/0** |
+| R4-1 regression | — | — | — | — | — | — | — | **47/2/0** |
+| Full Chat | OK smoke | OK | OK | OK | — | OK | — | **SMOKE PASS** / full chain partial |
+| Independent SQL | — | OK | OK | **0 mismatch** | — | — | — | PASS |
+
+\*R3 “biggest margin decline” still correctly routes to `margin_decline_drivers`.
 
 ---
 
-## Next step for Andy
+## Git check
 
-1. Pull `phase12-first-customer-ready`.
-2. Confirm Vercel project name is **`zodiac-back`**.
-3. `npx vercel --prod`.
-4. `python scripts/r3_post_deploy_live_acceptance.py`
-5. `python scripts/r4_1_live_acceptance.py`
-6. `python scripts/r4_2_live_acceptance.py`
-7. `python scripts/r4_2_independent_sql.py`
-8. Full Chat manual chain.
-9. Only then mark **R4-2 PRODUCTION COMPLETE**.
+```text
+branch: phase12-first-customer-ready
+HEAD:   a5699e5
+911afed is ancestor of origin/HEAD: YES
+```
+
+Not committed: secrets, live JSON dumps, tokens.
+
+Reusable scripts used/added for acceptance:
+- `scripts/r4_2_live_acceptance.py`
+- `scripts/r4_2_independent_sql.py`
+- `scripts/r4_2_post_deploy_extra_probes.py` (new harness, local)
+
+---
+
+## Stop rule
+
+**R4-3 not started.** No R4-2 rewrite performed in this acceptance pass.

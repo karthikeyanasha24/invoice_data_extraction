@@ -141,6 +141,36 @@ def test_absolute_revenue_increase_sql():
     assert "AS DATE" not in sql.upper()
 
 
+def test_added_the_most_revenue_is_absolute_growth():
+    assert wants_product_change("which products added the most revenue?")
+    assert is_deep_analysis_candidate("Which products added the most revenue?")
+    plan = build_analytical_plan("Which products added the most revenue?")
+    assert plan.intent == "product_growth_decline"
+    assert plan.filters.get("change_mode") == "absolute"
+    assert plan.filters.get("growth_metric") == "revenue"
+    queries, _ = compile_queries(plan)
+    assert "ORDER BY revenue_change_abs DESC" in queries[0]["sql"] or (
+        "revenue_change_abs" in queries[0]["sql"] and "DESC" in queries[0]["sql"]
+    )
+
+
+def test_single_year_does_not_pad_to_2004_2005():
+    from app.services.product_growth import resolve_comparison_years
+
+    assert resolve_comparison_years([2099]) == (2098, 2099)
+    assert resolve_comparison_years([2005]) == (2004, 2005)
+    assert resolve_comparison_years([2004, 2005]) == (2004, 2005)
+    assert resolve_comparison_years([]) == (2004, 2005)
+    plan = build_analytical_plan("Which products grew in 2099?")
+    assert plan.intent == "product_growth_decline"
+    queries, _ = compile_queries(plan)
+    sql = queries[0]["sql"]
+    assert "'2099'" in sql and "'2098'" in sql
+    assert "'2004'" not in sql or "'2099'" in sql
+    # Must not silently compare only 2004/2005
+    assert "previous_year" in sql.lower() or "2098" in sql
+
+
 def test_yoy_2004_2005():
     plan = build_analytical_plan("Which products grew the most from 2004 to 2005?")
     assert plan.intent == "product_growth_decline"

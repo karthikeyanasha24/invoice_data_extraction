@@ -41,6 +41,7 @@ from .product_growth import (
     pct_change_sql,
     period_status_sql,
     resolve_change_mode,
+    resolve_comparison_years,
     resolve_direction,
     resolve_growth_metric,
     resolve_period_grain,
@@ -166,6 +167,9 @@ def _is_basic_engine_query(ql: str) -> bool:
             "decline",
             "loser",
             "gainer",
+            "added the most",
+            "lost the most",
+            "added most",
         )
     ):
         return False
@@ -1400,10 +1404,10 @@ LIMIT 40
         queries.append({"id": "margin_decline_customer_drivers", "sql": sql_cust})
 
     elif plan.intent == "product_growth_decline":
-        ylist = years if len(years) >= 2 else sorted(set(list(years or []) + [2004, 2005]))[:2]
-        if len(ylist) < 2:
-            ylist = [2004, 2005]
-        y1, y2 = int(ylist[0]), int(ylist[1])
+        y1, y2 = resolve_comparison_years(years)
+        plan.filters["years"] = [y1, y2]
+        plan.years = [y1, y2]
+        ylist = [y1, y2]
         g_metric = str(
             (plan.ranking or {}).get("growth_metric")
             or plan.filters.get("growth_metric")
@@ -2328,6 +2332,29 @@ def try_deep_multidim_analysis(
             primary_rows = rows
             primary_sql = sql
     db_ms = int((time.perf_counter() - t_db) * 1000)
+
+    # Product growth: missing current year outside the extract must not look like
+    # a real full-decline ranking (e.g. 2004 vs 2099 → fabricated zeros).
+    # Only apply when the requested current year is outside known billing years.
+    if plan.intent == "product_growth_decline" and primary_rows:
+        yrs = [int(y) for y in (plan.filters.get("years") or plan.years or []) if y is not None]
+        curr_year = max(yrs) if yrs else None
+        # This SAP extract's billing coverage is historical 2004–2005.
+        _known_billing_years = {2004, 2005}
+        if curr_year is not None and curr_year not in _known_billing_years:
+            curr_vals = []
+            for r in primary_rows:
+                if not isinstance(r, dict) or "revenue_curr" not in r:
+                    curr_vals = []
+                    break
+                try:
+                    curr_vals.append(float(r.get("revenue_curr") or 0))
+                except (TypeError, ValueError):
+                    curr_vals.append(0.0)
+            if curr_vals and all(v == 0 for v in curr_vals):
+                primary_rows = []
+                if not primary_sql and bundled:
+                    primary_sql = bundled[0].get("sql") or ""
 
     if not bundled or (
         not primary_rows
