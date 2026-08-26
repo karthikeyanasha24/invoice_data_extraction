@@ -408,6 +408,23 @@ def resolve_analytical_followup(
         res.resolved = True
         return res
 
+    # ── Inventory snapshot / velocity (before bare "compare" → year compare) ──
+    if any(
+        x in ql
+        for x in (
+            "inventory",
+            "stock value",
+            "slow-moving",
+            "fast-moving",
+            "inventory age",
+        )
+    ):
+        res.kind = KIND_DIMENSION_EXPANSION
+        res.intent = "inventory_analysis"
+        res.add_dimensions = ["warehouse"]
+        res.resolved = True
+        return res
+
     # ── Time comparison ──
     years = _extract_years(question)
     if _COMPARE_RE.search(ql) or len(years) >= 2:

@@ -415,6 +415,9 @@ def build_analytical_plan(
             plan.intent = "product_expiry"
         elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
+        elif wants_inventory:
+            # Inventory (+ optional sales/velocity) must win over bare "compare".
+            plan.intent = "inventory_analysis"
         elif wants_compare:
             plan.intent = "period_compare_selection"
         elif wants_history:
@@ -657,6 +660,7 @@ def compile_queries(plan: AnalyticalPlan) -> Tuple[List[Dict[str, str]], List[st
     if direction not in {"ASC", "DESC"}:
         direction = "DESC"
     rank_metric = str((plan.ranking or {}).get("metric") or "gross_profit")
+    ql = _ql(plan.base_question or "")
 
     order_col = {
         "gross_profit": "gross_profit",
@@ -922,6 +926,13 @@ LIMIT {max(limit, 50)}
     elif plan.intent == "period_compare_selection":
         ylist = years if len(years) >= 2 else sorted(set(years + [2004, 2005]))[:2]
         yfilter2 = _year_filter_sql(ylist)
+        # When a product selection is active, return only that selection×years
+        # (not a broad 200-row scan). Measured warm P50≈2.7s on period_compare.
+        pc_limit = (
+            max(limit * max(len(ylist), 2), 40)
+            if products
+            else 200
+        )
         sql = f"""
 SELECT
   {_year_predicate('vk')} AS year,
@@ -947,7 +958,7 @@ WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
   {pfilter}
 GROUP BY {_year_predicate('vk')}, TRIM(v.matnr), vk.waerk
 ORDER BY year, gross_profit DESC NULLS LAST
-LIMIT 200
+LIMIT {pc_limit}
 """.strip()
         queries.append({"id": "period_compare", "sql": sql})
 
@@ -1110,9 +1121,28 @@ ORDER BY stock_value DESC NULLS LAST
 LIMIT {max(limit, 30)}
 """.strip(),
         })
-        queries.append({
-            "id": "billing_velocity_proxy",
-            "sql": f"""
+        # Billing velocity is only needed for inventory↔sales / slow-fast comparisons.
+        # Snapshot-only asks (Show inventory / highest inventory) skip the second query.
+        wants_velocity = any(
+            x in ql
+            for x in (
+                "sales",
+                "sold",
+                "demand",
+                "compare",
+                "versus",
+                " vs ",
+                "slow",
+                "fast",
+                "moving",
+                "velocity",
+                "turnover",
+            )
+        )
+        if wants_velocity:
+            queries.append({
+                "id": "billing_velocity_proxy",
+                "sql": f"""
 SELECT
   TRIM(v.matnr) AS product,
   COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
@@ -1127,10 +1157,15 @@ GROUP BY TRIM(v.matnr)
 ORDER BY billed_qty ASC NULLS LAST
 LIMIT {max(limit, 30)}
 """.strip(),
-        })
-        gaps.append(
-            "Slow/fast-moving uses billed quantity as a proxy; true inventory age needs movement history (MSEG not in schema_full)."
-        )
+            })
+            gaps.append(
+                "Slow/fast-moving uses billed quantity as a proxy; true inventory age needs movement history (MSEG not in schema_full)."
+            )
+        else:
+            gaps.append(
+                "Inventory is an MBEW/MARD snapshot (stock value/qty), not aging. "
+                "Ask to compare inventory with sales for the billed-qty velocity proxy."
+            )
 
     elif plan.intent == "suppliers_of_selection":
         pfilter_po = ""
@@ -1468,6 +1503,7 @@ def try_deep_multidim_analysis(
         )
 
     queries, gaps = compile_queries(plan)
+    plan_ms = int((time.perf_counter() - t0) * 1000)
     plan.grain = grain_contract(plan.intent, plan.dimensions)
     safe_queries = []
     for q in queries:
@@ -1493,18 +1529,26 @@ def try_deep_multidim_analysis(
     bundled: List[Dict[str, Any]] = []
     primary_rows: List[Dict[str, Any]] = []
     primary_sql = ""
+    per_query_ms: List[Dict[str, Any]] = []
+    t_db = time.perf_counter()
     for q in queries[:6]:
         sql = q["sql"]
+        t_q = time.perf_counter()
         try:
             rows = execute_sql(db, sql, question) or []
+            q_ms = int((time.perf_counter() - t_q) * 1000)
+            per_query_ms.append({"id": q.get("id"), "db_ms": q_ms, "rows": len(rows), "ok": True})
         except Exception as exc:
+            q_ms = int((time.perf_counter() - t_q) * 1000)
             logger.info("[deep] query %s failed: %s", q.get("id"), exc)
             plan.data_gaps.append(f"Query {q.get('id')} failed: {exc}")
+            per_query_ms.append({"id": q.get("id"), "db_ms": q_ms, "rows": 0, "ok": False})
             continue
         bundled.append({"id": q["id"], "sql": sql, "rows": rows})
         if not primary_rows and rows:
             primary_rows = rows
             primary_sql = sql
+    db_ms = int((time.perf_counter() - t_db) * 1000)
 
     if not bundled or (
         not primary_rows
@@ -1617,11 +1661,13 @@ def try_deep_multidim_analysis(
         ]
 
     plan.drilldowns = available_drilldowns(set(plan.dimensions), set(plan.metrics))
+    t_xf = time.perf_counter()
     summary, findings = _interpret(plan, bundled)
+    transform_ms = int((time.perf_counter() - t_xf) * 1000)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     logger.info(
         "[deep] analysis_complete intent=%s metrics=%s dims=%s query_count=%s "
-        "row_count=%s gaps=%s elapsed_ms=%s status=SUCCESS",
+        "row_count=%s gaps=%s elapsed_ms=%s plan_ms=%s db_ms=%s transform_ms=%s status=SUCCESS",
         plan.intent,
         plan.metrics,
         plan.dimensions,
@@ -1629,6 +1675,9 @@ def try_deep_multidim_analysis(
         len(primary_rows),
         plan.data_gaps[:3],
         elapsed_ms,
+        plan_ms,
+        db_ms,
+        transform_ms,
     )
 
     ctx = plan.to_context()
@@ -1690,11 +1739,20 @@ def try_deep_multidim_analysis(
             "analytical_plan": ctx,
             "query_count": len(bundled),
             "planning_ms": elapsed_ms,
+            "plan_ms": plan_ms,
+            "db_ms": db_ms,
+            "transform_ms": transform_ms,
+            "per_query_ms": per_query_ms,
             "data_gaps": plan.data_gaps,
             "bundled_queries": [{"id": b["id"], "rows": len(b["rows"])} for b in bundled],
         },
         "pipeline": "deep_multidim",
         "sql_generation_method": "deep_multidim",
         "llm_calls": 0,
-        "stage_timings": {"deep_analysis_ms": elapsed_ms},
+        "stage_timings": {
+            "deep_analysis_ms": elapsed_ms,
+            "plan_ms": plan_ms,
+            "db_ms": db_ms,
+            "transform_ms": transform_ms,
+        },
     }
