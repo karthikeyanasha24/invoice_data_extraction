@@ -507,6 +507,8 @@ def available_drilldowns(active_dimensions: Set[str], metrics: Set[str]) -> List
         ("product", "Product breakdown"),
         ("cogs", "Invoice document cost (WAVWR) components"),
         ("gross_margin_pct", "Gross margin %"),
+        ("quantity", "Quantity / volume change"),
+        ("avg_selling_price", "Average selling price (ASP)"),
         ("process_sell", "Order → delivery → billing process links"),
         ("process_buy", "Purchase order / vendor process for materials"),
         ("supplier", "Vendors sourcing the current materials (PO grain, not invoice COGS)"),

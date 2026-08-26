@@ -100,6 +100,10 @@ _SHORT_METRIC_PHRASES: Dict[str, str] = {
     "sales": "revenue",
     "quantity": "quantity",
     "qty": "quantity",
+    "asp": "avg_selling_price",
+    "average selling price": "avg_selling_price",
+    "unit price": "avg_selling_price",
+    "selling price": "avg_selling_price",
     "invoice count": "invoice_count",
     "invoices": "invoice_count",
     "net profit": "net_profit",
@@ -160,6 +164,8 @@ _INTENT_BY_RESOLUTION: Dict[str, str] = {
     "process_delivery": "process_sell",
     "components": "profit_components",
     "margin_decline": "margin_decline_drivers",
+    "product_growth": "product_growth_decline",
+    "product_decline": "product_growth_decline",
     "period_compare": "period_compare_selection",
     "month": "monthly_trend",
     "quarter": "quarterly_trend",
@@ -172,6 +178,15 @@ _INTENT_BY_RESOLUTION: Dict[str, str] = {
 }
 
 _TIME_GRAIN_INTENTS = frozenset({"monthly_trend", "quarterly_trend"})
+_PRODUCT_CHANGE_INTENTS = frozenset({"product_growth_decline", "margin_decline_drivers"})
+_GROWTH_SIGNAL_RE = re.compile(
+    r"\b(grew|grow|growth|growers?|gainers?|increase[sd]?|rose|risen|improv\w*)\b",
+    re.I,
+)
+_DECLINE_SIGNAL_RE = re.compile(
+    r"\b(declin\w*|drop(?:ped)?|fell|fall|losers?|lost|worsen\w*|deteriorat\w*|decrease[sd]?|shrink\w*)\b",
+    re.I,
+)
 _MONTH_SIGNAL_RE = re.compile(
     r"\b(monthly|by\s+month|each\s+month|per\s+month|months?|mom|month[\s-]over[\s-]month)\b",
     re.I,
@@ -378,11 +393,38 @@ def resolve_analytical_followup(
         return res
 
     # ── Why / cause analysis ──
-    if _WHY_RE.search(ql) or ql.strip() in {"why", "why?", "why did it decline?", "why did it decline"}:
+    if _WHY_RE.search(ql) or ql.strip() in {
+        "why",
+        "why?",
+        "why did it decline?",
+        "why did it decline",
+        "what drove the decline?",
+        "what drove the decline",
+        "what drove the growth?",
+        "what drove the growth",
+        "what changed?",
+        "what changed",
+    }:
         if prior_intent in _TIME_GRAIN_INTENTS:
             res.kind = KIND_CAUSE_ANALYSIS
             res.intent = prior_intent
             res.comparisons = ["yoy", "mom" if prior_intent == "monthly_trend" else "qoq"]
+            res.resolved = True
+            return res
+        if prior_intent == "product_growth_decline" or (
+            prior_intent in _PRODUCT_CHANGE_INTENTS
+            and (_GROWTH_SIGNAL_RE.search(ql) or _DECLINE_SIGNAL_RE.search(ql) or ql.strip() in {"why", "why?"})
+        ):
+            # Preserve product growth/decline context for observed-driver follow-ups.
+            if "margin" in ql and prior_intent == "margin_decline_drivers":
+                res.kind = KIND_CAUSE_ANALYSIS
+                res.intent = "margin_decline_drivers"
+                res.comparisons = ["yoy_margin"]
+                res.resolved = True
+                return res
+            res.kind = KIND_CAUSE_ANALYSIS
+            res.intent = "product_growth_decline" if prior_intent == "product_growth_decline" else prior_intent
+            res.comparisons = ["yoy", "product_change"]
             res.resolved = True
             return res
         if (
@@ -397,6 +439,63 @@ def resolve_analytical_followup(
             res.comparisons = ["yoy_margin"]
             res.resolved = True
             return res
+
+    # ── Product growth / decline ranking switch (before generic metric) ──
+    if (
+        prior_intent == "product_growth_decline"
+        or _GROWTH_SIGNAL_RE.search(ql)
+        or _DECLINE_SIGNAL_RE.search(ql)
+    ) and any(
+        x in ql
+        for x in (
+            "product",
+            "products",
+            "grower",
+            "growers",
+            "loser",
+            "losers",
+            "gainer",
+            "gainers",
+            "which of them",
+            "which ones",
+        )
+    ):
+        # Keep R4-1 month/quarter margin ranking when grain is explicit.
+        if _QUARTER_SIGNAL_RE.search(ql) and "margin" in ql:
+            res.kind = KIND_RANKING_CHANGE
+            res.intent = "quarterly_trend"
+            res.add_dimensions = ["quarter"]
+            res.comparisons = ["qoq", "yoy"]
+            res.resolved = True
+            return res
+        if _MONTH_SIGNAL_RE.search(ql) and "margin" in ql:
+            res.kind = KIND_RANKING_CHANGE
+            res.intent = "monthly_trend"
+            res.add_dimensions = ["month"]
+            res.comparisons = ["mom", "yoy"]
+            res.resolved = True
+            return res
+        res.kind = KIND_RANKING_CHANGE
+        res.intent = "product_growth_decline"
+        res.comparisons = ["yoy", "product_change"]
+        if _MONTH_SIGNAL_RE.search(ql):
+            res.comparisons = ["mom", "yoy", "product_change"]
+            res.add_dimensions = ["month"]
+        elif _QUARTER_SIGNAL_RE.search(ql):
+            res.comparisons = ["qoq", "yoy", "product_change"]
+            res.add_dimensions = ["quarter"]
+        res.resolved = True
+        return res
+    if prior_intent == "product_growth_decline" and (
+        _GROWTH_SIGNAL_RE.search(ql)
+        or _DECLINE_SIGNAL_RE.search(ql)
+        or any(x in ql for x in ("what changed", "components", "show their growth", "show growth"))
+    ):
+        res.kind = KIND_RANKING_CHANGE
+        res.intent = "product_growth_decline"
+        res.comparisons = ["yoy", "product_change"]
+        res.resolved = True
+        return res
 
     # ── Process expansion (before history — "buying process" is not purchase history) ──
     if _PROCESS_RE.search(ql) or ql.strip() in {"show the process", "show process"}:
@@ -604,6 +703,8 @@ def resolve_analytical_followup(
             if prior_intent in _TIME_GRAIN_INTENTS:
                 # Keep month/quarter aggregation; only swap metrics.
                 res.intent = prior_intent
+            elif prior_intent == "product_growth_decline":
+                res.intent = "product_growth_decline"
             elif metric_key == "gross_profit" and prior_intent:
                 res.intent = prior_intent
             else:
@@ -659,7 +760,10 @@ def resolve_analytical_followup(
     # ── Fallback: inherit prior intent for short follow-ups (< 8 tokens) ──
     if len(_tokens(ql)) <= 8 and prior_intent:
         res.kind = KIND_DIMENSION_EXPANSION
-        res.intent = prior_intent if prior_intent in _TIME_GRAIN_INTENTS else "dimensional_extend"
+        if prior_intent in _TIME_GRAIN_INTENTS or prior_intent == "product_growth_decline":
+            res.intent = prior_intent
+        else:
+            res.intent = "dimensional_extend"
         res.resolved = True
         return res
 

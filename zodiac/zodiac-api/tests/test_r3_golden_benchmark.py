@@ -104,6 +104,35 @@ R4_1_FOLLOWUPS = [
     ("Why?", "monthly_trend", "PASS"),
 ]
 
+R4_2_CASES = [
+    ("Which products grew the most?", "product_growth_decline", "PASS"),
+    ("Which products declined the most?", "product_growth_decline", "PASS"),
+    ("Which products had the highest revenue growth?", "product_growth_decline", "PASS"),
+    ("Which products had the highest gross profit growth?", "product_growth_decline", "PASS"),
+    ("Which products grew fastest by volume?", "product_growth_decline", "PASS"),
+    ("Which products had the biggest ASP increase?", "product_growth_decline", "PASS"),
+    ("Show products whose margins improved.", "product_growth_decline", "PASS"),
+    ("Show products whose margins declined.", "product_growth_decline", "PASS"),
+    ("Which products grew the fastest?", "product_growth_decline", "PASS"),
+    ("Which products increased their revenue the most?", "product_growth_decline", "PASS"),
+    ("Which products grew the most from 2004 to 2005?", "product_growth_decline", "PASS"),
+    ("Which products grew month over month?", "product_growth_decline", "PASS"),
+    ("Which products declined quarter over quarter?", "product_growth_decline", "PASS"),
+    ("Show the biggest product growers.", "product_growth_decline", "PASS"),
+    ("Show the biggest losers.", "product_growth_decline", "PASS"),
+    ("Who grew fastest?", "product_growth_decline", "PASS"),
+]
+
+R4_2_FOLLOWUPS = [
+    ("Why?", "product_growth_decline", "PASS"),
+    ("Show their customers.", "customers_of_selection", "PASS"),
+    ("Show their regions.", "country_breakdown", "PASS"),
+    ("Show their ASP.", "product_growth_decline", "PASS"),
+    ("Show their COGS.", "product_growth_decline", "PASS"),
+    ("Show their margins.", "product_growth_decline", "PASS"),
+    ("What drove the decline?", "product_growth_decline", "PASS"),
+]
+
 
 def _expand() -> List[Dict]:
     cases: List[Dict] = []
@@ -123,6 +152,17 @@ def _expand() -> List[Dict]:
             "family": "r4_1_followup",
             "followup": True,
             "prior_intent": "monthly_trend",
+        })
+    for q, intent, status in R4_2_CASES:
+        cases.append({"question": q, "intent": intent, "status": status, "family": "r4_2_product_growth"})
+    for q, intent, status in R4_2_FOLLOWUPS:
+        cases.append({
+            "question": q,
+            "intent": intent,
+            "status": status,
+            "family": "r4_2_followup",
+            "followup": True,
+            "prior_intent": "product_growth_decline",
         })
 
     dims = ["product", "customer", "industry", "country", "year", "supplier", "product_group", "month", "quarter"]
@@ -213,3 +253,32 @@ def test_golden_benchmark_size_and_baseline_coverage():
     r4 = [c for c in GOLDEN_CASES if c["family"].startswith("r4_1")]
     assert len(r4) >= 20
     assert all(c["status"] == "PASS" for c in r4)
+    r42 = [c for c in GOLDEN_CASES if c["family"].startswith("r4_2")]
+    assert len(r42) >= 15
+    assert all(c["status"] == "PASS" for c in r42)
+    assert "Which products grew the most?" in texts
+
+
+def test_r4_2_routing_deterministic():
+    from app.services.analytical_deep_dive import build_analytical_plan
+    from app.services.analytical_followup_resolver import resolve_analytical_followup
+
+    prior = {
+        "deep_analysis": True,
+        "intent": "product_growth_decline",
+        "metrics": ["revenue", "cogs", "gross_profit"],
+        "dimensions": ["product", "year"],
+        "growth_metric": "revenue",
+        "growth_direction": "growth",
+        "change_mode": "absolute",
+        "filters": {"growth_metric": "revenue", "period_grain": "year"},
+    }
+    for c in GOLDEN_CASES:
+        if c["family"] == "r4_2_product_growth":
+            plan = build_analytical_plan(c["question"])
+            assert plan.intent == c["intent"], f"{c['question']} → {plan.intent}"
+        elif c["family"] == "r4_2_followup":
+            res = resolve_analytical_followup(c["question"], prior)
+            assert res.resolved and res.intent == c["intent"], (
+                f"{c['question']} → {res.intent} (expected {c['intent']})"
+            )

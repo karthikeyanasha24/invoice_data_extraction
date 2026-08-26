@@ -35,6 +35,17 @@ from .fkdat_time import (
     year_quarter_sql,
     year_sql,
 )
+from .product_growth import (
+    abs_change_sql,
+    order_col_for,
+    pct_change_sql,
+    period_status_sql,
+    resolve_change_mode,
+    resolve_direction,
+    resolve_growth_metric,
+    resolve_period_grain,
+    wants_product_change,
+)
 from .sql_grain_guard import grain_contract, sql_has_unsafe_monetary_fanout
 
 logger = logging.getLogger("zodiac-api.analytical-deep-dive")
@@ -84,6 +95,9 @@ class AnalyticalPlan:
             "base_question": self.base_question,
             "available_drilldowns": self.drilldowns,
             "data_gaps": self.data_gaps,
+            "growth_metric": (self.filters or {}).get("growth_metric"),
+            "growth_direction": (self.filters or {}).get("growth_direction"),
+            "change_mode": (self.filters or {}).get("change_mode"),
         }
 
 
@@ -143,8 +157,19 @@ def _is_basic_engine_query(ql: str) -> bool:
             "last month",
             "this quarter",
             "last quarter",
+            # R4-2 product growth / decline
+            "grew",
+            "grow",
+            "growth",
+            "grower",
+            "declined",
+            "decline",
+            "loser",
+            "gainer",
         )
     ):
+        return False
+    if wants_product_change(ql):
         return False
     if re.search(r"\b(months?|quarters?)\b", ql) and any(
         x in ql for x in ("sales", "revenue", "profit", "margin", "cogs", "trend", "compare", "performance")
@@ -213,6 +238,13 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         "why are margins",
         "decline",
         "erosion",
+        "grew",
+        "growth",
+        "grower",
+        "increase",
+        "decrease",
+        "loser",
+        "gainer",
     )
     dim_chain_signals = (
         "customers buying",
@@ -284,6 +316,8 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
     if any(s in ql for s in lifecycle_signals):
         score += 2
     if any(s in ql for s in time_grain_signals):
+        score += 3
+    if wants_product_change(ql):
         score += 3
     # Multi-dimension ask without saying "profit"
     if ("product" in ql and "customer" in ql) or (
@@ -510,6 +544,30 @@ def build_analytical_plan(
             plan.intent = "product_expiry_by_industry"
         elif wants_expiry:
             plan.intent = "product_expiry"
+        elif wants_monthly and "margin" in ql and any(
+            x in ql for x in ("decline", "improv", "change", "erosion")
+        ):
+            # R4-1: month-grain margin ranking (not product YoY growth).
+            plan.intent = "monthly_trend"
+            plan.comparisons = list(
+                dict.fromkeys([*(plan.comparisons or []), "yoy", "mom"])
+            )
+        elif wants_quarterly and "margin" in ql and any(
+            x in ql for x in ("decline", "improv", "change", "erosion")
+        ):
+            plan.intent = "quarterly_trend"
+            plan.comparisons = list(
+                dict.fromkeys([*(plan.comparisons or []), "yoy", "qoq"])
+            )
+        elif wants_product_change(ql) and (wants_monthly or wants_quarterly):
+            # Product MoM/QoQ ranking is R4-2 (not aggregate monthly/quarterly trend).
+            plan.intent = "product_growth_decline"
+            grain = resolve_period_grain(ql)
+            plan.filters["period_grain"] = grain
+            if grain == "month":
+                plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), "mom", "yoy"]))
+            elif grain == "quarter":
+                plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), "qoq", "yoy"]))
         elif wants_quarterly:
             # Explicit quarter grain (incl. quarter margin decline) before product YoY drivers.
             plan.intent = "quarterly_trend"
@@ -526,6 +584,9 @@ def build_analytical_plan(
                 )
         elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
+        elif wants_product_change(ql):
+            plan.intent = "product_growth_decline"
+            plan.filters["period_grain"] = resolve_period_grain(ql)
         elif wants_inventory:
             # Inventory (+ optional sales/velocity) must win over bare "compare".
             plan.intent = "inventory_analysis"
@@ -571,6 +632,24 @@ def build_analytical_plan(
     if plan.intent == "generic":
         if wants_logistics and "cost" in ql:
             plan.intent = "logistics_cost_gap"
+        elif wants_monthly and "margin" in ql and any(
+            x in ql for x in ("decline", "improv", "change", "erosion")
+        ):
+            plan.intent = "monthly_trend"
+            plan.comparisons = ["yoy", "mom"]
+        elif wants_quarterly and "margin" in ql and any(
+            x in ql for x in ("decline", "improv", "change", "erosion")
+        ):
+            plan.intent = "quarterly_trend"
+            plan.comparisons = ["yoy", "qoq"]
+        elif wants_product_change(ql) and (wants_monthly or wants_quarterly):
+            plan.intent = "product_growth_decline"
+            grain = resolve_period_grain(ql)
+            plan.filters["period_grain"] = grain
+            if grain == "month":
+                plan.comparisons = ["mom", "yoy"]
+            elif grain == "quarter":
+                plan.comparisons = ["qoq", "yoy"]
         elif wants_quarterly:
             plan.intent = "quarterly_trend"
             if wants_compare or len(years) >= 2 or wants_margin_decline:
@@ -581,6 +660,9 @@ def build_analytical_plan(
                 plan.comparisons = ["yoy", "mom"]
         elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
+        elif wants_product_change(ql):
+            plan.intent = "product_growth_decline"
+            plan.filters["period_grain"] = resolve_period_grain(ql)
         elif wants_history and (wants_customers or wants_product or prior_ctx):
             plan.intent = "purchase_history"
         elif wants_inventory:
@@ -645,6 +727,105 @@ def build_analytical_plan(
         if plan.intent == "product_industry_region":
             plan.dimensions.extend(["industry", "country"])
         plan.ranking = {"metric": metric, "direction": direction, "limit": limit}
+    elif plan.intent == "product_growth_decline":
+        g_metric = resolve_growth_metric(ql, plan.metrics or (prior_ctx or {}).get("metrics"))
+        # Preserve prior growth metric on short metric follow-ups ("Show ASP.") when ql is thin.
+        if prior_ctx and prior_ctx.get("growth_metric") and g_metric == "revenue":
+            prior_gm = str(prior_ctx.get("growth_metric"))
+            if prior_gm in (
+                "revenue",
+                "cogs",
+                "gross_profit",
+                "gross_margin_pct",
+                "quantity",
+                "avg_selling_price",
+                "invoice_count",
+            ) and not any(
+                x in ql
+                for x in (
+                    "revenue",
+                    "sales",
+                    "cogs",
+                    "profit",
+                    "margin",
+                    "quantity",
+                    "volume",
+                    "asp",
+                    "price",
+                    "invoice",
+                )
+            ):
+                g_metric = prior_gm
+        g_dir = resolve_direction(ql)
+        if prior_ctx and prior_ctx.get("growth_direction") and not any(
+            x in ql
+            for x in (
+                "grew",
+                "grow",
+                "growth",
+                "decline",
+                "declined",
+                "improv",
+                "worsen",
+                "loser",
+                "gainer",
+                "increase",
+                "decrease",
+                "fell",
+                "rose",
+            )
+        ):
+            g_dir = str(prior_ctx.get("growth_direction") or g_dir)  # type: ignore[assignment]
+        g_mode = resolve_change_mode(ql)
+        if prior_ctx and prior_ctx.get("change_mode") and g_mode == "absolute" and not any(
+            x in ql for x in ("fast", "percent", "%", "absolute", "added", "largest")
+        ):
+            g_mode = str(prior_ctx.get("change_mode") or g_mode)  # type: ignore[assignment]
+        # Margin uses pp absolute change; pct mode still ranks by pp for margins
+        if g_metric == "gross_margin_pct":
+            g_mode = "absolute"
+        period_grain = str(
+            plan.filters.get("period_grain")
+            or resolve_period_grain(ql)
+            or (prior_ctx or {}).get("filters", {}).get("period_grain")
+            or "year"
+        )
+        plan.filters["growth_metric"] = g_metric
+        plan.filters["growth_direction"] = g_dir
+        plan.filters["change_mode"] = g_mode
+        plan.filters["period_grain"] = period_grain
+        plan.metrics = [
+            "revenue",
+            "cogs",
+            "gross_profit",
+            "gross_margin_pct",
+            "quantity",
+            "avg_selling_price",
+            "invoice_count",
+        ]
+        plan.entities = ["product", "billing_item", "billing_header"]
+        dim_period = {"year": "year", "month": "month", "quarter": "quarter"}.get(period_grain, "year")
+        plan.dimensions = list(dict.fromkeys(["product", dim_period, "currency", *(plan.dimensions or [])]))
+        comps = ["product_change"]
+        if period_grain == "month":
+            comps.extend(["mom", "yoy"])
+        elif period_grain == "quarter":
+            comps.extend(["qoq", "yoy"])
+        else:
+            comps.append("yoy")
+        plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), *comps]))
+        plan.relationships = ["billing_item→billing_header", "billing_item→product"]
+        order_col, order_dir = order_col_for(g_metric, g_mode, g_dir)
+        plan.ranking = {
+            "metric": order_col,
+            "direction": order_dir.lower(),
+            "limit": limit,
+            "growth_metric": g_metric,
+            "change_mode": g_mode,
+            "growth_direction": g_dir,
+            "period_grain": period_grain,
+        }
+        plan.grain = {"fact_grain": "billing_item", "join": "VBRP→VBRK"}
     elif plan.intent == "cogs_by_product":
         plan.metrics = ["cogs", "revenue"]
         plan.entities = ["product"]
@@ -1218,6 +1399,250 @@ LIMIT 40
 """.strip()
         queries.append({"id": "margin_decline_customer_drivers", "sql": sql_cust})
 
+    elif plan.intent == "product_growth_decline":
+        ylist = years if len(years) >= 2 else sorted(set(list(years or []) + [2004, 2005]))[:2]
+        if len(ylist) < 2:
+            ylist = [2004, 2005]
+        y1, y2 = int(ylist[0]), int(ylist[1])
+        g_metric = str(
+            (plan.ranking or {}).get("growth_metric")
+            or plan.filters.get("growth_metric")
+            or "revenue"
+        )
+        g_mode = str(
+            (plan.ranking or {}).get("change_mode")
+            or plan.filters.get("change_mode")
+            or "absolute"
+        )
+        g_dir = str(
+            (plan.ranking or {}).get("growth_direction")
+            or plan.filters.get("growth_direction")
+            or "growth"
+        )
+        period_grain = str(
+            (plan.ranking or {}).get("period_grain")
+            or plan.filters.get("period_grain")
+            or "year"
+        )
+        order_col, order_dir = order_col_for(g_metric, g_mode, g_dir)  # type: ignore[arg-type]
+        year_in = ", ".join(f"'{y}'" for y in sorted(set(ylist)))
+        if period_grain in {"month", "quarter"}:
+            period_expr = year_month_sql("vk") if period_grain == "month" else year_quarter_sql("vk")
+            sql_growth = f"""
+WITH by_period AS (
+  SELECT
+    {period_expr} AS period_label,
+    TRIM(CAST(v."matnr" AS TEXT)) AS product,
+    COALESCE(MAX(m."maktx"), TRIM(CAST(v."matnr" AS TEXT))) AS product_name,
+    vk."waerk" AS currency,
+    SUM({rev}) AS revenue,
+    SUM({cogs}) AS cogs,
+    SUM({rev}) - SUM({cogs}) AS gross_profit,
+    CASE WHEN SUM({rev}) > 0 THEN
+      ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
+    ELSE NULL END AS gross_margin_pct,
+    SUM({qty}) AS quantity,
+    COUNT(DISTINCT TRIM(CAST(vk."vbeln" AS TEXT))) AS invoice_count,
+    CASE WHEN SUM({qty}) > 0 THEN ROUND(SUM({rev}) / SUM({qty}), 4) ELSE NULL END AS avg_selling_price
+  FROM "vbrp" v
+  JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+  LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+    AND (m."spras" = 'E' OR m."spras" IS NULL)
+  WHERE v."matnr" IS NOT NULL AND TRIM(CAST(v."matnr" AS TEXT)) <> ''
+    AND {rev} IS NOT NULL
+    AND {fkdat_valid_predicate('vk')}
+    AND {_year_predicate('vk')} IN ({year_in})
+    {pfilter}
+    {cfilter}
+    {rfilter}
+  GROUP BY {period_expr}, TRIM(CAST(v."matnr" AS TEXT)), vk."waerk"
+),
+with_lag AS (
+  SELECT
+    product,
+    product_name,
+    currency,
+    period_label AS current_period,
+    LAG(period_label) OVER (PARTITION BY product, currency ORDER BY period_label) AS previous_period,
+    revenue AS revenue_curr,
+    LAG(revenue) OVER (PARTITION BY product, currency ORDER BY period_label) AS revenue_prev,
+    cogs AS cogs_curr,
+    LAG(cogs) OVER (PARTITION BY product, currency ORDER BY period_label) AS cogs_prev,
+    gross_profit AS gross_profit_curr,
+    LAG(gross_profit) OVER (PARTITION BY product, currency ORDER BY period_label) AS gross_profit_prev,
+    gross_margin_pct AS margin_curr,
+    LAG(gross_margin_pct) OVER (PARTITION BY product, currency ORDER BY period_label) AS margin_prev,
+    quantity AS quantity_curr,
+    LAG(quantity) OVER (PARTITION BY product, currency ORDER BY period_label) AS quantity_prev,
+    invoice_count AS invoice_count_curr,
+    LAG(invoice_count) OVER (PARTITION BY product, currency ORDER BY period_label) AS invoice_count_prev,
+    avg_selling_price AS asp_curr,
+    LAG(avg_selling_price) OVER (PARTITION BY product, currency ORDER BY period_label) AS asp_prev
+  FROM by_period
+),
+latest AS (
+  SELECT MAX(period_label) AS max_period FROM by_period
+)
+SELECT
+  w.product,
+  w.product_name,
+  w.currency,
+  w.previous_period,
+  w.current_period,
+  COALESCE(w.revenue_prev, 0) AS revenue_prev,
+  COALESCE(w.revenue_curr, 0) AS revenue_curr,
+  {abs_change_sql('COALESCE(w.revenue_curr, 0)', 'COALESCE(w.revenue_prev, 0)', 'revenue_change_abs')},
+  {pct_change_sql('COALESCE(w.revenue_curr, 0)', 'COALESCE(w.revenue_prev, 0)', 'revenue_change_pct')},
+  COALESCE(w.cogs_prev, 0) AS cogs_prev,
+  COALESCE(w.cogs_curr, 0) AS cogs_curr,
+  {abs_change_sql('COALESCE(w.cogs_curr, 0)', 'COALESCE(w.cogs_prev, 0)', 'cogs_change_abs')},
+  {pct_change_sql('COALESCE(w.cogs_curr, 0)', 'COALESCE(w.cogs_prev, 0)', 'cogs_change_pct')},
+  COALESCE(w.gross_profit_prev, 0) AS gross_profit_prev,
+  COALESCE(w.gross_profit_curr, 0) AS gross_profit_curr,
+  {abs_change_sql('COALESCE(w.gross_profit_curr, 0)', 'COALESCE(w.gross_profit_prev, 0)', 'gross_profit_change_abs')},
+  {pct_change_sql('COALESCE(w.gross_profit_curr, 0)', 'COALESCE(w.gross_profit_prev, 0)', 'gross_profit_change_pct')},
+  w.margin_prev,
+  w.margin_curr,
+  (COALESCE(w.margin_curr, 0) - COALESCE(w.margin_prev, 0)) AS margin_change_pp,
+  COALESCE(w.quantity_prev, 0) AS quantity_prev,
+  COALESCE(w.quantity_curr, 0) AS quantity_curr,
+  {abs_change_sql('COALESCE(w.quantity_curr, 0)', 'COALESCE(w.quantity_prev, 0)', 'quantity_change_abs')},
+  {pct_change_sql('COALESCE(w.quantity_curr, 0)', 'COALESCE(w.quantity_prev, 0)', 'quantity_change_pct')},
+  w.asp_prev,
+  w.asp_curr,
+  {abs_change_sql('COALESCE(w.asp_curr, 0)', 'COALESCE(w.asp_prev, 0)', 'avg_selling_price_change_abs')},
+  {pct_change_sql('COALESCE(w.asp_curr, 0)', 'COALESCE(w.asp_prev, 0)', 'avg_selling_price_change_pct')},
+  COALESCE(w.invoice_count_prev, 0) AS invoice_count_prev,
+  COALESCE(w.invoice_count_curr, 0) AS invoice_count_curr,
+  {abs_change_sql('COALESCE(w.invoice_count_curr, 0)', 'COALESCE(w.invoice_count_prev, 0)', 'invoice_count_change_abs')},
+  {pct_change_sql('COALESCE(w.invoice_count_curr, 0)', 'COALESCE(w.invoice_count_prev, 0)', 'invoice_count_change_pct')},
+  {period_status_sql('COALESCE(w.revenue_curr, 0)', 'COALESCE(w.revenue_prev, 0)')}
+FROM with_lag w
+CROSS JOIN latest l
+WHERE w.previous_period IS NOT NULL
+  AND w.current_period = l.max_period
+ORDER BY {order_col} {order_dir} NULLS LAST
+LIMIT {limit}
+""".strip()
+        else:
+            sql_growth = f"""
+WITH yearly AS (
+  SELECT
+    {_year_predicate('vk')} AS year,
+    TRIM(CAST(v."matnr" AS TEXT)) AS product,
+    COALESCE(MAX(m."maktx"), TRIM(CAST(v."matnr" AS TEXT))) AS product_name,
+    vk."waerk" AS currency,
+    SUM({rev}) AS revenue,
+    SUM({cogs}) AS cogs,
+    SUM({rev}) - SUM({cogs}) AS gross_profit,
+    CASE WHEN SUM({rev}) > 0 THEN
+      ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
+    ELSE NULL END AS gross_margin_pct,
+    SUM({qty}) AS quantity,
+    COUNT(DISTINCT TRIM(CAST(vk."vbeln" AS TEXT))) AS invoice_count,
+    CASE WHEN SUM({qty}) > 0 THEN ROUND(SUM({rev}) / SUM({qty}), 4) ELSE NULL END AS avg_selling_price
+  FROM "vbrp" v
+  JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+  LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
+    AND (m."spras" = 'E' OR m."spras" IS NULL)
+  WHERE v."matnr" IS NOT NULL AND TRIM(CAST(v."matnr" AS TEXT)) <> ''
+    AND {rev} IS NOT NULL
+    AND {_year_predicate('vk')} IN ('{y1}', '{y2}')
+    {pfilter}
+    {cfilter}
+    {rfilter}
+  GROUP BY {_year_predicate('vk')}, TRIM(CAST(v."matnr" AS TEXT)), vk."waerk"
+),
+prev AS (SELECT * FROM yearly WHERE year = '{y1}'),
+curr AS (SELECT * FROM yearly WHERE year = '{y2}'),
+paired AS (
+  SELECT
+    COALESCE(a.product, b.product) AS product,
+    COALESCE(a.product_name, b.product_name) AS product_name,
+    COALESCE(a.currency, b.currency) AS currency,
+    a.revenue AS revenue_prev,
+    b.revenue AS revenue_curr,
+    a.cogs AS cogs_prev,
+    b.cogs AS cogs_curr,
+    a.gross_profit AS gross_profit_prev,
+    b.gross_profit AS gross_profit_curr,
+    a.gross_margin_pct AS margin_prev,
+    b.gross_margin_pct AS margin_curr,
+    a.quantity AS quantity_prev,
+    b.quantity AS quantity_curr,
+    a.invoice_count AS invoice_count_prev,
+    b.invoice_count AS invoice_count_curr,
+    a.avg_selling_price AS asp_prev,
+    b.avg_selling_price AS asp_curr
+  FROM prev a
+  FULL OUTER JOIN curr b
+    ON a.product = b.product AND a.currency = b.currency
+)
+SELECT
+  product,
+  product_name,
+  currency,
+  '{y1}' AS previous_year,
+  '{y2}' AS current_year,
+  COALESCE(revenue_prev, 0) AS revenue_prev,
+  COALESCE(revenue_curr, 0) AS revenue_curr,
+  {abs_change_sql('COALESCE(revenue_curr, 0)', 'COALESCE(revenue_prev, 0)', 'revenue_change_abs')},
+  {pct_change_sql('COALESCE(revenue_curr, 0)', 'COALESCE(revenue_prev, 0)', 'revenue_change_pct')},
+  COALESCE(cogs_prev, 0) AS cogs_prev,
+  COALESCE(cogs_curr, 0) AS cogs_curr,
+  {abs_change_sql('COALESCE(cogs_curr, 0)', 'COALESCE(cogs_prev, 0)', 'cogs_change_abs')},
+  {pct_change_sql('COALESCE(cogs_curr, 0)', 'COALESCE(cogs_prev, 0)', 'cogs_change_pct')},
+  COALESCE(gross_profit_prev, 0) AS gross_profit_prev,
+  COALESCE(gross_profit_curr, 0) AS gross_profit_curr,
+  {abs_change_sql('COALESCE(gross_profit_curr, 0)', 'COALESCE(gross_profit_prev, 0)', 'gross_profit_change_abs')},
+  {pct_change_sql('COALESCE(gross_profit_curr, 0)', 'COALESCE(gross_profit_prev, 0)', 'gross_profit_change_pct')},
+  margin_prev,
+  margin_curr,
+  (COALESCE(margin_curr, 0) - COALESCE(margin_prev, 0)) AS margin_change_pp,
+  COALESCE(quantity_prev, 0) AS quantity_prev,
+  COALESCE(quantity_curr, 0) AS quantity_curr,
+  {abs_change_sql('COALESCE(quantity_curr, 0)', 'COALESCE(quantity_prev, 0)', 'quantity_change_abs')},
+  {pct_change_sql('COALESCE(quantity_curr, 0)', 'COALESCE(quantity_prev, 0)', 'quantity_change_pct')},
+  asp_prev,
+  asp_curr,
+  {abs_change_sql('COALESCE(asp_curr, 0)', 'COALESCE(asp_prev, 0)', 'avg_selling_price_change_abs')},
+  {pct_change_sql('COALESCE(asp_curr, 0)', 'COALESCE(asp_prev, 0)', 'avg_selling_price_change_pct')},
+  COALESCE(invoice_count_prev, 0) AS invoice_count_prev,
+  COALESCE(invoice_count_curr, 0) AS invoice_count_curr,
+  {abs_change_sql('COALESCE(invoice_count_curr, 0)', 'COALESCE(invoice_count_prev, 0)', 'invoice_count_change_abs')},
+  {pct_change_sql('COALESCE(invoice_count_curr, 0)', 'COALESCE(invoice_count_prev, 0)', 'invoice_count_change_pct')},
+  {period_status_sql('COALESCE(revenue_curr, 0)', 'COALESCE(revenue_prev, 0)')}
+FROM paired
+WHERE product IS NOT NULL AND TRIM(product) <> ''
+ORDER BY {order_col} {order_dir} NULLS LAST
+LIMIT {limit}
+""".strip()
+        queries.append({"id": "product_growth_decline", "sql": sql_growth})
+        sql_drv = f"""
+SELECT
+  TRIM(CAST(vk."kunag" AS TEXT)) AS customer,
+  MAX(k."name1") AS customer_name,
+  MAX(k."brsch") AS industry,
+  MAX(vk."land1") AS country,
+  {_year_predicate('vk')} AS year,
+  vk."waerk" AS currency,
+  SUM({rev}) AS revenue,
+  SUM({cogs}) AS cogs,
+  SUM({qty}) AS quantity
+FROM "vbrp" v
+JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
+LEFT JOIN "KNA1" k ON TRIM(CAST(vk."kunag" AS TEXT)) = TRIM(CAST(k."kunnr" AS TEXT))
+WHERE {rev} IS NOT NULL
+  AND {_year_predicate('vk')} IN ('{y1}', '{y2}')
+  {pfilter}
+  {cfilter}
+  {rfilter}
+GROUP BY TRIM(CAST(vk."kunag" AS TEXT)), {_year_predicate('vk')}, vk."waerk"
+ORDER BY revenue DESC NULLS LAST
+LIMIT 40
+""".strip()
+        queries.append({"id": "product_change_customer_drivers", "sql": sql_drv})
+
     elif plan.intent == "monthly_trend":
         ym = year_month_sql("vk")
         yexpr = year_sql("vk")
@@ -1611,6 +2036,74 @@ def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str
             continue
         lines.append(f"### {qid} ({len(rows)} rows)")
         top = rows[0]
+        if qid in {"product_growth_decline", "product_change_customer_drivers"} or (
+            "revenue_change_abs" in top or "period_status" in top
+        ):
+            if qid == "product_change_customer_drivers" or "customer" in top:
+                lines.append(
+                    f"- Customer mix sample: **{top.get('customer_name') or top.get('customer')}** "
+                    f"| year={top.get('year')} | revenue={_fmt_num(top.get('revenue'))} "
+                    f"| qty={_fmt_num(top.get('quantity'))} | currency={top.get('currency')}"
+                )
+                findings.append(
+                    "Customer mix is an observed contributor cut — not proven causation."
+                )
+                continue
+            pname = top.get("product_name") or top.get("product")
+            prev_p = top.get("previous_year") or top.get("previous_period")
+            curr_p = top.get("current_year") or top.get("current_period")
+            status = top.get("period_status") or "CONTINUING"
+            lines.append(
+                f"- Top change: **{pname}** | {prev_p} → {curr_p} | status={status} "
+                f"| Δ revenue={_fmt_num(top.get('revenue_change_abs'))} "
+                f"({_fmt_num(top.get('revenue_change_pct'))}%) "
+                f"| Δ GP={_fmt_num(top.get('gross_profit_change_abs'))} "
+                f"| Δ margin_pp={_fmt_num(top.get('margin_change_pp'))} "
+                f"| currency={top.get('currency')}"
+            )
+            findings.append(
+                f"{pname}: revenue change {_fmt_num(top.get('revenue_change_abs'))} "
+                f"({_fmt_num(top.get('revenue_change_pct'))}%) {top.get('currency') or ''}".strip()
+            )
+            # Observed drivers (not causal certainty)
+            for metric_key, label in (
+                ("quantity_change_abs", "quantity"),
+                ("avg_selling_price_change_abs", "ASP"),
+                ("cogs_change_abs", "COGS"),
+                ("margin_change_pp", "margin pp"),
+            ):
+                if top.get(metric_key) is None:
+                    continue
+                lines.append(
+                    f"- Observed contributor ({label}): Δ={_fmt_num(top.get(metric_key))} "
+                    "(associated change; not proven causation)"
+                )
+            # Approximate volume + price decomposition when both sides present
+            try:
+                q0 = float(top.get("quantity_prev") or 0)
+                q1 = float(top.get("quantity_curr") or 0)
+                a0 = float(top.get("asp_prev") or 0)
+                a1 = float(top.get("asp_curr") or 0)
+                if q0 or q1 or a0 or a1:
+                    vol_eff = (q1 - q0) * a0
+                    price_eff = (a1 - a0) * q1
+                    lines.append(
+                        f"- Approximate revenue decomposition (illustrative): "
+                        f"volume effect≈{_fmt_num(vol_eff)}, price/ASP effect≈{_fmt_num(price_eff)}. "
+                        "Mix and other factors are not fully separated."
+                    )
+            except (TypeError, ValueError):
+                pass
+            if status == "NEW_NO_PRIOR_BASE":
+                lines.append(
+                    "- Period status **NEW / NO PRIOR PERIOD BASE** — growth % is undefined (NULL)."
+                )
+            elif status == "FULL_DECLINE_NO_CURRENT":
+                lines.append(
+                    "- Period status **FULL DECLINE / NO CURRENT PERIOD SALES** — "
+                    "growth % may be NULL when prior base is missing math."
+                )
+            continue
         if top.get("year_month") or top.get("year_quarter"):
             period = top.get("year_month") or top.get("year_quarter")
             lines.append(
@@ -1847,6 +2340,7 @@ def try_deep_multidim_analysis(
             "monthly_trend",
             "quarterly_trend",
             "margin_decline_drivers",
+            "product_growth_decline",
             "period_compare_selection",
             "product_expiry",
             "product_expiry_by_industry",
@@ -1872,6 +2366,7 @@ def try_deep_multidim_analysis(
         in {
             "period_compare_selection",
             "margin_decline_drivers",
+            "product_growth_decline",
             "monthly_trend",
             "quarterly_trend",
         }
@@ -2008,6 +2503,7 @@ def try_deep_multidim_analysis(
         "gross_profit" in primary_rows[0]
         or "revenue" in primary_rows[0]
         or "margin_change_pp" in primary_rows[0]
+        or "revenue_change_abs" in primary_rows[0]
         or "stock_value" in primary_rows[0]
     ):
         label_key = "product_name" if "product_name" in primary_rows[0] else (
@@ -2018,12 +2514,16 @@ def try_deep_multidim_analysis(
             )
         )
         value_key = (
-            "margin_change_pp"
-            if "margin_change_pp" in primary_rows[0]
+            "revenue_change_abs"
+            if "revenue_change_abs" in primary_rows[0]
             else (
-                "gross_profit"
-                if "gross_profit" in primary_rows[0]
-                else ("stock_value" if "stock_value" in primary_rows[0] else "revenue")
+                "margin_change_pp"
+                if "margin_change_pp" in primary_rows[0]
+                else (
+                    "gross_profit"
+                    if "gross_profit" in primary_rows[0]
+                    else ("stock_value" if "stock_value" in primary_rows[0] else "revenue")
+                )
             )
         )
         charts.append({
