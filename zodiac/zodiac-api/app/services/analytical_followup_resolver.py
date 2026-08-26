@@ -441,23 +441,48 @@ def resolve_analytical_followup(
             return res
 
     # ── Product growth / decline ranking switch (before generic metric) ──
-    if (
-        prior_intent == "product_growth_decline"
-        or _GROWTH_SIGNAL_RE.search(ql)
-        or _DECLINE_SIGNAL_RE.search(ql)
-    ) and any(
+    # Do not steal dimension drills that merely contain the word "product"
+    # (e.g. "Show their product groups.").
+    _dim_drill = any(
         x in ql
         for x in (
-            "product",
-            "products",
-            "grower",
-            "growers",
-            "loser",
-            "losers",
-            "gainer",
-            "gainers",
-            "which of them",
-            "which ones",
+            "product group",
+            "product groups",
+            "material group",
+            "supplier",
+            "suppliers",
+            "inventory",
+            "customer",
+            "customers",
+            "region",
+            "regions",
+            "industry",
+            "industries",
+            "country",
+            "countries",
+        )
+    )
+    if (
+        not _dim_drill
+        and (
+            prior_intent == "product_growth_decline"
+            or _GROWTH_SIGNAL_RE.search(ql)
+            or _DECLINE_SIGNAL_RE.search(ql)
+        )
+        and any(
+            x in ql
+            for x in (
+                "product",
+                "products",
+                "grower",
+                "growers",
+                "loser",
+                "losers",
+                "gainer",
+                "gainers",
+                "which of them",
+                "which ones",
+            )
         )
     ):
         # Keep R4-1 month/quarter margin ranking when grain is explicit.
@@ -475,17 +500,39 @@ def resolve_analytical_followup(
             res.comparisons = ["mom", "yoy"]
             res.resolved = True
             return res
-        res.kind = KIND_RANKING_CHANGE
-        res.intent = "product_growth_decline"
-        res.comparisons = ["yoy", "product_change"]
-        if _MONTH_SIGNAL_RE.search(ql):
-            res.comparisons = ["mom", "yoy", "product_change"]
-            res.add_dimensions = ["month"]
-        elif _QUARTER_SIGNAL_RE.search(ql):
-            res.comparisons = ["qoq", "yoy", "product_change"]
-            res.add_dimensions = ["quarter"]
-        res.resolved = True
-        return res
+        # Bare prior-context + "product" without growth/decline language is not a ranking switch.
+        if prior_intent == "product_growth_decline" and not (
+            _GROWTH_SIGNAL_RE.search(ql)
+            or _DECLINE_SIGNAL_RE.search(ql)
+            or any(
+                x in ql
+                for x in (
+                    "grower",
+                    "growers",
+                    "loser",
+                    "losers",
+                    "gainer",
+                    "gainers",
+                    "which of them",
+                    "which ones",
+                    "fastest",
+                    "most",
+                )
+            )
+        ):
+            pass  # fall through to dimension / metric handlers
+        else:
+            res.kind = KIND_RANKING_CHANGE
+            res.intent = "product_growth_decline"
+            res.comparisons = ["yoy", "product_change"]
+            if _MONTH_SIGNAL_RE.search(ql):
+                res.comparisons = ["mom", "yoy", "product_change"]
+                res.add_dimensions = ["month"]
+            elif _QUARTER_SIGNAL_RE.search(ql):
+                res.comparisons = ["qoq", "yoy", "product_change"]
+                res.add_dimensions = ["quarter"]
+            res.resolved = True
+            return res
     if prior_intent == "product_growth_decline" and (
         _GROWTH_SIGNAL_RE.search(ql)
         or _DECLINE_SIGNAL_RE.search(ql)

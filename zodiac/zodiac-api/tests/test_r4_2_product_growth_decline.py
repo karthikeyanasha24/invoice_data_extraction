@@ -194,6 +194,8 @@ def test_followups_preserve_context():
     assert cogs.resolved and cogs.intent == "product_growth_decline"
     regions = resolve_analytical_followup("Show their regions.", PRIOR)
     assert regions.resolved and regions.intent == "country_breakdown"
+    groups = resolve_analytical_followup("Show their product groups.", PRIOR)
+    assert groups.resolved and groups.intent == "product_group_breakdown"
 
 
 def test_decline_chain_why():

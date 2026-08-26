@@ -110,7 +110,12 @@ def cmp_top(ai_rows, ind_rows, metric: str, tol_pct: float = 1.0):
 
 def run():
     url = os_url()
-    eng = create_engine(url)
+    eng = create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 30},
+        use_native_hstore=False,
+    )
     with eng.connect() as conn:
         ind = [dict(r) for r in conn.execute(text(GROWTH_SQL)).mappings()]
 
