@@ -136,6 +136,10 @@ def test_yoy_monthly_and_quarterly_compare():
     plan_q = build_analytical_plan("Compare quarterly performance for 2004 and 2005.")
     assert plan_q.intent == "quarterly_trend"
     assert 2004 in plan_q.years
+    # Standalone year-compare with explicit month/quarter grain must stay deep
+    assert is_deep_analysis_candidate("Compare 2004 and 2005 by month.")
+    assert build_analytical_plan("Compare 2004 and 2005 by month.").intent == "monthly_trend"
+    assert build_analytical_plan("Compare 2004 and 2005 by quarter.").intent == "quarterly_trend"
 
 
 def test_which_month_highest_orders_by_metric():

@@ -128,7 +128,26 @@ def _is_basic_engine_query(ql: str) -> bool:
             "products bought by",
             "customers buy",
             "customers buying",
+            # R4-1 time grain — never surrender to basic year-compare
+            "monthly",
+            "quarterly",
+            "by month",
+            "by quarter",
+            "each month",
+            "per month",
+            "per quarter",
+            "each quarter",
+            "month over month",
+            "quarter over quarter",
+            "this month",
+            "last month",
+            "this quarter",
+            "last quarter",
         )
+    ):
+        return False
+    if re.search(r"\b(months?|quarters?)\b", ql) and any(
+        x in ql for x in ("sales", "revenue", "profit", "margin", "cogs", "trend", "compare", "performance")
     ):
         return False
     # Classic sales / ranking / invoice count without cost/profit semantics
