@@ -20,29 +20,29 @@ COGS = "CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMER
 QTY = "CAST(NULLIF(TRIM(CAST(v.\"fkimg\" AS TEXT)), '') AS NUMERIC)"
 
 
-GROWTH_SQL = f"""
+GROWTH_SQL_TMPL = """
 WITH yearly AS (
   SELECT
-    {YEAR} AS year,
+    {year} AS year,
     TRIM(CAST(v."matnr" AS TEXT)) AS product,
     COALESCE(MAX(m."maktx"), TRIM(CAST(v."matnr" AS TEXT))) AS product_name,
     vk."waerk" AS currency,
-    SUM({REV}) AS revenue,
-    SUM({COGS}) AS cogs,
-    SUM({REV}) - SUM({COGS}) AS gross_profit,
-    CASE WHEN SUM({REV}) > 0 THEN
-      ROUND(100.0 * (SUM({REV}) - SUM({COGS})) / SUM({REV}), 2)
+    SUM({rev}) AS revenue,
+    SUM({cogs}) AS cogs,
+    SUM({rev}) - SUM({cogs}) AS gross_profit,
+    CASE WHEN SUM({rev}) > 0 THEN
+      ROUND(100.0 * (SUM({rev}) - SUM({cogs})) / SUM({rev}), 2)
     ELSE NULL END AS gross_margin_pct,
-    SUM({QTY}) AS quantity,
-    CASE WHEN SUM({QTY}) > 0 THEN ROUND(SUM({REV}) / SUM({QTY}), 4) ELSE NULL END AS avg_selling_price
+    SUM({qty}) AS quantity,
+    CASE WHEN SUM({qty}) > 0 THEN ROUND(SUM({rev}) / SUM({qty}), 4) ELSE NULL END AS avg_selling_price
   FROM "vbrp" v
   JOIN "VBRK" vk ON TRIM(CAST(v."vbeln" AS TEXT)) = TRIM(CAST(vk."vbeln" AS TEXT))
   LEFT JOIN "MAKT" m ON TRIM(CAST(v."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
     AND (m."spras" = 'E' OR m."spras" IS NULL)
   WHERE v."matnr" IS NOT NULL AND TRIM(CAST(v."matnr" AS TEXT)) <> ''
-    AND {REV} IS NOT NULL
-    AND {YEAR} IN ('2004', '2005')
-  GROUP BY {YEAR}, TRIM(CAST(v."matnr" AS TEXT)), vk."waerk"
+    AND {rev} IS NOT NULL
+    AND {year} IN ('2004', '2005')
+  GROUP BY {year}, TRIM(CAST(v."matnr" AS TEXT)), vk."waerk"
 ),
 prev AS (SELECT * FROM yearly WHERE year = '2004'),
 curr AS (SELECT * FROM yearly WHERE year = '2005')
@@ -66,9 +66,19 @@ FROM prev a
 FULL OUTER JOIN curr b
   ON a.product = b.product AND a.currency = b.currency
 WHERE COALESCE(a.product, b.product) IS NOT NULL
-ORDER BY revenue_change_abs DESC NULLS LAST
+ORDER BY {order_expr}
 LIMIT 10
 """.strip()
+
+
+def growth_sql(order_expr: str) -> str:
+    return GROWTH_SQL_TMPL.format(
+        year=YEAR,
+        rev=REV,
+        cogs=COGS,
+        qty=QTY,
+        order_expr=order_expr,
+    )
 
 
 def post(q: str):
@@ -116,60 +126,75 @@ def run():
         connect_args={"connect_timeout": 30},
         use_native_hstore=False,
     )
-    with eng.connect() as conn:
-        ind = [dict(r) for r in conn.execute(text(GROWTH_SQL)).mappings()]
+
+    cases_spec = [
+        (
+            "Which products grew the most?",
+            "revenue_change_abs",
+            "absolute revenue",
+            "revenue_change_abs DESC NULLS LAST",
+        ),
+        (
+            "Which products increased their revenue the most?",
+            "revenue_change_abs",
+            "absolute revenue",
+            "revenue_change_abs DESC NULLS LAST",
+        ),
+        (
+            "Which products grew the fastest?",
+            "revenue_change_pct",
+            "pct revenue",
+            "revenue_change_pct DESC NULLS LAST",
+        ),
+        (
+            "Which products declined the most?",
+            "revenue_change_abs",
+            "decline abs",
+            "revenue_change_abs ASC NULLS LAST",
+        ),
+        (
+            "Which products had the highest gross profit growth?",
+            "gross_profit_change_abs",
+            "gp abs",
+            "gross_profit_change_abs DESC NULLS LAST",
+        ),
+        (
+            "Show products whose margins improved.",
+            "margin_change_pp",
+            "margin pp",
+            "margin_change_pp DESC NULLS LAST",
+        ),
+    ]
 
     cases = []
-    for q, metric, mode_note in [
-        ("Which products grew the most?", "revenue_change_abs", "absolute revenue"),
-        ("Which products increased their revenue the most?", "revenue_change_abs", "absolute revenue"),
-        ("Which products grew the fastest?", "revenue_change_pct", "pct revenue"),
-        ("Which products declined the most?", "revenue_change_abs", "decline abs"),
-        ("Which products had the highest gross profit growth?", "gross_profit_change_abs", "gp abs"),
-        ("Show products whose margins improved.", "margin_change_pp", "margin pp"),
-    ]:
-        ai, ms = post(q)
-        ai_rows = ai.get("data") or []
-        # For decline / margin, re-sort independent when needed
-        ind_sorted = list(ind)
-        if "declined" in q.lower():
-            ind_sorted = sorted(ind_sorted, key=lambda r: float(r.get("revenue_change_abs") or 0))
-        elif "margins improved" in q.lower():
-            ind_sorted = sorted(
-                ind_sorted, key=lambda r: float(r.get("margin_change_pp") or 0), reverse=True
+    with eng.connect() as conn:
+        for q, metric, mode_note, order_expr in cases_spec:
+            ind = [dict(r) for r in conn.execute(text(growth_sql(order_expr))).mappings()]
+            ai, ms = post(q)
+            ai_rows = ai.get("data") or []
+            diffs = cmp_top(ai_rows, ind, metric)
+            cases.append(
+                {
+                    "question": q,
+                    "metric": metric,
+                    "mode": mode_note,
+                    "order": order_expr,
+                    "ms": ms,
+                    "intent": ((ai.get("query_plan") or {}).get("analytical_context") or {}).get(
+                        "intent"
+                    ),
+                    "ai_top": (ai_rows[0] if ai_rows else {}),
+                    "ind_top": (ind[0] if ind else {}),
+                    "diffs": diffs,
+                    "mismatches": sum(1 for d in diffs if not d["ok"]),
+                }
             )
-        elif "gross profit" in q.lower():
-            ind_sorted = sorted(
-                ind_sorted, key=lambda r: float(r.get("gross_profit_change_abs") or 0), reverse=True
-            )
-        elif "fastest" in q.lower():
-            ind_sorted = sorted(
-                [
-                    r
-                    for r in ind_sorted
-                    if r.get("revenue_change_pct") is not None
-                ],
-                key=lambda r: float(r.get("revenue_change_pct") or 0),
-                reverse=True,
-            )
-        diffs = cmp_top(ai_rows, ind_sorted, metric)
-        cases.append(
-            {
-                "question": q,
-                "metric": metric,
-                "mode": mode_note,
-                "ms": ms,
-                "intent": ((ai.get("query_plan") or {}).get("analytical_context") or {}).get("intent"),
-                "ai_top": (ai_rows[0] if ai_rows else {}),
-                "ind_top": (ind_sorted[0] if ind_sorted else {}),
-                "diffs": diffs,
-                "mismatches": sum(1 for d in diffs if not d["ok"]),
-            }
-        )
 
     report = {
         "api": API,
-        "independent_sql_head": " ".join(GROWTH_SQL.split())[:400],
+        "independent_sql_head": " ".join(growth_sql("revenue_change_abs DESC NULLS LAST").split())[
+            :400
+        ],
         "cases": cases,
         "total_mismatches": sum(c["mismatches"] for c in cases),
     }

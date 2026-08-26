@@ -6,7 +6,21 @@
 R4-2 NOT PRODUCTION COMPLETE
 ```
 
-**Blocker:** Local implementation and unit/golden tests are green, but this machine cannot deploy to `zodiac-back` (no Vercel project link). Production still runs the prior baseline until Andy deploys the pushed commit, then live R3 / R4-1 / R4-2 + Full Chat acceptance must pass.
+**Live status (2026-08-26):** R4-2 code **is executing** on `zodiac-back` (behavioral fingerprint confirmed). Remaining blockers:
+
+1. Redeploy commit **`abce857`** (product-group follow-up fix) — currently live may still be prior deploy.
+2. Re-run R4-2 live acceptance to clear the 1 real FAIL (`Show their product groups.`).
+3. Confirm independent SQL after script order-by fix (absolute growth already matched 0 mismatches).
+
+### Live results so far
+
+| Suite | Result |
+|-------|--------|
+| Behavioral fingerprint `Which products grew the most?` | `product_growth_decline` + `revenue_change_abs` + `period_status` |
+| R3 | **23 PASS / 2 DATA GAP / 0 FAIL** |
+| R4-1 | **47 PASS / 2 DATA GAP / 0 FAIL** |
+| R4-2 live | **37 PASS / 1 DATA_GAP / 3 FAIL** (2 harness false fan-out on supplier/inventory fixed in harness; 1 product-group routing fixed in `abce857`) |
+| Latency (R4-2) | P50 901ms / P95 1503ms / Max 2237ms |
 
 ---
 
