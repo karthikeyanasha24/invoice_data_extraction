@@ -1,0 +1,3 @@
+To https://github.com/dodandre/invoice_data_extraction.git
+   44126a6..e97f9e0  phase12-first-customer-ready -> phase12-first-customer-ready
+EXITCODE=0 
