@@ -42,8 +42,26 @@ def intent_of(r: Dict[str, Any]) -> str:
 
 def classify(label: str, r: Dict[str, Any], expected_intents: Optional[List[str]] = None) -> str:
     status = r.get("answer_status", "")
-    pipe = r.get("pipeline", "")
-    intent = intent_of(r)
+    pipe = r.get("pipeline", "") or r.get("pipe", "")
+    intent = intent_of(r) if "query_plan" in r or "intent" not in r else str(r.get("intent") or "")
+    if not intent:
+        intent = intent_of(r) or str(r.get("intent") or "")
+    if status == "CANNOT_ANSWER":
+        return "DATA_GAP"
+    if status == "SUCCESS" and pipe == "deep_multidim":
+        if expected_intents and intent not in expected_intents:
+            return f"PARTIAL(intent={intent})"
+        return "PASS"
+    if status == "CLARIFICATION":
+        return "FAIL(CLARIFICATION)"
+    return f"FAIL({status}/{pipe})"
+
+
+def classify_row(row: Dict[str, Any], expected_intents: Optional[List[str]] = None) -> str:
+    """Classify from a run_chain row that already has status/pipe/intent."""
+    status = row.get("status", "")
+    pipe = row.get("pipe", "")
+    intent = str(row.get("intent") or "")
     if status == "CANNOT_ANSWER":
         return "DATA_GAP"
     if status == "SUCCESS" and pipe == "deep_multidim":
@@ -106,7 +124,7 @@ def main() -> int:
     chain = run_chain(baseline)
     for i, row in enumerate(chain, 1):
         exp = "DATA_GAP" if i in (15, 16) else "PASS"
-        got = classify("", {"answer_status": row["status"], "pipeline": row["pipe"]})
+        got = classify_row(row)
         results.append({"phase": "baseline_chain", "turn": i, **row, "expected": exp, "result": got})
         latencies.append(row["ms"])
 
@@ -137,7 +155,7 @@ def main() -> int:
         10: ["margin_decline_drivers"],
     }
     for i, row in enumerate(r3_rows, 1):
-        got = classify("", {"answer_status": row["status"], "pipeline": row["pipe"]}, r3_expected.get(i))
+        got = classify_row(row, r3_expected.get(i))
         results.append({"phase": "r3_chain", "turn": i, **row, "expected_intents": r3_expected.get(i), "result": got})
         latencies.append(row["ms"])
 
@@ -162,7 +180,12 @@ def main() -> int:
     ])
     dg_exp = ["PASS", "DATA_GAP", "DATA_GAP", "PASS", "PASS"]
     for i, row in enumerate(dg_chain, 1):
-        got = classify("", {"answer_status": row["status"], "pipeline": row["pipe"]})
+        got = classify_row(row)
+        # Align expected: DATA_GAP turns must be DATA_GAP; others PASS
+        if dg_exp[i - 1] == "DATA_GAP":
+            got = "DATA_GAP" if got == "DATA_GAP" else f"FAIL(expected_DATA_GAP got={got})"
+        elif got != "PASS":
+            got = f"FAIL(expected_PASS got={got})"
         results.append({"phase": "data_gap_recovery", "turn": i, **row, "expected": dg_exp[i-1], "result": got})
 
     # Phase 13: new question reset
@@ -173,7 +196,7 @@ def main() -> int:
         "Show COGS.",
     ])
     for i, row in enumerate(reset, 1):
-        results.append({"phase": "new_question_reset", "turn": i, **row})
+        results.append({"phase": "new_question_reset", "turn": i, **row, "result": classify_row(row)})
 
     # Phase 12: short follow-ups
     ctx = None
@@ -212,10 +235,29 @@ def main() -> int:
         "margin": top.get("gross_margin_pct"),
     })
 
-    # Summary
+    # Summary — unambiguous scored acceptance (canonical R3 gate)
+    # Canonical 25 scored turns = baseline 17 (15 PASS + 2 DATA_GAP) + R3 chain 8 core PASS
+    # (exclude soft turns 9-10 from the 23 PASS total if PARTIAL; count hard PASS only)
     baseline_pass = sum(1 for x in results if x.get("phase") == "baseline_chain" and str(x.get("result", "")).startswith("PASS"))
     baseline_gap = sum(1 for x in results if x.get("phase") == "baseline_chain" and x.get("result") == "DATA_GAP")
     baseline_fail = sum(1 for x in results if x.get("phase") == "baseline_chain" and str(x.get("result", "")).startswith("FAIL"))
+    r3_pass = sum(1 for x in results if x.get("phase") == "r3_chain" and str(x.get("result", "")).startswith("PASS"))
+    r3_partial = sum(1 for x in results if x.get("phase") == "r3_chain" and str(x.get("result", "")).startswith("PARTIAL"))
+    r3_fail = sum(1 for x in results if x.get("phase") == "r3_chain" and str(x.get("result", "")).startswith("FAIL"))
+    supplier_ok = next((x for x in results if x.get("phase") == "supplier_profit_safety"), {}).get("result") == "PASS"
+    dg_pass = sum(1 for x in results if x.get("phase") == "data_gap_recovery" and x.get("result") == "PASS")
+    dg_gap = sum(1 for x in results if x.get("phase") == "data_gap_recovery" and x.get("result") == "DATA_GAP")
+    dg_fail = sum(1 for x in results if x.get("phase") == "data_gap_recovery" and str(x.get("result", "")).startswith("FAIL"))
+
+    # Canonical score used for "23 PASS / 2 DATA GAP / 0 FAIL":
+    # baseline 15 PASS + r3_chain first 8 PASS (turns 1-8) = 23 PASS; baseline 2 DATA_GAP
+    r3_core = [x for x in results if x.get("phase") == "r3_chain" and x.get("turn") in {1, 2, 3, 4, 5, 6, 7, 8}]
+    r3_core_pass = sum(1 for x in r3_core if str(x.get("result", "")).startswith("PASS"))
+    r3_core_fail = sum(1 for x in r3_core if str(x.get("result", "")).startswith(("FAIL", "PARTIAL")))
+    canonical_pass = baseline_pass + r3_core_pass
+    canonical_gap = baseline_gap
+    canonical_fail = baseline_fail + r3_core_fail + (0 if supplier_ok else 1) + dg_fail
+
     r3_supplier = next((x for x in results if x.get("phase") == "r3_chain" and x.get("turn") == 2), {})
     r3_pg = next((x for x in results if x.get("phase") == "r3_chain" and x.get("turn") == 4), {})
     r3_deployed = r3_supplier.get("intent") == "suppliers_of_selection" and r3_pg.get("intent") == "product_group_breakdown"
@@ -224,8 +266,21 @@ def main() -> int:
         "baseline_pass": baseline_pass,
         "baseline_data_gap": baseline_gap,
         "baseline_fail": baseline_fail,
+        "r3_chain_pass": r3_pass,
+        "r3_chain_partial": r3_partial,
+        "r3_chain_fail": r3_fail,
+        "r3_core_pass_8": r3_core_pass,
+        "canonical_pass": canonical_pass,
+        "canonical_data_gap": canonical_gap,
+        "canonical_fail": canonical_fail,
+        "canonical_verdict": (
+            f"{canonical_pass} PASS / {canonical_gap} DATA GAP / {canonical_fail} FAIL"
+        ),
         "short_followup_pass": short_pass,
         "short_followup_total": len(shorts),
+        "data_gap_recovery_pass": dg_pass,
+        "data_gap_recovery_gap": dg_gap,
+        "supplier_profit_safety": supplier_ok,
         "r3_deployed_evidence": r3_deployed,
         "r3_supplier_intent": r3_supplier.get("intent"),
         "r3_product_group_intent": r3_pg.get("intent"),
@@ -242,7 +297,7 @@ def main() -> int:
         json.dump(out, f, indent=2)
     print(json.dumps(summary, indent=2))
     print(f"Wrote {path}")
-    return 0 if baseline_fail == 0 and baseline_pass >= 15 else 1
+    return 0 if canonical_fail == 0 and canonical_pass >= 23 and canonical_gap == 2 else 1
 
 
 if __name__ == "__main__":
