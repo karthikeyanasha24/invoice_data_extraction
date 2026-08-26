@@ -491,20 +491,25 @@ def build_analytical_plan(
             plan.intent = "product_expiry_by_industry"
         elif wants_expiry:
             plan.intent = "product_expiry"
+        elif wants_quarterly:
+            # Explicit quarter grain (incl. quarter margin decline) before product YoY drivers.
+            plan.intent = "quarterly_trend"
+            if wants_compare or len(years) >= 2 or wants_margin_decline:
+                plan.comparisons = list(
+                    dict.fromkeys([*(plan.comparisons or []), "yoy", "qoq"])
+                )
+        elif wants_monthly:
+            # Explicit month grain (incl. month margin decline) before product YoY drivers.
+            plan.intent = "monthly_trend"
+            if wants_compare or len(years) >= 2 or wants_margin_decline:
+                plan.comparisons = list(
+                    dict.fromkeys([*(plan.comparisons or []), "yoy", "mom"])
+                )
         elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
         elif wants_inventory:
             # Inventory (+ optional sales/velocity) must win over bare "compare".
             plan.intent = "inventory_analysis"
-        elif wants_quarterly:
-            # Quarter grain wins over year compare when quarter is explicit.
-            plan.intent = "quarterly_trend"
-            if wants_compare or len(years) >= 2:
-                plan.comparisons = ["yoy", "qoq"]
-        elif wants_monthly:
-            plan.intent = "monthly_trend"
-            if wants_compare or len(years) >= 2:
-                plan.comparisons = ["yoy", "mom"]
         elif wants_compare:
             plan.intent = "period_compare_selection"
         elif wants_history:
@@ -547,18 +552,18 @@ def build_analytical_plan(
     if plan.intent == "generic":
         if wants_logistics and "cost" in ql:
             plan.intent = "logistics_cost_gap"
+        elif wants_quarterly:
+            plan.intent = "quarterly_trend"
+            if wants_compare or len(years) >= 2 or wants_margin_decline:
+                plan.comparisons = ["yoy", "qoq"]
+        elif wants_monthly:
+            plan.intent = "monthly_trend"
+            if wants_compare or len(years) >= 2 or wants_margin_decline:
+                plan.comparisons = ["yoy", "mom"]
         elif wants_margin_decline or (wants_why and wants_margin):
             plan.intent = "margin_decline_drivers"
         elif wants_history and (wants_customers or wants_product or prior_ctx):
             plan.intent = "purchase_history"
-        elif wants_quarterly:
-            plan.intent = "quarterly_trend"
-            if wants_compare or len(years) >= 2:
-                plan.comparisons = ["yoy", "qoq"]
-        elif wants_monthly:
-            plan.intent = "monthly_trend"
-            if wants_compare or len(years) >= 2:
-                plan.comparisons = ["yoy", "mom"]
         elif wants_inventory:
             plan.intent = "inventory_analysis"
         elif wants_supplier:

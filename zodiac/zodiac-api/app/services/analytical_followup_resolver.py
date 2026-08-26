@@ -569,11 +569,20 @@ def resolve_analytical_followup(
         res.resolved = True
         return res
 
-    # ── Margin decline ranking ──
+    # ── Margin decline ranking (month/quarter grain wins over product YoY drivers) ──
     if any(x in ql for x in ("margin decline", "biggest margin", "declining margin", "margin erosion")):
         res.kind = KIND_RANKING_CHANGE
-        res.intent = "margin_decline_drivers"
-        res.comparisons = ["yoy_margin"]
+        if _QUARTER_SIGNAL_RE.search(ql) or prior_intent == "quarterly_trend":
+            res.intent = "quarterly_trend"
+            res.add_dimensions = ["quarter"]
+            res.comparisons = ["qoq", "yoy"]
+        elif _MONTH_SIGNAL_RE.search(ql) or prior_intent == "monthly_trend":
+            res.intent = "monthly_trend"
+            res.add_dimensions = ["month"]
+            res.comparisons = ["mom", "yoy"]
+        else:
+            res.intent = "margin_decline_drivers"
+            res.comparisons = ["yoy_margin"]
         res.resolved = True
         return res
 

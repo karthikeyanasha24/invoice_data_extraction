@@ -233,6 +233,12 @@ def test_data_gap_recovery_after_monthly():
     assert res2.intent == "monthly_trend"
 
 
+def test_month_margin_decline_routes_to_monthly_trend():
+    plan = build_analytical_plan("Which month had the biggest margin decline?")
+    assert plan.intent == "monthly_trend"
+    assert "mom" in (plan.comparisons or []) or "yoy" in (plan.comparisons or [])
+
+
 def test_basic_ga_regression_highest_profit_unchanged():
     plan = build_analytical_plan("Show me the products with the highest profits.")
     assert plan.intent == "product_profitability"
