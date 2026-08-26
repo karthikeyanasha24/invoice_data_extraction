@@ -3,23 +3,34 @@
     "baseline_pass": 15,
     "baseline_data_gap": 2,
     "baseline_fail": 0,
+    "r3_chain_pass": 10,
+    "r3_chain_partial": 0,
+    "r3_chain_fail": 0,
+    "r3_core_pass_8": 8,
+    "canonical_pass": 23,
+    "canonical_data_gap": 2,
+    "canonical_fail": 0,
+    "canonical_verdict": "23 PASS / 2 DATA GAP / 0 FAIL",
     "short_followup_pass": 17,
     "short_followup_total": 17,
+    "data_gap_recovery_pass": 3,
+    "data_gap_recovery_gap": 2,
+    "supplier_profit_safety": true,
     "r3_deployed_evidence": true,
     "r3_supplier_intent": "suppliers_of_selection",
     "r3_product_group_intent": "product_group_breakdown",
     "r3_supplier_has_ekpo": true,
     "r3_product_group_has_matkl": true,
-    "perf_p50_ms": 556,
-    "perf_p95_ms": 860,
-    "perf_max_ms": 1050
+    "perf_p50_ms": 609,
+    "perf_p95_ms": 929,
+    "perf_max_ms": 1281
   },
   "results": [
     {
       "phase": "baseline_chain",
       "turn": 1,
       "question": "Show me the products with the highest profits.",
-      "ms": 860,
+      "ms": 846,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "product_profitability",
@@ -35,7 +46,7 @@
       "phase": "baseline_chain",
       "turn": 2,
       "question": "Show their customers.",
-      "ms": 591,
+      "ms": 605,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "customers_of_selection",
@@ -51,7 +62,7 @@
       "phase": "baseline_chain",
       "turn": 3,
       "question": "Break that down by industry.",
-      "ms": 494,
+      "ms": 575,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "industry_breakdown",
@@ -67,7 +78,7 @@
       "phase": "baseline_chain",
       "turn": 4,
       "question": "Show the regions.",
-      "ms": 438,
+      "ms": 649,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "country_breakdown",
@@ -83,7 +94,7 @@
       "phase": "baseline_chain",
       "turn": 5,
       "question": "Compare 2004 and 2005.",
-      "ms": 607,
+      "ms": 501,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "period_compare_selection",
@@ -99,7 +110,7 @@
       "phase": "baseline_chain",
       "turn": 6,
       "question": "Show COGS.",
-      "ms": 449,
+      "ms": 505,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "cogs_by_product",
@@ -115,7 +126,7 @@
       "phase": "baseline_chain",
       "turn": 7,
       "question": "Show the margins.",
-      "ms": 615,
+      "ms": 466,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "margin_by_product",
@@ -131,7 +142,7 @@
       "phase": "baseline_chain",
       "turn": 8,
       "question": "Which products had the biggest margin decline?",
-      "ms": 530,
+      "ms": 779,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "margin_decline_drivers",
@@ -147,7 +158,7 @@
       "phase": "baseline_chain",
       "turn": 9,
       "question": "Why did those margins decline?",
-      "ms": 698,
+      "ms": 734,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "margin_decline_drivers",
@@ -163,7 +174,7 @@
       "phase": "baseline_chain",
       "turn": 10,
       "question": "Show me the cost components.",
-      "ms": 688,
+      "ms": 575,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "profit_components",
@@ -179,7 +190,7 @@
       "phase": "baseline_chain",
       "turn": 11,
       "question": "How long have they been buying them?",
-      "ms": 524,
+      "ms": 789,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "purchase_history",
@@ -195,7 +206,7 @@
       "phase": "baseline_chain",
       "turn": 12,
       "question": "Show me the buying process.",
-      "ms": 338,
+      "ms": 1032,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "process_buy",
@@ -211,7 +222,7 @@
       "phase": "baseline_chain",
       "turn": 13,
       "question": "Show me the selling process.",
-      "ms": 1050,
+      "ms": 1281,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "process_sell",
@@ -227,7 +238,7 @@
       "phase": "baseline_chain",
       "turn": 14,
       "question": "Show me the delivery process.",
-      "ms": 450,
+      "ms": 592,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "process_sell",
@@ -243,7 +254,7 @@
       "phase": "baseline_chain",
       "turn": 15,
       "question": "Show me logistics cost.",
-      "ms": 300,
+      "ms": 530,
       "status": "CANNOT_ANSWER",
       "pipe": "deep_multidim",
       "intent": "process_sell",
@@ -259,7 +270,7 @@
       "phase": "baseline_chain",
       "turn": 16,
       "question": "Show me net profit.",
-      "ms": 327,
+      "ms": 338,
       "status": "CANNOT_ANSWER",
       "pipe": "deep_multidim",
       "intent": "process_sell",
@@ -275,7 +286,7 @@
       "phase": "baseline_chain",
       "turn": 17,
       "question": "Now show me COGS again.",
-      "ms": 731,
+      "ms": 741,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "cogs_by_product",
@@ -291,7 +302,7 @@
       "phase": "r3_chain",
       "turn": 1,
       "question": "Show me the products with the highest profits.",
-      "ms": 697,
+      "ms": 762,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "product_profitability",
@@ -303,13 +314,13 @@
       "expected_intents": [
         "product_profitability"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 2,
       "question": "Show their suppliers.",
-      "ms": 565,
+      "ms": 582,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "suppliers_of_selection",
@@ -321,13 +332,13 @@
       "expected_intents": [
         "suppliers_of_selection"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 3,
       "question": "Show their purchase history.",
-      "ms": 571,
+      "ms": 788,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "purchase_history",
@@ -339,13 +350,13 @@
       "expected_intents": [
         "purchase_history"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 4,
       "question": "Break the products down by product group.",
-      "ms": 706,
+      "ms": 847,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "product_group_breakdown",
@@ -357,13 +368,13 @@
       "expected_intents": [
         "product_group_breakdown"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 5,
       "question": "Show the average selling price.",
-      "ms": 526,
+      "ms": 531,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "product_profitability",
@@ -378,13 +389,13 @@
         "cogs_by_product",
         "dimensional_extend"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 6,
       "question": "Show the inventory.",
-      "ms": 868,
+      "ms": 615,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "inventory_analysis",
@@ -396,13 +407,13 @@
       "expected_intents": [
         "inventory_analysis"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 7,
       "question": "Which products have the highest inventory?",
-      "ms": 523,
+      "ms": 541,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "inventory_analysis",
@@ -414,13 +425,13 @@
       "expected_intents": [
         "inventory_analysis"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 8,
       "question": "Which suppliers are associated with these products?",
-      "ms": 475,
+      "ms": 912,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "suppliers_of_selection",
@@ -432,13 +443,13 @@
       "expected_intents": [
         "suppliers_of_selection"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 9,
       "question": "Which products have increasing purchase costs?",
-      "ms": 542,
+      "ms": 547,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "dimensional_extend",
@@ -452,13 +463,13 @@
         "margin_decline_drivers",
         "dimensional_extend"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "r3_chain",
       "turn": 10,
       "question": "Why are their margins declining?",
-      "ms": 493,
+      "ms": 613,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "margin_decline_drivers",
@@ -470,12 +481,12 @@
       "expected_intents": [
         "margin_decline_drivers"
       ],
-      "result": "PARTIAL(intent=)"
+      "result": "PASS"
     },
     {
       "phase": "supplier_profit_safety",
       "question": "Which suppliers generated the most profit?",
-      "ms": 712,
+      "ms": 611,
       "status": "SUCCESS",
       "intent": "suppliers_of_selection",
       "result": "PASS"
@@ -500,7 +511,7 @@
       "phase": "data_gap_recovery",
       "turn": 2,
       "question": "Show logistics cost.",
-      "ms": 305,
+      "ms": 541,
       "status": "CANNOT_ANSWER",
       "pipe": "deep_multidim",
       "intent": "product_profitability",
@@ -516,7 +527,7 @@
       "phase": "data_gap_recovery",
       "turn": 3,
       "question": "Show net profit.",
-      "ms": 300,
+      "ms": 354,
       "status": "CANNOT_ANSWER",
       "pipe": "deep_multidim",
       "intent": "product_profitability",
@@ -532,7 +543,7 @@
       "phase": "data_gap_recovery",
       "turn": 4,
       "question": "Show COGS.",
-      "ms": 552,
+      "ms": 549,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "cogs_by_product",
@@ -548,7 +559,7 @@
       "phase": "data_gap_recovery",
       "turn": 5,
       "question": "Show their customers.",
-      "ms": 1150,
+      "ms": 581,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "customers_of_selection",
@@ -564,7 +575,7 @@
       "phase": "new_question_reset",
       "turn": 1,
       "question": "Show the highest-profit products.",
-      "ms": 678,
+      "ms": 751,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "product_profitability",
@@ -572,13 +583,14 @@
       "has_ekpo": false,
       "has_matkl": false,
       "has_mbew": false,
-      "has_avg_selling_price": true
+      "has_avg_selling_price": true,
+      "result": "PASS"
     },
     {
       "phase": "new_question_reset",
       "turn": 2,
       "question": "Show their customers.",
-      "ms": 744,
+      "ms": 590,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "customers_of_selection",
@@ -586,13 +598,14 @@
       "has_ekpo": false,
       "has_matkl": false,
       "has_mbew": false,
-      "has_avg_selling_price": false
+      "has_avg_selling_price": false,
+      "result": "PASS"
     },
     {
       "phase": "new_question_reset",
       "turn": 3,
       "question": "What were total sales in 2010?",
-      "ms": 634,
+      "ms": 704,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "dimensional_extend",
@@ -600,13 +613,14 @@
       "has_ekpo": false,
       "has_matkl": false,
       "has_mbew": false,
-      "has_avg_selling_price": true
+      "has_avg_selling_price": true,
+      "result": "PASS"
     },
     {
       "phase": "new_question_reset",
       "turn": 4,
       "question": "Show COGS.",
-      "ms": 633,
+      "ms": 533,
       "status": "SUCCESS",
       "pipe": "deep_multidim",
       "intent": "cogs_by_product",
@@ -614,12 +628,13 @@
       "has_ekpo": false,
       "has_matkl": false,
       "has_mbew": false,
-      "has_avg_selling_price": true
+      "has_avg_selling_price": true,
+      "result": "PASS"
     },
     {
       "phase": "short_followup",
       "question": "Show COGS.",
-      "ms": 712,
+      "ms": 771,
       "status": "SUCCESS",
       "intent": "cogs_by_product",
       "result": "PASS"
@@ -627,7 +642,7 @@
     {
       "phase": "short_followup",
       "question": "Show cost.",
-      "ms": 525,
+      "ms": 547,
       "status": "SUCCESS",
       "intent": "cogs_by_product",
       "result": "PASS"
@@ -635,7 +650,7 @@
     {
       "phase": "short_followup",
       "question": "Show margins.",
-      "ms": 523,
+      "ms": 929,
       "status": "SUCCESS",
       "intent": "margin_by_product",
       "result": "PASS"
@@ -643,7 +658,7 @@
     {
       "phase": "short_followup",
       "question": "Show customers.",
-      "ms": 578,
+      "ms": 661,
       "status": "SUCCESS",
       "intent": "customers_of_selection",
       "result": "PASS"
@@ -651,7 +666,7 @@
     {
       "phase": "short_followup",
       "question": "Show industries.",
-      "ms": 480,
+      "ms": 549,
       "status": "SUCCESS",
       "intent": "industry_breakdown",
       "result": "PASS"
@@ -659,7 +674,7 @@
     {
       "phase": "short_followup",
       "question": "Show regions.",
-      "ms": 439,
+      "ms": 497,
       "status": "SUCCESS",
       "intent": "country_breakdown",
       "result": "PASS"
@@ -667,7 +682,7 @@
     {
       "phase": "short_followup",
       "question": "Show suppliers.",
-      "ms": 651,
+      "ms": 519,
       "status": "SUCCESS",
       "intent": "suppliers_of_selection",
       "result": "PASS"
@@ -675,7 +690,7 @@
     {
       "phase": "short_followup",
       "question": "Show product groups.",
-      "ms": 515,
+      "ms": 526,
       "status": "SUCCESS",
       "intent": "product_group_breakdown",
       "result": "PASS"
@@ -683,7 +698,7 @@
     {
       "phase": "short_followup",
       "question": "Show inventory.",
-      "ms": 672,
+      "ms": 556,
       "status": "SUCCESS",
       "intent": "inventory_analysis",
       "result": "PASS"
@@ -691,7 +706,7 @@
     {
       "phase": "short_followup",
       "question": "Show purchase history.",
-      "ms": 753,
+      "ms": 777,
       "status": "SUCCESS",
       "intent": "purchase_history",
       "result": "PASS"
@@ -699,7 +714,7 @@
     {
       "phase": "short_followup",
       "question": "Show ASP.",
-      "ms": 571,
+      "ms": 568,
       "status": "SUCCESS",
       "intent": "dimensional_extend",
       "result": "PASS"
@@ -707,7 +722,7 @@
     {
       "phase": "short_followup",
       "question": "Compare last year.",
-      "ms": 638,
+      "ms": 521,
       "status": "SUCCESS",
       "intent": "period_compare_selection",
       "result": "PASS"
@@ -715,7 +730,7 @@
     {
       "phase": "short_followup",
       "question": "Break that down.",
-      "ms": 652,
+      "ms": 926,
       "status": "SUCCESS",
       "intent": "profit_components",
       "result": "PASS"
@@ -723,7 +738,7 @@
     {
       "phase": "short_followup",
       "question": "Why?",
-      "ms": 547,
+      "ms": 538,
       "status": "SUCCESS",
       "intent": "margin_decline_drivers",
       "result": "PASS"
@@ -731,7 +746,7 @@
     {
       "phase": "short_followup",
       "question": "What changed?",
-      "ms": 514,
+      "ms": 857,
       "status": "SUCCESS",
       "intent": "dimensional_extend",
       "result": "PASS"
@@ -739,7 +754,7 @@
     {
       "phase": "short_followup",
       "question": "Show the components.",
-      "ms": 647,
+      "ms": 706,
       "status": "SUCCESS",
       "intent": "profit_components",
       "result": "PASS"
@@ -747,7 +762,7 @@
     {
       "phase": "short_followup",
       "question": "Show the process.",
-      "ms": 496,
+      "ms": 713,
       "status": "SUCCESS",
       "intent": "process_sell",
       "result": "PASS"

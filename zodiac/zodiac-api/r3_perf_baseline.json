@@ -6,14 +6,14 @@
       "question": "Show sales for 2005",
       "summary": {
         "n": 12,
-        "p50": 331,
-        "p75": 336,
-        "p90": 340,
-        "p95": 344,
-        "p99": 347,
-        "max": 348,
-        "min": 319,
-        "mean": 331,
+        "p50": 379,
+        "p75": 405,
+        "p90": 485,
+        "p95": 2042,
+        "p99": 3558,
+        "max": 3938,
+        "min": 342,
+        "mean": 684,
         "plan_ms_median": null,
         "query_count_median": null,
         "pipeline": "intent_sql_fast",
@@ -21,7 +21,7 @@
       },
       "samples": [
         {
-          "total_ms": 325,
+          "total_ms": 492,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -31,7 +31,7 @@
           "rows": 2
         },
         {
-          "total_ms": 329,
+          "total_ms": 342,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -41,7 +41,7 @@
           "rows": 2
         },
         {
-          "total_ms": 331,
+          "total_ms": 397,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -51,7 +51,7 @@
           "rows": 2
         },
         {
-          "total_ms": 319,
+          "total_ms": 367,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -61,7 +61,7 @@
           "rows": 2
         },
         {
-          "total_ms": 341,
+          "total_ms": 364,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -71,7 +71,7 @@
           "rows": 2
         },
         {
-          "total_ms": 331,
+          "total_ms": 398,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -81,7 +81,7 @@
           "rows": 2
         },
         {
-          "total_ms": 325,
+          "total_ms": 382,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -91,7 +91,7 @@
           "rows": 2
         },
         {
-          "total_ms": 339,
+          "total_ms": 427,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -101,7 +101,7 @@
           "rows": 2
         },
         {
-          "total_ms": 336,
+          "total_ms": 375,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -111,7 +111,7 @@
           "rows": 2
         },
         {
-          "total_ms": 348,
+          "total_ms": 376,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -121,7 +121,7 @@
           "rows": 2
         },
         {
-          "total_ms": 332,
+          "total_ms": 356,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -131,7 +131,7 @@
           "rows": 2
         },
         {
-          "total_ms": 324,
+          "total_ms": 3938,
           "status": "SUCCESS",
           "pipeline": "intent_sql_fast",
           "intent": null,
@@ -146,157 +146,22 @@
       "question": "Show me the products with the highest profits.",
       "summary": {
         "n": 12,
-        "p50": 683,
-        "p75": 692,
-        "p90": 708,
-        "p95": 775,
-        "p99": 839,
-        "max": 855,
-        "min": 666,
-        "mean": 697,
-        "plan_ms_median": 374,
+        "p50": 718,
+        "p75": 731,
+        "p90": 741,
+        "p95": 759,
+        "p99": 775,
+        "max": 780,
+        "min": 690,
+        "mean": 720,
+        "plan_ms_median": 368,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "product_profitability"
       },
       "samples": [
         {
-          "total_ms": 682,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 362,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 362,
-            "plan_ms": 0,
-            "db_ms": 362,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 710,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 406,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 406,
-            "plan_ms": 0,
-            "db_ms": 406,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 687,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 380,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 380,
-            "plan_ms": 0,
-            "db_ms": 380,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 679,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 370,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 370,
-            "plan_ms": 0,
-            "db_ms": 369,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 684,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 375,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 375,
-            "plan_ms": 0,
-            "db_ms": 375,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 666,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 368,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 368,
-            "plan_ms": 0,
-            "db_ms": 368,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 673,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 372,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 372,
-            "plan_ms": 0,
-            "db_ms": 372,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 674,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 375,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 375,
-            "plan_ms": 0,
-            "db_ms": 374,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 674,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 372,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 372,
-            "plan_ms": 0,
-            "db_ms": 371,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 692,
+          "total_ms": 713,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_profitability",
@@ -311,31 +176,166 @@
           "rows": 10
         },
         {
-          "total_ms": 855,
+          "total_ms": 697,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_profitability",
-          "plan_ms": 459,
+          "plan_ms": 359,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 459,
+            "deep_analysis_ms": 359,
             "plan_ms": 0,
-            "db_ms": 459,
+            "db_ms": 359,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 694,
+          "total_ms": 724,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_profitability",
-          "plan_ms": 383,
+          "plan_ms": 364,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 383,
+            "deep_analysis_ms": 364,
             "plan_ms": 0,
-            "db_ms": 383,
+            "db_ms": 364,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 695,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 363,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 363,
+            "plan_ms": 0,
+            "db_ms": 362,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 698,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 360,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 360,
+            "plan_ms": 0,
+            "db_ms": 360,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 712,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 374,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 374,
+            "plan_ms": 0,
+            "db_ms": 374,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 780,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 371,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 371,
+            "plan_ms": 0,
+            "db_ms": 371,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 726,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 367,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 367,
+            "plan_ms": 0,
+            "db_ms": 367,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 690,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 364,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 364,
+            "plan_ms": 0,
+            "db_ms": 364,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 731,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 376,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 376,
+            "plan_ms": 0,
+            "db_ms": 375,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 743,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 405,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 405,
+            "plan_ms": 0,
+            "db_ms": 405,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 731,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 370,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 370,
+            "plan_ms": 0,
+            "db_ms": 369,
             "transform_ms": 0
           },
           "rows": 10
@@ -346,22 +346,22 @@
       "question": "Show COGS.",
       "summary": {
         "n": 12,
-        "p50": 544,
-        "p75": 597,
-        "p90": 708,
-        "p95": 709,
-        "p99": 709,
-        "max": 710,
-        "min": 522,
-        "mean": 581,
-        "plan_ms_median": 222,
+        "p50": 626,
+        "p75": 782,
+        "p90": 810,
+        "p95": 902,
+        "p99": 991,
+        "max": 1013,
+        "min": 547,
+        "mean": 677,
+        "plan_ms_median": 219,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product"
       },
       "samples": [
         {
-          "total_ms": 525,
+          "total_ms": 547,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
@@ -376,127 +376,67 @@
           "rows": 10
         },
         {
-          "total_ms": 709,
+          "total_ms": 549,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
-          "plan_ms": 219,
+          "plan_ms": 215,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 219,
+            "deep_analysis_ms": 215,
             "plan_ms": 0,
-            "db_ms": 219,
+            "db_ms": 215,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 551,
+          "total_ms": 585,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
-          "plan_ms": 227,
+          "plan_ms": 213,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 227,
+            "deep_analysis_ms": 213,
             "plan_ms": 0,
-            "db_ms": 227,
+            "db_ms": 213,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 556,
+          "total_ms": 568,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
-          "plan_ms": 223,
+          "plan_ms": 232,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 223,
+            "deep_analysis_ms": 232,
             "plan_ms": 0,
-            "db_ms": 222,
+            "db_ms": 232,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 710,
+          "total_ms": 567,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
-          "plan_ms": 219,
+          "plan_ms": 218,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 219,
+            "deep_analysis_ms": 218,
             "plan_ms": 0,
-            "db_ms": 219,
+            "db_ms": 218,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 526,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "cogs_by_product",
-          "plan_ms": 228,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 228,
-            "plan_ms": 0,
-            "db_ms": 228,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 538,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "cogs_by_product",
-          "plan_ms": 231,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 231,
-            "plan_ms": 0,
-            "db_ms": 230,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 561,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "cogs_by_product",
-          "plan_ms": 227,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 227,
-            "plan_ms": 0,
-            "db_ms": 227,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 522,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "cogs_by_product",
-          "plan_ms": 223,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 223,
-            "plan_ms": 0,
-            "db_ms": 223,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 532,
+          "total_ms": 813,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
@@ -511,29 +451,89 @@
           "rows": 10
         },
         {
-          "total_ms": 536,
+          "total_ms": 668,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
-          "plan_ms": 220,
+          "plan_ms": 221,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 220,
+            "deep_analysis_ms": 221,
             "plan_ms": 0,
-            "db_ms": 219,
+            "db_ms": 221,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 707,
+          "total_ms": 683,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "cogs_by_product",
-          "plan_ms": 220,
+          "plan_ms": 216,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 220,
+            "deep_analysis_ms": 216,
+            "plan_ms": 0,
+            "db_ms": 216,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 782,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "cogs_by_product",
+          "plan_ms": 215,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 215,
+            "plan_ms": 0,
+            "db_ms": 215,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 569,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "cogs_by_product",
+          "plan_ms": 226,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 226,
+            "plan_ms": 0,
+            "db_ms": 225,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 1013,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "cogs_by_product",
+          "plan_ms": 486,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 486,
+            "plan_ms": 0,
+            "db_ms": 486,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 784,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "cogs_by_product",
+          "plan_ms": 221,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 221,
             "plan_ms": 0,
             "db_ms": 220,
             "transform_ms": 0
@@ -546,172 +546,37 @@
       "question": "Show the lowest margin products.",
       "summary": {
         "n": 12,
-        "p50": 686,
-        "p75": 721,
-        "p90": 817,
-        "p95": 966,
-        "p99": 1109,
-        "max": 1145,
-        "min": 665,
-        "mean": 739,
-        "plan_ms_median": 371,
+        "p50": 711,
+        "p75": 730,
+        "p90": 746,
+        "p95": 756,
+        "p99": 764,
+        "max": 767,
+        "min": 695,
+        "mean": 719,
+        "plan_ms_median": 369,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "lowest_margin_products"
       },
       "samples": [
         {
-          "total_ms": 672,
+          "total_ms": 726,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "lowest_margin_products",
-          "plan_ms": 369,
+          "plan_ms": 367,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 369,
+            "deep_analysis_ms": 367,
             "plan_ms": 0,
-            "db_ms": 369,
+            "db_ms": 367,
             "transform_ms": 0
           },
           "rows": 10
         },
         {
-          "total_ms": 673,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 369,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 369,
-            "plan_ms": 0,
-            "db_ms": 369,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 678,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 373,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 373,
-            "plan_ms": 0,
-            "db_ms": 373,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 1145,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 854,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 854,
-            "plan_ms": 0,
-            "db_ms": 854,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 690,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 385,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 385,
-            "plan_ms": 0,
-            "db_ms": 385,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 682,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 377,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 377,
-            "plan_ms": 0,
-            "db_ms": 377,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 665,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 368,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 368,
-            "plan_ms": 0,
-            "db_ms": 368,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 794,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 363,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 363,
-            "plan_ms": 0,
-            "db_ms": 362,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 820,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 440,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 440,
-            "plan_ms": 0,
-            "db_ms": 440,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 695,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "lowest_margin_products",
-          "plan_ms": 373,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 373,
-            "plan_ms": 0,
-            "db_ms": 372,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 667,
+          "total_ms": 743,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "lowest_margin_products",
@@ -726,7 +591,52 @@
           "rows": 10
         },
         {
-          "total_ms": 697,
+          "total_ms": 699,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 371,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 371,
+            "plan_ms": 0,
+            "db_ms": 371,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 718,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 380,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 380,
+            "plan_ms": 0,
+            "db_ms": 380,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 708,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 368,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 368,
+            "plan_ms": 0,
+            "db_ms": 368,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 706,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "lowest_margin_products",
@@ -739,6 +649,96 @@
             "transform_ms": 0
           },
           "rows": 10
+        },
+        {
+          "total_ms": 700,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 370,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 370,
+            "plan_ms": 0,
+            "db_ms": 370,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 695,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 357,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 357,
+            "plan_ms": 0,
+            "db_ms": 357,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 767,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 376,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 376,
+            "plan_ms": 0,
+            "db_ms": 375,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 747,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 369,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 369,
+            "plan_ms": 0,
+            "db_ms": 369,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 711,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 370,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 370,
+            "plan_ms": 0,
+            "db_ms": 370,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 711,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "lowest_margin_products",
+          "plan_ms": 369,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 369,
+            "plan_ms": 0,
+            "db_ms": 368,
+            "transform_ms": 0
+          },
+          "rows": 10
         }
       ]
     },
@@ -746,31 +746,46 @@
       "question": "Show their customers.",
       "summary": {
         "n": 12,
-        "p50": 611,
-        "p75": 730,
-        "p90": 749,
-        "p95": 757,
-        "p99": 763,
-        "max": 765,
-        "min": 552,
-        "mean": 638,
-        "plan_ms_median": 252,
+        "p50": 765,
+        "p75": 772,
+        "p90": 784,
+        "p95": 796,
+        "p99": 807,
+        "max": 810,
+        "min": 582,
+        "mean": 714,
+        "plan_ms_median": 250,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection"
       },
       "samples": [
         {
-          "total_ms": 730,
+          "total_ms": 765,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "customers_of_selection",
-          "plan_ms": 250,
+          "plan_ms": 246,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 250,
+            "deep_analysis_ms": 246,
             "plan_ms": 0,
-            "db_ms": 249,
+            "db_ms": 245,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 766,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "customers_of_selection",
+          "plan_ms": 243,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 243,
+            "plan_ms": 0,
+            "db_ms": 243,
             "transform_ms": 0
           },
           "rows": 30
@@ -780,48 +795,18 @@
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "customers_of_selection",
-          "plan_ms": 274,
+          "plan_ms": 250,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 274,
+            "deep_analysis_ms": 250,
             "plan_ms": 0,
-            "db_ms": 273,
+            "db_ms": 250,
             "transform_ms": 0
           },
           "rows": 30
         },
         {
-          "total_ms": 572,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "customers_of_selection",
-          "plan_ms": 245,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 245,
-            "plan_ms": 0,
-            "db_ms": 245,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 733,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "customers_of_selection",
-          "plan_ms": 253,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 253,
-            "plan_ms": 0,
-            "db_ms": 253,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 751,
+          "total_ms": 637,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "customers_of_selection",
@@ -836,7 +821,7 @@
           "rows": 30
         },
         {
-          "total_ms": 552,
+          "total_ms": 587,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "customers_of_selection",
@@ -845,88 +830,28 @@
           "stage_timings": {
             "deep_analysis_ms": 248,
             "plan_ms": 0,
-            "db_ms": 247,
+            "db_ms": 248,
             "transform_ms": 0
           },
           "rows": 30
         },
         {
-          "total_ms": 556,
+          "total_ms": 645,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "customers_of_selection",
-          "plan_ms": 247,
+          "plan_ms": 252,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 247,
+            "deep_analysis_ms": 252,
             "plan_ms": 0,
-            "db_ms": 247,
+            "db_ms": 252,
             "transform_ms": 0
           },
           "rows": 30
         },
         {
-          "total_ms": 563,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "customers_of_selection",
-          "plan_ms": 251,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 251,
-            "plan_ms": 0,
-            "db_ms": 251,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 660,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "customers_of_selection",
-          "plan_ms": 360,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 360,
-            "plan_ms": 0,
-            "db_ms": 360,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 637,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "customers_of_selection",
-          "plan_ms": 321,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 321,
-            "plan_ms": 0,
-            "db_ms": 321,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 586,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "customers_of_selection",
-          "plan_ms": 256,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 256,
-            "plan_ms": 0,
-            "db_ms": 256,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 554,
+          "total_ms": 810,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "customers_of_selection",
@@ -939,6 +864,81 @@
             "transform_ms": 0
           },
           "rows": 30
+        },
+        {
+          "total_ms": 778,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "customers_of_selection",
+          "plan_ms": 253,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 253,
+            "plan_ms": 0,
+            "db_ms": 252,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 785,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "customers_of_selection",
+          "plan_ms": 255,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 255,
+            "plan_ms": 0,
+            "db_ms": 254,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 684,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "customers_of_selection",
+          "plan_ms": 250,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 250,
+            "plan_ms": 0,
+            "db_ms": 250,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 770,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "customers_of_selection",
+          "plan_ms": 254,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 254,
+            "plan_ms": 0,
+            "db_ms": 254,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 582,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "customers_of_selection",
+          "plan_ms": 248,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 248,
+            "plan_ms": 0,
+            "db_ms": 248,
+            "transform_ms": 0
+          },
+          "rows": 30
         }
       ]
     },
@@ -946,22 +946,142 @@
       "question": "Break that down by industry.",
       "summary": {
         "n": 12,
-        "p50": 436,
-        "p75": 490,
-        "p90": 602,
-        "p95": 630,
-        "p99": 646,
-        "max": 650,
-        "min": 396,
-        "mean": 467,
-        "plan_ms_median": 101,
+        "p50": 636,
+        "p75": 719,
+        "p90": 732,
+        "p95": 744,
+        "p99": 756,
+        "max": 759,
+        "min": 508,
+        "mean": 633,
+        "plan_ms_median": 183,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "industry_breakdown"
       },
       "samples": [
         {
-          "total_ms": 496,
+          "total_ms": 759,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 183,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 183,
+            "plan_ms": 0,
+            "db_ms": 183,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 537,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 185,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 185,
+            "plan_ms": 0,
+            "db_ms": 185,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 528,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 186,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 186,
+            "plan_ms": 0,
+            "db_ms": 186,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 733,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 188,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 188,
+            "plan_ms": 0,
+            "db_ms": 187,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 715,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 179,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 179,
+            "plan_ms": 0,
+            "db_ms": 179,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 584,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 183,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 183,
+            "plan_ms": 0,
+            "db_ms": 182,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 731,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 183,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 183,
+            "plan_ms": 0,
+            "db_ms": 183,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 554,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "industry_breakdown",
+          "plan_ms": 186,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 186,
+            "plan_ms": 0,
+            "db_ms": 186,
+            "transform_ms": 0
+          },
+          "rows": 16
+        },
+        {
+          "total_ms": 564,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "industry_breakdown",
@@ -976,166 +1096,46 @@
           "rows": 16
         },
         {
-          "total_ms": 475,
+          "total_ms": 696,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "industry_breakdown",
-          "plan_ms": 178,
+          "plan_ms": 177,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 178,
+            "deep_analysis_ms": 177,
             "plan_ms": 0,
-            "db_ms": 178,
+            "db_ms": 177,
             "transform_ms": 0
           },
           "rows": 16
         },
         {
-          "total_ms": 464,
+          "total_ms": 689,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "industry_breakdown",
-          "plan_ms": 165,
+          "plan_ms": 186,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 165,
+            "deep_analysis_ms": 186,
             "plan_ms": 0,
-            "db_ms": 164,
+            "db_ms": 186,
             "transform_ms": 0
           },
           "rows": 16
         },
         {
-          "total_ms": 614,
+          "total_ms": 508,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "industry_breakdown",
-          "plan_ms": 101,
+          "plan_ms": 179,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 101,
+            "deep_analysis_ms": 179,
             "plan_ms": 0,
-            "db_ms": 100,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 396,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 101,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 101,
-            "plan_ms": 0,
-            "db_ms": 101,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 405,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 102,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 102,
-            "plan_ms": 0,
-            "db_ms": 101,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 396,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 104,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 104,
-            "plan_ms": 0,
-            "db_ms": 103,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 404,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 97,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 97,
-            "plan_ms": 0,
-            "db_ms": 96,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 408,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 100,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 100,
-            "plan_ms": 0,
-            "db_ms": 100,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 650,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 101,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 101,
-            "plan_ms": 0,
-            "db_ms": 101,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 409,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 100,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 100,
-            "plan_ms": 0,
-            "db_ms": 100,
-            "transform_ms": 0
-          },
-          "rows": 16
-        },
-        {
-          "total_ms": 489,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "industry_breakdown",
-          "plan_ms": 190,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 190,
-            "plan_ms": 0,
-            "db_ms": 190,
+            "db_ms": 179,
             "transform_ms": 0
           },
           "rows": 16
@@ -1146,22 +1146,142 @@
       "question": "Show their suppliers.",
       "summary": {
         "n": 12,
-        "p50": 497,
-        "p75": 636,
-        "p90": 672,
-        "p95": 707,
-        "p99": 740,
-        "max": 749,
-        "min": 386,
-        "mean": 535,
-        "plan_ms_median": 137,
+        "p50": 688,
+        "p75": 720,
+        "p90": 732,
+        "p95": 733,
+        "p99": 733,
+        "max": 734,
+        "min": 522,
+        "mean": 641,
+        "plan_ms_median": 163,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "suppliers_of_selection"
       },
       "samples": [
         {
-          "total_ms": 663,
+          "total_ms": 564,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 163,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 163,
+            "plan_ms": 0,
+            "db_ms": 163,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 522,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 171,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 171,
+            "plan_ms": 0,
+            "db_ms": 171,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 535,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 162,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 162,
+            "plan_ms": 0,
+            "db_ms": 162,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 682,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 161,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 161,
+            "plan_ms": 0,
+            "db_ms": 161,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 550,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 160,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 160,
+            "plan_ms": 0,
+            "db_ms": 160,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 717,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 163,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 163,
+            "plan_ms": 0,
+            "db_ms": 163,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 734,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 171,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 171,
+            "plan_ms": 0,
+            "db_ms": 170,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 732,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "suppliers_of_selection",
+          "plan_ms": 160,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 160,
+            "plan_ms": 0,
+            "db_ms": 160,
+            "transform_ms": 0
+          },
+          "rows": 9
+        },
+        {
+          "total_ms": 530,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "suppliers_of_selection",
@@ -1176,166 +1296,46 @@
           "rows": 9
         },
         {
-          "total_ms": 673,
+          "total_ms": 701,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "suppliers_of_selection",
-          "plan_ms": 173,
+          "plan_ms": 163,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 173,
+            "deep_analysis_ms": 163,
             "plan_ms": 0,
-            "db_ms": 173,
+            "db_ms": 163,
             "transform_ms": 0
           },
           "rows": 9
         },
         {
-          "total_ms": 468,
+          "total_ms": 733,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "suppliers_of_selection",
-          "plan_ms": 170,
+          "plan_ms": 199,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 170,
+            "deep_analysis_ms": 199,
             "plan_ms": 0,
-            "db_ms": 170,
+            "db_ms": 199,
             "transform_ms": 0
           },
           "rows": 9
         },
         {
-          "total_ms": 495,
+          "total_ms": 695,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "suppliers_of_selection",
-          "plan_ms": 170,
+          "plan_ms": 162,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 170,
+            "deep_analysis_ms": 162,
             "plan_ms": 0,
-            "db_ms": 170,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 500,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 188,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 188,
-            "plan_ms": 0,
-            "db_ms": 188,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 386,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 94,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 94,
-            "plan_ms": 0,
-            "db_ms": 94,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 412,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 95,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 95,
-            "plan_ms": 0,
-            "db_ms": 95,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 450,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 75,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 75,
-            "plan_ms": 0,
-            "db_ms": 75,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 627,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 74,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 74,
-            "plan_ms": 0,
-            "db_ms": 74,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 749,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 246,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 246,
-            "plan_ms": 0,
-            "db_ms": 245,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 589,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 92,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 92,
-            "plan_ms": 0,
-            "db_ms": 91,
-            "transform_ms": 0
-          },
-          "rows": 9
-        },
-        {
-          "total_ms": 413,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "suppliers_of_selection",
-          "plan_ms": 106,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 106,
-            "plan_ms": 0,
-            "db_ms": 106,
+            "db_ms": 161,
             "transform_ms": 0
           },
           "rows": 9
@@ -1346,106 +1346,166 @@
       "question": "Break them down by product group.",
       "summary": {
         "n": 12,
-        "p50": 487,
-        "p75": 518,
-        "p90": 584,
-        "p95": 604,
-        "p99": 623,
-        "max": 628,
-        "min": 384,
-        "mean": 480,
-        "plan_ms_median": 96,
+        "p50": 529,
+        "p75": 610,
+        "p90": 710,
+        "p95": 727,
+        "p99": 741,
+        "max": 745,
+        "min": 483,
+        "mean": 569,
+        "plan_ms_median": 173,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "product_group_breakdown"
       },
       "samples": [
         {
-          "total_ms": 425,
+          "total_ms": 494,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 101,
+          "plan_ms": 172,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 101,
+            "deep_analysis_ms": 172,
             "plan_ms": 0,
-            "db_ms": 101,
+            "db_ms": 172,
             "transform_ms": 0
           },
           "rows": 12
         },
         {
-          "total_ms": 384,
+          "total_ms": 506,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 93,
+          "plan_ms": 179,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 93,
+            "deep_analysis_ms": 179,
             "plan_ms": 0,
-            "db_ms": 93,
+            "db_ms": 179,
             "transform_ms": 0
           },
           "rows": 12
         },
         {
-          "total_ms": 396,
+          "total_ms": 527,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 94,
+          "plan_ms": 164,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 94,
+            "deep_analysis_ms": 164,
             "plan_ms": 0,
-            "db_ms": 94,
+            "db_ms": 164,
             "transform_ms": 0
           },
           "rows": 12
         },
         {
-          "total_ms": 628,
+          "total_ms": 516,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 93,
+          "plan_ms": 178,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 93,
+            "deep_analysis_ms": 178,
             "plan_ms": 0,
-            "db_ms": 93,
+            "db_ms": 178,
             "transform_ms": 0
           },
           "rows": 12
         },
         {
-          "total_ms": 586,
+          "total_ms": 686,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 92,
+          "plan_ms": 164,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 92,
+            "deep_analysis_ms": 164,
             "plan_ms": 0,
-            "db_ms": 92,
+            "db_ms": 163,
             "transform_ms": 0
           },
           "rows": 12
         },
         {
-          "total_ms": 405,
+          "total_ms": 531,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 92,
+          "plan_ms": 172,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 92,
+            "deep_analysis_ms": 172,
             "plan_ms": 0,
-            "db_ms": 92,
+            "db_ms": 172,
+            "transform_ms": 0
+          },
+          "rows": 12
+        },
+        {
+          "total_ms": 745,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_group_breakdown",
+          "plan_ms": 183,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 183,
+            "plan_ms": 0,
+            "db_ms": 183,
+            "transform_ms": 0
+          },
+          "rows": 12
+        },
+        {
+          "total_ms": 531,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_group_breakdown",
+          "plan_ms": 180,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 180,
+            "plan_ms": 0,
+            "db_ms": 180,
+            "transform_ms": 0
+          },
+          "rows": 12
+        },
+        {
+          "total_ms": 516,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_group_breakdown",
+          "plan_ms": 170,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 170,
+            "plan_ms": 0,
+            "db_ms": 170,
+            "transform_ms": 0
+          },
+          "rows": 12
+        },
+        {
+          "total_ms": 713,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_group_breakdown",
+          "plan_ms": 179,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 179,
+            "plan_ms": 0,
+            "db_ms": 179,
             "transform_ms": 0
           },
           "rows": 12
@@ -1455,87 +1515,27 @@
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 95,
+          "plan_ms": 162,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 95,
+            "deep_analysis_ms": 162,
             "plan_ms": 0,
-            "db_ms": 94,
+            "db_ms": 162,
             "transform_ms": 0
           },
           "rows": 12
         },
         {
-          "total_ms": 397,
+          "total_ms": 585,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_group_breakdown",
-          "plan_ms": 97,
+          "plan_ms": 174,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 97,
+            "deep_analysis_ms": 174,
             "plan_ms": 0,
-            "db_ms": 97,
-            "transform_ms": 0
-          },
-          "rows": 12
-        },
-        {
-          "total_ms": 491,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_group_breakdown",
-          "plan_ms": 185,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 185,
-            "plan_ms": 0,
-            "db_ms": 185,
-            "transform_ms": 0
-          },
-          "rows": 12
-        },
-        {
-          "total_ms": 572,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_group_breakdown",
-          "plan_ms": 172,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 172,
-            "plan_ms": 0,
-            "db_ms": 171,
-            "transform_ms": 0
-          },
-          "rows": 12
-        },
-        {
-          "total_ms": 500,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_group_breakdown",
-          "plan_ms": 176,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 176,
-            "plan_ms": 0,
-            "db_ms": 175,
-            "transform_ms": 0
-          },
-          "rows": 12
-        },
-        {
-          "total_ms": 493,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_group_breakdown",
-          "plan_ms": 165,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 165,
-            "plan_ms": 0,
-            "db_ms": 165,
+            "db_ms": 174,
             "transform_ms": 0
           },
           "rows": 12
@@ -1546,172 +1546,22 @@
       "question": "Show the average selling price.",
       "summary": {
         "n": 12,
-        "p50": 534,
-        "p75": 701,
-        "p90": 713,
-        "p95": 750,
-        "p99": 785,
-        "max": 794,
-        "min": 521,
-        "mean": 598,
-        "plan_ms_median": 221,
+        "p50": 589,
+        "p75": 654,
+        "p90": 748,
+        "p95": 814,
+        "p99": 876,
+        "max": 892,
+        "min": 561,
+        "mean": 637,
+        "plan_ms_median": 217,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "product_profitability"
       },
       "samples": [
         {
-          "total_ms": 704,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 225,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 225,
-            "plan_ms": 0,
-            "db_ms": 225,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 527,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 221,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 221,
-            "plan_ms": 0,
-            "db_ms": 220,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 528,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 224,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 224,
-            "plan_ms": 0,
-            "db_ms": 223,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 715,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 217,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 217,
-            "plan_ms": 0,
-            "db_ms": 216,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 536,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 220,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 220,
-            "plan_ms": 0,
-            "db_ms": 220,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 521,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 221,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 221,
-            "plan_ms": 0,
-            "db_ms": 220,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 523,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 220,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 220,
-            "plan_ms": 0,
-            "db_ms": 220,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 700,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 380,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 380,
-            "plan_ms": 0,
-            "db_ms": 380,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 575,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 223,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 223,
-            "plan_ms": 0,
-            "db_ms": 222,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 794,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "product_profitability",
-          "plan_ms": 216,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 216,
-            "plan_ms": 0,
-            "db_ms": 216,
-            "transform_ms": 0
-          },
-          "rows": 10
-        },
-        {
-          "total_ms": 532,
+          "total_ms": 752,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_profitability",
@@ -1726,7 +1576,22 @@
           "rows": 10
         },
         {
-          "total_ms": 529,
+          "total_ms": 561,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 224,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 224,
+            "plan_ms": 0,
+            "db_ms": 224,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 633,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "product_profitability",
@@ -1739,6 +1604,141 @@
             "transform_ms": 0
           },
           "rows": 10
+        },
+        {
+          "total_ms": 566,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 222,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 222,
+            "plan_ms": 0,
+            "db_ms": 221,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 581,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 215,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 215,
+            "plan_ms": 0,
+            "db_ms": 215,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 575,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 213,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 213,
+            "plan_ms": 0,
+            "db_ms": 213,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 619,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 216,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 216,
+            "plan_ms": 0,
+            "db_ms": 216,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 720,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 223,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 223,
+            "plan_ms": 0,
+            "db_ms": 222,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 581,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 214,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 214,
+            "plan_ms": 0,
+            "db_ms": 214,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 598,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 219,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 219,
+            "plan_ms": 0,
+            "db_ms": 218,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 892,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 218,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 218,
+            "plan_ms": 0,
+            "db_ms": 218,
+            "transform_ms": 0
+          },
+          "rows": 10
+        },
+        {
+          "total_ms": 566,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "product_profitability",
+          "plan_ms": 216,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 216,
+            "plan_ms": 0,
+            "db_ms": 216,
+            "transform_ms": 0
+          },
+          "rows": 10
         }
       ]
     },
@@ -1746,22 +1746,22 @@
       "question": "Show the inventory.",
       "summary": {
         "n": 12,
-        "p50": 596,
-        "p75": 701,
-        "p90": 721,
-        "p95": 723,
-        "p99": 723,
-        "max": 723,
-        "min": 487,
-        "mean": 600,
-        "plan_ms_median": 194,
+        "p50": 718,
+        "p75": 736,
+        "p90": 751,
+        "p95": 831,
+        "p99": 908,
+        "max": 928,
+        "min": 519,
+        "mean": 672,
+        "plan_ms_median": 193,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "inventory_analysis"
       },
       "samples": [
         {
-          "total_ms": 503,
+          "total_ms": 519,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "inventory_analysis",
@@ -1776,97 +1776,22 @@
           "rows": 30
         },
         {
-          "total_ms": 723,
+          "total_ms": 928,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "inventory_analysis",
-          "plan_ms": 194,
+          "plan_ms": 369,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 194,
+            "deep_analysis_ms": 369,
             "plan_ms": 0,
-            "db_ms": 193,
+            "db_ms": 369,
             "transform_ms": 0
           },
           "rows": 30
         },
         {
-          "total_ms": 509,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 192,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 192,
-            "plan_ms": 0,
-            "db_ms": 191,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 723,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 195,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 195,
-            "plan_ms": 0,
-            "db_ms": 195,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 487,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 194,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 194,
-            "plan_ms": 0,
-            "db_ms": 194,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 699,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 193,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 193,
-            "plan_ms": 0,
-            "db_ms": 193,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 489,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 193,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 193,
-            "plan_ms": 0,
-            "db_ms": 192,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 679,
+          "total_ms": 719,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "inventory_analysis",
@@ -1881,52 +1806,22 @@
           "rows": 30
         },
         {
-          "total_ms": 496,
+          "total_ms": 727,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "inventory_analysis",
-          "plan_ms": 192,
+          "plan_ms": 190,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 192,
+            "deep_analysis_ms": 190,
             "plan_ms": 0,
-            "db_ms": 192,
+            "db_ms": 190,
             "transform_ms": 0
           },
           "rows": 30
         },
         {
-          "total_ms": 514,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 214,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 214,
-            "plan_ms": 0,
-            "db_ms": 214,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 681,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "inventory_analysis",
-          "plan_ms": 196,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 196,
-            "plan_ms": 0,
-            "db_ms": 195,
-            "transform_ms": 0
-          },
-          "rows": 30
-        },
-        {
-          "total_ms": 707,
+          "total_ms": 588,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "inventory_analysis",
@@ -1935,7 +1830,112 @@
           "stage_timings": {
             "deep_analysis_ms": 198,
             "plan_ms": 0,
-            "db_ms": 197,
+            "db_ms": 198,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 752,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 227,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 227,
+            "plan_ms": 0,
+            "db_ms": 226,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 555,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 201,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 201,
+            "plan_ms": 0,
+            "db_ms": 201,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 526,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 187,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 187,
+            "plan_ms": 0,
+            "db_ms": 187,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 718,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 194,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 194,
+            "plan_ms": 0,
+            "db_ms": 194,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 742,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 193,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 193,
+            "plan_ms": 0,
+            "db_ms": 193,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 735,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 193,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 193,
+            "plan_ms": 0,
+            "db_ms": 193,
+            "transform_ms": 0
+          },
+          "rows": 30
+        },
+        {
+          "total_ms": 565,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "inventory_analysis",
+          "plan_ms": 193,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 193,
+            "plan_ms": 0,
+            "db_ms": 193,
             "transform_ms": 0
           },
           "rows": 30
@@ -1946,157 +1946,97 @@
       "question": "How long have they been buying them?",
       "summary": {
         "n": 12,
-        "p50": 588,
-        "p75": 757,
-        "p90": 800,
-        "p95": 950,
-        "p99": 1094,
-        "max": 1130,
-        "min": 555,
-        "mean": 669,
-        "plan_ms_median": 262,
+        "p50": 619,
+        "p75": 643,
+        "p90": 748,
+        "p95": 826,
+        "p99": 894,
+        "max": 912,
+        "min": 589,
+        "mean": 655,
+        "plan_ms_median": 259,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "purchase_history"
       },
       "samples": [
         {
-          "total_ms": 568,
+          "total_ms": 606,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
-          "plan_ms": 263,
+          "plan_ms": 272,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 263,
+            "deep_analysis_ms": 272,
             "plan_ms": 0,
-            "db_ms": 263,
+            "db_ms": 272,
             "transform_ms": 0
           },
           "rows": 40
         },
         {
-          "total_ms": 750,
+          "total_ms": 589,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
-          "plan_ms": 257,
+          "plan_ms": 260,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 257,
+            "deep_analysis_ms": 260,
             "plan_ms": 0,
-            "db_ms": 257,
+            "db_ms": 260,
             "transform_ms": 0
           },
           "rows": 40
         },
         {
-          "total_ms": 595,
+          "total_ms": 673,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
-          "plan_ms": 262,
+          "plan_ms": 277,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 262,
+            "deep_analysis_ms": 277,
             "plan_ms": 0,
-            "db_ms": 262,
+            "db_ms": 277,
             "transform_ms": 0
           },
           "rows": 40
         },
         {
-          "total_ms": 555,
+          "total_ms": 619,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
-          "plan_ms": 254,
+          "plan_ms": 259,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 254,
+            "deep_analysis_ms": 259,
             "plan_ms": 0,
-            "db_ms": 254,
+            "db_ms": 259,
             "transform_ms": 0
           },
           "rows": 40
         },
         {
-          "total_ms": 1130,
+          "total_ms": 633,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
-          "plan_ms": 634,
+          "plan_ms": 258,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 634,
+            "deep_analysis_ms": 258,
             "plan_ms": 0,
-            "db_ms": 633,
+            "db_ms": 258,
             "transform_ms": 0
           },
           "rows": 40
         },
         {
-          "total_ms": 582,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "purchase_history",
-          "plan_ms": 251,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 251,
-            "plan_ms": 0,
-            "db_ms": 251,
-            "transform_ms": 0
-          },
-          "rows": 40
-        },
-        {
-          "total_ms": 556,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "purchase_history",
-          "plan_ms": 262,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 262,
-            "plan_ms": 0,
-            "db_ms": 262,
-            "transform_ms": 0
-          },
-          "rows": 40
-        },
-        {
-          "total_ms": 566,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "purchase_history",
-          "plan_ms": 274,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 274,
-            "plan_ms": 0,
-            "db_ms": 274,
-            "transform_ms": 0
-          },
-          "rows": 40
-        },
-        {
-          "total_ms": 778,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "purchase_history",
-          "plan_ms": 276,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 276,
-            "plan_ms": 0,
-            "db_ms": 276,
-            "transform_ms": 0
-          },
-          "rows": 40
-        },
-        {
-          "total_ms": 559,
+          "total_ms": 619,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
@@ -2105,13 +2045,28 @@
           "stage_timings": {
             "deep_analysis_ms": 256,
             "plan_ms": 0,
-            "db_ms": 255,
+            "db_ms": 256,
             "transform_ms": 0
           },
           "rows": 40
         },
         {
-          "total_ms": 803,
+          "total_ms": 628,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "purchase_history",
+          "plan_ms": 261,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 261,
+            "plan_ms": 0,
+            "db_ms": 261,
+            "transform_ms": 0
+          },
+          "rows": 40
+        },
+        {
+          "total_ms": 610,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
@@ -2126,16 +2081,61 @@
           "rows": 40
         },
         {
-          "total_ms": 595,
+          "total_ms": 620,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "purchase_history",
-          "plan_ms": 265,
+          "plan_ms": 256,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 265,
+            "deep_analysis_ms": 256,
             "plan_ms": 0,
-            "db_ms": 265,
+            "db_ms": 256,
+            "transform_ms": 0
+          },
+          "rows": 40
+        },
+        {
+          "total_ms": 598,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "purchase_history",
+          "plan_ms": 259,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 259,
+            "plan_ms": 0,
+            "db_ms": 258,
+            "transform_ms": 0
+          },
+          "rows": 40
+        },
+        {
+          "total_ms": 757,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "purchase_history",
+          "plan_ms": 256,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 256,
+            "plan_ms": 0,
+            "db_ms": 256,
+            "transform_ms": 0
+          },
+          "rows": 40
+        },
+        {
+          "total_ms": 912,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "purchase_history",
+          "plan_ms": 379,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 379,
+            "plan_ms": 0,
+            "db_ms": 379,
             "transform_ms": 0
           },
           "rows": 40
@@ -2146,52 +2146,187 @@
       "question": "Why did those margins decline?",
       "summary": {
         "n": 12,
-        "p50": 518,
-        "p75": 532,
-        "p90": 559,
-        "p95": 635,
-        "p99": 707,
-        "max": 725,
-        "min": 485,
-        "mean": 534,
-        "plan_ms_median": 214,
+        "p50": 544,
+        "p75": 585,
+        "p90": 714,
+        "p95": 727,
+        "p99": 727,
+        "max": 727,
+        "min": 503,
+        "mean": 573,
+        "plan_ms_median": 210,
         "query_count_median": 2.0,
         "pipeline": "deep_multidim",
         "intent": "margin_decline_drivers"
       },
       "samples": [
         {
-          "total_ms": 485,
+          "total_ms": 727,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "margin_decline_drivers",
-          "plan_ms": 184,
+          "plan_ms": 224,
           "query_count": 2,
           "stage_timings": {
-            "deep_analysis_ms": 184,
+            "deep_analysis_ms": 224,
             "plan_ms": 0,
-            "db_ms": 184,
+            "db_ms": 224,
             "transform_ms": 0
           },
           "rows": 8
         },
         {
-          "total_ms": 562,
+          "total_ms": 503,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "margin_decline_drivers",
-          "plan_ms": 237,
+          "plan_ms": 176,
           "query_count": 2,
           "stage_timings": {
-            "deep_analysis_ms": 237,
+            "deep_analysis_ms": 176,
             "plan_ms": 0,
-            "db_ms": 237,
+            "db_ms": 176,
             "transform_ms": 0
           },
           "rows": 8
         },
         {
-          "total_ms": 506,
+          "total_ms": 533,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 203,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 203,
+            "plan_ms": 0,
+            "db_ms": 203,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 546,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 228,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 228,
+            "plan_ms": 0,
+            "db_ms": 228,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 578,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 191,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 191,
+            "plan_ms": 0,
+            "db_ms": 191,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 523,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 193,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 193,
+            "plan_ms": 0,
+            "db_ms": 192,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 727,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 213,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 213,
+            "plan_ms": 0,
+            "db_ms": 212,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 543,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 220,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 220,
+            "plan_ms": 0,
+            "db_ms": 220,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 606,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 222,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 222,
+            "plan_ms": 0,
+            "db_ms": 222,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 532,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 207,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 207,
+            "plan_ms": 0,
+            "db_ms": 207,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 546,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "margin_decline_drivers",
+          "plan_ms": 230,
+          "query_count": 2,
+          "stage_timings": {
+            "deep_analysis_ms": 230,
+            "plan_ms": 0,
+            "db_ms": 230,
+            "transform_ms": 0
+          },
+          "rows": 8
+        },
+        {
+          "total_ms": 520,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "margin_decline_drivers",
@@ -2204,141 +2339,6 @@
             "transform_ms": 0
           },
           "rows": 8
-        },
-        {
-          "total_ms": 529,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 227,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 227,
-            "plan_ms": 0,
-            "db_ms": 227,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 500,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 184,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 184,
-            "plan_ms": 0,
-            "db_ms": 184,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 535,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 229,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 229,
-            "plan_ms": 0,
-            "db_ms": 229,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 495,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 195,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 195,
-            "plan_ms": 0,
-            "db_ms": 195,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 508,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 214,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 214,
-            "plan_ms": 0,
-            "db_ms": 213,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 725,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 225,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 225,
-            "plan_ms": 0,
-            "db_ms": 225,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 526,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 214,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 214,
-            "plan_ms": 0,
-            "db_ms": 214,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 531,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 238,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 238,
-            "plan_ms": 0,
-            "db_ms": 238,
-            "transform_ms": 0
-          },
-          "rows": 8
-        },
-        {
-          "total_ms": 510,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "margin_decline_drivers",
-          "plan_ms": 182,
-          "query_count": 2,
-          "stage_timings": {
-            "deep_analysis_ms": 182,
-            "plan_ms": 0,
-            "db_ms": 182,
-            "transform_ms": 0
-          },
-          "rows": 8
         }
       ]
     },
@@ -2346,22 +2346,97 @@
       "question": "Compare 2004 and 2005.",
       "summary": {
         "n": 12,
-        "p50": 455,
-        "p75": 604,
-        "p90": 648,
-        "p95": 769,
-        "p99": 885,
-        "max": 914,
-        "min": 417,
-        "mean": 526,
-        "plan_ms_median": 126,
+        "p50": 580,
+        "p75": 725,
+        "p90": 741,
+        "p95": 793,
+        "p99": 843,
+        "max": 856,
+        "min": 453,
+        "mean": 605,
+        "plan_ms_median": 125,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "period_compare_selection"
       },
       "samples": [
         {
-          "total_ms": 447,
+          "total_ms": 633,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "period_compare_selection",
+          "plan_ms": 135,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 135,
+            "plan_ms": 0,
+            "db_ms": 134,
+            "transform_ms": 0
+          },
+          "rows": 17
+        },
+        {
+          "total_ms": 720,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "period_compare_selection",
+          "plan_ms": 123,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 123,
+            "plan_ms": 0,
+            "db_ms": 123,
+            "transform_ms": 0
+          },
+          "rows": 17
+        },
+        {
+          "total_ms": 528,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "period_compare_selection",
+          "plan_ms": 126,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 126,
+            "plan_ms": 0,
+            "db_ms": 126,
+            "transform_ms": 0
+          },
+          "rows": 17
+        },
+        {
+          "total_ms": 740,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "period_compare_selection",
+          "plan_ms": 123,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 123,
+            "plan_ms": 0,
+            "db_ms": 122,
+            "transform_ms": 0
+          },
+          "rows": 17
+        },
+        {
+          "total_ms": 491,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "period_compare_selection",
+          "plan_ms": 127,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 127,
+            "plan_ms": 0,
+            "db_ms": 127,
+            "transform_ms": 0
+          },
+          "rows": 17
+        },
+        {
+          "total_ms": 706,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "period_compare_selection",
@@ -2376,29 +2451,29 @@
           "rows": 17
         },
         {
-          "total_ms": 495,
+          "total_ms": 467,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "period_compare_selection",
-          "plan_ms": 128,
+          "plan_ms": 123,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 128,
+            "deep_analysis_ms": 123,
             "plan_ms": 0,
-            "db_ms": 127,
+            "db_ms": 123,
             "transform_ms": 0
           },
           "rows": 17
         },
         {
-          "total_ms": 417,
+          "total_ms": 742,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "period_compare_selection",
-          "plan_ms": 122,
+          "plan_ms": 123,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 122,
+            "deep_analysis_ms": 123,
             "plan_ms": 0,
             "db_ms": 122,
             "transform_ms": 0
@@ -2406,22 +2481,7 @@
           "rows": 17
         },
         {
-          "total_ms": 433,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "period_compare_selection",
-          "plan_ms": 126,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 126,
-            "plan_ms": 0,
-            "db_ms": 125,
-            "transform_ms": 0
-          },
-          "rows": 17
-        },
-        {
-          "total_ms": 914,
+          "total_ms": 469,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "period_compare_selection",
@@ -2430,28 +2490,43 @@
           "stage_timings": {
             "deep_analysis_ms": 128,
             "plan_ms": 0,
-            "db_ms": 127,
+            "db_ms": 128,
             "transform_ms": 0
           },
           "rows": 17
         },
         {
-          "total_ms": 622,
+          "total_ms": 856,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "period_compare_selection",
-          "plan_ms": 132,
+          "plan_ms": 321,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 132,
+            "deep_analysis_ms": 321,
             "plan_ms": 0,
-            "db_ms": 131,
+            "db_ms": 320,
             "transform_ms": 0
           },
           "rows": 17
         },
         {
-          "total_ms": 423,
+          "total_ms": 458,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "period_compare_selection",
+          "plan_ms": 129,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 129,
+            "plan_ms": 0,
+            "db_ms": 129,
+            "transform_ms": 0
+          },
+          "rows": 17
+        },
+        {
+          "total_ms": 453,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "period_compare_selection",
@@ -2464,81 +2539,6 @@
             "transform_ms": 0
           },
           "rows": 17
-        },
-        {
-          "total_ms": 651,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "period_compare_selection",
-          "plan_ms": 126,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 126,
-            "plan_ms": 0,
-            "db_ms": 125,
-            "transform_ms": 0
-          },
-          "rows": 17
-        },
-        {
-          "total_ms": 419,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "period_compare_selection",
-          "plan_ms": 124,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 124,
-            "plan_ms": 0,
-            "db_ms": 123,
-            "transform_ms": 0
-          },
-          "rows": 17
-        },
-        {
-          "total_ms": 463,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "period_compare_selection",
-          "plan_ms": 130,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 130,
-            "plan_ms": 0,
-            "db_ms": 130,
-            "transform_ms": 0
-          },
-          "rows": 17
-        },
-        {
-          "total_ms": 599,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "period_compare_selection",
-          "plan_ms": 124,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 124,
-            "plan_ms": 0,
-            "db_ms": 123,
-            "transform_ms": 0
-          },
-          "rows": 17
-        },
-        {
-          "total_ms": 435,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "period_compare_selection",
-          "plan_ms": 126,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 126,
-            "plan_ms": 0,
-            "db_ms": 125,
-            "transform_ms": 0
-          },
-          "rows": 17
         }
       ]
     },
@@ -2546,67 +2546,22 @@
       "question": "Show the regions.",
       "summary": {
         "n": 12,
-        "p50": 462,
-        "p75": 605,
-        "p90": 615,
-        "p95": 627,
-        "p99": 638,
-        "max": 641,
-        "min": 423,
-        "mean": 502,
-        "plan_ms_median": 127,
+        "p50": 470,
+        "p75": 597,
+        "p90": 717,
+        "p95": 732,
+        "p99": 746,
+        "max": 750,
+        "min": 445,
+        "mean": 536,
+        "plan_ms_median": 123,
         "query_count_median": 1.0,
         "pipeline": "deep_multidim",
         "intent": "country_breakdown"
       },
       "samples": [
         {
-          "total_ms": 462,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 163,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 163,
-            "plan_ms": 0,
-            "db_ms": 163,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 498,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 166,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 166,
-            "plan_ms": 0,
-            "db_ms": 165,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 426,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 123,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 123,
-            "plan_ms": 0,
-            "db_ms": 122,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 428,
+          "total_ms": 494,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "country_breakdown",
@@ -2621,74 +2576,14 @@
           "rows": 19
         },
         {
-          "total_ms": 424,
+          "total_ms": 463,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "country_breakdown",
-          "plan_ms": 123,
+          "plan_ms": 124,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 123,
-            "plan_ms": 0,
-            "db_ms": 123,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 641,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 130,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 130,
-            "plan_ms": 0,
-            "db_ms": 129,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 431,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 127,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 127,
-            "plan_ms": 0,
-            "db_ms": 127,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 616,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 130,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 130,
-            "plan_ms": 0,
-            "db_ms": 129,
-            "transform_ms": 0
-          },
-          "rows": 19
-        },
-        {
-          "total_ms": 603,
-          "status": "SUCCESS",
-          "pipeline": "deep_multidim",
-          "intent": "country_breakdown",
-          "plan_ms": 125,
-          "query_count": 1,
-          "stage_timings": {
-            "deep_analysis_ms": 125,
+            "deep_analysis_ms": 124,
             "plan_ms": 0,
             "db_ms": 124,
             "transform_ms": 0
@@ -2696,22 +2591,37 @@
           "rows": 19
         },
         {
-          "total_ms": 612,
+          "total_ms": 467,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "country_breakdown",
-          "plan_ms": 123,
+          "plan_ms": 122,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 123,
+            "deep_analysis_ms": 122,
             "plan_ms": 0,
-            "db_ms": 123,
+            "db_ms": 122,
             "transform_ms": 0
           },
           "rows": 19
         },
         {
-          "total_ms": 463,
+          "total_ms": 563,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 119,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 119,
+            "plan_ms": 0,
+            "db_ms": 119,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 456,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "country_breakdown",
@@ -2726,16 +2636,106 @@
           "rows": 19
         },
         {
-          "total_ms": 423,
+          "total_ms": 750,
           "status": "SUCCESS",
           "pipeline": "deep_multidim",
           "intent": "country_breakdown",
-          "plan_ms": 128,
+          "plan_ms": 123,
           "query_count": 1,
           "stage_timings": {
-            "deep_analysis_ms": 128,
+            "deep_analysis_ms": 123,
             "plan_ms": 0,
-            "db_ms": 128,
+            "db_ms": 123,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 702,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 124,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 124,
+            "plan_ms": 0,
+            "db_ms": 123,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 719,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 124,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 124,
+            "plan_ms": 0,
+            "db_ms": 123,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 473,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 132,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 132,
+            "plan_ms": 0,
+            "db_ms": 131,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 445,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 126,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 126,
+            "plan_ms": 0,
+            "db_ms": 126,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 453,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 123,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 123,
+            "plan_ms": 0,
+            "db_ms": 122,
+            "transform_ms": 0
+          },
+          "rows": 19
+        },
+        {
+          "total_ms": 447,
+          "status": "SUCCESS",
+          "pipeline": "deep_multidim",
+          "intent": "country_breakdown",
+          "plan_ms": 120,
+          "query_count": 1,
+          "stage_timings": {
+            "deep_analysis_ms": 120,
+            "plan_ms": 0,
+            "db_ms": 119,
             "transform_ms": 0
           },
           "rows": 19
@@ -2747,23 +2747,7 @@
     "purchase_history": [
       {
         "label": "coldish_1",
-        "total_ms": 577,
-        "status": "SUCCESS",
-        "pipeline": "deep_multidim",
-        "intent": "purchase_history",
-        "plan_ms": 265,
-        "query_count": 1,
-        "stage_timings": {
-          "deep_analysis_ms": 265,
-          "plan_ms": 0,
-          "db_ms": 265,
-          "transform_ms": 0
-        },
-        "rows": 40
-      },
-      {
-        "label": "warm_1",
-        "total_ms": 762,
+        "total_ms": 603,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "purchase_history",
@@ -2778,17 +2762,33 @@
         "rows": 40
       },
       {
-        "label": "warm_2",
-        "total_ms": 609,
+        "label": "warm_1",
+        "total_ms": 597,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "purchase_history",
-        "plan_ms": 260,
+        "plan_ms": 281,
         "query_count": 1,
         "stage_timings": {
-          "deep_analysis_ms": 260,
+          "deep_analysis_ms": 281,
           "plan_ms": 0,
-          "db_ms": 259,
+          "db_ms": 281,
+          "transform_ms": 0
+        },
+        "rows": 40
+      },
+      {
+        "label": "warm_2",
+        "total_ms": 612,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "purchase_history",
+        "plan_ms": 254,
+        "query_count": 1,
+        "stage_timings": {
+          "deep_analysis_ms": 254,
+          "plan_ms": 0,
+          "db_ms": 254,
           "transform_ms": 0
         },
         "rows": 40
@@ -2797,14 +2797,30 @@
     "highest_profit": [
       {
         "label": "coldish_1",
-        "total_ms": 702,
+        "total_ms": 719,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
-        "plan_ms": 385,
+        "plan_ms": 370,
         "query_count": 1,
         "stage_timings": {
-          "deep_analysis_ms": 385,
+          "deep_analysis_ms": 370,
+          "plan_ms": 0,
+          "db_ms": 370,
+          "transform_ms": 0
+        },
+        "rows": 10
+      },
+      {
+        "label": "warm_1",
+        "total_ms": 773,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "product_profitability",
+        "plan_ms": 384,
+        "query_count": 1,
+        "stage_timings": {
+          "deep_analysis_ms": 384,
           "plan_ms": 0,
           "db_ms": 384,
           "transform_ms": 0
@@ -2812,33 +2828,17 @@
         "rows": 10
       },
       {
-        "label": "warm_1",
-        "total_ms": 846,
-        "status": "SUCCESS",
-        "pipeline": "deep_multidim",
-        "intent": "product_profitability",
-        "plan_ms": 365,
-        "query_count": 1,
-        "stage_timings": {
-          "deep_analysis_ms": 365,
-          "plan_ms": 0,
-          "db_ms": 365,
-          "transform_ms": 0
-        },
-        "rows": 10
-      },
-      {
         "label": "warm_2",
-        "total_ms": 702,
+        "total_ms": 968,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
-        "plan_ms": 379,
+        "plan_ms": 380,
         "query_count": 1,
         "stage_timings": {
-          "deep_analysis_ms": 379,
+          "deep_analysis_ms": 380,
           "plan_ms": 0,
-          "db_ms": 378,
+          "db_ms": 380,
           "transform_ms": 0
         },
         "rows": 10
@@ -2847,53 +2847,53 @@
     "year_compare": [
       {
         "label": "coldish_1",
-        "total_ms": 639,
+        "total_ms": 649,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "period_compare_selection",
-        "plan_ms": 131,
+        "plan_ms": 124,
         "query_count": 1,
         "stage_timings": {
-          "deep_analysis_ms": 131,
+          "deep_analysis_ms": 124,
           "plan_ms": 0,
-          "db_ms": 131,
+          "db_ms": 124,
           "transform_ms": 0
         },
         "rows": 17
       },
       {
         "label": "warm_1",
-        "total_ms": 535,
+        "total_ms": 466,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "period_compare_selection",
-        "plan_ms": 131,
+        "plan_ms": 124,
         "query_count": 1,
         "stage_timings": {
-          "deep_analysis_ms": 131,
+          "deep_analysis_ms": 124,
           "plan_ms": 0,
-          "db_ms": 131,
+          "db_ms": 123,
           "transform_ms": 0
         },
         "rows": 17
       },
       {
         "label": "warm_2",
-        "total_ms": 472,
+        "total_ms": 460,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "period_compare_selection",
-        "plan_ms": 127,
+        "plan_ms": 122,
         "query_count": 1,
         "stage_timings": {
-          "deep_analysis_ms": 127,
+          "deep_analysis_ms": 122,
           "plan_ms": 0,
-          "db_ms": 126,
+          "db_ms": 122,
           "transform_ms": 0
         },
         "rows": 17
       }
     ]
   },
-  "seed_ms": 977
+  "seed_ms": 1208
 }
