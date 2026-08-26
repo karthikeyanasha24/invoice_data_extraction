@@ -1,0 +1,659 @@
+{
+  "result": "PASS",
+  "cases": [
+    {
+      "metric": "revenue",
+      "period_key": "year_month",
+      "compared": 40,
+      "mismatches": 0,
+      "sample": [
+        {
+          "period": [
+            "1995-06",
+            "DEM"
+          ],
+          "ai": 3354100.0,
+          "ind": 3354100.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-06",
+            "PTE"
+          ],
+          "ai": 5365400.0,
+          "ind": 5365400.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-07",
+            "DEM"
+          ],
+          "ai": 671000.0,
+          "ind": 671000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-07",
+            "PTE"
+          ],
+          "ai": 402000.0,
+          "ind": 402000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-09",
+            "DEM"
+          ],
+          "ai": 670300.0,
+          "ind": 670300.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-09",
+            "PTE"
+          ],
+          "ai": 201000.0,
+          "ind": 201000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-12",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1996-02",
+            "PTE"
+          ],
+          "ai": 8978000.0,
+          "ind": 8978000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        }
+      ],
+      "result": "PASS",
+      "question": "Show monthly revenue.",
+      "ai_ms": 764,
+      "ai_intent": "monthly_trend",
+      "ai_rows": 120,
+      "ind_rows": 120,
+      "chron_ok": [
+        "1995-06",
+        "1995-06",
+        "1995-07",
+        "1995-07",
+        "1995-09"
+      ]
+    },
+    {
+      "metric": "revenue",
+      "period_key": "year_quarter",
+      "compared": 40,
+      "mismatches": 0,
+      "sample": [
+        {
+          "period": [
+            "1995-Q2",
+            "DEM"
+          ],
+          "ai": 3354100.0,
+          "ind": 3354100.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q2",
+            "PTE"
+          ],
+          "ai": 5365400.0,
+          "ind": 5365400.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q3",
+            "DEM"
+          ],
+          "ai": 1341300.0,
+          "ind": 1341300.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q3",
+            "PTE"
+          ],
+          "ai": 603000.0,
+          "ind": 603000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q4",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1996-Q1",
+            "PTE"
+          ],
+          "ai": 22378000.0,
+          "ind": 22378000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1997-Q1",
+            "DEM"
+          ],
+          "ai": 8875997.79,
+          "ind": 8875997.79,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1997-Q2",
+            "DEM"
+          ],
+          "ai": 9666499.29,
+          "ind": 9666499.29,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        }
+      ],
+      "result": "PASS",
+      "question": "Show quarterly revenue.",
+      "ai_ms": 635,
+      "ai_intent": "quarterly_trend",
+      "ai_rows": 80,
+      "ind_rows": 120,
+      "chron_ok": [
+        "1995-Q2",
+        "1995-Q2",
+        "1995-Q3",
+        "1995-Q3",
+        "1995-Q4"
+      ]
+    },
+    {
+      "metric": "cogs",
+      "period_key": "year_month",
+      "compared": 40,
+      "mismatches": 0,
+      "sample": [
+        {
+          "period": [
+            "1995-06",
+            "DEM"
+          ],
+          "ai": 3354090.0,
+          "ind": 3354090.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-06",
+            "PTE"
+          ],
+          "ai": 5365392.72,
+          "ind": 5365392.72,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-07",
+            "DEM"
+          ],
+          "ai": 671005.0,
+          "ind": 671005.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-07",
+            "PTE"
+          ],
+          "ai": 402000.0,
+          "ind": 402000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-09",
+            "DEM"
+          ],
+          "ai": 670297.72,
+          "ind": 670297.72,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-09",
+            "PTE"
+          ],
+          "ai": 201000.0,
+          "ind": 201000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-12",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1996-02",
+            "PTE"
+          ],
+          "ai": 8978000.0,
+          "ind": 8978000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        }
+      ],
+      "result": "PASS",
+      "question": "Show monthly COGS.",
+      "ai_ms": 622,
+      "ai_intent": "monthly_trend",
+      "ai_rows": 120,
+      "ind_rows": 120,
+      "chron_ok": [
+        "1995-06",
+        "1995-06",
+        "1995-07",
+        "1995-07",
+        "1995-09"
+      ]
+    },
+    {
+      "metric": "gross_profit",
+      "period_key": "year_quarter",
+      "compared": 40,
+      "mismatches": 0,
+      "sample": [
+        {
+          "period": [
+            "1995-Q2",
+            "DEM"
+          ],
+          "ai": 10.0,
+          "ind": 10.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q2",
+            "PTE"
+          ],
+          "ai": 7.28,
+          "ind": 7.28,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q3",
+            "DEM"
+          ],
+          "ai": -2.72,
+          "ind": -2.72,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q3",
+            "PTE"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q4",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1996-Q1",
+            "PTE"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1997-Q1",
+            "DEM"
+          ],
+          "ai": 5276239.65,
+          "ind": 5276239.65,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1997-Q2",
+            "DEM"
+          ],
+          "ai": 6108428.47,
+          "ind": 6108428.47,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        }
+      ],
+      "result": "PASS",
+      "question": "Show quarterly profit.",
+      "ai_ms": 677,
+      "ai_intent": "quarterly_trend",
+      "ai_rows": 80,
+      "ind_rows": 120,
+      "chron_ok": [
+        "1995-Q2",
+        "1995-Q2",
+        "1995-Q3",
+        "1995-Q3",
+        "1995-Q4"
+      ]
+    },
+    {
+      "metric": "avg_selling_price",
+      "period_key": "year_month",
+      "compared": 40,
+      "mismatches": 0,
+      "sample": [
+        {
+          "period": [
+            "1995-06",
+            "DEM"
+          ],
+          "ai": 36858.2418,
+          "ind": 36858.2418,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-06",
+            "PTE"
+          ],
+          "ai": 40040.2985,
+          "ind": 40040.2985,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-07",
+            "DEM"
+          ],
+          "ai": 33550.0,
+          "ind": 33550.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-07",
+            "PTE"
+          ],
+          "ai": 67000.0,
+          "ind": 67000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-09",
+            "DEM"
+          ],
+          "ai": 51561.5385,
+          "ind": 51561.5385,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-09",
+            "PTE"
+          ],
+          "ai": 67000.0,
+          "ind": 67000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-12",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1996-02",
+            "PTE"
+          ],
+          "ai": 67000.0,
+          "ind": 67000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        }
+      ],
+      "result": "PASS",
+      "question": "Show monthly revenue.",
+      "ai_ms": 634,
+      "ai_intent": "monthly_trend",
+      "ai_rows": 120,
+      "ind_rows": 120,
+      "chron_ok": [
+        "1995-06",
+        "1995-06",
+        "1995-07",
+        "1995-07",
+        "1995-09"
+      ]
+    },
+    {
+      "metric": "gross_margin_pct",
+      "period_key": "year_quarter",
+      "compared": 40,
+      "mismatches": 0,
+      "sample": [
+        {
+          "period": [
+            "1995-Q2",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q2",
+            "PTE"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q3",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q3",
+            "PTE"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1995-Q4",
+            "DEM"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1996-Q1",
+            "PTE"
+          ],
+          "ai": 0.0,
+          "ind": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1997-Q1",
+            "DEM"
+          ],
+          "ai": 59.44,
+          "ind": 59.44,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        },
+        {
+          "period": [
+            "1997-Q2",
+            "DEM"
+          ],
+          "ai": 63.19,
+          "ind": 63.19,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "status": "OK"
+        }
+      ],
+      "result": "PASS",
+      "question": "Show quarterly margins.",
+      "ai_ms": 658,
+      "ai_intent": "quarterly_trend",
+      "ai_rows": 80,
+      "ind_rows": 120,
+      "chron_ok": [
+        "1995-Q2",
+        "1995-Q2",
+        "1995-Q3",
+        "1995-Q3",
+        "1995-Q4"
+      ]
+    }
+  ]
+}

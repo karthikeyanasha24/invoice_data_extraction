@@ -1,0 +1,2827 @@
+{
+  "api": "https://zodiac-back.vercel.app/api/query/adaptive",
+  "sections": {
+    "gate": [
+      {
+        "question": "Show monthly revenue.",
+        "ms": 852,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show quarterly revenue.",
+        "ms": 627,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1995-Q4"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      }
+    ],
+    "probes": [
+      {
+        "question": "Show monthly revenue.",
+        "ms": 619,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show quarterly revenue.",
+        "ms": 841,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1995-Q4"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Show monthly COGS.",
+        "ms": 804,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show quarterly COGS.",
+        "ms": 685,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1995-Q4"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Show monthly margins.",
+        "ms": 817,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show quarterly margins.",
+        "ms": 840,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1995-Q4"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Which month had the highest revenue?",
+        "ms": 853,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2013-07",
+          "2011-07",
+          "2014-01",
+          "2015-08",
+          "2016-01"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "2013-07",
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "gross_margin_pct": 100.0,
+          "quantity": 5.0,
+          "avg_selling_price": 194740000.0,
+          "invoice_count": 4,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Which quarter had the highest gross profit?",
+        "ms": 670,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2013-Q3",
+          "2014-Q1",
+          "2015-Q3",
+          "2011-Q3",
+          "2016-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2013-Q3",
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "gross_margin_pct": 100.0,
+          "quantity": 5.0,
+          "avg_selling_price": 194740000.0,
+          "invoice_count": 4,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Compare this month with last month.",
+        "ms": 994,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Compare this quarter with last quarter.",
+        "ms": 661,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1995-Q4"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Compare 2004 and 2005 by month.",
+        "ms": 431,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 48,
+        "dims": [
+          "month",
+          "currency",
+          "year"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-01",
+          "2004-01",
+          "2004-02",
+          "2004-02",
+          "2004-03"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "2004-01",
+          "revenue": 3576079.87,
+          "cogs": 1646069.94,
+          "gross_profit": 1930009.93,
+          "gross_margin_pct": 53.97,
+          "quantity": 7211.0,
+          "avg_selling_price": 495.9201,
+          "invoice_count": 52,
+          "currency": "EUR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Compare 2004 and 2005 by quarter.",
+        "ms": 466,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 16,
+        "dims": [
+          "quarter",
+          "currency",
+          "year"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-Q1",
+          "2004-Q1",
+          "2004-Q2",
+          "2004-Q2",
+          "2004-Q3"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2004-Q1",
+          "revenue": 12446393.11,
+          "cogs": 5164197.93,
+          "gross_profit": 7282195.18,
+          "gross_margin_pct": 58.51,
+          "quantity": 21188.0,
+          "avg_selling_price": 587.4265,
+          "invoice_count": 150,
+          "currency": "EUR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      }
+    ],
+    "context_chain": [
+      {
+        "question": "Show the highest-profit products.",
+        "ms": 681,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "product_profitability",
+        "expected_intent": "product_profitability",
+        "rows": 10,
+        "dims": [
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "product",
+          "product_name",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "gross_margin_pct": 100.0,
+          "quantity": 5.0,
+          "avg_selling_price": 194740000.0,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
+        "summary_head": "**Deep analysis** \u2014 intent `product_profitability`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Reve",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Show their monthly revenue.",
+        "ms": 626,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1997-02",
+          "1997-04",
+          "1997-05",
+          "1997-06",
+          "1997-07"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1997-02",
+          "revenue": 130000.0,
+          "cogs": 46753.4,
+          "gross_profit": 83246.6,
+          "gross_margin_pct": 64.04,
+          "quantity": 20.0,
+          "avg_selling_price": 6500.0,
+          "invoice_count": 1,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Show their quarterly revenue.",
+        "ms": 472,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1997-Q1",
+          "1997-Q2",
+          "1997-Q3",
+          "1997-Q4",
+          "1998-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1997-Q1",
+          "revenue": 130000.0,
+          "cogs": 46753.4,
+          "gross_profit": 83246.6,
+          "gross_margin_pct": 64.04,
+          "quantity": 20.0,
+          "avg_selling_price": 6500.0,
+          "invoice_count": 1,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Compare 2004 and 2005.",
+        "ms": 717,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 15,
+        "dims": [
+          "quarter",
+          "currency",
+          "year"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-Q1",
+          "2004-Q1",
+          "2004-Q2",
+          "2004-Q2",
+          "2004-Q3"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2004-Q1",
+          "revenue": 5641210.6,
+          "cogs": 1373633.46,
+          "gross_profit": 4267577.14,
+          "gross_margin_pct": 75.65,
+          "quantity": 1291.0,
+          "avg_selling_price": 4369.6442,
+          "invoice_count": 44,
+          "currency": "EUR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Show COGS.",
+        "ms": 431,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 15,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "cogs"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-Q1",
+          "2004-Q1",
+          "2004-Q2",
+          "2004-Q2",
+          "2004-Q3"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2004-Q1",
+          "revenue": 5641210.6,
+          "cogs": 1373633.46,
+          "gross_profit": 4267577.14,
+          "gross_margin_pct": 75.65,
+          "quantity": 1291.0,
+          "avg_selling_price": 4369.6442,
+          "invoice_count": 44,
+          "currency": "EUR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Show margins.",
+        "ms": 566,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 15,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-Q1",
+          "2004-Q1",
+          "2004-Q2",
+          "2004-Q2",
+          "2004-Q3"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2004-Q1",
+          "revenue": 5641210.6,
+          "cogs": 1373633.46,
+          "gross_profit": 4267577.14,
+          "gross_margin_pct": 75.65,
+          "quantity": 1291.0,
+          "avg_selling_price": 4369.6442,
+          "invoice_count": 44,
+          "currency": "EUR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Which quarter had the biggest decline?",
+        "ms": 414,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 15,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-Q3",
+          "2005-Q4",
+          "2004-Q2",
+          "2004-Q4",
+          "2004-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2004-Q3",
+          "revenue": 430536.0,
+          "cogs": 170990.6,
+          "gross_profit": 259545.4,
+          "gross_margin_pct": 60.28,
+          "quantity": 244.0,
+          "avg_selling_price": 1764.4918,
+          "invoice_count": 4,
+          "currency": "USD"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS",
+        "products_n": 10
+      },
+      {
+        "question": "Why?",
+        "ms": 414,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 15,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2004-Q1",
+          "2004-Q1",
+          "2004-Q2",
+          "2004-Q2",
+          "2004-Q3"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2004-Q1",
+          "revenue": 5641210.6,
+          "cogs": 1373633.46,
+          "gross_profit": 4267577.14,
+          "gross_margin_pct": 75.65,
+          "quantity": 1291.0,
+          "avg_selling_price": 4369.6442,
+          "invoice_count": 44,
+          "currency": "EUR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS",
+        "products_n": 10
+      }
+    ],
+    "followups": [
+      {
+        "question": "Show COGS.",
+        "ms": 777,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "cogs"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show margins.",
+        "ms": 796,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "gross_margin_pct"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-06",
+          "1995-06",
+          "1995-07",
+          "1995-07",
+          "1995-09"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1995-06",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show customers.",
+        "ms": 1011,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "customers_of_selection",
+        "expected_intent": "customers_of_selection",
+        "rows": 30,
+        "dims": [
+          "customer",
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "quantity"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "customer",
+          "customer_name",
+          "industry",
+          "country",
+          "currency",
+          "product",
+          "product_name",
+          "revenue",
+          "quantity",
+          "first_billing_date",
+          "last_billing_date"
+        ],
+        "sample_row": {
+          "revenue": 973700000.0,
+          "quantity": 5.0,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT TRIM(vk.kunag) AS customer, MAX(k.name1) AS customer_name, MAX(k.brsch) AS industry, MAX(k.land1) AS country, vk.waerk AS currency, TRIM(v.matnr) AS product, COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERI",
+        "summary_head": "**Deep analysis** \u2014 intent `customers_of_selection`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
+        "result": "PASS"
+      },
+      {
+        "question": "Show regions.",
+        "ms": 434,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "country_breakdown",
+        "expected_intent": "country_breakdown",
+        "rows": 13,
+        "dims": [
+          "country",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "gross_profit"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "country",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit"
+        ],
+        "sample_row": {
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown') AS country, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(NULLIF(TRIM(CAST(v",
+        "summary_head": "**Deep analysis** \u2014 intent `country_breakdown`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue ",
+        "result": "PASS"
+      },
+      {
+        "question": "Show quarterly.",
+        "ms": 616,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "gross_profit"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1996-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Compare last year.",
+        "ms": 426,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "gross_profit"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1996-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Which month was best?",
+        "ms": 416,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "gross_profit"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2013-07",
+          "2011-07",
+          "2014-01",
+          "1996-03",
+          "1996-02"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "2013-07",
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "gross_margin_pct": 100.0,
+          "quantity": 5.0,
+          "avg_selling_price": 194740000.0,
+          "invoice_count": 4,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Which quarter was worst?",
+        "ms": 441,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "gross_profit"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "2016-Q2",
+          "2013-Q3",
+          "1997-Q2",
+          "1998-Q4",
+          "2014-Q4"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "2016-Q2",
+          "revenue": 2400.0,
+          "cogs": 1778836.87,
+          "gross_profit": -1776436.87,
+          "gross_margin_pct": -74018.2,
+          "quantity": 1.0,
+          "avg_selling_price": 2400.0,
+          "invoice_count": 1,
+          "currency": "KRW"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Why?",
+        "ms": 600,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "gross_profit"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "H10000",
+          "GTS-14001",
+          "H10000",
+          "PROJECT",
+          "L-80C",
+          "M-08",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "1400-300",
+          "1400-300",
+          "L-40C",
+          "P-102",
+          "P-103",
+          "P-103",
+          "P-104",
+          "P-103",
+          "1400-300",
+          "P-104"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1995-Q2",
+          "1995-Q2",
+          "1995-Q3",
+          "1995-Q3",
+          "1996-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1995-Q2",
+          "revenue": 3354100.0,
+          "cogs": 3354090.0,
+          "gross_profit": 10.0,
+          "gross_margin_pct": 0.0,
+          "quantity": 91.0,
+          "avg_selling_price": 36858.2418,
+          "invoice_count": 5,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Show the components.",
+        "ms": 849,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "profit_components",
+        "expected_intent": "profit_components",
+        "rows": 10,
+        "dims": [
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "1400-300",
+          "1400-300",
+          "L-40C"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "product",
+          "product_name",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "gross_margin_pct": 100.0,
+          "quantity": 5.0,
+          "avg_selling_price": 194740000.0,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
+        "summary_head": "**Deep analysis** \u2014 intent `profit_components`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue ",
+        "result": "PASS"
+      }
+    ],
+    "empty_period": [
+      {
+        "question": "Show monthly revenue for 2024.",
+        "ms": 379,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": null,
+        "rows": 0,
+        "dims": [
+          "month",
+          "currency",
+          "year"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [],
+        "sample_keys": [],
+        "sample_row": {},
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are available for ye",
+        "result": "PASS",
+        "honest_empty": true
+      },
+      {
+        "question": "Show quarterly revenue for 2025.",
+        "ms": 390,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": null,
+        "rows": 0,
+        "dims": [
+          "quarter",
+          "currency",
+          "year"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "selected_products": [],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [],
+        "sample_keys": [],
+        "sample_row": {},
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are available for ",
+        "result": "PASS",
+        "honest_empty": true
+      }
+    ],
+    "root_cause": [
+      {
+        "question": "Which month had the biggest margin decline?",
+        "ms": 974,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "margin_decline_drivers",
+        "expected_intent": "monthly_trend",
+        "rows": 10,
+        "dims": [
+          "product",
+          "currency",
+          "year",
+          "customer",
+          "industry"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "1400-200",
+          "M-19",
+          "M-07",
+          "1400-200",
+          "L-80C",
+          "L-60C",
+          "M-06",
+          "M-05",
+          "M-18",
+          "M-06"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "product",
+          "product_name",
+          "currency",
+          "revenue_2004",
+          "revenue_2005",
+          "cogs_2004",
+          "cogs_2005",
+          "margin_2004",
+          "margin_2005",
+          "margin_change_pp"
+        ],
+        "sample_row": {
+          "currency": "USD"
+        },
+        "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERI",
+        "summary_head": "**Deep analysis** \u2014 intent `margin_decline_drivers`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
+        "result": "FAIL(intent=margin_decline_drivers)"
+      },
+      {
+        "question": "Why?",
+        "ms": 533,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "margin_decline_drivers",
+        "expected_intent": null,
+        "rows": 10,
+        "dims": [
+          "product",
+          "currency",
+          "year",
+          "customer",
+          "industry"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "1400-200",
+          "M-19",
+          "M-07",
+          "1400-200",
+          "L-80C",
+          "L-60C",
+          "M-06",
+          "M-05",
+          "M-18",
+          "M-06"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "product",
+          "product_name",
+          "currency",
+          "revenue_2004",
+          "revenue_2005",
+          "cogs_2004",
+          "cogs_2005",
+          "margin_2004",
+          "margin_2005",
+          "margin_change_pp"
+        ],
+        "sample_row": {
+          "currency": "USD"
+        },
+        "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERI",
+        "summary_head": "**Deep analysis** \u2014 intent `margin_decline_drivers`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
+        "result": "PASS",
+        "observed_language": false,
+        "causal_claim": false
+      }
+    ],
+    "data_gap_recovery": [
+      {
+        "question": "Show highest-profit products.",
+        "ms": 700,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "product_profitability",
+        "expected_intent": "product_profitability",
+        "rows": 10,
+        "dims": [
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "product",
+          "product_name",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "revenue": 973700000.0,
+          "cogs": 0.0,
+          "gross_profit": 973700000.0,
+          "gross_margin_pct": 100.0,
+          "quantity": 5.0,
+          "avg_selling_price": 194740000.0,
+          "currency": "INR"
+        },
+        "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
+        "summary_head": "**Deep analysis** \u2014 intent `product_profitability`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Reve",
+        "result": "PASS"
+      },
+      {
+        "question": "Show logistics cost.",
+        "ms": 472,
+        "status": "CANNOT_ANSWER",
+        "pipeline": "deep_multidim",
+        "intent": "product_profitability",
+        "expected_intent": null,
+        "rows": 0,
+        "dims": [
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": false,
+        "has_vbrk": false,
+        "banned_joins": [],
+        "sample_periods": [],
+        "sample_keys": [],
+        "sample_row": {},
+        "sql_head": "",
+        "summary_head": "I cannot accurately answer \u00abShow logistics cost.\u00bb with the currently linked datasets.\n\n**Why:** Delivery headers exist (LIKP/LIPS) but no reliable logistics-cost amount linkage in ",
+        "result": "DATA_GAP"
+      },
+      {
+        "question": "Show net profit.",
+        "ms": 308,
+        "status": "CANNOT_ANSWER",
+        "pipeline": "deep_multidim",
+        "intent": "product_profitability",
+        "expected_intent": null,
+        "rows": 0,
+        "dims": [
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct"
+        ],
+        "selected_products": [
+          "SHIP_PROJECT",
+          "P-103",
+          "P-104",
+          "PROJECT",
+          "P-102",
+          "1400-300",
+          "GTS-14001",
+          "GTS-30006",
+          "GTS-30002",
+          "1400-300"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": false,
+        "has_vbrk": false,
+        "banned_joins": [],
+        "sample_periods": [],
+        "sample_keys": [],
+        "sample_row": {},
+        "sql_head": "",
+        "summary_head": "I cannot accurately answer \u00abShow net profit.\u00bb with the currently linked datasets.\n\n**Why:** Operating-cost allocation to product is not linked in live schema_full.\n\n**What I can an",
+        "result": "DATA_GAP"
+      },
+      {
+        "question": "Show COGS.",
+        "ms": 516,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "cogs_by_product",
+        "expected_intent": null,
+        "rows": 10,
+        "dims": [
+          "product",
+          "currency"
+        ],
+        "metrics": [
+          "cogs",
+          "revenue"
+        ],
+        "selected_products": [
+          "GTS-14001",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "P-102",
+          "1400-300",
+          "1400-300",
+          "GTS-14001",
+          "P-104",
+          "P-102"
+        ],
+        "has_substring": false,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "sample_keys": [
+          "product",
+          "product_name",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "revenue": 54002400.0,
+          "cogs": 37355574.27,
+          "gross_profit": 16646825.73,
+          "gross_margin_pct": 30.83,
+          "quantity": 21.0,
+          "avg_selling_price": 2571542.8571,
+          "currency": "KRW"
+        },
+        "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
+        "summary_head": "**Deep analysis** \u2014 intent `cogs_by_product`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      },
+      {
+        "question": "Show monthly revenue.",
+        "ms": 422,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "monthly_trend",
+        "expected_intent": "monthly_trend",
+        "rows": 120,
+        "dims": [
+          "month",
+          "currency"
+        ],
+        "metrics": [
+          "cogs",
+          "revenue"
+        ],
+        "selected_products": [
+          "GTS-14001",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "P-102",
+          "1400-300",
+          "1400-300",
+          "GTS-14001",
+          "P-104",
+          "P-102"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": true,
+        "has_year_quarter": false,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1997-02",
+          "1997-04",
+          "1997-05",
+          "1997-06",
+          "1997-07"
+        ],
+        "sample_keys": [
+          "year_month",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_month": "1997-02",
+          "revenue": 130000.0,
+          "cogs": 46753.4,
+          "gross_profit": 83246.6,
+          "gross_margin_pct": 64.04,
+          "quantity": 20.0,
+          "avg_selling_price": 6500.0,
+          "invoice_count": 1,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
+        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "result": "PASS"
+      },
+      {
+        "question": "Show quarterly revenue.",
+        "ms": 437,
+        "status": "SUCCESS",
+        "pipeline": "deep_multidim",
+        "intent": "quarterly_trend",
+        "expected_intent": "quarterly_trend",
+        "rows": 80,
+        "dims": [
+          "quarter",
+          "currency"
+        ],
+        "metrics": [
+          "cogs",
+          "revenue"
+        ],
+        "selected_products": [
+          "GTS-14001",
+          "P-103",
+          "P-104",
+          "1400-300",
+          "P-102",
+          "1400-300",
+          "1400-300",
+          "GTS-14001",
+          "P-104",
+          "P-102"
+        ],
+        "has_substring": true,
+        "has_cast_as_date": false,
+        "has_year_month": false,
+        "has_year_quarter": true,
+        "has_vbrp": true,
+        "has_vbrk": true,
+        "banned_joins": [],
+        "sample_periods": [
+          "1997-Q1",
+          "1997-Q2",
+          "1997-Q3",
+          "1997-Q4",
+          "1998-Q1"
+        ],
+        "sample_keys": [
+          "year_quarter",
+          "year",
+          "currency",
+          "revenue",
+          "cogs",
+          "gross_profit",
+          "gross_margin_pct",
+          "quantity",
+          "invoice_count",
+          "avg_selling_price"
+        ],
+        "sample_row": {
+          "year_quarter": "1997-Q1",
+          "revenue": 130000.0,
+          "cogs": 46753.4,
+          "gross_profit": 83246.6,
+          "gross_margin_pct": 64.04,
+          "quantity": 20.0,
+          "avg_selling_price": 6500.0,
+          "invoice_count": 1,
+          "currency": "DEM"
+        },
+        "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
+        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "result": "PASS"
+      }
+    ],
+    "basic_ga": [
+      {
+        "question": "2004",
+        "ms": 9440,
+        "status": "SUCCESS",
+        "pipeline": "universal_adaptive",
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      },
+      {
+        "question": "Meaning of life",
+        "ms": 316,
+        "status": "CLARIFICATION",
+        "pipeline": null,
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      },
+      {
+        "question": "Top 5",
+        "ms": 9482,
+        "status": "SUCCESS",
+        "pipeline": "universal_adaptive",
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      },
+      {
+        "question": "2004",
+        "ms": 5571,
+        "status": "SUCCESS",
+        "pipeline": "universal_adaptive",
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      },
+      {
+        "question": "Meaning of life",
+        "ms": 319,
+        "status": "CLARIFICATION",
+        "pipeline": null,
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      },
+      {
+        "question": "Show sales for 2005",
+        "ms": 333,
+        "status": "SUCCESS",
+        "pipeline": "intent_sql_fast",
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      },
+      {
+        "question": "Top 3",
+        "ms": 326,
+        "status": "SUCCESS",
+        "pipeline": "deterministic_sql_delta",
+        "intent": "",
+        "hijacked_by_r4": false,
+        "result": "PASS"
+      }
+    ]
+  },
+  "counts": {
+    "PASS": 46,
+    "DATA_GAP": 2,
+    "FAIL": 1,
+    "total": 49
+  }
+}
