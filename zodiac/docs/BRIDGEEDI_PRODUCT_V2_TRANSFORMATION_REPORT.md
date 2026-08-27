@@ -336,6 +336,9 @@ Do not create another project, attach the domain elsewhere, or change DNS.
 
 Local `.env.local` is `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` (dev only, not committed). Production frontend must keep `NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app` in **Vercel project env**, not from this file.
 
+**Git (ready for Andy to deploy):** commit `5220444` on `phase12-first-customer-ready` (pushed). Live `https://www.bridgeedi.com/overview` remains **404** after push — this GitHub push did not change the production alias.
+
+
 
 ---
 
