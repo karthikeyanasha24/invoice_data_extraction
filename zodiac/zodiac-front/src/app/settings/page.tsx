@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { User, Key, Settings, Shield, Copy, Eye, EyeOff, Plus, Trash2, Save, AlertCircle, CheckCircle, Globe } from 'lucide-react';
+import { User, Key, Shield, Copy, Eye, EyeOff, Plus, Trash2, AlertCircle, CheckCircle, Globe } from 'lucide-react';
 import { fileApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
 import { ApiKeyInfo, ApiKeyResponse } from '@/types';
@@ -176,7 +176,7 @@ export default function SettingsPage() {
       topSection={
         <TopSection 
           title="Settings" 
-          subtitle="Manage your account settings and API access"
+          subtitle="Profile, security, and API access"
         />
       }
     >
@@ -200,8 +200,24 @@ export default function SettingsPage() {
           </div>
         )}
         <div className="space-y-6">
+          <nav className="flex flex-wrap gap-2" aria-label="Settings sections">
+            {[
+              { href: '#profile', label: 'Profile' },
+              { href: '#security', label: 'Security' },
+              { href: '#api-access', label: 'API access' },
+              { href: '#account', label: 'Account' },
+            ].map((s) => (
+              <a
+                key={s.href}
+                href={s.href}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-emerald-400 hover:text-emerald-800"
+              >
+                {s.label}
+              </a>
+            ))}
+          </nav>
           {/* Profile Settings */}
-          <div className="bg-white shadow rounded-lg">
+          <div id="profile" className="bg-white shadow rounded-lg scroll-mt-24">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center">
                 <User className="h-6 w-6 text-blue-600 mr-3" />
@@ -243,130 +259,34 @@ export default function SettingsPage() {
                 </div>
                 
                 <div className="mt-6">
-                  <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-                    <div className="flex">
-                      <Shield className="h-5 w-5 text-blue-400" />
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-blue-800">Account Security</h3>
-                        <div className="mt-2 text-sm text-blue-700">
-                          <p>Your account is secured with industry-standard encryption and authentication.</p>
-                          <p className="mt-1">For password changes or account modifications, please contact support.</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  <p className="text-xs text-slate-500">
+                    Username and email are assigned by your administrator. Contact support to change them.
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Notification Preferences */}
-          <div className="bg-white shadow rounded-lg">
+          <div id="security" className="bg-white shadow rounded-lg scroll-mt-24">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center">
-                <Settings className="h-6 w-6 text-blue-600 mr-3" />
-                <h3 className="text-lg leading-6 font-medium text-gray-900">Notification Preferences</h3>
+                <Shield className="h-6 w-6 text-emerald-800 mr-3" />
+                <h3 className="text-lg leading-6 font-medium text-gray-900">Security</h3>
               </div>
               <p className="mt-2 text-sm text-gray-600">
-                Configure how you receive notifications about your document processing.
+                Sessions use a signed JWT. Protected pages and adaptive analytics require a valid token.
               </p>
-              
-              <div className="mt-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-900">Email Notifications</h4>
-                    <p className="text-sm text-gray-500">Receive email updates about processing status</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-900">Processing Alerts</h4>
-                    <p className="text-sm text-gray-500">Get notified when documents finish processing</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-900">Error Notifications</h4>
-                    <p className="text-sm text-gray-500">Receive alerts when processing fails</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Processing Preferences */}
-          <div className="bg-white shadow rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <div className="flex items-center">
-                <Settings className="h-6 w-6 text-blue-600 mr-3" />
-                <h3 className="text-lg leading-6 font-medium text-gray-900">Processing Preferences</h3>
-              </div>
-              <p className="mt-2 text-sm text-gray-600">
-                Configure default settings for document processing.
-              </p>
-              
-              <div className="mt-6 space-y-6">
-                <div>
-                  <label htmlFor="default-validation" className="block text-sm font-medium text-gray-700">
-                    Default Validation Mode
-                  </label>
-                  <select
-                    id="default-validation"
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  >
-                    <option>Standard Validation</option>
-                    <option>Strict Validation</option>
-                    <option>Relaxed Validation</option>
-                  </select>
-                  <p className="mt-1 text-sm text-gray-500">Choose the default validation level for new documents</p>
-                </div>
-                
-                <div>
-                  <label htmlFor="auto-delete" className="block text-sm font-medium text-gray-700">
-                    Auto-delete Processed Files
-                  </label>
-                  <select
-                    id="auto-delete"
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  >
-                    <option>Never</option>
-                    <option>After 30 days</option>
-                    <option>After 90 days</option>
-                    <option>After 1 year</option>
-                  </select>
-                  <p className="mt-1 text-sm text-gray-500">Automatically remove processed files after a specified period</p>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-900">Auto-retry Failed Processing</h4>
-                    <p className="text-sm text-gray-500">Automatically retry failed document processing</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
+              <div className="mt-6 bg-slate-50 border border-slate-200 rounded-md p-4">
+                <h4 className="text-sm font-medium text-slate-800">Password and account changes</h4>
+                <p className="mt-2 text-sm text-slate-600">
+                  Password resets and role changes are handled by your administrator. This page does not expose unused notification or processing toggles.
+                </p>
               </div>
             </div>
           </div>
 
           {/* API Key Management */}
-          <div className="bg-white shadow rounded-lg">
+          <div id="api-access" className="bg-white shadow rounded-lg scroll-mt-24">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center">
                 <Key className="h-6 w-6 text-blue-600 mr-3" />
@@ -620,10 +540,9 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Account Statistics */}
-          <div className="bg-white shadow rounded-lg">
+          <div id="account" className="bg-white shadow rounded-lg scroll-mt-24">
             <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Account Statistics</h3>
+              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Account</h3>
               
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
                 <div className="bg-gray-50 overflow-hidden shadow rounded-lg">

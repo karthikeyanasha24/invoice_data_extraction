@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
 import DashboardAIAnalysis from './DashboardAIAnalysis';
@@ -379,7 +380,8 @@ function AIChatPanel() {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function IntelligencePage() {
-  const [tab, setTab] = useState<Tab>('realtime');
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState<Tab>('chat');
   const [pendingChatQuestion, setPendingChatQuestion] = useState<string | undefined>(undefined);
   const [days, setDays] = useState(30);
   const [inbound, setInbound] = useState<any>(null);
@@ -388,6 +390,14 @@ export default function IntelligencePage() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [dashError, setDashError] = useState<string | null>(null);
   const dashAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const q = (searchParams.get('q') || '').trim();
+    if (q) {
+      setPendingChatQuestion(q);
+      setTab('chat');
+    }
+  }, [searchParams]);
   const fetchData = useCallback(async () => {
     dashAbortRef.current?.abort();
     const ac = new AbortController();
@@ -458,9 +468,9 @@ export default function IntelligencePage() {
   const handleAsk = (q: string) => { setPendingChatQuestion(q); setTab('chat'); };
 
   const TABS = [
-    { id: 'realtime' as Tab,   label: 'Real-time',  icon: <Activity className="h-3.5 w-3.5" /> },
+    { id: 'chat' as Tab,       label: 'Ask',  icon: <Sparkles className="h-3.5 w-3.5" /> },
+    { id: 'realtime' as Tab,   label: 'Operations',  icon: <Activity className="h-3.5 w-3.5" /> },
     { id: 'historical' as Tab, label: 'Snapshot', icon: <TrendingUp className="h-3.5 w-3.5" /> },
-    { id: 'chat' as Tab,       label: 'Full Chat',  icon: <Sparkles className="h-3.5 w-3.5" /> },
   ];
 
   return (
@@ -469,13 +479,13 @@ export default function IntelligencePage() {
       {/* ── Header bar ── */}
       <div className="flex-shrink-0 flex items-center gap-4 px-5 py-2.5 bg-white border-b border-slate-200 shadow-sm">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-sm">
+          <div className="w-7 h-7 rounded-lg bg-emerald-800 flex items-center justify-center shadow-sm">
             <Sparkles className="h-4 w-4 text-white" />
           </div>
-          <span className="text-sm font-bold text-slate-800">Intelligence</span>
+          <span className="text-sm font-bold text-slate-800">AI Analyst</span>
         </div>
 
-        <nav className="flex items-center gap-0.5 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+        <nav className="flex items-center gap-0.5 border border-slate-200 rounded-lg p-0.5 bg-slate-50" aria-label="AI Analyst views">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${

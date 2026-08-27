@@ -15,14 +15,15 @@ import {
   Key,
   Users,
   Sparkles,
-  Wifi,
-  WifiOff,
   AlertCircle,
   MapPin,
   Boxes,
+  ArrowDownToLine,
+  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { adminNavGroups, isNavActive, type NavItem } from '@/lib/navConfig';
 
 // ── Environment detection ─────────────────────────────────────────────────────
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || '').trim();
@@ -52,33 +53,27 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
   const { user, logout } = useAuth();
 
   const isCustomerUser = user?.is_customer_user && !user?.is_admin;
-  // Phase 2: workspace nav — default on; set NEXT_PUBLIC_WORKSPACE_UI=false to hide
   const workspaceUiEnabled = process.env.NEXT_PUBLIC_WORKSPACE_UI !== 'false';
-  const workspaceMenuItem = {
-    id: 'workspaces',
-    label: 'Workspaces',
-    icon: Boxes,
-    path: '/workspace',
-    description: 'Per-customer workspace',
+  const ICONS: Record<string, LucideIcon> = {
+    LayoutDashboard,
+    Sparkles,
+    ArrowDownToLine,
+    FileText,
+    Receipt,
+    Building2,
+    Boxes,
+    Users,
+    MapPin,
+    Key,
+    Settings,
   };
-  const adminMenuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', description: 'Inbound, outbound, and business operations' },
-    { id: 'generative-ai', label: 'Intelligence', icon: Sparkles, path: '/dashboard/ai', description: 'Ask questions about SAP business data' },
-    { id: 'invoices', label: 'Invoices', icon: FileText, path: '/invoices-v2', description: 'Validate and convert invoices' },
-    { id: 'customers', label: 'Customers', icon: Building2, path: '/customers', description: 'Manage EDI customers' },
-    ...(workspaceUiEnabled ? [workspaceMenuItem] : []),
-    ...(user?.is_admin ? [{ id: 'customer-users', label: 'Customer users', icon: Users, path: '/customer-users', description: 'Users & customer assignments' }] : []),
-    { id: 'sat-documents', label: 'SAT Documents', icon: Receipt, path: '/sat-documents', description: 'CFDI documents and SAP send' },
-    { id: 'account-mapping', label: 'Account Mapping', icon: MapPin, path: '/admin/account-mapping', description: 'RFC to SAP G/L mapping' },
-    { id: 'supplier-tokens', label: 'Supplier Tokens', icon: Key, path: '/admin/supplier-tokens', description: 'Manage supplier API tokens' },
-    { id: 'settings', label: 'Settings', icon: Settings, path: '/settings', description: 'Account and API access' }
+  const navGroups = adminNavGroups({
+    isAdmin: !!user?.is_admin,
+    workspaceUi: workspaceUiEnabled,
+  });
+  const customerUserMenuItems: NavItem[] = [
+    { id: 'customer-portal', label: 'Customer Portal', icon: 'Boxes', path: '/customer/overview', description: 'Your exclusive workspace' },
   ];
-  // Phase 11 — customer users are redirected to /customer/* (see MainLayout).
-  // Keep a minimal fallback menu pointing at the dedicated portal only.
-  const customerUserMenuItems = [
-    { id: 'customer-portal', label: 'Customer Portal', icon: Boxes, path: '/customer/overview', description: 'Your exclusive workspace' },
-  ];
-  const menuItems = isCustomerUser ? customerUserMenuItems : adminMenuItems;
 
   const handleNavigation = (path: string) => {
     router.push(path);
@@ -101,12 +96,12 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
         <div className="flex items-center justify-between">
           {(!isCollapsed || isMobile) && (
             <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center shadow-sm flex-shrink-0">
-                <span className="text-white font-bold text-sm">Z</span>
+              <div className="w-7 h-7 sm:w-8 sm:h-8 bg-emerald-800 rounded-lg flex items-center justify-center flex-shrink-0">
+                <span className="text-white font-bold text-sm">B</span>
               </div>
               <div className="min-w-0">
                 <span className="font-semibold text-slate-900 text-sm sm:text-base truncate block">BridgeEDI</span>
-                <p className="text-xs text-slate-500 truncate">Invoice ops + SAP Q&amp;A</p>
+                <p className="text-xs text-slate-500 truncate">Governed SAP intelligence</p>
               </div>
             </div>
           )}
@@ -136,40 +131,62 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
       </div>
 
       {/* Navigation Menu */}
-      <nav className="flex-1 p-3 sm:p-4 overflow-y-auto">
-        <div className="space-y-1 sm:space-y-2">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = item.path === '/dashboard'
-              ? pathname === '/dashboard'
-              : pathname === item.path || pathname.startsWith(item.path + '/');
-            
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleNavigation(item.path)}
-                className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-200 group cursor-pointer min-w-0",
-                  isActive 
-                    ? "bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 border border-blue-200 shadow-sm" 
-                    : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
-                )}
-                title={isCollapsed && !isMobile ? item.label : undefined}
-              >
-                <Icon className={cn(
-                  "h-5 w-5 flex-shrink-0",
-                  isActive ? "text-blue-600" : "text-slate-500 group-hover:text-slate-700"
-                )} />
+      <nav className="flex-1 p-3 sm:p-4 overflow-y-auto" aria-label="Main">
+        {isCustomerUser ? (
+          <div className="space-y-1">
+            {customerUserMenuItems.map((item) => {
+              const Icon = ICONS[item.icon] || Boxes;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => handleNavigation(item.path)}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-slate-700 hover:bg-slate-50"
+                >
+                  <Icon className="h-5 w-5 text-slate-500" />
+                  {(!isCollapsed || isMobile) && <span className="text-sm font-medium">{item.label}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {navGroups.map((group) => (
+              <div key={group.id}>
                 {(!isCollapsed || isMobile) && (
-                  <div className="flex-1 min-w-0 overflow-hidden">
-                    <div className="font-medium text-sm truncate">{item.label}</div>
-                    <div className="text-xs text-slate-500 truncate">{item.description}</div>
-                  </div>
+                  <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                    {group.label}
+                  </p>
                 )}
-              </button>
-            );
-          })}
-        </div>
+                <div className="space-y-0.5">
+                  {group.items.map((item) => {
+                    const Icon = ICONS[item.icon] || LayoutDashboard;
+                    const isActive = isNavActive(pathname, item);
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => handleNavigation(item.path)}
+                        className={cn(
+                          'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors min-w-0',
+                          isActive
+                            ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+                            : 'text-slate-700 hover:bg-slate-50'
+                        )}
+                        title={isCollapsed && !isMobile ? item.label : item.description}
+                      >
+                        <Icon className={cn('h-5 w-5 flex-shrink-0', isActive ? 'text-emerald-800' : 'text-slate-500')} />
+                        {(!isCollapsed || isMobile) && (
+                          <div className="flex-1 min-w-0 overflow-hidden">
+                            <div className="font-medium text-sm truncate">{item.label}</div>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* Environment Indicator */}

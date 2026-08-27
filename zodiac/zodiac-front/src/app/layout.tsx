@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "BridgeEDI",
-  description: "Invoice operations and governed SAP business questions",
+  description: "Governed SAP intelligence — invoice operations and AI business analysis",
 };
 
 export default function RootLayout({

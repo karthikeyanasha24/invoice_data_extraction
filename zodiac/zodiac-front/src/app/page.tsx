@@ -59,7 +59,7 @@ function HomeContent() {
           !next.startsWith('//') &&
           !next.startsWith('/customer')
             ? next
-            : '/dashboard';
+            : '/overview';
         router.push(safeNext);
       }
     }

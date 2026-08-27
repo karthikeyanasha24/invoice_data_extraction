@@ -12,8 +12,8 @@ export default function Footer({ className = '' }: FooterProps) {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col sm:flex-row items-center justify-between space-y-2 sm:space-y-0">
           <div className="flex items-center space-x-2">
-            <div className="w-6 h-6 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center">
-              <span className="text-white font-bold text-xs">Z</span>
+            <div className="w-6 h-6 bg-emerald-800 rounded-md flex items-center justify-center">
+              <span className="text-white font-bold text-xs">B</span>
             </div>
             <span className="text-sm text-slate-600">Powered by</span>
             <Link 

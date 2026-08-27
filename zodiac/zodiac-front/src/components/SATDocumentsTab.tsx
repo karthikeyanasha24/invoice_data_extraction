@@ -298,9 +298,12 @@ export default function SATDocumentsTab() {
         ) : documents.length === 0 ? (
           <div className="p-12 text-center">
             <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Documents</h3>
-            <p className="text-gray-600">
-              No SAT documents found. Upload CFDI documents to get started.
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No SAT documents yet</h3>
+            <p className="text-gray-600 max-w-md mx-auto">
+              This list is empty because no CFDI files have been uploaded for this account. That is expected for a new workspace.
+            </p>
+            <p className="text-sm text-gray-500 mt-2">
+              Upload XML invoices to start intake, then merge and send to SAP from the tabs above.
             </p>
           </div>
         ) : (

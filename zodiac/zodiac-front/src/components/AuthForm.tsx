@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { publicApiError } from '@/lib/apiErrors';
 import { cn } from '@/lib/utils';
 import { Eye, EyeOff, Mail, User, Lock } from 'lucide-react';
 import Footer from './Footer';
@@ -39,8 +40,9 @@ export default function AuthForm({ isLogin, onToggleMode }: AuthFormProps) {
         setError(isLogin ? 'Login failed. Please check your credentials and try again.' : 'Signup failed. Please check your information and try again.');
       }
     } catch (err: any) {
-      // Use the specific error message from the API
-      setError(err.message || 'An unexpected error occurred. Please try again.');
+      setError(publicApiError(err, isLogin
+        ? 'Sign-in failed. Check your email and password and try again.'
+        : 'Sign-up failed. Check your information and try again.'));
     } finally {
       setLoading(false);
     }
@@ -67,8 +69,8 @@ export default function AuthForm({ isLogin, onToggleMode }: AuthFormProps) {
         <div className="w-full max-w-md space-y-6">
           {/* Logo and Branding */}
           <div className="text-center">
-            <div className="mx-auto w-16 h-16 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center shadow-lg">
-              <span className="text-white font-bold text-xl">Z</span>
+            <div className="mx-auto w-16 h-16 bg-emerald-800 rounded-2xl flex items-center justify-center shadow-lg">
+              <span className="text-white font-bold text-xl">B</span>
             </div>
             <h1 className="mt-4 text-2xl sm:text-3xl font-bold text-slate-900">Welcome to BridgeEDI</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-sm mx-auto px-4">

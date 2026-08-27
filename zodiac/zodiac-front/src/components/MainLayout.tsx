@@ -93,6 +93,12 @@ export default function MainLayout({ children, topSection, fillViewport = false 
 
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-emerald-800 focus:px-3 focus:py-2 focus:text-white"
+      >
+        Skip to content
+      </a>
       <div className="flex relative">
         {isMobile && mobileSidebarOpen && (
           <div
@@ -126,8 +132,9 @@ export default function MainLayout({ children, topSection, fillViewport = false 
             <div className="sticky top-0 z-30 bg-white border-b border-gray-200 px-4 py-3 lg:hidden">
               <button
                 onClick={toggleSidebar}
-                className="p-2 rounded-md hover:bg-gray-100 transition-colors"
-                aria-label="Toggle menu"
+                className="p-2 rounded-md hover:bg-gray-100 transition-colors min-h-11 min-w-11"
+                aria-label="Open navigation menu"
+                aria-expanded={mobileSidebarOpen}
               >
                 <Menu className="h-6 w-6 text-gray-600" />
               </button>
@@ -141,6 +148,7 @@ export default function MainLayout({ children, topSection, fillViewport = false 
           )}
 
           <main
+            id="main-content"
             className={cn(
               'flex-1 min-h-0',
               fillViewport ? 'overflow-hidden flex flex-col' : 'overflow-auto'

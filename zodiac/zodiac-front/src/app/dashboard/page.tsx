@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils';
 type TabId = 'inbound' | 'outbound' | 'business' | 'comparison';
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'inbound', label: 'To ERP', icon: <ArrowDownToLine className="h-4 w-4" /> },
+  { id: 'inbound', label: 'Inbound SAT', icon: <ArrowDownToLine className="h-4 w-4" /> },
   { id: 'outbound', label: 'From ERP', icon: <ArrowUpFromLine className="h-4 w-4" /> },
   { id: 'business', label: 'Business', icon: <TrendingUp className="h-4 w-4" /> },
   { id: 'comparison', label: 'Customer Comparison', icon: <GitCompare className="h-4 w-4" /> },
@@ -26,8 +26,8 @@ export default function DashboardPage() {
     <MainLayout
       topSection={
         <TopSection
-          title="Dashboard"
-          subtitle="Inbound SAT documents (To ERP), outbound invoices, and business analytics"
+          title="EDI operations"
+          subtitle="Inbound SAT documents (To ERP tab), outbound invoices, and invoice-based business analytics"
         />
       }
     >
@@ -47,6 +47,7 @@ export default function DashboardPage() {
                       : 'text-gray-500 hover:text-gray-700 border-b-2 border-transparent'
                   )}
                   aria-current={isActive ? 'page' : undefined}
+                  title={tab.id === 'inbound' ? 'Inbound SAT KPIs (not a live ERP push)' : tab.label}
                 >
                   <div className="flex items-center justify-center space-x-2">
                     <span className={cn(isActive ? 'text-blue-600' : 'text-gray-500')}>

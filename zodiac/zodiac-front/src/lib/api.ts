@@ -1826,9 +1826,9 @@ export const dashboardApi = {
         } | null;
         overrideSql?: string | null;
         threadId?: string | null;
-    }) => {
+    }, config?: { signal?: AbortSignal }) => {
         try {
-            const response = await api.post('/api/query/adaptive', body, { timeout: 600000 });
+            const response = await api.post('/api/query/adaptive', body, { timeout: 600000, signal: config?.signal });
             return response.data;
         } catch (error: any) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') {
