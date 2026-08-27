@@ -1,6 +1,6 @@
 # R4-3 Inventory ↔ Sales Snapshot
 
-Status: **implemented and pushed (`dbc1913`)** — **not production-complete**. Blocker: this Vercel account cannot deploy `zodiac-back`; live still lacks `inventory_sales_comparison` / `inventory_risk_analysis`. See `R4_3_PRODUCTION_ACCEPTANCE_REPORT.md`.
+Status: **R4-3 PRODUCTION COMPLETE** (`dbc1913` on `zodiac-back`). Live harness 31 PASS / 6 DATA_GAP / 0 FAIL; R3 23/2/0, R4-1 47/2/0, R4-2 40/1/0 held. See `R4_3_PRODUCTION_ACCEPTANCE_REPORT.md`.
 
 Prerequisite: R4-2 production baseline (**40 PASS / 1 DATA GAP / 0 FAIL**) on `zodiac-back`.
 

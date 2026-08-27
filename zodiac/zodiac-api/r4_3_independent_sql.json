@@ -1,0 +1,451 @@
+{
+  "api": "https://zodiac-back.vercel.app/api/query/adaptive",
+  "period": "inventory=current snapshot; sales=all billed history in extract",
+  "cases": [
+    {
+      "question": "Show inventory.",
+      "metric": "stock_value",
+      "note": "inventory value",
+      "ms": 876,
+      "intent": "inventory_analysis",
+      "ai_top": {
+        "product": "ME_4003",
+        "product_name": "SAP 500-L1",
+        "valuation_area": "3000",
+        "stock_value": 25000000000.0,
+        "stock_qty": 50000.0,
+        "standard_price": 500000.0
+      },
+      "ind_top": {
+        "product": "ME_4002",
+        "valuation_area": "3000",
+        "stock_value": "25000000000.00",
+        "stock_qty": "50000.000"
+      },
+      "diffs": [
+        {
+          "rank": 1,
+          "ai_key": "ME_4003",
+          "ind_key": "ME_4002",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        },
+        {
+          "rank": 2,
+          "ai_key": "ME_4002",
+          "ind_key": "ME_4003",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        },
+        {
+          "rank": 3,
+          "ai_key": "ME_4001",
+          "ind_key": "ME_4001",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 4,
+          "ai_key": "IMC_8000",
+          "ind_key": "IMC_6000",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 12500000000.0,
+          "ind_value": 12500000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        },
+        {
+          "rank": 5,
+          "ai_key": "IMC_6000",
+          "ind_key": "IMC_8000",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 12500000000.0,
+          "ind_value": 12500000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        }
+      ],
+      "mismatches": 4
+    },
+    {
+      "question": "Which products have the highest inventory?",
+      "metric": "stock_value",
+      "note": "inventory value",
+      "ms": 712,
+      "intent": "inventory_analysis",
+      "ai_top": {
+        "product": "ME_4003",
+        "product_name": "SAP 500-L1",
+        "valuation_area": "3000",
+        "stock_value": 25000000000.0,
+        "stock_qty": 50000.0,
+        "standard_price": 500000.0
+      },
+      "ind_top": {
+        "product": "ME_4002",
+        "valuation_area": "3000",
+        "stock_value": "25000000000.00",
+        "stock_qty": "50000.000"
+      },
+      "diffs": [
+        {
+          "rank": 1,
+          "ai_key": "ME_4003",
+          "ind_key": "ME_4002",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        },
+        {
+          "rank": 2,
+          "ai_key": "ME_4002",
+          "ind_key": "ME_4003",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        },
+        {
+          "rank": 3,
+          "ai_key": "ME_4001",
+          "ind_key": "ME_4001",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 4,
+          "ai_key": "IMC_8000",
+          "ind_key": "IMC_6000",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 12500000000.0,
+          "ind_value": 12500000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        },
+        {
+          "rank": 5,
+          "ai_key": "IMC_6000",
+          "ind_key": "IMC_8000",
+          "key_match": false,
+          "metric": "stock_value",
+          "ai_value": 12500000000.0,
+          "ind_value": 12500000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": false
+        }
+      ],
+      "mismatches": 4
+    },
+    {
+      "question": "Show inventory versus sales.",
+      "metric": "stock_value",
+      "note": "inventory vs sales",
+      "ms": 1031,
+      "intent": "inventory_sales_comparison",
+      "ai_top": {
+        "product": "ME_4001",
+        "product_name": "SAP 500 R",
+        "currency": null,
+        "stock_value": 25000000000.0,
+        "stock_qty": 50000.0,
+        "revenue": null,
+        "cogs": null,
+        "gross_profit": null,
+        "gross_margin_pct": null,
+        "billed_qty": null,
+        "avg_selling_price": null,
+        "sales_qty_to_stock_qty": null,
+        "inventory_value_to_revenue": null,
+        "data_availability": "INVENTORY_ONLY"
+      },
+      "ind_top": {
+        "product": "ME_4001",
+        "stock_value": "25000000000.00",
+        "stock_qty": "50000.000",
+        "revenue": null,
+        "billed_qty": null
+      },
+      "diffs": [
+        {
+          "rank": 1,
+          "ai_key": "ME_4001",
+          "ind_key": "ME_4001",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 2,
+          "ai_key": "ME_4003",
+          "ind_key": "ME_4003",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 3,
+          "ai_key": "ME_4002",
+          "ind_key": "ME_4002",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 25000000000.0,
+          "ind_value": 25000000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 4,
+          "ai_key": "IMC_6000",
+          "ind_key": "IMC_6000",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 12500000000.0,
+          "ind_value": 12500000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 5,
+          "ai_key": "IMC_8000",
+          "ind_key": "IMC_8000",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 12500000000.0,
+          "ind_value": 12500000000.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        }
+      ],
+      "mismatches": 0
+    },
+    {
+      "question": "Show inventory versus sales.",
+      "metric": "revenue",
+      "note": "sales revenue in comparison",
+      "ms": 1170,
+      "intent": "inventory_sales_comparison",
+      "ai_top": {
+        "product": "ME_4001",
+        "product_name": "SAP 500 R",
+        "currency": null,
+        "stock_value": 25000000000.0,
+        "stock_qty": 50000.0,
+        "revenue": null,
+        "cogs": null,
+        "gross_profit": null,
+        "gross_margin_pct": null,
+        "billed_qty": null,
+        "avg_selling_price": null,
+        "sales_qty_to_stock_qty": null,
+        "inventory_value_to_revenue": null,
+        "data_availability": "INVENTORY_ONLY"
+      },
+      "ind_top": {
+        "product": "ME_4001",
+        "stock_value": "25000000000.00",
+        "stock_qty": "50000.000",
+        "revenue": null,
+        "billed_qty": null
+      },
+      "diffs": [
+        {
+          "rank": 1,
+          "ai_key": "ME_4001",
+          "ind_key": "ME_4001",
+          "key_match": true,
+          "metric": "revenue",
+          "ai_value": 0.0,
+          "ind_value": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 2,
+          "ai_key": "ME_4003",
+          "ind_key": "ME_4003",
+          "key_match": true,
+          "metric": "revenue",
+          "ai_value": 0.0,
+          "ind_value": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 3,
+          "ai_key": "ME_4002",
+          "ind_key": "ME_4002",
+          "key_match": true,
+          "metric": "revenue",
+          "ai_value": 0.0,
+          "ind_value": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 4,
+          "ai_key": "IMC_6000",
+          "ind_key": "IMC_6000",
+          "key_match": true,
+          "metric": "revenue",
+          "ai_value": 0.0,
+          "ind_value": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 5,
+          "ai_key": "IMC_8000",
+          "ind_key": "IMC_8000",
+          "key_match": true,
+          "metric": "revenue",
+          "ai_value": 0.0,
+          "ind_value": 0.0,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        }
+      ],
+      "mismatches": 0
+    },
+    {
+      "question": "Show inventory by product group.",
+      "metric": "stock_value",
+      "note": "product-group inventory",
+      "ms": 1025,
+      "intent": "inventory_sales_comparison",
+      "ai_top": {
+        "product_group": "00104",
+        "currency": "USD",
+        "stock_value": 100089299823.21,
+        "stock_qty": 2366806.0,
+        "revenue": 1385630.0,
+        "cogs": 418949.34,
+        "gross_profit": 966680.66,
+        "gross_margin_pct": 69.76,
+        "billed_qty": 5278.0,
+        "avg_selling_price": 262.5294,
+        "sales_qty_to_stock_qty": 0.00223,
+        "inventory_value_to_revenue": 72233.785226,
+        "data_availability": "BOTH"
+      },
+      "ind_top": {
+        "product_group": "00104",
+        "stock_value": "100089299823.21",
+        "revenue": "1385630.00"
+      },
+      "diffs": [
+        {
+          "rank": 1,
+          "ai_key": "00104",
+          "ind_key": "00104",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 100089299823.21,
+          "ind_value": 100089299823.21,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 2,
+          "ai_key": "0001",
+          "ind_key": "0001",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 7945718701.6,
+          "ind_value": 7945718701.6,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 3,
+          "ai_key": "001",
+          "ind_key": "001",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 2643966840.35,
+          "ind_value": 2643966840.35,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 4,
+          "ai_key": "002",
+          "ind_key": "002",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 2637898789.42,
+          "ind_value": 2637898789.42,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        },
+        {
+          "rank": 5,
+          "ai_key": "009",
+          "ind_key": "009",
+          "key_match": true,
+          "metric": "stock_value",
+          "ai_value": 2043087422.07,
+          "ind_value": 2043087422.07,
+          "diff": 0.0,
+          "diff_pct": 0.0,
+          "ok": true
+        }
+      ],
+      "mismatches": 0
+    }
+  ],
+  "total_mismatches": 8
+}

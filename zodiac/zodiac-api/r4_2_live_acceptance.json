@@ -4,7 +4,7 @@
     "probes": [
       {
         "question": "Which products grew the most?",
-        "ms": 10762,
+        "ms": 1826,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -69,7 +69,7 @@
       },
       {
         "question": "Which products declined the most?",
-        "ms": 1249,
+        "ms": 738,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -134,7 +134,7 @@
       },
       {
         "question": "Which products had the highest revenue growth?",
-        "ms": 1189,
+        "ms": 777,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -199,7 +199,7 @@
       },
       {
         "question": "Which products had the highest gross profit growth?",
-        "ms": 1243,
+        "ms": 698,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -264,7 +264,7 @@
       },
       {
         "question": "Which products grew the fastest?",
-        "ms": 1010,
+        "ms": 752,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -329,7 +329,7 @@
       },
       {
         "question": "Which products increased their revenue the most?",
-        "ms": 982,
+        "ms": 741,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -394,7 +394,7 @@
       },
       {
         "question": "Which products grew the most from 2004 to 2005?",
-        "ms": 1151,
+        "ms": 719,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -459,7 +459,7 @@
       },
       {
         "question": "Which products grew month over month?",
-        "ms": 1593,
+        "ms": 754,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -515,7 +515,7 @@
       },
       {
         "question": "Which products declined quarter over quarter?",
-        "ms": 955,
+        "ms": 767,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -578,7 +578,7 @@
       },
       {
         "question": "Show products whose margins improved.",
-        "ms": 1133,
+        "ms": 778,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -643,7 +643,7 @@
       },
       {
         "question": "Show products whose margins declined.",
-        "ms": 1156,
+        "ms": 704,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -708,7 +708,7 @@
       },
       {
         "question": "Which products had the biggest ASP increase?",
-        "ms": 981,
+        "ms": 732,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -772,7 +772,7 @@
       },
       {
         "question": "Which products grew fastest by volume?",
-        "ms": 867,
+        "ms": 897,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -839,7 +839,7 @@
     "growth_chain": [
       {
         "question": "Which products grew the most?",
-        "ms": 913,
+        "ms": 737,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -904,7 +904,7 @@
       },
       {
         "question": "Show their customers.",
-        "ms": 1859,
+        "ms": 876,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -966,7 +966,7 @@
       },
       {
         "question": "Break them down by industry.",
-        "ms": 1568,
+        "ms": 585,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "industry_breakdown",
@@ -1021,7 +1021,7 @@
       },
       {
         "question": "Show their regions.",
-        "ms": 1185,
+        "ms": 582,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "country_breakdown",
@@ -1075,7 +1075,7 @@
       },
       {
         "question": "Compare their growth with the previous year.",
-        "ms": 1063,
+        "ms": 596,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "period_compare_selection",
@@ -1134,7 +1134,7 @@
       },
       {
         "question": "Show their ASP.",
-        "ms": 966,
+        "ms": 668,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -1184,7 +1184,7 @@
       },
       {
         "question": "Show their COGS.",
-        "ms": 846,
+        "ms": 766,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product",
@@ -1234,7 +1234,7 @@
       },
       {
         "question": "Which of them had the biggest margin improvement?",
-        "ms": 895,
+        "ms": 852,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1299,7 +1299,7 @@
       },
       {
         "question": "Which products declined?",
-        "ms": 2144,
+        "ms": 987,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1364,7 +1364,7 @@
       },
       {
         "question": "Why did those products decline?",
-        "ms": 1301,
+        "ms": 1161,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1429,7 +1429,7 @@
       },
       {
         "question": "Show the quantity change.",
-        "ms": 1016,
+        "ms": 1167,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1494,7 +1494,7 @@
       },
       {
         "question": "Show their product groups.",
-        "ms": 1289,
+        "ms": 990,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_group_breakdown",
@@ -1539,7 +1539,7 @@
       },
       {
         "question": "Show their suppliers.",
-        "ms": 961,
+        "ms": 637,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "suppliers_of_selection",
@@ -1592,12 +1592,12 @@
       },
       {
         "question": "Show their inventory.",
-        "ms": 1223,
+        "ms": 618,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "inventory_analysis",
         "expected_intent": "inventory_analysis",
-        "rows": 30,
+        "rows": 22,
         "growth_metric": "quantity",
         "growth_direction": "decline",
         "change_mode": "absolute",
@@ -1635,8 +1635,8 @@
           "standard_price"
         ],
         "sample_row": {
-          "product": "ME_4003",
-          "product_name": "SAP 500-L1"
+          "product": "1400-300",
+          "product_name": "SunFun / 1200 cm3"
         },
         "sql_head": "SELECT TRIM(CAST(b.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(b.\"matnr\" AS TEXT))) AS product_name, TRIM(CAST(b.\"bwkey\" AS TEXT)) AS valuation_area, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b.\"salk3\", '0') AS TEXT)), '') AS NUMERIC)) AS stock_value, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b.\"lbkum\", '0') AS ",
         "summary_head": "**Deep analysis** \u2014 intent `inventory_analysis`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross mar",
@@ -1647,7 +1647,7 @@
     "decline_chain": [
       {
         "question": "Which products declined the most?",
-        "ms": 994,
+        "ms": 752,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1712,7 +1712,7 @@
       },
       {
         "question": "Why?",
-        "ms": 2293,
+        "ms": 981,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1777,7 +1777,7 @@
       },
       {
         "question": "Show their customers.",
-        "ms": 2212,
+        "ms": 952,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -1839,7 +1839,7 @@
       },
       {
         "question": "Show their ASP.",
-        "ms": 730,
+        "ms": 661,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -1889,7 +1889,7 @@
       },
       {
         "question": "Show their quantity.",
-        "ms": 899,
+        "ms": 831,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "dimensional_extend",
@@ -1939,7 +1939,7 @@
       },
       {
         "question": "Show COGS.",
-        "ms": 766,
+        "ms": 1023,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product",
@@ -1989,7 +1989,7 @@
       },
       {
         "question": "Show margins.",
-        "ms": 1167,
+        "ms": 760,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "margin_by_product",
@@ -2041,7 +2041,7 @@
     "data_gap_recovery": [
       {
         "question": "Which products grew the most?",
-        "ms": 880,
+        "ms": 769,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -2106,7 +2106,7 @@
       },
       {
         "question": "Show their logistics cost.",
-        "ms": 686,
+        "ms": 700,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -2142,7 +2142,7 @@
       },
       {
         "question": "Show their revenue growth.",
-        "ms": 1007,
+        "ms": 619,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -2209,7 +2209,7 @@
     "regression_guards": [
       {
         "question": "Which products had the biggest margin decline?",
-        "ms": 1023,
+        "ms": 741,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "margin_decline_drivers",
@@ -2261,7 +2261,7 @@
       },
       {
         "question": "Which month had the biggest margin decline?",
-        "ms": 832,
+        "ms": 1008,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2299,7 +2299,7 @@
       },
       {
         "question": "Show monthly sales.",
-        "ms": 1168,
+        "ms": 755,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2337,7 +2337,7 @@
       },
       {
         "question": "Show quarterly sales.",
-        "ms": 852,
+        "ms": 781,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2381,51 +2381,51 @@
     "DATA_GAP": 1,
     "FAIL": 0,
     "latencies_ms": [
-      686,
-      730,
+      582,
+      585,
+      596,
+      618,
+      619,
+      637,
+      661,
+      668,
+      698,
+      700,
+      704,
+      719,
+      732,
+      737,
+      738,
+      741,
+      741,
+      752,
+      752,
+      754,
+      755,
+      760,
       766,
-      832,
-      846,
+      767,
+      769,
+      777,
+      778,
+      781,
+      831,
       852,
-      867,
-      880,
-      895,
-      899,
-      913,
-      955,
-      961,
-      966,
+      876,
+      897,
+      952,
       981,
-      982,
-      994,
-      1007,
-      1010,
-      1016,
+      987,
+      990,
+      1008,
       1023,
-      1063,
-      1133,
-      1151,
-      1156,
+      1161,
       1167,
-      1168,
-      1185,
-      1189,
-      1223,
-      1243,
-      1249,
-      1289,
-      1301,
-      1568,
-      1593,
-      1859,
-      2144,
-      2212,
-      2293,
-      10762
+      1826
     ],
-    "P50": 1023,
-    "P95": 2212,
-    "P99": 10762,
-    "Max": 10762
+    "P50": 755,
+    "P95": 1161,
+    "P99": 1826,
+    "Max": 1826
   }
 }

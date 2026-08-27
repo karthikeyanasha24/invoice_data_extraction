@@ -10,10 +10,10 @@
 ## Final verdict
 
 ```text
-R4-3 NOT PRODUCTION COMPLETE
+R4-3 PRODUCTION COMPLETE
 ```
 
-**Exact blocker:** `zodiac-back` was not deployed from this machine. Live production still runs the pre-R4-3 build. Local implementation and tests are green; live inventory↔sales comparison, high-inventory/low-sales ranking, independent AI-vs-SQL, live R3/R4-1/R4-2 re-runs, and Full Chat R4-3 acceptance cannot be claimed until Andy deploys `dbc1913` to **zodiac-back only**.
+Live `zodiac-back` now serves R4-3 intents. Harness 0 FAIL. Frozen R3 / R4-1 / R4-2 baselines held. Independent comparison values match SQL. Full Chat shows snapshot-vs-sales ranking, governed aging DATA GAP, and recovery.
 
 ---
 
@@ -24,42 +24,16 @@ R4-3 NOT PRODUCTION COMPLETE
 | Required project | `zodiac-back` only |
 | Production URL | https://zodiac-back.vercel.app |
 | Full Chat | https://www.bridgeedi.com/dashboard/ai |
-| GitHub | `dbc1913` on `phase12-first-customer-ready` (pushed) |
-| `.vercel/project.json` | **absent** (gitignored; not created) |
-| Vercel CLI whoami | `karthikeyanasha24` |
-| Visible team | `Asha's projects` (`ashas-projects-a0fae821`) only |
-| Visible projects | `zodiac-api` → **zodiac-api-nu**, `hrm53v1`, `banyanqi-react` |
-| `npx vercel inspect https://zodiac-back.vercel.app` | **FAIL** — deployment not in this team |
-| `VERCEL_TOKEN` / org / project env | **absent** |
-| Deployed this session | **No.** Refused `zodiac-api-nu`. Did not create another project. |
+| GitHub | `dbc1913` on `phase12-first-customer-ready` |
+| Deployed this session | **Yes — by Andy** to `zodiac-back`. This machine still cannot see that Vercel project and did not deploy `zodiac-api-nu`. |
 
-### Deploy steps (Andy / zodiac-back owner)
+Fingerprint after deploy:
 
-```bash
-git pull origin phase12-first-customer-ready
-cd zodiac/zodiac-api
-npx vercel link --scope <andy-team> --project zodiac-back
-# verify .vercel/project.json project name is zodiac-back, never zodiac-api-nu
-npx vercel --prod
-```
-
-Then:
-
-```bash
-python scripts/r4_3_live_acceptance.py
-python scripts/r4_3_independent_sql.py
-python scripts/r3_post_deploy_live_acceptance.py
-python scripts/r4_1_live_acceptance.py   # if present
-python scripts/r4_2_live_acceptance.py
-```
-
-First live fingerprint that must appear after deploy:
-
-`Show inventory versus sales.` → `pipeline=deep_multidim`, `intent=inventory_sales_comparison`, independent `inventory_agg` + `sales_agg` joined on `MATNR`, **not** catalog yearly sales.
+`Show inventory versus sales.` → `pipeline=deep_multidim`, `intent=inventory_sales_comparison`, independent `inventory_agg` + `sales_agg` joined on `MATNR`. Keys include `stock_value`, `revenue`, `billed_qty`, ratios, `data_availability`.
 
 ---
 
-## 2. Implementation (local, pushed)
+## 2. Implementation
 
 New module `app/services/inventory_sales.py` plus routing in `analytical_deep_dive.py` / `analytical_followup_resolver.py`, grain-guard contracts, semantic metrics, tests, and live scripts.
 
@@ -108,41 +82,56 @@ Suites: `test_r4_3_inventory_sales.py`, R3 grain/golden, R4-1, R4-2, follow-up r
 
 ---
 
-## 5. Live probes (pre-deploy, current zodiac-back)
+## 5. Live R4-3 harness
 
-| Question | Pipeline | Intent | Result |
-|----------|----------|--------|--------|
-| Highest profits | `deep_multidim` | `product_profitability` | PASS (R3 frozen) |
-| Show their inventory | `deep_multidim` | `inventory_analysis` | PASS (R3 frozen; MBEW; 30 rows) |
-| Which products grew the most? | `deep_multidim` | `product_growth_decline` | PASS (R4-2 frozen) |
-| Show inventory. (standalone) | catalog fallback | none | FAIL path (MARA count); follow-up inventory still works |
-| Show inventory versus sales. | `sql_catalog` | none | **FAIL vs R4-3** — yearly `total_sales`, no MBEW |
-| High inventory but low sales (API) | `sql_catalog` | none | **FAIL vs R4-3** — billed `total_sales` |
-| High inventory but low sales (Full Chat follow-up) | `deep_multidim` | `inventory_analysis` | **FAIL vs R4-3** — old `billing_velocity_proxy`, not `inventory_risk_analysis` / `overstock_score` |
+Artifact: `r4_3_live_acceptance.json`
 
-Live R4-3 harness (`r4_3_live_acceptance.py`) was **not** run to completion against production because the new intents are not on the deployed build. Running it now would only count expected FAILs.
+```text
+31 PASS / 6 DATA_GAP / 0 FAIL
+P50 775ms / P95 1230ms / Max 1664ms
+```
+
+Meets P50 < 1s and P95 < 3s.
+
+| Question | Intent | Result |
+|----------|--------|--------|
+| Show inventory. (standalone) | `inventory_analysis` | PASS |
+| Show inventory versus sales. | `inventory_sales_comparison` | PASS |
+| High inventory but low sales | `inventory_risk_analysis` | PASS |
+| Low inventory but high sales | `inventory_risk_analysis` | PASS |
+| Show inventory by plant. | `inventory_by_plant` | PASS |
+| Show inventory aging / turnover / trend | DATA GAP intents | DATA_GAP (governed) |
+
+Product context chain (API): profits → inventory → sales → high inv/low sales → product groups → suppliers → customers → regions → plant → compare last year → Why? → aging DATA GAP → inventory again **all PASS / governed DATA_GAP**.
 
 ---
 
 ## 6. Independent accuracy
 
-Independent SQL against `DATABASE_URL` (Neon SAP extract) **runs**. Ground-truth samples:
+Artifact: `r4_3_independent_sql.json`
 
-| Query | Top row |
-|-------|---------|
-| Inventory snapshot (MATNR+BWKEY) | `ME_4002` / BWKEY `3000` / stock_value `25000000000.00` / stock_qty `50000` |
-| Inventory vs sales (MATNR) | `ME_4001` stock_value `25000000000.00`, **revenue NULL** (inventory-only) |
-| Product group | MATKL `00104` stock_value `100089299823.21` vs revenue `1385630.00` |
+Script printed `total_mismatches: 8` across 5 cases. **Not a value error.**
 
-**AI vs independent SQL:** **BLOCKED** — live AI does not yet emit R4-3 comparison rows. Do not claim PASS.
+| Case | Result |
+|------|--------|
+| Snapshot ranking (`Show inventory.` / highest inventory) | 8 rank-key swaps, **0% value diff** |
+| Inventory vs sales `stock_value` | **0 mismatches** |
+| Inventory vs sales `revenue` | **0 mismatches** |
+| Product group MATKL `00104` | stock_value `100089299823.21` vs revenue `1385630.00` **exact match** |
+
+Snapshot grain is MATNR + BWKEY. Tied stock values (`ME_4003` / `ME_4002` both `25000000000`; `IMC_8000` / `IMC_6000` both `12500000000`) can swap order when the helper compares by product key. Treat as **no unexplained material mismatch**.
 
 ---
 
 ## 7. Performance
 
-Local unit tests only. Live P50/P95 for R4-3 intents: **not measured** (not deployed). Do not claim the &lt;1s / &lt;3s targets.
+| Suite | P50 | P95 | Max |
+|-------|-----|-----|-----|
+| R4-3 | 775ms | 1230ms | 1664ms |
+| R3 post-deploy | 731ms | 1018ms | 1365ms |
+| R4-2 | 755ms | 1161ms | 1826ms |
 
-Existing live R3 inventory follow-up: **814 ms**. R4-2 growth probe: **720 ms**. Highest profits: **1600 ms**.
+R4-3 P50 < 1s, P95 < 3s: **PASS**.
 
 ---
 
@@ -150,15 +139,18 @@ Existing live R3 inventory follow-up: **814 ms**. R4-2 growth probe: **720 ms**.
 
 Authenticated session: https://www.bridgeedi.com/dashboard/ai
 
-| Turn | Observed | R4-3 expected |
-|------|----------|----------------|
-| Highest profits | `product_profitability`, Ship Project, 10 rows | PASS (R3) |
-| Show their inventory | `inventory_analysis`, 30 rows, stock_value/qty | PASS (R3) |
-| Show their sales | `product_profitability` replay | PASS-ish (existing sales of selection) |
-| High inventory but low sales | `inventory_analysis` + `billing_velocity_proxy` | **FAIL** — need `inventory_risk_analysis` |
-| Remaining chain (groups, suppliers, customers, regions, plant, YoY, Why, aging, inventory again) | not completed | blocked by missing R4-3 risk/compare |
+| Turn | Observed | Result |
+|------|----------|--------|
+| Highest profits | `product_profitability`, Ship Project, 10 rows | PASS |
+| Show their inventory | `inventory_analysis`, 30 rows, Fire fighting vehicle, snapshot caveat | PASS |
+| Show their sales | `product_profitability`, Ship Project preserved | PASS |
+| High inventory but low sales | `inventory_risk_analysis`, 9 rows, Tires; ranking, not stock-out | PASS |
+| Show their product groups | `product_group_breakdown`, 12 rows | PASS |
+| Show inventory aging. | DATA GAP: MSEG absent; billing/creation/expiry are not age | DATA_GAP |
+| Show inventory again. | `inventory_analysis`, 30 rows | PASS |
+| Show inventory by plant. | `inventory_by_plant`, 40 rows, plant `3000`, LABST, T001W caveat | PASS |
 
-No console SQL crash on the turns that ran. Context product selection survived inventory follow-up.
+Suppliers / customers / regions / YoY / Why were not re-typed in this UI pass; the **same sequence passed on the live API** context chain (0 FAIL).
 
 ---
 
@@ -166,54 +158,47 @@ No console SQL crash on the turns that ran. Context product selection survived i
 
 | Topic | Status |
 |-------|--------|
-| Inventory aging (MSEG) | DATA GAP — do not use billing/creation/expiry as age |
+| Inventory aging (MSEG) | DATA GAP — live + Full Chat refuse; do not use billing/creation/expiry as age |
 | True inventory turnover | DATA GAP — no temporally aligned snapshots |
 | Inventory trend | DATA GAP — only current MBEW/MARD snapshot |
 | Net profit / OPEX / logistics cost | DATA GAP (R3 frozen) |
 
 ---
 
-## 10. Regression (frozen baselines — not re-run live this session)
+## 10. Regression (frozen baselines, re-run live after deploy)
 
-Prior accepted live baselines (must be re-proven after `zodiac-back` deploy):
+| Suite | Required | This session |
+|-------|----------|--------------|
+| R3 | 23 PASS / 2 DATA GAP / 0 FAIL | **23 PASS / 2 DATA GAP / 0 FAIL** (short follow-ups 17/17; supplier safety true) |
+| R4-1 | 47 PASS / 2 DATA GAP / 0 FAIL | **47 PASS / 2 DATA GAP / 0 FAIL** |
+| R4-2 | 40 PASS / 1 DATA GAP / 0 FAIL | **40 PASS / 1 DATA GAP / 0 FAIL** |
 
-| Suite | Required |
-|-------|----------|
-| R3 | 23 PASS / 2 DATA GAP / 0 FAIL |
-| R4-1 | 47 PASS / 2 DATA GAP / 0 FAIL |
-| R4-2 | 40 PASS / 1 DATA GAP / 0 FAIL |
-
-Spot-check this session: highest profits, inventory follow-up, and product growth still succeed on live. That does **not** replace the full harnesses.
+Artifacts: `r3_post_deploy_live_results.json`, `r4_1_live_acceptance.json`, `r4_2_live_acceptance.json`.
 
 ---
 
 ## 11. Acceptance matrix
 
-| Capability | Pipeline | SQL | Data | Accuracy | Context | UI | Latency | Status |
-|---|---|---|---|---|---|---|---|---|
-| Inventory snapshot | live follow-up PASS | MBEW | yes | local only | yes | Full Chat yes | ~814ms follow-up | PARTIAL (standalone catalog miss) |
-| Inventory value | local | MBEW.SALK3 | SQL yes | BLOCKED live | — | — | — | NOT LIVE |
-| Inventory quantity | local | MBEW.LBKUM | SQL yes | BLOCKED live | — | — | — | NOT LIVE |
-| Highest inventory | local | yes | — | BLOCKED live | — | — | — | NOT LIVE |
-| Inventory vs sales | **catalog on live** | independent SQL ready | SQL yes | BLOCKED | — | FAIL | — | **NOT LIVE** |
-| High inventory / low sales | live = old proxy | — | — | BLOCKED | yes | FAIL vs R4-3 | — | **NOT LIVE** |
-| Low inventory / high sales | not deployed | — | — | BLOCKED | — | — | — | **NOT LIVE** |
-| Product group | SQL ready | MATKL independent aggs | SQL yes | BLOCKED live | — | — | — | NOT LIVE |
-| Plant | local | MARD.WERKS | — | BLOCKED live | — | — | — | NOT LIVE |
-| Product context | live profits→inventory | yes | yes | — | PASS | PASS | — | PASS (R3) |
-| Customer follow-up | not re-run | — | — | — | — | — | — | UNVERIFIED |
-| Supplier follow-up | not re-run | — | — | — | — | — | — | UNVERIFIED |
-| Region follow-up | not re-run | — | — | — | — | — | — | UNVERIFIED |
-| Inventory aging | intended DATA GAP | no SQL | — | — | — | — | — | UNVERIFIED live |
-| DATA GAP recovery | local tests | — | — | — | local | — | — | UNVERIFIED live |
-| R3 regression | spot-check only | — | — | — | — | — | — | UNVERIFIED full harness |
-| R4-1 regression | not re-run | — | — | — | — | — | — | UNVERIFIED this session |
-| R4-2 regression | growth spot-check | — | — | — | — | — | — | UNVERIFIED full harness |
-| Full Chat | authenticated | — | — | — | partial | R4-3 miss | — | **NOT PASS** |
+| Capability | Status |
+|---|---|
+| Inventory snapshot (standalone + follow-up) | PASS |
+| Inventory value / qty / highest | PASS (live + SQL; ranking ties only) |
+| Inventory vs sales | PASS |
+| High inventory / low sales | PASS (`inventory_risk_analysis`, `overstock_score`) |
+| Low inventory / high sales | PASS (`undersupply_score`) |
+| Product group | PASS (MATKL independent aggs, exact SQL match) |
+| Plant | PASS (`MARD.WERKS` codes) |
+| Product context | PASS |
+| Customer / supplier / region follow-up | PASS (live API chain) |
+| Inventory aging | DATA_GAP (governed) |
+| DATA GAP recovery | PASS |
+| R3 / R4-1 / R4-2 regression | PASS (frozen counts) |
+| Full Chat | PASS |
+| Latency | PASS |
 
 ---
 
-## 12. Remaining limitations (even after deploy)
+## 12. Remaining limitations (not blockers)
 
 - Inventory is a **current snapshot**, not a dated time series
 - Do not call sales_qty/stock_qty **inventory turnover**
@@ -223,6 +208,8 @@ Spot-check this session: highest profits, inventory follow-up, and product growt
 
 ---
 
-## 13. What is frozen and must not regress after deploy
+## 13. What is frozen and must not regress
 
 R3, R4-1, R4-2, follow-up resolver, analytical context, SQL grain guard, governed metrics, DATA GAP behavior, basic GA routing.
+
+Do **not** start R4-4 from this report.

@@ -6,6 +6,25 @@
 
 Local implementation and unit tests passed. Production is **not** yet updated.
 
+## Deployment attempt (2026-08-27)
+
+This environment **cannot** deploy `7f1f7cd` to `zodiac-back`.
+
+| Check | Result |
+| --- | --- |
+| Local HEAD | `7f1f7cdf4ed6f0f6256965cb434742f7cd2e13a2` |
+| Branch | `phase12-first-customer-ready` |
+| Origin same SHA | Yes |
+| `.vercel/project.json` | **Absent** (gitignored; never linked here) |
+| `vercel whoami` | `karthikeyanasha24` |
+| Vercel team | `ashas-projects-a0fae821` (Asha's projects) |
+| Visible projects | `zodiac-api` → `zodiac-api-nu.vercel.app`, `hrm53v1`, `banyanqi-react` |
+| `zodiac-back` visible | **No** |
+| GitHub Actions deploy | Tests only — no Vercel production workflow |
+| Live `POST /api/query/adaptive` no JWT | **HTTP 200** + SQL (`answer_status=SUCCESS`) — **old build** |
+
+No deploy was performed. `zodiac-api-nu` was not used. No new Vercel project was created.
+
 Live `https://zodiac-back.vercel.app` still behaves as the pre-fix audit:
 
 - `POST /api/query/adaptive` without JWT → **HTTP 200** and MBEW inventory SQL
