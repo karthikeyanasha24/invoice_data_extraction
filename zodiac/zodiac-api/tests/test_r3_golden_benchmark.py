@@ -135,6 +135,37 @@ R4_2_FOLLOWUPS = [
 ]
 
 
+R4_3_CASES = [
+    ("Show inventory.", "inventory_analysis", "PASS"),
+    ("Show inventory value.", "inventory_analysis", "PASS"),
+    ("Show inventory quantity.", "inventory_analysis", "PASS"),
+    ("Which products have the highest inventory?", "inventory_analysis", "PASS"),
+    ("Which products have the lowest inventory?", "inventory_analysis", "PASS"),
+    ("Show inventory versus sales.", "inventory_sales_comparison", "PASS"),
+    ("Compare inventory with revenue.", "inventory_sales_comparison", "PASS"),
+    ("Which products have high inventory but low sales?", "inventory_risk_analysis", "PASS"),
+    ("Which products have low inventory but high sales?", "inventory_risk_analysis", "PASS"),
+    ("Show inventory by product group.", "inventory_sales_comparison", "PASS"),
+    ("Show inventory by plant.", "inventory_by_plant", "PASS"),
+    ("Show inventory aging.", "inventory_aging_gap", "DATA_GAP"),
+    ("Show inventory turnover.", "inventory_turnover_gap", "DATA_GAP"),
+    ("Show inventory trend.", "inventory_trend_gap", "DATA_GAP"),
+]
+
+R4_3_FOLLOWUPS = [
+    ("Show their inventory.", "inventory_analysis", "PASS"),
+    ("Show their sales.", "product_profitability", "PASS"),
+    ("Show their customers.", "customers_of_selection", "PASS"),
+    ("Show their suppliers.", "suppliers_of_selection", "PASS"),
+    ("Show their regions.", "country_breakdown", "PASS"),
+    ("Show their product groups.", "product_group_breakdown", "PASS"),
+    ("Break that down by plant.", "inventory_by_plant", "PASS"),
+    ("Compare their sales with last year.", "period_compare_selection", "PASS"),
+    ("Why?", "inventory_analysis", "PASS"),
+    ("Show inventory aging.", "inventory_aging_gap", "DATA_GAP"),
+]
+
+
 def _expand() -> List[Dict]:
     cases: List[Dict] = []
     for row in BASELINE_CHAIN:
@@ -164,6 +195,17 @@ def _expand() -> List[Dict]:
             "family": "r4_2_followup",
             "followup": True,
             "prior_intent": "product_growth_decline",
+        })
+    for q, intent, status in R4_3_CASES:
+        cases.append({"question": q, "intent": intent, "status": status, "family": "r4_3_inventory_sales"})
+    for q, intent, status in R4_3_FOLLOWUPS:
+        cases.append({
+            "question": q,
+            "intent": intent,
+            "status": status,
+            "family": "r4_3_followup",
+            "followup": True,
+            "prior_intent": "inventory_analysis",
         })
 
     dims = ["product", "customer", "industry", "country", "year", "supplier", "product_group", "month", "quarter"]

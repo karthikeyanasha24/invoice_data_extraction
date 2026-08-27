@@ -71,5 +71,7 @@ def test_grain_guard_flags_fanout():
     assert sql_has_unsafe_monetary_fanout(bad)
     good = 'SELECT SUM(v.netwr) FROM "vbrp" v JOIN "VBRK" vk ON v.vbeln = vk.vbeln'
     assert not sql_has_unsafe_monetary_fanout(good)
+    inv_fanout = 'SELECT SUM(v.netwr) FROM "vbrp" v JOIN "MARD" d ON v.matnr = d.matnr'
+    assert sql_has_unsafe_monetary_fanout(inv_fanout)
     g = grain_contract("suppliers_of_selection", ["supplier"])
     assert g["fact_grain"] == "po_item"

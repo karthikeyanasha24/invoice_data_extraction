@@ -108,7 +108,7 @@ ENTITIES: List[Dict[str, Any]] = [
         "measures": ["SALK3", "LBKUM", "LABST"],
         "confidence": "medium",
         "status": "PARTIAL",
-        "limitations": "Snapshot value/qty. MSEG movements absent — aging is a billing-qty proxy.",
+        "limitations": "Current snapshot value/qty only. MSEG absent — aging is DATA GAP. No dated snapshots — trend/turnover DATA GAP.",
     },
     {
         "entity": "Expiry/batch",
@@ -268,8 +268,10 @@ METRICS_R3: List[Dict[str, Any]] = [
     {"metric": "avg_selling_price", "status": "SUPPORTED", "formula": "revenue / NULLIF(quantity,0)", "grain": "billing_item"},
     {"metric": "purchase_value", "status": "PARTIAL", "formula": "SUM(EKPO.NETWR)", "grain": "po_item", "not": "cogs"},
     {"metric": "purchase_qty", "status": "PARTIAL", "formula": "SUM(EKPO.MENGE)", "grain": "po_item"},
-    {"metric": "inventory_value", "status": "PARTIAL", "formula": "MBEW.SALK3", "grain": "material/valuation"},
-    {"metric": "inventory_qty", "status": "PARTIAL", "formula": "MARD.LABST / MBEW.LBKUM", "grain": "material/plant"},
+    {"metric": "inventory_value", "status": "PARTIAL", "formula": "SUM(MBEW.SALK3) GROUP BY MATNR[+BWKEY]", "grain": "material/valuation"},
+    {"metric": "inventory_qty", "status": "PARTIAL", "formula": "SUM(MBEW.LBKUM); unrestricted SUM(MARD.LABST) by plant/storage", "grain": "material/valuation or material/plant/storage"},
+    {"metric": "inventory_aging", "status": "DATA_GAP", "reason": "MSEG absent"},
+    {"metric": "inventory_turnover", "status": "DATA_GAP", "reason": "no temporally aligned inventory snapshots"},
     {"metric": "delivery_count", "status": "PARTIAL", "formula": "COUNT LIKP", "grain": "delivery", "not": "logistics_cost"},
     {"metric": "discount", "status": "UNSAFE", "reason": "KONV.KSCHL not certified"},
     {"metric": "tax", "status": "UNSAFE", "reason": "condition/tax procedure not certified"},
@@ -308,6 +310,8 @@ def compose_intent(add_dimensions: List[str]) -> str:
         return "industry_breakdown"
     if "country" in dims:
         return "country_breakdown"
+    if "warehouse" in dims or "plant" in dims:
+        return "inventory_by_plant"
     if "year" in dims:
         return "period_compare_selection"
     if "quarter" in dims:

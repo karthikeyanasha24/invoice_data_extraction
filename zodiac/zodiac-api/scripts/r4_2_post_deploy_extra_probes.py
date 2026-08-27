@@ -47,7 +47,13 @@ def row(q: str, r: Dict[str, Any], ms: int, expected: Optional[str] = None) -> D
     banned = [t for t in ("EKPO", "EKKO", "LFA1", "VBFA", "KONV", "BSEG") if t in su and "VBRP" in su]
     # supplier/inventory intents may include those tables intentionally
     intent = intent_of(r)
-    if intent in {"suppliers_of_selection", "inventory_analysis"}:
+    if intent in {
+        "suppliers_of_selection",
+        "inventory_analysis",
+        "inventory_sales_comparison",
+        "inventory_risk_analysis",
+        "inventory_by_plant",
+    }:
         banned = []
     out = {
         "question": q,

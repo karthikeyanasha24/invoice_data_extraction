@@ -47,6 +47,25 @@ from .product_growth import (
     resolve_period_grain,
     wants_product_change,
 )
+from .inventory_sales import (
+    INVENTORY_GAP_INTENTS,
+    INVENTORY_INTENTS,
+    SNAPSHOT_CAVEAT,
+    availability_sql,
+    comparison_label,
+    compile_inventory_queries,
+    gap_reason_for_intent,
+    ratio_sql,
+    resolve_inventory_intent,
+    resolve_inventory_rank_dir,
+    resolve_inventory_rank_metric,
+    resolve_risk_direction,
+    risk_language,
+    wants_inventory_aging,
+    wants_inventory_by_group,
+    wants_inventory_topic,
+    wants_true_inventory_turnover,
+)
 from .sql_grain_guard import grain_contract, sql_has_unsafe_monetary_fanout
 
 logger = logging.getLogger("zodiac-api.analytical-deep-dive")
@@ -137,6 +156,12 @@ def _is_basic_engine_query(ql: str) -> bool:
             "slow-moving",
             "fast-moving",
             "inventory age",
+            "inventory aging",
+            "inventory turnover",
+            "inventory",
+            "overstock",
+            "inventory versus",
+            "inventory vs",
             "how long",
             "purchase history",
             "type of products bought",
@@ -281,7 +306,13 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         "slow-moving",
         "fast-moving",
         "inventory age",
+        "inventory aging",
+        "inventory",
         "stock value",
+        "stock quantity",
+        "stock qty",
+        "overstock",
+        "inventory turnover",
     )
     time_grain_signals = (
         "monthly",
@@ -318,6 +349,8 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
     ):
         score += 2
     if any(s in ql for s in lifecycle_signals):
+        score += 2
+    if wants_inventory_topic(ql) or wants_inventory_aging(ql) or wants_true_inventory_turnover(ql):
         score += 2
     if any(s in ql for s in time_grain_signals):
         score += 3
@@ -400,7 +433,8 @@ def build_analytical_plan(
             if follow.replace_dimensions:
                 plan.dimensions = list(follow.replace_dimensions)
             if follow.data_gap_metric:
-                plan.data_gaps.append(METRICS[follow.data_gap_metric].caveats)
+                md = METRICS.get(follow.data_gap_metric)
+                plan.data_gaps.append(md.caveats if md else gap_reason_for_intent(follow.intent or ""))
             if follow.add_dimensions and plan.intent in {"generic", "dimensional_extend"}:
                 plan.intent = compose_intent(follow.add_dimensions)
             plan = _merge_prior(plan, prior_ctx)
@@ -533,8 +567,9 @@ def build_analytical_plan(
         )
     )
     wants_inventory = any(
-        x in ql for x in ("inventory", "stock value", "slow-moving", "fast-moving", "inventory age")
+        x in ql for x in ("inventory", "stock value", "stock qty", "stock quantity", "slow-moving", "fast-moving", "overstock")
     )
+    inv_intent = resolve_inventory_intent(ql)
     wants_supplier = any(x in ql for x in ("supplier", "vendor", "procurement"))
     wants_product_group = any(x in ql for x in ("product group", "material group", "category"))
     wants_asp = any(x in ql for x in ("average selling price", "unit price", "asp"))
@@ -544,6 +579,9 @@ def build_analytical_plan(
     if prior_ctx and prior_ctx.get("deep_analysis") and plan.intent == "generic":
         if wants_logistics and "cost" in ql:
             plan.intent = "logistics_cost_gap"
+        elif inv_intent:
+            # Inventory snapshot / vs-sales / risk / plant / DATA GAPs beat month grain and compare.
+            plan.intent = inv_intent
         elif wants_expiry and wants_industry:
             plan.intent = "product_expiry_by_industry"
         elif wants_expiry:
@@ -591,9 +629,6 @@ def build_analytical_plan(
         elif wants_product_change(ql):
             plan.intent = "product_growth_decline"
             plan.filters["period_grain"] = resolve_period_grain(ql)
-        elif wants_inventory:
-            # Inventory (+ optional sales/velocity) must win over bare "compare".
-            plan.intent = "inventory_analysis"
         elif wants_compare:
             plan.intent = "period_compare_selection"
         elif wants_history:
@@ -636,6 +671,8 @@ def build_analytical_plan(
     if plan.intent == "generic":
         if wants_logistics and "cost" in ql:
             plan.intent = "logistics_cost_gap"
+        elif inv_intent:
+            plan.intent = inv_intent
         elif wants_monthly and "margin" in ql and any(
             x in ql for x in ("decline", "improv", "change", "erosion")
         ):
@@ -669,8 +706,6 @@ def build_analytical_plan(
             plan.filters["period_grain"] = resolve_period_grain(ql)
         elif wants_history and (wants_customers or wants_product or prior_ctx):
             plan.intent = "purchase_history"
-        elif wants_inventory:
-            plan.intent = "inventory_analysis"
         elif wants_supplier:
             plan.intent = "suppliers_of_selection"
         elif wants_product_group:
@@ -923,12 +958,51 @@ def build_analytical_plan(
         plan.relationships = ["billing_item→billing_header"]
         plan.grain = {"fact_grain": "billing_item", "join": "VBRP→VBRK"}
     elif plan.intent == "inventory_analysis":
-        plan.metrics = ["quantity"]
+        rank_metric = resolve_inventory_rank_metric(ql)
+        rank_dir = resolve_inventory_rank_dir(ql)
+        plan.metrics = ["inventory_value", "inventory_qty"]
         plan.entities = ["inventory", "product"]
-        plan.dimensions = ["product", "plant"]
+        plan.dimensions = ["product", "valuation_area"]
+        plan.filters["inventory_rank_metric"] = rank_metric
+        plan.filters["inventory_rank_dir"] = rank_dir
+        plan.ranking = {"metric": rank_metric, "direction": rank_dir.lower(), "limit": max(limit, 30)}
+        plan.grain = {"fact_grain": "material_valuation", "join": "MBEW GROUP BY MATNR+BWKEY"}
+        plan.data_gaps.append(SNAPSHOT_CAVEAT)
+    elif plan.intent == "inventory_sales_comparison":
+        group_grain = wants_inventory_by_group(ql) or "product_group" in (plan.dimensions or [])
+        plan.metrics = ["inventory_value", "inventory_qty", "revenue", "cogs", "gross_profit", "quantity"]
+        plan.entities = ["inventory", "product", "billing_item"]
+        plan.dimensions = ["product_group"] if group_grain else ["product"]
+        plan.filters["inventory_grain"] = "product_group" if group_grain else "product"
+        plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), "inventory_vs_sales"]))
+        plan.grain = {"fact_grain": "sales_agg⋈inventory_agg", "join": "MATKL" if group_grain else "MATNR"}
+        plan.data_gaps.append(comparison_label(years or plan.years))
+    elif plan.intent == "inventory_risk_analysis":
+        direction = resolve_risk_direction(ql) or "high_inv_low_sales"
+        plan.filters["risk_direction"] = direction
+        plan.metrics = ["inventory_value", "inventory_qty", "revenue", "quantity"]
+        plan.entities = ["inventory", "product", "billing_item"]
+        plan.dimensions = ["product"]
+        plan.comparisons = list(dict.fromkeys([*(plan.comparisons or []), "inventory_vs_sales", direction]))
+        plan.grain = {"fact_grain": "sales_agg⋈inventory_agg", "join": "MATNR percentile rank"}
+        plan.data_gaps.append(risk_language(direction)[1])
+    elif plan.intent == "inventory_by_plant":
+        plan.metrics = ["inventory_qty"]
+        plan.entities = ["inventory", "product"]
+        plan.dimensions = ["plant", "product"]
+        plan.grain = {"fact_grain": "storage_location_stock", "join": "MARD GROUP BY WERKS"}
         plan.data_gaps.append(
-            "Inventory uses MBEW/MARD stock value/qty — not equated to COGS or logistics cost."
+            "Plant is MARD.WERKS (plant code). T001W plant-text master is not in this extract. "
+            "Inventory is not customer-owned or region-owned."
         )
+    elif plan.intent in INVENTORY_GAP_INTENTS:
+        gap_metric = {
+            "inventory_aging_gap": "inventory_aging",
+            "inventory_turnover_gap": "inventory_turnover",
+            "inventory_trend_gap": "inventory_aging",
+        }.get(plan.intent, "inventory_aging")
+        plan.metrics = [gap_metric]
+        plan.data_gaps.append(gap_reason_for_intent(plan.intent))
     elif plan.intent == "suppliers_of_selection":
         plan.metrics = ["purchase_value"]
         plan.entities = ["supplier", "product", "purchase"]
@@ -998,11 +1072,15 @@ def _region_in_sql(regions: Sequence[str], alias: str = "vk") -> str:
 
 
 def _product_in_sql(products: Sequence[str]) -> str:
+    return _matnr_in_sql(products, alias="v")
+
+
+def _matnr_in_sql(products: Sequence[str], alias: str = "v", col: str = "matnr") -> str:
     clean = [p.replace("'", "''") for p in products if p]
     if not clean:
         return ""
     vals = ", ".join(f"'{p}'" for p in clean[:50])
-    return f' AND TRIM(CAST(v."matnr" AS TEXT)) IN ({vals})'
+    return f' AND TRIM(CAST({alias}."{col}" AS TEXT)) IN ({vals})'
 
 
 def _num(expr: str) -> str:
@@ -1776,71 +1854,28 @@ LIMIT {max(limit, 30)}
 """.strip()
         queries.append({"id": "product_industry_region", "sql": sql})
 
-    elif plan.intent == "inventory_analysis":
-        queries.append({
-            "id": "stock_value_by_material",
-            "sql": f"""
-SELECT
-  TRIM(CAST(b."matnr" AS TEXT)) AS product,
-  COALESCE(MAX(m."maktx"), TRIM(CAST(b."matnr" AS TEXT))) AS product_name,
-  TRIM(CAST(b."bwkey" AS TEXT)) AS valuation_area,
-  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b."salk3", '0') AS TEXT)), '') AS NUMERIC)) AS stock_value,
-  SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b."lbkum", '0') AS TEXT)), '') AS NUMERIC)) AS stock_qty,
-  MAX(CAST(NULLIF(TRIM(CAST(COALESCE(b."stprs", '0') AS TEXT)), '') AS NUMERIC)) AS standard_price
-FROM "MBEW" b
-LEFT JOIN "MAKT" m ON TRIM(CAST(b."matnr" AS TEXT)) = TRIM(CAST(m."matnr" AS TEXT))
-  AND (m."spras" = 'E' OR m."spras" IS NULL)
-WHERE b."matnr" IS NOT NULL AND TRIM(CAST(b."matnr" AS TEXT)) <> ''
-GROUP BY TRIM(CAST(b."matnr" AS TEXT)), TRIM(CAST(b."bwkey" AS TEXT))
-ORDER BY stock_value DESC NULLS LAST
-LIMIT {max(limit, 30)}
-""".strip(),
-        })
-        # Billing velocity is only needed for inventory↔sales / slow-fast comparisons.
-        # Snapshot-only asks (Show inventory / highest inventory) skip the second query.
-        wants_velocity = any(
-            x in ql
-            for x in (
-                "sales",
-                "sold",
-                "demand",
-                "compare",
-                "versus",
-                " vs ",
-                "slow",
-                "fast",
-                "moving",
-                "velocity",
-                "turnover",
-            )
+    elif plan.intent in INVENTORY_INTENTS:
+        inv_q, inv_g = compile_inventory_queries(
+            intent=plan.intent,
+            products=products,
+            yfilter=yfilter,
+            pfilter=pfilter,
+            pfilter_b=_matnr_in_sql(products, alias="b"),
+            pfilter_d=_matnr_in_sql(products, alias="d"),
+            pfilter_a=_matnr_in_sql(products, alias="a"),
+            rev=rev,
+            cogs=cogs,
+            qty=qty,
+            years=years or plan.years,
+            rank_metric=str(plan.filters.get("inventory_rank_metric") or "stock_value"),
+            rank_dir=str(plan.filters.get("inventory_rank_dir") or "DESC").upper(),
+            inventory_grain=str(plan.filters.get("inventory_grain") or "product"),
+            risk_direction=str(plan.filters.get("risk_direction") or ""),
+            ql=ql,
+            limit=limit,
         )
-        if wants_velocity:
-            queries.append({
-                "id": "billing_velocity_proxy",
-                "sql": f"""
-SELECT
-  TRIM(v.matnr) AS product,
-  COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name,
-  SUM(CAST(NULLIF(TRIM(CAST(v."fkimg" AS TEXT)), '') AS NUMERIC)) AS billed_qty,
-  COUNT(DISTINCT vk.vbeln) AS invoice_count
-FROM "vbrp" v
-JOIN "VBRK" vk ON TRIM(v.vbeln) = TRIM(vk.vbeln)
-LEFT JOIN "MAKT" m ON TRIM(v.matnr) = TRIM(m.matnr) AND (m.spras = 'E' OR m.spras IS NULL)
-WHERE v.matnr IS NOT NULL AND TRIM(v.matnr) <> ''
-  {yfilter}
-GROUP BY TRIM(v.matnr)
-ORDER BY billed_qty ASC NULLS LAST
-LIMIT {max(limit, 30)}
-""".strip(),
-            })
-            gaps.append(
-                "Slow/fast-moving uses billed quantity as a proxy; true inventory age needs movement history (MSEG not in schema_full)."
-            )
-        else:
-            gaps.append(
-                "Inventory is an MBEW/MARD snapshot (stock value/qty), not aging. "
-                "Ask to compare inventory with sales for the billed-qty velocity proxy."
-            )
+        queries.extend(inv_q)
+        gaps.extend(inv_g)
 
     elif plan.intent == "suppliers_of_selection":
         pfilter_po = ""
@@ -2148,6 +2183,45 @@ def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str
                     findings.append(
                         "Observed contributors are period deltas (COGS / ASP / quantity / revenue) — not proven causation."
                     )
+        elif "overstock_score" in top or "undersupply_score" in top or (
+            "stock_value" in top and ("billed_qty" in top or "data_availability" in top)
+        ):
+            pname = top.get("product_name") or top.get("product") or top.get("product_group")
+            direction = str((plan.filters or {}).get("risk_direction") or "")
+            if "overstock_score" in top or "undersupply_score" in top:
+                label = risk_language(direction or "high_inv_low_sales")[1]
+            else:
+                label = comparison_label(plan.years or (plan.filters or {}).get("years"))
+            lines.append(
+                f"- Inventory snapshot vs sales activity: **{pname}** "
+                f"| stock_value={_fmt_num(top.get('stock_value'))} "
+                f"| stock_qty={_fmt_num(top.get('stock_qty'))} "
+                f"| revenue={_fmt_num(top.get('revenue'))} "
+                f"| billed_qty={_fmt_num(top.get('billed_qty'))} "
+                f"| availability={top.get('data_availability')}"
+            )
+            lines.append(f"- {label}")
+            findings.append(label)
+        elif "stock_value" in top or "stock_qty" in top or "unrestricted_stock_qty" in top:
+            pname = (
+                top.get("product_name")
+                or top.get("product")
+                or top.get("product_group")
+                or top.get("plant")
+            )
+            lines.append(
+                f"- Current inventory snapshot: **{pname}** "
+                f"| stock_value={_fmt_num(top.get('stock_value'))} "
+                f"| stock_qty={_fmt_num(top.get('stock_qty'))} "
+                f"| unrestricted_qty={_fmt_num(top.get('unrestricted_stock_qty'))} "
+                f"| plant={top.get('plant') or 'n/a'} "
+                f"| valuation_area={top.get('valuation_area') or 'n/a'}"
+            )
+            findings.append(SNAPSHOT_CAVEAT)
+            if top.get("plant"):
+                lines.append(
+                    "- Plant dimension is MARD.WERKS (plant code). Inventory is not assigned to customers or regions."
+                )
         elif "gross_profit" in top or "revenue" in top or "margin_change_pp" in top:
             pname = top.get("product_name") or top.get("product") or top.get("industry") or top.get("country") or top.get("customer_name")
             if "margin_change_pp" in top:
@@ -2284,6 +2358,30 @@ def try_deep_multidim_analysis(
             ],
             prior_analytical_context=prior_for_gap,
         )
+    if (
+        plan.intent in INVENTORY_GAP_INTENTS
+        or follow_gap.intent in INVENTORY_GAP_INTENTS
+        or follow_gap.data_gap_metric in {"inventory_aging", "inventory_turnover"}
+        or wants_inventory_aging(ql)
+        or wants_true_inventory_turnover(ql)
+    ):
+        gap_intent = plan.intent if plan.intent in INVENTORY_GAP_INTENTS else (
+            follow_gap.intent if follow_gap.intent in INVENTORY_GAP_INTENTS else "inventory_aging_gap"
+        )
+        if wants_true_inventory_turnover(ql):
+            gap_intent = "inventory_turnover_gap"
+        elif wants_inventory_aging(ql):
+            gap_intent = "inventory_aging_gap"
+        return data_gap_payload(
+            question,
+            gap_reason_for_intent(gap_intent),
+            can_answer=[
+                "Current inventory snapshot (MBEW.SALK3 value, MBEW.LBKUM qty)",
+                "Inventory snapshot vs sales activity (independent aggregations on MATNR)",
+                "High inventory / low sales ranking (percentile, not a business threshold)",
+            ],
+            prior_analytical_context=prior_for_gap,
+        )
 
     queries, gaps = compile_queries(plan)
     plan_ms = int((time.perf_counter() - t0) * 1000)
@@ -2364,6 +2462,9 @@ def try_deep_multidim_analysis(
             "process_buy",
             "process_sell_and_buy",
             "inventory_analysis",
+            "inventory_sales_comparison",
+            "inventory_risk_analysis",
+            "inventory_by_plant",
             "monthly_trend",
             "quarterly_trend",
             "margin_decline_drivers",
@@ -2461,10 +2562,12 @@ def try_deep_multidim_analysis(
         "process_sell_and_buy",
         "product_expiry",
         "product_expiry_by_industry",
-        "inventory_analysis",
         "monthly_trend",
         "quarterly_trend",
     }
+    # Inventory follow-up must keep the prior product set (missing stock ≠ drop selection).
+    if plan.intent in INVENTORY_INTENTS and plan.selected_products:
+        _preserve_product_selection = True
     if (
         primary_rows
         and (primary_rows[0].get("product") or primary_rows[0].get("matnr"))
@@ -2532,6 +2635,8 @@ def try_deep_multidim_analysis(
         or "margin_change_pp" in primary_rows[0]
         or "revenue_change_abs" in primary_rows[0]
         or "stock_value" in primary_rows[0]
+        or "overstock_score" in primary_rows[0]
+        or "unrestricted_stock_qty" in primary_rows[0]
     ):
         label_key = "product_name" if "product_name" in primary_rows[0] else (
             "customer_name" if "customer_name" in primary_rows[0] else (
@@ -2549,7 +2654,19 @@ def try_deep_multidim_analysis(
                 else (
                     "gross_profit"
                     if "gross_profit" in primary_rows[0]
-                    else ("stock_value" if "stock_value" in primary_rows[0] else "revenue")
+                    else (
+                        "overstock_score"
+                        if "overstock_score" in primary_rows[0]
+                        else (
+                            "stock_value"
+                            if "stock_value" in primary_rows[0]
+                            else (
+                                "unrestricted_stock_qty"
+                                if "unrestricted_stock_qty" in primary_rows[0]
+                                else "revenue"
+                            )
+                        )
+                    )
                 )
             )
         )

@@ -150,6 +150,11 @@ ENTITIES: Dict[str, EntityDef] = {
         dimensions=("WERKS", "LGORT"),
         measures=("SALK3", "LBKUM", "LABST", "STPRS", "VERPR"),
         date_fields=(),
+        notes=(
+            "Current snapshot only. Value = MBEW.SALK3; valuated qty = MBEW.LBKUM; "
+            "unrestricted qty = MARD.LABST. No MSEG → aging DATA GAP. No dated snapshots → "
+            "trend/turnover DATA GAP. T001W absent — plant is MARD.WERKS code."
+        ),
     ),
     "document_flow": EntityDef(
         name="document_flow",
@@ -365,7 +370,60 @@ METRICS: Dict[str, MetricDef] = {
         currency_field=None,
         time_field=None,
         default_dimensions=("product",),
-        caveats="Snapshot valuation. Not a P&L cost. No movement-age without MSEG.",
+        caveats=(
+            "Current snapshot valuation (MBEW.SALK3). Not a P&L cost. "
+            "Not synchronized to billing FKDAT. Not inventory aging."
+        ),
+    ),
+    "inventory_qty": MetricDef(
+        name="inventory_qty",
+        description="Valuated stock quantity (MBEW.LBKUM); unrestricted plant qty is MARD.LABST",
+        aliases=("inventory quantity", "stock quantity", "stock qty"),
+        status="partial",
+        formula_sql="SUM(CAST(NULLIF(TRIM(mbew.lbkum), '') AS NUMERIC))",
+        base_tables=("MBEW", "MARD"),
+        grain="material_valuation",
+        currency_field=None,
+        time_field=None,
+        default_dimensions=("product",),
+        caveats=(
+            "Governed stock_qty = MBEW.LBKUM (valuated). MARD.LABST is unrestricted qty at "
+            "plant/storage. Distinct from billed quantity (VBRP.FKIMG) and PO qty (EKPO.MENGE)."
+        ),
+        substitutes_forbidden=("quantity",),
+    ),
+    "inventory_aging": MetricDef(
+        name="inventory_aging",
+        description="Age of inventory — unsupported without MSEG",
+        aliases=("inventory aging", "inventory age", "stock aging", "aged inventory"),
+        status="unavailable",
+        formula_sql="",
+        base_tables=(),
+        grain="material_doc",
+        currency_field=None,
+        time_field=None,
+        default_dimensions=(),
+        caveats=(
+            "True inventory aging requires material movement history (MSEG), which is not in "
+            "this extract. Billing dates, product creation dates, and expiry dates are not inventory age."
+        ),
+    ),
+    "inventory_turnover": MetricDef(
+        name="inventory_turnover",
+        description="COGS / average inventory — unsupported without dated snapshots",
+        aliases=("inventory turnover", "stock turnover", "inventory turns"),
+        status="unavailable",
+        formula_sql="",
+        base_tables=("MBEW",),
+        grain="material_valuation",
+        currency_field=None,
+        time_field=None,
+        default_dimensions=(),
+        caveats=(
+            "True inventory turnover (COGS / average inventory) needs temporally aligned "
+            "inventory snapshots. Only a current MBEW/MARD snapshot exists. "
+            "Sales quantity / current stock is not inventory turnover."
+        ),
     ),
     "delivery_count": MetricDef(
         name="delivery_count",
@@ -512,7 +570,8 @@ def available_drilldowns(active_dimensions: Set[str], metrics: Set[str]) -> List
         ("process_sell", "Order → delivery → billing process links"),
         ("process_buy", "Purchase order / vendor process for materials"),
         ("supplier", "Vendors sourcing the current materials (PO grain, not invoice COGS)"),
-        ("inventory", "Stock value/qty snapshot (MBEW/MARD)"),
+        ("inventory", "Stock value/qty snapshot (MBEW/MARD) vs sales activity"),
+        ("warehouse", "Inventory by plant code (MARD.WERKS; T001W absent)"),
         ("product_group", "Material group (MARA.MATKL)"),
     ]
     out: List[Dict[str, str]] = []

@@ -99,7 +99,13 @@ def summarize(q: str, r: Dict[str, Any], ms: int, expected: Optional[str] = None
         row["result"] = "DATA_GAP"
     if banned and r.get("answer_status") == "SUCCESS":
         # Supplier / inventory intents intentionally use non-billing joins.
-        if intent_of(r) not in {"suppliers_of_selection", "inventory_analysis"}:
+        if intent_of(r) not in {
+            "suppliers_of_selection",
+            "inventory_analysis",
+            "inventory_sales_comparison",
+            "inventory_risk_analysis",
+            "inventory_by_plant",
+        }:
             row["result"] = "FAIL(fanout)"
     return row
 

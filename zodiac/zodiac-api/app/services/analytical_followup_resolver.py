@@ -17,6 +17,16 @@ from .business_semantic_layer import (
     metric_status,
     resolve_metric,
 )
+from .inventory_sales import (
+    INVENTORY_GAP_INTENTS,
+    INVENTORY_INTENTS,
+    resolve_inventory_intent,
+    resolve_risk_direction,
+    wants_inventory_aging,
+    wants_inventory_by_plant,
+    wants_true_inventory_turnover,
+    wants_inventory_trend,
+)
 
 FollowUpKind = str
 
@@ -139,6 +149,10 @@ _SHORT_DIMENSION_PHRASES: Dict[str, str] = {
     "expiry": "expiry",
     "inventory": "inventory",
     "stock": "inventory",
+    "plant": "warehouse",
+    "plants": "warehouse",
+    "warehouse": "warehouse",
+    "warehouses": "warehouse",
     "supplier": "supplier",
     "suppliers": "supplier",
     "vendor": "supplier",
@@ -173,6 +187,10 @@ _INTENT_BY_RESOLUTION: Dict[str, str] = {
     "net_profit": "net_profit_gap",
     "supplier": "suppliers_of_selection",
     "inventory": "inventory_analysis",
+    "inventory_sales": "inventory_sales_comparison",
+    "inventory_risk": "inventory_risk_analysis",
+    "warehouse": "inventory_by_plant",
+    "plant": "inventory_by_plant",
     "product_group": "product_group_breakdown",
     "avg_selling_price": "product_profitability",
 }
@@ -364,10 +382,33 @@ def resolve_analytical_followup(
 
     # ── Data gap metrics (must not destroy context) ──
     metric_key = _detect_metric(ql, prior_metrics)
-    if metric_key in {"net_profit", "logistics_cost"}:
+    if metric_key in {"net_profit", "logistics_cost", "inventory_aging", "inventory_turnover"}:
         res.kind = KIND_DATA_GAP_REQUEST
         res.data_gap_metric = metric_key
-        res.intent = _INTENT_BY_RESOLUTION.get(metric_key, "logistics_cost_gap")
+        if metric_key == "inventory_aging":
+            res.intent = "inventory_aging_gap"
+        elif metric_key == "inventory_turnover":
+            res.intent = "inventory_turnover_gap"
+        else:
+            res.intent = _INTENT_BY_RESOLUTION.get(metric_key, "logistics_cost_gap")
+        res.resolved = True
+        return res
+    if wants_inventory_aging(ql):
+        res.kind = KIND_DATA_GAP_REQUEST
+        res.data_gap_metric = "inventory_aging"
+        res.intent = "inventory_aging_gap"
+        res.resolved = True
+        return res
+    if wants_true_inventory_turnover(ql):
+        res.kind = KIND_DATA_GAP_REQUEST
+        res.data_gap_metric = "inventory_turnover"
+        res.intent = "inventory_turnover_gap"
+        res.resolved = True
+        return res
+    if wants_inventory_trend(ql):
+        res.kind = KIND_DATA_GAP_REQUEST
+        res.data_gap_metric = "inventory_aging"
+        res.intent = "inventory_trend_gap"
         res.resolved = True
         return res
 
@@ -405,6 +446,12 @@ def resolve_analytical_followup(
         "what changed?",
         "what changed",
     }:
+        if prior_intent in INVENTORY_INTENTS or prior_intent in INVENTORY_GAP_INTENTS:
+            # Observed facts only — do not invent inventory causality.
+            res.kind = KIND_CAUSE_ANALYSIS
+            res.intent = prior_intent if prior_intent in INVENTORY_INTENTS else "inventory_analysis"
+            res.resolved = True
+            return res
         if prior_intent in _TIME_GRAIN_INTENTS:
             res.kind = KIND_CAUSE_ANALYSIS
             res.intent = prior_intent
@@ -580,20 +627,50 @@ def resolve_analytical_followup(
         res.resolved = True
         return res
 
-    # ── Inventory snapshot / velocity (before bare "compare" → year compare) ──
-    if any(
-        x in ql
-        for x in (
-            "inventory",
-            "stock value",
-            "slow-moving",
-            "fast-moving",
-            "inventory age",
-        )
+    # ── Inventory snapshot / vs-sales / risk / plant (before history and compare) ──
+    inv_intent = resolve_inventory_intent(ql)
+    if inv_intent:
+        res.kind = KIND_DIMENSION_EXPANSION if inv_intent not in INVENTORY_GAP_INTENTS else KIND_DATA_GAP_REQUEST
+        res.intent = inv_intent
+        if inv_intent in INVENTORY_GAP_INTENTS:
+            res.data_gap_metric = (
+                "inventory_turnover" if inv_intent == "inventory_turnover_gap" else "inventory_aging"
+            )
+        if inv_intent == "inventory_by_plant":
+            res.add_dimensions = ["warehouse"]
+        elif inv_intent == "inventory_sales_comparison" and "product group" in ql:
+            res.add_dimensions = ["product_group"]
+        risk = resolve_risk_direction(ql)
+        if risk:
+            res.comparisons = [risk]
+        res.resolved = True
+        return res
+    if wants_inventory_by_plant(ql) or (
+        prior_intent in INVENTORY_INTENTS
+        and any(x in ql for x in ("by plant", "by warehouse", "plants", "warehouse"))
     ):
         res.kind = KIND_DIMENSION_EXPANSION
-        res.intent = "inventory_analysis"
+        res.intent = "inventory_by_plant"
         res.add_dimensions = ["warehouse"]
+        res.resolved = True
+        return res
+    if prior_intent in INVENTORY_INTENTS and any(
+        x in ql for x in ("by product group", "product groups", "material group")
+    ) and "inventory" not in ql:
+        # "Show their product groups" after inventory → sales product_group_breakdown (existing)
+        pass
+    if prior_intent in INVENTORY_INTENTS and (
+        ql.strip() in {"compare them", "compare", "compare that"}
+        or (
+            any(x in ql for x in ("compare", "versus", " vs "))
+            and any(x in ql for x in ("sales", "revenue", "inventory"))
+            and "last year" not in ql
+            and "previous year" not in ql
+            and not _YEAR_RE.search(ql)
+        )
+    ):
+        res.kind = KIND_COMPARISON
+        res.intent = "inventory_sales_comparison"
         res.resolved = True
         return res
 
@@ -655,7 +732,7 @@ def resolve_analytical_followup(
     # Prefer multi-word dimensions (product group) before bare "product".
     dim_in_break = re.search(
         r"\bby\s+(product\s+groups?|material\s+groups?|industr(?:y|ies)|"
-        r"regions?|countries?|customers?|products?|years?|months?|quarters?)\b",
+        r"regions?|countries?|customers?|products?|years?|months?|quarters?|plants?|warehouses?)\b",
         ql,
     )
     if dim_in_break:
@@ -673,6 +750,8 @@ def resolve_analytical_followup(
                 "years": "year",
                 "months": "month",
                 "quarters": "quarter",
+                "plants": "plant",
+                "warehouses": "warehouse",
             }
             key = plural_map.get(dim_word, dim_word)
             canonical = DIMENSION_ALIASES.get(key, key)
@@ -752,6 +831,8 @@ def resolve_analytical_followup(
                 res.intent = prior_intent
             elif prior_intent == "product_growth_decline":
                 res.intent = "product_growth_decline"
+            elif prior_intent in INVENTORY_INTENTS and metric_key == "quantity":
+                res.intent = prior_intent
             elif metric_key == "gross_profit" and prior_intent:
                 res.intent = prior_intent
             else:
@@ -786,6 +867,8 @@ def resolve_analytical_followup(
                 res.intent = "suppliers_of_selection"
             elif dim_key == "inventory":
                 res.intent = "inventory_analysis"
+            elif dim_key == "warehouse":
+                res.intent = "inventory_by_plant"
             elif dim_key == "product_group":
                 res.intent = "product_group_breakdown"
             elif dim_key == "month":
@@ -807,7 +890,7 @@ def resolve_analytical_followup(
     # ── Fallback: inherit prior intent for short follow-ups (< 8 tokens) ──
     if len(_tokens(ql)) <= 8 and prior_intent:
         res.kind = KIND_DIMENSION_EXPANSION
-        if prior_intent in _TIME_GRAIN_INTENTS or prior_intent == "product_growth_decline":
+        if prior_intent in _TIME_GRAIN_INTENTS or prior_intent == "product_growth_decline" or prior_intent in INVENTORY_INTENTS:
             res.intent = prior_intent
         else:
             res.intent = "dimensional_extend"

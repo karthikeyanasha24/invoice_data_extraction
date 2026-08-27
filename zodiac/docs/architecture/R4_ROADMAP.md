@@ -24,7 +24,7 @@ Status: **R4-1 in implementation / deploy gate**. Do not declare R4-1 production
 |---|---|---|---|---|---|---|
 | Month / quarter trends (billing) | High — seasonality & growth | VBRK.FKDAT | billing_item by period | High | Low | **R4-1 implemented** (local; live acceptance pending) |
 | Product growth / decline ranking | High | VBRP/VBRK YoY | billing_item | High | Medium | **R4-2 ready** |
-| Inventory vs sales (snapshot×velocity) | High | MBEW + VBRP | snapshot ⋈ product (no fan-out of NETWR) | Medium | Medium | **R4-3 ready** (velocity already conditional) |
+| Inventory vs sales (snapshot×velocity) | High | MBEW + VBRP | snapshot ⋈ product (no fan-out of NETWR) | Medium | Medium | **R4-3 implemented** (local; live acceptance pending) |
 | Supplier concentration by product | High | EKPO/EKKO/LFA1 | PO item | Medium | Medium | **R4-4 ready** (association only; no supplier profit) |
 | Delivery cycle times (order→delivery→billing) | High | VBAK/LIKP/VBRK/VBFA | document-flow counts/dates | Medium | High | **R4-5 careful** |
 | Customer value change / mix shift | High | VBRP/KNA1 | billing_item | High | Medium | **R4-6 ready** |
