@@ -14,7 +14,8 @@ from ..schemas.user import UserCreate, UserLogin, ZodiacUser as UserSchema, Auth
 load_dotenv()
 
 router = APIRouter(prefix="/user/auth", tags=["authentication"])
-security = HTTPBearer()
+# auto_error=False so a missing Authorization header is 401 (not FastAPI's default 403).
+security = HTTPBearer(auto_error=False)
 
 # JWT settings
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
@@ -43,7 +44,16 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+):
+    if not credentials or not (credentials.credentials or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
         token = credentials.credentials
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])

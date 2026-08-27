@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import { TrendingUp, TrendingDown, Package, RefreshCw, BarChart3, Users, Sparkles, Globe, MapPin, Layers, Banknote } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
 import {
@@ -29,7 +30,7 @@ export default function DashboardV2Business() {
       const res = await dashboardApi.getV2Business(days, currency || undefined);
       setData(res);
     } catch (err: any) {
-      setError(err.message || 'Failed to load business data');
+      setError(publicApiError(err, 'This business dashboard is temporarily unavailable. Please try again.'));
     } finally {
       setLoading(false);
     }

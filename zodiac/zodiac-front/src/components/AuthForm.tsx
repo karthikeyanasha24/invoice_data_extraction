@@ -70,9 +70,9 @@ export default function AuthForm({ isLogin, onToggleMode }: AuthFormProps) {
             <div className="mx-auto w-16 h-16 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center shadow-lg">
               <span className="text-white font-bold text-xl">Z</span>
             </div>
-            <h1 className="mt-4 text-2xl sm:text-3xl font-bold text-slate-900">Welcome to Zodiac</h1>
+            <h1 className="mt-4 text-2xl sm:text-3xl font-bold text-slate-900">Welcome to BridgeEDI</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-sm mx-auto px-4">
-              Zodiac is an AI-powered document management system.
+              Invoice operations and governed questions over your SAP business data.
             </p>
             <p className="mt-3 text-xs text-slate-500">
               Customer organization?{' '}
@@ -167,6 +167,7 @@ export default function AuthForm({ isLogin, onToggleMode }: AuthFormProps) {
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
                       {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                     </button>

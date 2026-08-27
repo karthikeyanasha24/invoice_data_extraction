@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import DashboardAIAnalysis from './DashboardAIAnalysis';
 import AIChartRenderer from './ai/AIChartRenderer';
 import ReactMarkdown from 'react-markdown';
@@ -235,7 +236,7 @@ function AIChatPanel() {
         insights: res.insights || [],
       });
     } catch (err: any) {
-      setError(err?.message || 'Query failed. Please try again.');
+      setError(publicApiError(err, 'Could not complete this analysis. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -385,6 +386,7 @@ export default function IntelligencePage() {
   const [outbound, setOutbound] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [dashError, setDashError] = useState<string | null>(null);
   const dashAbortRef = useRef<AbortController | null>(null);
   const fetchData = useCallback(async () => {
     dashAbortRef.current?.abort();
@@ -392,6 +394,7 @@ export default function IntelligencePage() {
     dashAbortRef.current = ac;
     try {
       setLoading(true);
+      setDashError(null);
       const [inbRes, outRes] = await Promise.all([
         dashboardApi.getV2Inbound(days, { signal: ac.signal }),
         dashboardApi.getV2Outbound(days, { signal: ac.signal }),
@@ -402,6 +405,7 @@ export default function IntelligencePage() {
       setLastRefresh(new Date());
     } catch (err: any) {
       if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+      setDashError(publicApiError(err, 'Operational metrics are temporarily unavailable. Please try again.'));
     } finally {
       if (!ac.signal.aborted) setLoading(false);
     }
@@ -455,7 +459,7 @@ export default function IntelligencePage() {
 
   const TABS = [
     { id: 'realtime' as Tab,   label: 'Real-time',  icon: <Activity className="h-3.5 w-3.5" /> },
-    { id: 'historical' as Tab, label: 'Historical', icon: <TrendingUp className="h-3.5 w-3.5" /> },
+    { id: 'historical' as Tab, label: 'Snapshot', icon: <TrendingUp className="h-3.5 w-3.5" /> },
     { id: 'chat' as Tab,       label: 'Full Chat',  icon: <Sparkles className="h-3.5 w-3.5" /> },
   ];
 
@@ -524,12 +528,29 @@ export default function IntelligencePage() {
           <div className="flex-shrink-0 px-5 pt-4 pb-3">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <KPICard primary label="Docs Received" value={fmt(totalDocs)} sub="SAT / CFDI inbound" />
-              <KPICard label="Validated OK" value={fmt(sentToSAP)} accent="green" sub="Sent to SAP" />
+              <KPICard label="Sent to SAP" value={fmt(sentToSAP)} accent="green" sub="Validated inbound merges" />
               <KPICard label="Converted OK" value={fmt(converted)} accent="green" sub="EDI outbound" />
               <KPICard label="Success Rate" value={successRate}
                 accent={received > 0 && converted / received > 0.8 ? 'green' : 'amber'}
                 sub="Converted / Received" />
             </div>
+            {dashError && (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                <p>{dashError}</p>
+                <button
+                  type="button"
+                  onClick={fetchData}
+                  className="mt-2 rounded-md bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-800"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {tab === 'historical' && !dashError && (
+              <p className="mt-2 text-[11px] text-slate-500">
+                Snapshot of the same operational invoice KPIs without auto-refresh. This is not historical SAP inventory.
+              </p>
+            )}
           </div>
 
           {/* Inbound vs Outbound comparison chart */}

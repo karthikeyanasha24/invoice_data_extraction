@@ -9,8 +9,10 @@ if sys.platform == "win32":
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-    except:
+    except Exception:
         pass
+
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,7 +86,7 @@ app.add_middleware(
 @app.get("/")
 async def root():
     return {
-        "message": "Zodiac API is running", 
+        "message": "Zodiac API is running",
         "status": "healthy",
         "version": "1.0.0"
     }
@@ -93,7 +95,7 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {
-        "status": "healthy", 
+        "status": "healthy",
         "service": "zodiac-api",
         "version": "1.0.0"
     }
@@ -147,184 +149,204 @@ async def readiness_check():
             },
         )
 
-# Import and register routers with safe error handling
+
+# Import and register routers. Failures are logged with traceback and recorded
+# on GET /health/routers so a missing route is diagnosable (not a silent 404).
+ROUTER_STATUS: Dict[str, Dict[str, Any]] = {}
+
+
+def _register_router(
+    name: str,
+    loader: Callable,
+    *,
+    prefix: Optional[str] = None,
+    unavailable_paths: Optional[Sequence[Tuple[str, Sequence[str]]]] = None,
+) -> None:
+    try:
+        loaded_router = loader()
+        if prefix:
+            app.include_router(loaded_router, prefix=prefix)
+        else:
+            app.include_router(loaded_router)
+        ROUTER_STATUS[name] = {"loaded": True, "error_type": None}
+        logger.info("[OK] %s router loaded", name)
+    except Exception as e:
+        err_msg = str(e).encode("ascii", "replace").decode("ascii")
+        logger.exception("[ERROR] Failed to load %s router: %s", name, err_msg)
+        ROUTER_STATUS[name] = {
+            "loaded": False,
+            "error_type": type(e).__name__,
+        }
+        if unavailable_paths:
+            async def _unavailable(router_name: str = name):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=(
+                        f"{router_name} router failed to load "
+                        f"({ROUTER_STATUS[router_name].get('error_type')}). "
+                        "See GET /health/routers."
+                    ),
+                )
+
+            for path, methods in unavailable_paths:
+                app.add_api_route(path, _unavailable, methods=list(methods))
+
+
 logger.info("[INIT] Loading API routers...")
 
-try:
-    from .api.auth import router as auth_router
-    app.include_router(auth_router, prefix="/api/v1")
-    logger.info("[OK] Auth router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load auth router: {err_msg}")
 
-try:
-    from .api.invoices import router as invoices_router
-    app.include_router(invoices_router, prefix="/api/v1")
-    logger.info("[OK] Invoices router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load invoices router: {err_msg}")
-
-try:
-    from .api.invoices_v2 import router as invoices_v2_router
-    app.include_router(invoices_v2_router, prefix="/api/v1")
-    logger.info("[OK] Invoices V2 router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load invoices V2 router: {err_msg}")
-
-try:
-    from .api.converted_invoices import router as converted_invoices_router
-    app.include_router(converted_invoices_router, prefix="/api/v1")
-    logger.info("[OK] Converted Invoices router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load converted invoices router: {err_msg}")
-
-try:
-    from .api.customers import router as customers_router
-    app.include_router(customers_router, prefix="/api/v1")
-    logger.info("[OK] Customers router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load customers router: {err_msg}")
-
-try:
-    from .api.corrections import router as corrections_router
-    app.include_router(corrections_router)
-    logger.info("[OK] Corrections router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load corrections router: {err_msg}")
-
-try:
-    from .api.dashboard import router as dashboard_router
-    app.include_router(dashboard_router, prefix="/api/v1")
-    logger.info("[OK] Dashboard router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load dashboard router: {err_msg}")
-
-try:
-    from .api.adaptive_query import router as adaptive_query_router
-    app.include_router(adaptive_query_router)
-    logger.info("[OK] Adaptive query router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load adaptive query router: {err_msg}")
-    # Do not return 404 for adaptive-query path when router import fails.
-    # Return a clear 503 so the frontend can surface actionable diagnostics.
-    @app.api_route("/api/query/adaptive", methods=["GET", "POST"])
-    @app.api_route("/api/v1/query/adaptive", methods=["GET", "POST"])
-    async def _adaptive_query_unavailable():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Adaptive query router failed to load. Check server logs for import errors.",
-        )
-
-try:
-    from .api.admin import router as admin_router
-    app.include_router(admin_router, prefix="/api/v1")
-    logger.info("[OK] Admin router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load admin router: {err_msg}")
-
-try:
-    from .api.sat import router as sat_router
-    app.include_router(sat_router, prefix="/api/v1")
-    logger.info("[OK] SAT router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load SAT router: {err_msg}")
-
-try:
-    from .api.sat_canonical import router as sat_canonical_router
-    app.include_router(sat_canonical_router, prefix="/api/v1")
-    logger.info("[OK] SAT Canonical router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load SAT Canonical router: {err_msg}")
-
-try:
-    from .api.sat_supplier_mapping import router as sat_supplier_mapping_router
-    app.include_router(sat_supplier_mapping_router, prefix="/api/v1")
-    logger.info("[OK] SAT Supplier Mapping router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load SAT Supplier Mapping router: {err_msg}")
-
-try:
-    from .api.sat_simple_merge import router as sat_simple_merge_router
-    app.include_router(sat_simple_merge_router, prefix="/api/v1")
-    logger.info("[OK] SAT Simple Merge router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load SAT Simple Merge router: {err_msg}")
-
-try:
-    from .api.supplier_tokens import router as supplier_tokens_router
-    app.include_router(supplier_tokens_router, prefix="/api/v1")
-    logger.info("[OK] Supplier Tokens router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load Supplier Tokens router: {err_msg}")
+def _load_auth():
+    from .api.auth import router as r
+    return r
 
 
-try:
-    from .api.customer_users import router as customer_users_router
-    app.include_router(customer_users_router, prefix="/api/v1")
-    logger.info("[OK] Customer Users router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load Customer Users router: {err_msg}")
+def _load_invoices():
+    from .api.invoices import router as r
+    return r
 
-try:
-    from .api.certificates import router as certificates_router
-    app.include_router(certificates_router, prefix="/api/v1")
-    logger.info("[OK] Certificates router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load Certificates router: {err_msg}")
 
-# Phase 2 — Customer Workspace (additive; does not replace existing customer APIs)
-try:
-    from .api.workspace import router as workspace_router
-    app.include_router(workspace_router, prefix="/api/v1")
-    logger.info("[OK] Workspace router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load Workspace router: {err_msg}")
+def _load_invoices_v2():
+    from .api.invoices_v2 import router as r
+    return r
 
-# Phase 4 — Invoice Processing Pipeline (opt-in; does not replace /sat/*)
-try:
-    from .api.pipeline import router as pipeline_router
-    app.include_router(pipeline_router, prefix="/api/v1")
-    logger.info("[OK] Pipeline router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load Pipeline router: {err_msg}")
 
-# Phase 8 — Enterprise Monitoring (additive; observes pipeline only)
-try:
-    from .api.monitoring import router as monitoring_router
-    app.include_router(monitoring_router, prefix="/api/v1")
-    logger.info("[OK] Monitoring router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load Monitoring router: {err_msg}")
+def _load_converted_invoices():
+    from .api.converted_invoices import router as r
+    return r
 
-# Phase 9 — AI Operational Intelligence (additive; monitoring consumer only)
-try:
-    from .api.ai_ops import router as ai_ops_router
-    app.include_router(ai_ops_router, prefix="/api/v1")
-    logger.info("[OK] AI Ops router loaded")
-except Exception as e:
-    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
-    logger.error(f"[ERROR] Failed to load AI Ops router: {err_msg}")
 
-logger.info("[OK] Zodiac API initialized successfully")
+def _load_customers():
+    from .api.customers import router as r
+    return r
+
+
+def _load_corrections():
+    from .api.corrections import router as r
+    return r
+
+
+def _load_dashboard():
+    from .api.dashboard import router as r
+    return r
+
+
+def _load_adaptive_query():
+    from .api.adaptive_query import router as r
+    return r
+
+
+def _load_admin():
+    from .api.admin import router as r
+    return r
+
+
+def _load_sat():
+    from .api.sat import router as r
+    return r
+
+
+def _load_sat_canonical():
+    from .api.sat_canonical import router as r
+    return r
+
+
+def _load_sat_supplier_mapping():
+    from .api.sat_supplier_mapping import router as r
+    return r
+
+
+def _load_sat_simple_merge():
+    from .api.sat_simple_merge import router as r
+    return r
+
+
+def _load_supplier_tokens():
+    from .api.supplier_tokens import router as r
+    return r
+
+
+def _load_customer_users():
+    from .api.customer_users import router as r
+    return r
+
+
+def _load_certificates():
+    from .api.certificates import router as r
+    return r
+
+
+def _load_workspace():
+    from .api.workspace import router as r
+    return r
+
+
+def _load_pipeline():
+    from .api.pipeline import router as r
+    return r
+
+
+def _load_monitoring():
+    from .api.monitoring import router as r
+    return r
+
+
+def _load_ai_ops():
+    from .api.ai_ops import router as r
+    return r
+
+
+_register_router("auth", _load_auth, prefix="/api/v1")
+_register_router("invoices", _load_invoices, prefix="/api/v1")
+_register_router("invoices_v2", _load_invoices_v2, prefix="/api/v1")
+_register_router("converted_invoices", _load_converted_invoices, prefix="/api/v1")
+_register_router("customers", _load_customers, prefix="/api/v1")
+_register_router("corrections", _load_corrections)
+_register_router(
+    "dashboard",
+    _load_dashboard,
+    prefix="/api/v1",
+    unavailable_paths=(
+        ("/api/v1/dashboard/{full_path:path}", ("GET", "POST", "PUT", "PATCH", "DELETE")),
+    ),
+)
+_register_router(
+    "adaptive_query",
+    _load_adaptive_query,
+    unavailable_paths=(
+        ("/api/query/adaptive", ("GET", "POST")),
+        ("/api/v1/query/adaptive", ("GET", "POST")),
+    ),
+)
+_register_router("admin", _load_admin, prefix="/api/v1")
+_register_router("sat", _load_sat, prefix="/api/v1")
+_register_router("sat_canonical", _load_sat_canonical, prefix="/api/v1")
+_register_router("sat_supplier_mapping", _load_sat_supplier_mapping, prefix="/api/v1")
+_register_router("sat_simple_merge", _load_sat_simple_merge, prefix="/api/v1")
+_register_router("supplier_tokens", _load_supplier_tokens, prefix="/api/v1")
+_register_router("customer_users", _load_customer_users, prefix="/api/v1")
+_register_router("certificates", _load_certificates, prefix="/api/v1")
+_register_router("workspace", _load_workspace, prefix="/api/v1")
+_register_router("pipeline", _load_pipeline, prefix="/api/v1")
+_register_router("monitoring", _load_monitoring, prefix="/api/v1")
+_register_router("ai_ops", _load_ai_ops, prefix="/api/v1")
+
+failed_routers = [k for k, v in ROUTER_STATUS.items() if not v.get("loaded")]
+if failed_routers:
+    logger.error("[INIT] Routers failed to load: %s", ", ".join(failed_routers))
+else:
+    logger.info("[OK] Zodiac API initialized successfully — all routers loaded")
+
+
+@app.get("/health/routers")
+async def router_health():
+    """Diagnose which API routers registered. Does not include secrets or stack traces."""
+    failed = [k for k, v in ROUTER_STATUS.items() if not v.get("loaded")]
+    return {
+        "status": "ok" if not failed else "degraded",
+        "loaded_count": sum(1 for v in ROUTER_STATUS.values() if v.get("loaded")),
+        "failed": failed,
+        "routers": ROUTER_STATUS,
+    }
 
 
 @app.on_event("startup")

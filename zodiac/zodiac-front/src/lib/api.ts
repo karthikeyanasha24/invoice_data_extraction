@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { publicApiError } from './apiErrors';
 import {
     AuthResponse,
     LoginRequest,
@@ -1834,20 +1835,13 @@ export const dashboardApi = {
                 throw error;
             }
             if (error?.code === 'ECONNABORTED') {
-                throw new Error('Query timed out after 10 minutes. Try a simpler question or use a quick-action chip.');
+                throw new Error('This analysis took too long. Try a simpler question.');
             }
             if (error?.code === 'ECONNRESET' || error?.message === 'Network Error') {
-                throw new Error(
-                    'Cannot reach the API backend. Start zodiac-api on port 8000 (python start.py) ' +
-                    'and ensure NEXT_PUBLIC_API_URL=http://localhost:8000 in .env.local, then restart npm run dev.'
-                );
+                throw new Error('Could not reach the analysis service. Please try again.');
             }
             console.error('Adaptive query failed:', error);
-            const detail = error.response?.data?.detail;
-            const msg = typeof detail === 'string'
-                ? detail
-                : detail?.message || detail?.error || 'Adaptive query failed.';
-            throw new Error(msg);
+            throw new Error(publicApiError(error, 'Could not complete this analysis. Please try again.'));
         }
     },
 

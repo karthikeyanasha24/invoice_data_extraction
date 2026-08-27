@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from live_http import adaptive_headers
 
 API = "https://zodiac-back.vercel.app/api/query/adaptive"
 OUT = "r4_3_live_acceptance.json"
@@ -24,7 +29,7 @@ def post(q: str, ctx=None) -> Tuple[Dict[str, Any], int]:
         body["contextData"] = ctx
     t0 = time.perf_counter()
     req = urllib.request.Request(
-        API, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
+        API, data=json.dumps(body).encode(), headers=adaptive_headers()
     )
     with urllib.request.urlopen(req, timeout=180) as resp:
         out = json.load(resp)

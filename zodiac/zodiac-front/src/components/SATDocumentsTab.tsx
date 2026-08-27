@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { satApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import {
   RefreshCw,
   FileText,
@@ -76,7 +77,7 @@ export default function SATDocumentsTab() {
       setTotalCount(response.total || 0);
     } catch (err: any) {
       console.error('Error fetching documents:', err);
-      setError(err.message || 'Failed to fetch documents.');
+      setError(publicApiError(err, 'Could not load SAT documents. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -217,6 +218,13 @@ export default function SATDocumentsTab() {
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <p className="text-red-800">{error}</p>
+          <button
+            type="button"
+            onClick={fetchDocuments}
+            className="mt-3 px-3 py-1.5 text-sm rounded-md bg-red-700 text-white hover:bg-red-800"
+          >
+            Retry
+          </button>
         </div>
       )}
 

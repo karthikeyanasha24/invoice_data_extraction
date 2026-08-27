@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import { Users, RefreshCw, GitCompare, Globe, MessageCircle, Send, X } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
 import {
@@ -54,7 +55,7 @@ export default function DashboardV2CustomerComparison() {
       setCompareB(null);
       setChatMessages([]);
     } catch (err: any) {
-      setError(err.message || 'Failed to load customer comparison data');
+      setError(publicApiError(err, 'Customer comparison is temporarily unavailable. Please try again.'));
     } finally {
       setLoading(false);
     }

@@ -7,7 +7,8 @@
         "build": "next build --webpack",
         "start": "next start",
         "lint": "eslint",
-        "test:adaptive-context": "node --experimental-strip-types --test src/lib/adaptiveChatContext.test.ts"
+        "test:adaptive-context": "node --experimental-strip-types --test src/lib/adaptiveChatContext.test.ts",
+        "test:ux": "node --experimental-strip-types --test src/lib/apiErrors.test.ts src/lib/followupChips.test.ts"
     },
     "dependencies": {
         "axios": "^1.6.0",

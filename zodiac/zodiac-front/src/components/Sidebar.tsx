@@ -18,6 +18,7 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
+  MapPin,
   Boxes,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -58,19 +59,19 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
     label: 'Workspaces',
     icon: Boxes,
     path: '/workspace',
-    description: 'Customer exclusive workspace shell',
+    description: 'Per-customer workspace',
   };
   const adminMenuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', description: 'Overview and analytics' },
-    { id: 'generative-ai', label: 'Generative AI', icon: Sparkles, path: '/dashboard/ai', description: 'AI-powered dashboard analysis' },
-    { id: 'invoices', label: 'Invoices', icon: FileText, path: '/invoices-v2', description: 'Manage and validate invoices' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', description: 'Inbound, outbound, and business operations' },
+    { id: 'generative-ai', label: 'Intelligence', icon: Sparkles, path: '/dashboard/ai', description: 'Ask questions about SAP business data' },
+    { id: 'invoices', label: 'Invoices', icon: FileText, path: '/invoices-v2', description: 'Validate and convert invoices' },
     { id: 'customers', label: 'Customers', icon: Building2, path: '/customers', description: 'Manage EDI customers' },
     ...(workspaceUiEnabled ? [workspaceMenuItem] : []),
     ...(user?.is_admin ? [{ id: 'customer-users', label: 'Customer users', icon: Users, path: '/customer-users', description: 'Users & customer assignments' }] : []),
-    { id: 'sat-documents', label: 'SAT Documents', icon: Receipt, path: '/sat-documents', description: 'CFDI documents & SAP integration' },
-    { id: 'account-mapping', label: 'Account Mapping', icon: Settings, path: '/admin/account-mapping', description: 'RFC to SAP G/L mapping' },
+    { id: 'sat-documents', label: 'SAT Documents', icon: Receipt, path: '/sat-documents', description: 'CFDI documents and SAP send' },
+    { id: 'account-mapping', label: 'Account Mapping', icon: MapPin, path: '/admin/account-mapping', description: 'RFC to SAP G/L mapping' },
     { id: 'supplier-tokens', label: 'Supplier Tokens', icon: Key, path: '/admin/supplier-tokens', description: 'Manage supplier API tokens' },
-    { id: 'settings', label: 'Settings', icon: Settings, path: '/settings', description: 'Account and preferences' }
+    { id: 'settings', label: 'Settings', icon: Settings, path: '/settings', description: 'Account and API access' }
   ];
   // Phase 11 — customer users are redirected to /customer/* (see MainLayout).
   // Keep a minimal fallback menu pointing at the dedicated portal only.
@@ -104,8 +105,8 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
                 <span className="text-white font-bold text-sm">Z</span>
               </div>
               <div className="min-w-0">
-                <span className="font-semibold text-slate-900 text-sm sm:text-base truncate block">Zodiac</span>
-                <p className="text-xs text-slate-500 truncate">Document Management</p>
+                <span className="font-semibold text-slate-900 text-sm sm:text-base truncate block">BridgeEDI</span>
+                <p className="text-xs text-slate-500 truncate">Invoice ops + SAP Q&amp;A</p>
               </div>
             </div>
           )}

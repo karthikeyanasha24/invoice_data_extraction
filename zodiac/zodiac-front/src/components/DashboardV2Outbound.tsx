@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import { FileInput, CheckCircle, XCircle, FileOutput, RefreshCw, Users, AlertTriangle, Sparkles, TrendingUp, Package } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
 import {
@@ -54,7 +55,7 @@ export default function DashboardV2Outbound() {
       const res = await dashboardApi.getV2Outbound(days);
       setData(res);
     } catch (err: any) {
-      setError(err.message || 'Failed to load outbound data');
+      setError(publicApiError(err, 'This outbound dashboard is temporarily unavailable. Please try again.'));
     } finally {
       setLoading(false);
     }

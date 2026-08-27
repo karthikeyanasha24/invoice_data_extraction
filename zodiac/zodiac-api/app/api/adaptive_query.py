@@ -60,7 +60,7 @@ from ..services.ai_query_plan import (
     plan_prompt_directive,
     QueryPlan,
 )
-from ..api.auth import get_current_user_optional
+from ..api.auth import get_current_user
 from ..models.user import ZodiacUser
 
 logger = logging.getLogger("zodiac-api.adaptive_query")
@@ -2476,7 +2476,7 @@ async def get_query_adaptive() -> Dict[str, Any]:
 async def get_adaptive_chat_history(
     thread_id: str = Query(..., min_length=8),
     db: Session = Depends(get_db),
-    current_user: Optional[ZodiacUser] = Depends(get_current_user_optional),
+    current_user: ZodiacUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Load persisted Full Chat turns for an adaptive thread (ada_*).
@@ -2590,7 +2590,7 @@ async def post_query_adaptive(
     overrideSql: Optional[str] = Body(default=None, embed=True),
     threadId: Optional[str] = Body(default=None, embed=True),
     db: Session = Depends(get_db),
-    current_user: Optional[ZodiacUser] = Depends(get_current_user_optional),
+    current_user: ZodiacUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     q = (question or "").strip()
     if not q:
@@ -2602,7 +2602,7 @@ async def post_query_adaptive(
     thread_id = (threadId or "").strip() or None
     if thread_id and not thread_id.startswith("ada_"):
         thread_id = None  # ignore non-adaptive thread ids
-    user_id = int(current_user.id) if current_user is not None else None
+    user_id = int(current_user.id)
 
     routing_meta: Dict[str, Any] = {}
 

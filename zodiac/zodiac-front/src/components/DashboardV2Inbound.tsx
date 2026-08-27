@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import { FileText, Merge, Send, Clock, Key, RefreshCw, Building2, ArrowDownCircle } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
 import {
@@ -50,7 +51,7 @@ export default function DashboardV2Inbound() {
       setData(res);
       setRecentDocs(recent?.recent_documents ?? []);
     } catch (err: any) {
-      setError(err.message || 'Failed to load inbound data');
+      setError(publicApiError(err, 'This inbound dashboard is temporarily unavailable. Please try again.'));
     } finally {
       setLoading(false);
     }

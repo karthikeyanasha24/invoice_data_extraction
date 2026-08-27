@@ -25,13 +25,17 @@ export default function MainLayout({ children, topSection, fillViewport = false 
 
   const isCustomer = !authLoading && !!user && isCustomerPortalUser(user);
 
-  // Phase 11/12 — customer portal users must never see the admin shell
   useEffect(() => {
-    if (authLoading || !user) return;
+    if (authLoading) return;
+    if (!user) {
+      const next = pathname && pathname !== '/' ? `/?next=${encodeURIComponent(pathname)}` : '/';
+      router.replace(next);
+      return;
+    }
     if (isCustomerPortalUser(user)) {
       router.replace(CUSTOMER_HOME_PATH);
     }
-  }, [user, authLoading, router]);
+  }, [user, authLoading, router, pathname]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -58,11 +62,31 @@ export default function MainLayout({ children, topSection, fillViewport = false 
     }
   };
 
-  // Phase 12 — no admin chrome flash while redirecting customer users
-  if (authLoading || isCustomer) {
+  if (authLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
+        <Loader className="h-8 w-8 animate-spin text-emerald-600" aria-label="Checking your session" />
+        <p className="text-sm font-medium text-slate-700">Checking your session…</p>
+        <p className="text-xs text-slate-500">Protected pages require you to be signed in.</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
+        <Loader className="h-8 w-8 animate-spin text-emerald-600" aria-label="Redirecting to sign in" />
+        <p className="text-sm font-medium text-slate-700">Redirecting to sign in…</p>
+        <p className="text-xs text-slate-500">You need an account to open this page.</p>
+      </div>
+    );
+  }
+
+  if (isCustomer) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
         <Loader className="h-8 w-8 animate-spin text-emerald-600" aria-label="Redirecting" />
+        <p className="text-sm font-medium text-slate-700">Opening your workspace…</p>
       </div>
     );
   }

@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Zodiac - Invoice Management System",
-  description: "Modern invoice processing and management platform",
+  title: "BridgeEDI",
+  description: "Invoice operations and governed SAP business questions",
 };
 
 export default function RootLayout({

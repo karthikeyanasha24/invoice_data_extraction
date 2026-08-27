@@ -51,10 +51,16 @@ function HomeContent() {
     
     if (isAuthenticated && !loading && user) {
       if (user.is_customer_user && !user.is_admin) {
-        // Phase 11 — dedicated customer portal (not admin shell)
         router.push('/customer/overview');
       } else {
-        router.push('/dashboard');
+        const next = searchParams.get('next') || '';
+        const safeNext =
+          next.startsWith('/') &&
+          !next.startsWith('//') &&
+          !next.startsWith('/customer')
+            ? next
+            : '/dashboard';
+        router.push(safeNext);
       }
     }
   }, [isAuthenticated, loading, router, isClient, user]);

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { User, Key, Settings, Shield, Copy, Eye, EyeOff, Plus, Trash2, Save, AlertCircle, CheckCircle, Globe } from 'lucide-react';
 import { fileApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import { ApiKeyInfo, ApiKeyResponse } from '@/types';
 import { cn } from '@/lib/utils';
 import MainLayout from '@/components/MainLayout';
@@ -10,7 +11,7 @@ import TopSection from '@/components/TopSection';
 import { useAuth } from '@/contexts/AuthContext';
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [apiKeyInfo, setApiKeyInfo] = useState<ApiKeyInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -23,8 +24,9 @@ export default function SettingsPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   useEffect(() => {
+    if (authLoading || !user) return;
     fetchApiKeyInfo();
-  }, []);
+  }, [authLoading, user]);
 
   const fetchApiKeyInfo = async () => {
     try {
@@ -35,7 +37,7 @@ export default function SettingsPage() {
       setHasChanges(false);
     } catch (error: any) {
       console.error('Failed to fetch API key info:', error);
-      setError(error.message || 'Failed to load API key information');
+      setError(publicApiError(error, 'Could not load API key information.'));
     } finally {
       setLoading(false);
     }
@@ -55,7 +57,7 @@ export default function SettingsPage() {
       await fetchApiKeyInfo();
     } catch (error: any) {
       console.error('Failed to generate API key:', error);
-      setError(error.message || 'Failed to generate API key');
+      setError(publicApiError(error, 'Could not generate API key.'));
     } finally {
       setActionLoading(null);
     }
@@ -79,7 +81,7 @@ export default function SettingsPage() {
       await fetchApiKeyInfo();
     } catch (error: any) {
       console.error('Failed to regenerate API key:', error);
-      setError(error.message || 'Failed to regenerate API key');
+      setError(publicApiError(error, 'Could not regenerate API key.'));
     } finally {
       setActionLoading(null);
     }
@@ -101,7 +103,7 @@ export default function SettingsPage() {
       await fetchApiKeyInfo();
     } catch (error: any) {
       console.error('Failed to suspend API key:', error);
-      setError(error.message || 'Failed to suspend API key');
+      setError(publicApiError(error, 'Could not suspend API key.'));
     } finally {
       setActionLoading(null);
     }
@@ -119,7 +121,7 @@ export default function SettingsPage() {
       await fetchApiKeyInfo();
     } catch (error: any) {
       console.error('Failed to activate API key:', error);
-      setError(error.message || 'Failed to activate API key');
+      setError(publicApiError(error, 'Could not activate API key.'));
     } finally {
       setActionLoading(null);
     }
@@ -138,7 +140,7 @@ export default function SettingsPage() {
       await fetchApiKeyInfo();
     } catch (error: any) {
       console.error('Failed to update IP allow list:', error);
-      setError(error.message || 'Failed to update IP allow list');
+      setError(publicApiError(error, 'Could not update the IP allow list.'));
     } finally {
       setActionLoading(null);
     }
@@ -179,6 +181,24 @@ export default function SettingsPage() {
       }
     >
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        {authLoading && (
+          <div className="mb-6 rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+            Loading your account…
+          </div>
+        )}
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <p className="font-medium">Could not load settings</p>
+            <p className="mt-1">{error}</p>
+            <button
+              type="button"
+              onClick={() => { setError(''); fetchApiKeyInfo(); }}
+              className="mt-3 rounded-md bg-red-700 px-3 py-1.5 text-white hover:bg-red-800"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         <div className="space-y-6">
           {/* Profile Settings */}
           <div className="bg-white shadow rounded-lg">

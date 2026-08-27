@@ -6,7 +6,11 @@ import statistics
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from live_http import adaptive_headers
 
 API = "https://zodiac-back.vercel.app/api/query/adaptive"
 
@@ -17,7 +21,7 @@ def post(q: str, ctx=None) -> Tuple[Dict[str, Any], int]:
         body["contextData"] = ctx
     data = json.dumps(body).encode()
     t0 = time.perf_counter()
-    req = urllib.request.Request(API, data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(API, data=data, headers=adaptive_headers())
     with urllib.request.urlopen(req, timeout=120) as resp:
         out = json.load(resp)
     ms = int((time.perf_counter() - t0) * 1000)

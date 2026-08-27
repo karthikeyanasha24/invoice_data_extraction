@@ -27,7 +27,7 @@ export default function DashboardPage() {
       topSection={
         <TopSection
           title="Dashboard"
-          subtitle="Inbound, outbound, and business analytics"
+          subtitle="Inbound SAT documents (To ERP), outbound invoices, and business analytics"
         />
       }
     >

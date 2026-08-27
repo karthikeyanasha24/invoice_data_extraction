@@ -1,9 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
 import MainLayout from '@/components/MainLayout';
-import LoadingSpinner from '@/components/LoadingSpinner';
 import SATDocumentsTab from '@/components/SATDocumentsTab';
 import SATSimpleMergeTab from '@/components/SATSimpleMergeTab';
 import SATCanonicalTab from '@/components/SATCanonicalTab';
@@ -11,16 +9,7 @@ import SAPSendTab from '@/components/SAPSendTab';
 import { FileText } from 'lucide-react';
 
 export default function SATDocumentsPage() {
-  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('documents');
-
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <LoadingSpinner />
-      </div>
-    );
-  }
 
   return (
     <MainLayout

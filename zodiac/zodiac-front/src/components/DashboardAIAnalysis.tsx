@@ -7,13 +7,15 @@
  *
  * Pipeline driven (no Schema Browser):
  *   1. User asks a natural language question
- *   2. Backend runs 15-stage analyst pipeline
+ *   2. Backend answers with governed SQL and a structured result
  *   3. Response contains: sql, data, kpis, charts, summary, keyFindings
  *   4. Frontend renders: KPI cards → Charts → Scrollable table → Insights
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
+import { humanizeFollowups } from '@/lib/followupChips';
 import {
   ADAPTIVE_CONTEXT_POLICY,
   buildFollowupContextData,
@@ -65,15 +67,11 @@ const QUICK_QUESTIONS = [
 ];
 
 // ─── Pipeline progress steps ─────────────────────────────────────────────────
-const PIPELINE_STEPS = [
-  { id: 'intent',   label: 'Understanding your question',       ms: 0     },
-  { id: 'domain',   label: 'Classifying business domain',       ms: 1000  },
-  { id: 'tables',   label: 'Selecting relevant tables',         ms: 2500  },
-  { id: 'columns',  label: 'Ranking columns by relevance',      ms: 4000  },
-  { id: 'sql',      label: 'Generating SQL',                    ms: 6000  },
-  { id: 'execute',  label: 'Executing query',                   ms: 11000 },
-  { id: 'analyze',  label: 'Analyzing results',                 ms: 18000 },
-  { id: 'charts',   label: 'Building visualizations',           ms: 25000 },
+const ANALYSIS_STEPS = [
+  { id: 'understand', label: 'Understanding your question', afterMs: 0 },
+  { id: 'check', label: 'Checking business data', afterMs: 400 },
+  { id: 'analyze', label: 'Analyzing the result', afterMs: 1200 },
+  { id: 'prepare', label: 'Preparing your answer', afterMs: 2500 },
 ];
 
 // ─── Number formatting ────────────────────────────────────────────────────────
@@ -125,6 +123,7 @@ type QueryResult = {
   kpis?: KPI[];
   charts?: Chart[];
   suggested_followups?: string[];
+  answer_status?: string;
   meta?: {
     domain?: string;
     intent?: string;
@@ -424,28 +423,56 @@ function MetaStrip({ meta, sqlStrategy, rowCount, totalCount }: {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pipeline progress indicator
 // ═══════════════════════════════════════════════════════════════════════════════
-function PipelineProgress({ elapsed }: { elapsed: number }) {
-  const activeIdx = PIPELINE_STEPS.findLastIndex(s => elapsed >= s.ms);
+function AnalysisProgress({ elapsed }: { elapsed: number }) {
+  const current = [...ANALYSIS_STEPS].reverse().find((s) => elapsed >= s.afterMs) || ANALYSIS_STEPS[0];
   return (
-    <div className="space-y-2 py-2">
-      {PIPELINE_STEPS.map((step, i) => {
-        const done    = i < activeIdx;
-        const active  = i === activeIdx;
-        const pending = i > activeIdx;
-        return (
-          <div key={step.id} className={cn(
-            "flex items-center gap-3 text-sm transition-all duration-300",
-            done    && "text-emerald-600",
-            active  && "text-indigo-700 font-medium",
-            pending && "text-slate-300",
-          )}>
-            {done    ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-            : active  ? <Loader2    className="h-4 w-4 flex-shrink-0 animate-spin" />
-            :           <div       className="h-4 w-4 flex-shrink-0 rounded-full border-2 border-slate-200" />}
-            <span>{step.label}</span>
-          </div>
-        );
-      })}
+    <div className="space-y-2 py-1">
+      <div className="flex items-center gap-3 text-sm font-medium text-indigo-700">
+        <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+        <span>{current.label}</span>
+      </div>
+      {elapsed > 5000 && (
+        <p className="text-xs text-slate-500 pl-7">Still working — larger questions can take a few seconds.</p>
+      )}
+      {elapsed > 20000 && (
+        <p className="text-xs text-amber-700 pl-7">Taking longer than usual. You can wait or try a simpler question.</p>
+      )}
+    </div>
+  );
+}
+
+function DataGapCard({
+  message,
+  followups,
+  onAskFollowup,
+}: {
+  message: string;
+  followups?: string[];
+  onAskFollowup?: (q: string) => void;
+}) {
+  const chips = humanizeFollowups(followups);
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Data limitation</p>
+      <p className="text-sm text-slate-800 leading-relaxed">{message}</p>
+      <p className="text-xs text-slate-600">
+        This question was understood, but the required data is not available in this environment.
+        No unsupported number was calculated. You can continue with another question — previous context is kept.
+      </p>
+      {chips.length > 0 && onAskFollowup && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {chips.map((chip) => (
+            <button
+              key={chip.question}
+              type="button"
+              onClick={() => onAskFollowup(chip.question)}
+              className="text-left text-xs px-2.5 py-1.5 rounded-lg border border-amber-200 bg-white text-slate-800 hover:bg-amber-100"
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -468,7 +495,18 @@ function ResultDashboard({
   const hasData    = (data?.length ?? 0) > 0;
   const hasSummary = !!summary;
   const hasInsights = (keyFindings?.length ?? 0) > 0 && keyFindings?.[0] !== 'No results found.';
-  const followups = (suggested_followups || []).filter(Boolean).slice(0, 8);
+  const followups = humanizeFollowups(suggested_followups);
+  const isGap = result.answer_status === 'CANNOT_ANSWER';
+
+  if (isGap) {
+    return (
+      <DataGapCard
+        message={summary || 'The required data for this analysis is not available.'}
+        followups={suggested_followups}
+        onAskFollowup={onAskFollowup}
+      />
+    );
+  }
 
   return (
     <div className="space-y-0">
@@ -488,12 +526,12 @@ function ResultDashboard({
           <div className="flex flex-wrap gap-1.5">
             {followups.map((f) => (
               <button
-                key={f}
+                key={f.question}
                 type="button"
-                onClick={() => onAskFollowup(f)}
+                onClick={() => onAskFollowup(f.question)}
                 className="text-left text-xs px-2.5 py-1.5 rounded-lg border border-indigo-100 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 transition-colors"
               >
-                {f}
+                {f.label}
               </button>
             ))}
           </div>
@@ -633,6 +671,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         kpis:        isCannotAnswer ? [] : (res.kpis || []),
         charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
         suggested_followups: res.suggested_followups || res.suggestedFollowups || [],
+        answer_status: answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS'),
         meta:        res.meta || {
           domain:        res.domain,
           intent:        res.intent,
@@ -672,7 +711,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       }
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err: any) {
-      setError(err.message || 'Query failed. Please try rephrasing.');
+      setError(publicApiError(err, 'Could not complete this analysis. Please try rephrasing.'));
       // Keep the user message visible so history does not silently lose questions
     } finally {
       setLoading(false);
@@ -727,8 +766,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               <Sparkles className="h-4 w-4 text-white" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-800">AI Data Analyst</h2>
-              <p className="text-xs text-slate-400">15-stage pipeline · Auto charts · Executive summaries</p>
+              <h2 className="text-sm font-bold text-slate-800">Business intelligence</h2>
+              <p className="text-xs text-slate-400">Governed answers from your SAP data</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -752,11 +791,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               <Sparkles className="h-8 w-8 text-indigo-500" />
             </div>
             <h3 className="text-xl font-bold bg-gradient-to-r from-indigo-700 to-violet-600 bg-clip-text text-transparent mb-2">
-              Ask anything about your data
+              Ask a business question
             </h3>
             <p className="text-sm text-slate-500 mb-6">
-              I analyze your question, select the right tables, write SQL, execute it, and
-              return charts, KPIs, and insights — automatically.
+              Ask about revenue, products, customers, inventory, or trends. Simple questions stay simple; deeper questions can include tables and next steps.
             </p>
             {/* Quick questions */}
             <div className="grid grid-cols-2 gap-2 text-left">
@@ -799,14 +837,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                 </div>
               ) : (
                 <>
-                  {/* Summary text (assistant text reply) */}
-                  {msg.content && (
-                    <div className="text-sm text-slate-700 leading-relaxed">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    </div>
-                  )}
-                  {/* Power BI-style dashboard output */}
-                  {msg.result && (
+                  {msg.result?.answer_status === 'CANNOT_ANSWER' ? (
                     <ResultDashboard
                       result={msg.result}
                       onAskFollowup={(fq) => {
@@ -814,6 +845,28 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                         void sendQuestion(fq);
                       }}
                     />
+                  ) : (
+                    <>
+                      {msg.content && msg.content !== msg.result?.summary && (
+                        <div className="text-sm text-slate-700 leading-relaxed">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        </div>
+                      )}
+                      {msg.result && (
+                        <ResultDashboard
+                          result={msg.result}
+                          onAskFollowup={(fq) => {
+                            setIsNewQuestion(false);
+                            void sendQuestion(fq);
+                          }}
+                        />
+                      )}
+                      {!msg.result && msg.content && (
+                        <div className="text-sm text-slate-700 leading-relaxed">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}
@@ -829,10 +882,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
             <div className="bg-white rounded-2xl rounded-tl-sm border border-slate-100 shadow-sm px-5 py-4 max-w-sm w-full">
               <div className="text-xs font-semibold text-slate-500 mb-3 flex items-center gap-1.5">
-                <Zap className="h-3.5 w-3.5 text-amber-500" />
-                Running AI Analyst Pipeline…
+                Working on your question
               </div>
-              <PipelineProgress elapsed={elapsed} />
+              <AnalysisProgress elapsed={elapsed} />
             </div>
           </div>
         )}
@@ -929,7 +981,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         </div>
         <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-400 px-1">
           <Zap className="h-3 w-3 text-amber-400" />
-          <span>15-stage pipeline · Auto SQL · Auto charts · No schema browser needed</span>
+          <span>Ask a follow-up or start a new question. Context is kept until you start a new question.</span>
         </div>
       </div>
 
