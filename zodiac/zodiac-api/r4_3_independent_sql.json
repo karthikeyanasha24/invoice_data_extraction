@@ -6,7 +6,7 @@
       "question": "Show inventory.",
       "metric": "stock_value",
       "note": "inventory value",
-      "ms": 876,
+      "ms": 647,
       "intent": "inventory_analysis",
       "ai_top": {
         "product": "ME_4003",
@@ -90,7 +90,7 @@
       "question": "Which products have the highest inventory?",
       "metric": "stock_value",
       "note": "inventory value",
-      "ms": 712,
+      "ms": 662,
       "intent": "inventory_analysis",
       "ai_top": {
         "product": "ME_4003",
@@ -174,7 +174,7 @@
       "question": "Show inventory versus sales.",
       "metric": "stock_value",
       "note": "inventory vs sales",
-      "ms": 1031,
+      "ms": 1373,
       "intent": "inventory_sales_comparison",
       "ai_top": {
         "product": "ME_4001",
@@ -267,7 +267,7 @@
       "question": "Show inventory versus sales.",
       "metric": "revenue",
       "note": "sales revenue in comparison",
-      "ms": 1170,
+      "ms": 1039,
       "intent": "inventory_sales_comparison",
       "ai_top": {
         "product": "ME_4001",
@@ -360,7 +360,7 @@
       "question": "Show inventory by product group.",
       "metric": "stock_value",
       "note": "product-group inventory",
-      "ms": 1025,
+      "ms": 922,
       "intent": "inventory_sales_comparison",
       "ai_top": {
         "product_group": "00104",
