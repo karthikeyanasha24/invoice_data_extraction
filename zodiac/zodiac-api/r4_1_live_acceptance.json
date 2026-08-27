@@ -4,7 +4,7 @@
     "gate": [
       {
         "question": "Show monthly revenue.",
-        "ms": 2127,
+        "ms": 1652,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -67,7 +67,7 @@
       },
       {
         "question": "Show quarterly revenue.",
-        "ms": 932,
+        "ms": 847,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -132,7 +132,7 @@
     "probes": [
       {
         "question": "Show monthly revenue.",
-        "ms": 764,
+        "ms": 743,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -195,7 +195,7 @@
       },
       {
         "question": "Show quarterly revenue.",
-        "ms": 1069,
+        "ms": 1221,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -258,7 +258,7 @@
       },
       {
         "question": "Show monthly COGS.",
-        "ms": 812,
+        "ms": 999,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -321,7 +321,7 @@
       },
       {
         "question": "Show quarterly COGS.",
-        "ms": 785,
+        "ms": 1561,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -384,7 +384,7 @@
       },
       {
         "question": "Show monthly margins.",
-        "ms": 786,
+        "ms": 1372,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -447,7 +447,7 @@
       },
       {
         "question": "Show quarterly margins.",
-        "ms": 1475,
+        "ms": 1265,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -510,7 +510,7 @@
       },
       {
         "question": "Which month had the highest revenue?",
-        "ms": 807,
+        "ms": 993,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -573,7 +573,7 @@
       },
       {
         "question": "Which quarter had the highest gross profit?",
-        "ms": 1094,
+        "ms": 887,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -636,7 +636,7 @@
       },
       {
         "question": "Compare this month with last month.",
-        "ms": 980,
+        "ms": 843,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -699,7 +699,7 @@
       },
       {
         "question": "Compare this quarter with last quarter.",
-        "ms": 802,
+        "ms": 834,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -762,7 +762,7 @@
       },
       {
         "question": "Compare 2004 and 2005 by month.",
-        "ms": 719,
+        "ms": 755,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -826,7 +826,7 @@
       },
       {
         "question": "Compare 2004 and 2005 by quarter.",
-        "ms": 646,
+        "ms": 623,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -892,7 +892,7 @@
     "context_chain": [
       {
         "question": "Show the highest-profit products.",
-        "ms": 945,
+        "ms": 777,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -961,7 +961,7 @@
       },
       {
         "question": "Show their monthly revenue.",
-        "ms": 736,
+        "ms": 709,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1033,7 +1033,7 @@
       },
       {
         "question": "Show their quarterly revenue.",
-        "ms": 638,
+        "ms": 622,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1105,7 +1105,7 @@
       },
       {
         "question": "Compare 2004 and 2005.",
-        "ms": 950,
+        "ms": 602,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1178,7 +1178,7 @@
       },
       {
         "question": "Show COGS.",
-        "ms": 589,
+        "ms": 770,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1247,7 +1247,7 @@
       },
       {
         "question": "Show margins.",
-        "ms": 635,
+        "ms": 588,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1316,7 +1316,7 @@
       },
       {
         "question": "Which quarter had the biggest decline?",
-        "ms": 767,
+        "ms": 578,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1385,7 +1385,7 @@
       },
       {
         "question": "Why?",
-        "ms": 547,
+        "ms": 596,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1456,7 +1456,7 @@
     "followups": [
       {
         "question": "Show COGS.",
-        "ms": 1033,
+        "ms": 854,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1513,7 +1513,7 @@
       },
       {
         "question": "Show margins.",
-        "ms": 768,
+        "ms": 948,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1570,7 +1570,7 @@
       },
       {
         "question": "Show customers.",
-        "ms": 962,
+        "ms": 986,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -1645,7 +1645,7 @@
       },
       {
         "question": "Show regions.",
-        "ms": 596,
+        "ms": 772,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "country_breakdown",
@@ -1714,7 +1714,7 @@
       },
       {
         "question": "Show quarterly.",
-        "ms": 939,
+        "ms": 763,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1793,7 +1793,7 @@
       },
       {
         "question": "Compare last year.",
-        "ms": 652,
+        "ms": 800,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1872,7 +1872,7 @@
       },
       {
         "question": "Which month was best?",
-        "ms": 862,
+        "ms": 788,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1951,7 +1951,7 @@
       },
       {
         "question": "Which quarter was worst?",
-        "ms": 834,
+        "ms": 586,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2030,7 +2030,7 @@
       },
       {
         "question": "Why?",
-        "ms": 663,
+        "ms": 780,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2109,7 +2109,7 @@
       },
       {
         "question": "Show the components.",
-        "ms": 810,
+        "ms": 818,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "profit_components",
@@ -2179,7 +2179,7 @@
     "empty_period": [
       {
         "question": "Show monthly revenue for 2024.",
-        "ms": 580,
+        "ms": 511,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2217,7 +2217,7 @@
       },
       {
         "question": "Show quarterly revenue for 2025.",
-        "ms": 503,
+        "ms": 514,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2257,7 +2257,7 @@
     "root_cause": [
       {
         "question": "Which month had the biggest margin decline?",
-        "ms": 749,
+        "ms": 779,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2320,7 +2320,7 @@
       },
       {
         "question": "Why?",
-        "ms": 1008,
+        "ms": 847,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2387,7 +2387,7 @@
     "data_gap_recovery": [
       {
         "question": "Show highest-profit products.",
-        "ms": 813,
+        "ms": 838,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -2455,7 +2455,7 @@
       },
       {
         "question": "Show logistics cost.",
-        "ms": 718,
+        "ms": 480,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -2499,7 +2499,7 @@
       },
       {
         "question": "Show net profit.",
-        "ms": 437,
+        "ms": 429,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -2543,7 +2543,7 @@
       },
       {
         "question": "Show COGS.",
-        "ms": 629,
+        "ms": 697,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product",
@@ -2609,7 +2609,7 @@
       },
       {
         "question": "Show monthly revenue.",
-        "ms": 575,
+        "ms": 656,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2678,7 +2678,7 @@
       },
       {
         "question": "Show quarterly revenue.",
-        "ms": 799,
+        "ms": 834,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2749,7 +2749,7 @@
     "basic_ga": [
       {
         "question": "2004",
-        "ms": 12009,
+        "ms": 13433,
         "status": "SUCCESS",
         "pipeline": null,
         "intent": "",
@@ -2758,7 +2758,7 @@
       },
       {
         "question": "Meaning of life",
-        "ms": 427,
+        "ms": 485,
         "status": "CLARIFICATION",
         "pipeline": null,
         "intent": "",
@@ -2767,7 +2767,7 @@
       },
       {
         "question": "Top 5",
-        "ms": 9506,
+        "ms": 9374,
         "status": "SUCCESS",
         "pipeline": null,
         "intent": "",
@@ -2776,7 +2776,7 @@
       },
       {
         "question": "2004",
-        "ms": 9546,
+        "ms": 9163,
         "status": "SUCCESS",
         "pipeline": null,
         "intent": "",
@@ -2785,7 +2785,7 @@
       },
       {
         "question": "Meaning of life",
-        "ms": 536,
+        "ms": 564,
         "status": "CLARIFICATION",
         "pipeline": null,
         "intent": "",
@@ -2794,7 +2794,7 @@
       },
       {
         "question": "Show sales for 2005",
-        "ms": 664,
+        "ms": 708,
         "status": "SUCCESS",
         "pipeline": "intent_sql_fast",
         "intent": "",
@@ -2803,7 +2803,7 @@
       },
       {
         "question": "Top 3",
-        "ms": 480,
+        "ms": 769,
         "status": "SUCCESS",
         "pipeline": "deterministic_sql_delta",
         "intent": "",
