@@ -7,7 +7,7 @@
       "metric": "revenue_change_abs",
       "mode": "absolute revenue",
       "order": "revenue_change_abs DESC NULLS LAST",
-      "ms": 1248,
+      "ms": 825,
       "intent": "product_growth_decline",
       "ai_top": {
         "product": "1400-300",
@@ -123,7 +123,7 @@
       "metric": "revenue_change_abs",
       "mode": "absolute revenue",
       "order": "revenue_change_abs DESC NULLS LAST",
-      "ms": 931,
+      "ms": 795,
       "intent": "product_growth_decline",
       "ai_top": {
         "product": "1400-300",
@@ -239,7 +239,7 @@
       "metric": "revenue_change_pct",
       "mode": "pct revenue",
       "order": "revenue_change_pct DESC NULLS LAST",
-      "ms": 699,
+      "ms": 991,
       "intent": "product_growth_decline",
       "ai_top": {
         "product": "1400-300",
@@ -355,7 +355,7 @@
       "metric": "revenue_change_abs",
       "mode": "decline abs",
       "order": "revenue_change_abs ASC NULLS LAST",
-      "ms": 728,
+      "ms": 752,
       "intent": "product_growth_decline",
       "ai_top": {
         "product": "1400-300",
@@ -471,7 +471,7 @@
       "metric": "gross_profit_change_abs",
       "mode": "gp abs",
       "order": "gross_profit_change_abs DESC NULLS LAST",
-      "ms": 738,
+      "ms": 768,
       "intent": "product_growth_decline",
       "ai_top": {
         "product": "1400-300",
@@ -587,7 +587,7 @@
       "metric": "margin_change_pp",
       "mode": "margin pp",
       "order": "margin_change_pp DESC NULLS LAST",
-      "ms": 796,
+      "ms": 732,
       "intent": "product_growth_decline",
       "ai_top": {
         "product": "R-1001",

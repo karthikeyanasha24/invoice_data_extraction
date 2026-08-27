@@ -4,7 +4,7 @@
     "abs_vs_pct": [
       {
         "question": "Which products grew the fastest?",
-        "ms": 819,
+        "ms": 814,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -31,34 +31,34 @@
       },
       {
         "question": "Which products added the most revenue?",
-        "ms": 957,
+        "ms": 773,
         "status": "SUCCESS",
-        "pipeline": "intent_sql_fast",
-        "intent": "",
+        "pipeline": "deep_multidim",
+        "intent": "product_growth_decline",
         "expected": "product_growth_decline",
-        "rows": 5,
-        "change_mode": null,
-        "growth_metric": null,
-        "growth_direction": null,
-        "period_grain": null,
-        "selected_products_n": 0,
-        "has_change_abs": false,
-        "has_change_pct": false,
-        "period_status": null,
+        "rows": 10,
+        "change_mode": "absolute",
+        "growth_metric": "revenue",
+        "growth_direction": "growth",
+        "period_grain": "year",
+        "selected_products_n": 10,
+        "has_change_abs": true,
+        "has_change_pct": true,
+        "period_status": "CONTINUING",
         "cast_as_date": false,
         "billing_grain": true,
         "banned_joins": [],
-        "order_by": "other",
-        "sql_head": "SELECT TRIM(p.\"matnr\") AS material_number, COALESCE(NULLIF(TRIM(m.\"maktx\"), ''), TRIM(p.\"matnr\")) AS product, TRIM(v.\"waerk\") AS currency, SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_sales, SUM(CAST(NULLIF(TRIM(CAST(p.\"fkimg\" AS TE",
-        "summary_head": "Top **5** **product** by **revenue** _(mixed currencies \u2014 see table)_:\n\n1. **Ship Project** \u2014 **973700000.00 INR**\n2. **Harley leather jacket** \u2014 **84835200.00 PTE**\n3. **Pump PREC",
-        "observed_language": false,
-        "result": "FAIL(intent=,status=SUCCESS)",
+        "order_by": "abs",
+        "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS T",
+        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
+        "observed_language": true,
+        "result": "PASS",
         "want_mode": "absolute",
-        "mode_ok": false
+        "mode_ok": true
       },
       {
         "question": "Which products increased revenue by the highest percentage?",
-        "ms": 800,
+        "ms": 759,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -85,7 +85,7 @@
       },
       {
         "question": "Which products increased their revenue the most?",
-        "ms": 813,
+        "ms": 700,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -114,7 +114,7 @@
     "metrics": [
       {
         "question": "Which products grew the most in revenue?",
-        "ms": 1506,
+        "ms": 852,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -139,7 +139,7 @@
       },
       {
         "question": "Which products declined the most in revenue?",
-        "ms": 779,
+        "ms": 758,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -164,7 +164,7 @@
       },
       {
         "question": "Which products had the biggest gross profit growth?",
-        "ms": 783,
+        "ms": 779,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -189,7 +189,7 @@
       },
       {
         "question": "Which products had the biggest gross profit decline?",
-        "ms": 703,
+        "ms": 746,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -214,7 +214,7 @@
       },
       {
         "question": "Which products improved their margins?",
-        "ms": 762,
+        "ms": 757,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -239,7 +239,7 @@
       },
       {
         "question": "Which products had the biggest margin decline?",
-        "ms": 763,
+        "ms": 735,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "margin_decline_drivers",
@@ -264,7 +264,7 @@
       },
       {
         "question": "Show products whose margins declined.",
-        "ms": 688,
+        "ms": 804,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -289,7 +289,7 @@
       },
       {
         "question": "Which products grew fastest by quantity?",
-        "ms": 697,
+        "ms": 741,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -314,7 +314,7 @@
       },
       {
         "question": "Which products had the biggest quantity decline?",
-        "ms": 724,
+        "ms": 765,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -339,7 +339,7 @@
       },
       {
         "question": "Which products had the biggest ASP increase?",
-        "ms": 719,
+        "ms": 743,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -364,7 +364,7 @@
       },
       {
         "question": "Which products had the biggest ASP decline?",
-        "ms": 894,
+        "ms": 994,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -391,7 +391,7 @@
     "time": [
       {
         "question": "Which products grew month over month?",
-        "ms": 741,
+        "ms": 778,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -418,7 +418,7 @@
       },
       {
         "question": "Which products declined month over month?",
-        "ms": 786,
+        "ms": 761,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -445,7 +445,7 @@
       },
       {
         "question": "Which products grew quarter over quarter?",
-        "ms": 769,
+        "ms": 802,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -472,7 +472,7 @@
       },
       {
         "question": "Which products declined quarter over quarter?",
-        "ms": 780,
+        "ms": 929,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -499,7 +499,7 @@
       },
       {
         "question": "Which products grew year over year?",
-        "ms": 1075,
+        "ms": 758,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -526,7 +526,7 @@
       },
       {
         "question": "Which products declined year over year?",
-        "ms": 920,
+        "ms": 843,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -553,7 +553,7 @@
       },
       {
         "question": "Which products grew the most from 2004 to 2005?",
-        "ms": 720,
+        "ms": 957,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -587,56 +587,56 @@
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
         "expected": null,
-        "rows": 10,
+        "rows": 0,
         "change_mode": "absolute",
         "growth_metric": "revenue",
         "growth_direction": "growth",
         "period_grain": "year",
-        "selected_products_n": 10,
+        "selected_products_n": 0,
         "has_change_abs": true,
         "has_change_pct": true,
-        "period_status": "FULL_DECLINE_NO_CURRENT",
+        "period_status": null,
         "cast_as_date": false,
         "billing_grain": true,
         "banned_joins": [],
         "order_by": "abs",
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS T",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
-        "observed_language": true,
+        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are availab",
+        "observed_language": false,
         "result": "PASS",
         "honest_empty": true
       },
       {
         "question": "Which products grew in 2099?",
-        "ms": 731,
+        "ms": 513,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
         "expected": null,
-        "rows": 10,
+        "rows": 0,
         "change_mode": "absolute",
         "growth_metric": "revenue",
         "growth_direction": "growth",
         "period_grain": "year",
-        "selected_products_n": 10,
+        "selected_products_n": 0,
         "has_change_abs": true,
         "has_change_pct": true,
-        "period_status": "CONTINUING",
+        "period_status": null,
         "cast_as_date": false,
         "billing_grain": true,
         "banned_joins": [],
         "order_by": "abs",
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS T",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
-        "observed_language": true,
-        "result": "FAIL",
-        "honest_empty": false
+        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are availab",
+        "observed_language": false,
+        "result": "PASS",
+        "honest_empty": true
       }
     ],
     "basic_ga": [
       {
         "question": "2004",
-        "ms": 4440,
+        "ms": 2948,
         "status": "SUCCESS",
         "pipeline": "universal_adaptive",
         "intent": "",
@@ -654,14 +654,14 @@
         "billing_grain": false,
         "banned_joins": [],
         "order_by": "other",
-        "sql_head": "SELECT SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_sales, k.\"waerk\" AS currency FROM \"VBRK\" k WHERE TRIM(CAST(k.\"fkdat\" AS TEXT)) <> '' AND SUBSTRING(TRIM(k.\"fkdat\"), 1, 4) = '2004' GROUP BY k.\"waerk\" ORDER BY k.\"waerk\";",
+        "sql_head": "SELECT SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS total_sales, k.\"waerk\" AS currency FROM \"VBRK\" k WHERE TRIM(CAST(k.\"fkdat\" AS TEXT)) <> '' AND SUBSTRING(TRIM(k.\"fkdat\"), 1, 4) = '2004' GROUP BY k.\"waerk\" ORDER BY total_sales DESC;",
         "summary_head": "Query returned results. value 52682981.46 EUR (2 row(s)).",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Meaning of life",
-        "ms": 441,
+        "ms": 433,
         "status": "CLARIFICATION",
         "pipeline": null,
         "intent": "",
@@ -686,7 +686,7 @@
       },
       {
         "question": "Top 5",
-        "ms": 2831,
+        "ms": 3092,
         "status": "SUCCESS",
         "pipeline": "universal_adaptive",
         "intent": "",
@@ -713,7 +713,7 @@
     "driver_chain": [
       {
         "question": "Which products declined the most?",
-        "ms": 742,
+        "ms": 755,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -738,7 +738,7 @@
       },
       {
         "question": "Why?",
-        "ms": 923,
+        "ms": 869,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -763,7 +763,7 @@
       },
       {
         "question": "What drove the decline?",
-        "ms": 1073,
+        "ms": 945,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -788,7 +788,7 @@
       },
       {
         "question": "Show their customers.",
-        "ms": 1260,
+        "ms": 742,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -813,7 +813,7 @@
       },
       {
         "question": "Show their ASP.",
-        "ms": 779,
+        "ms": 587,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -840,7 +840,7 @@
     "data_gap_recovery": [
       {
         "question": "Which products grew the most?",
-        "ms": 706,
+        "ms": 782,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -865,7 +865,7 @@
       },
       {
         "question": "Show logistics cost.",
-        "ms": 763,
+        "ms": 683,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -890,7 +890,7 @@
       },
       {
         "question": "Show net profit.",
-        "ms": 733,
+        "ms": 430,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -915,7 +915,7 @@
       },
       {
         "question": "Show revenue growth.",
-        "ms": 696,
+        "ms": 905,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -940,7 +940,7 @@
       },
       {
         "question": "Show COGS.",
-        "ms": 1191,
+        "ms": 710,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -965,7 +965,7 @@
       },
       {
         "question": "Show customers.",
-        "ms": 1297,
+        "ms": 869,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -992,7 +992,7 @@
     "product_group_followup": [
       {
         "question": "Which products grew the most?",
-        "ms": 886,
+        "ms": 743,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1017,12 +1017,12 @@
       },
       {
         "question": "Show their product groups.",
-        "ms": 698,
+        "ms": 807,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_group_breakdown",
         "expected": "product_group_breakdown",
-        "rows": 16,
+        "rows": 9,
         "change_mode": "absolute",
         "growth_metric": "revenue",
         "growth_direction": "growth",
@@ -1044,8 +1044,8 @@
   },
   "totals": {
     "total": 40,
-    "PASS": 36,
+    "PASS": 38,
     "DATA_GAP": 2,
-    "FAIL": 2
+    "FAIL": 0
   }
 }
