@@ -118,6 +118,18 @@ class AnalyticalPlan:
             "growth_metric": (self.filters or {}).get("growth_metric"),
             "growth_direction": (self.filters or {}).get("growth_direction"),
             "change_mode": (self.filters or {}).get("change_mode"),
+            "grain": self.grain,
+            "fact_grain": (self.grain or {}).get("fact_grain"),
+            "aggregation_grain": (self.grain or {}).get("aggregation_grain"),
+            "period_label": (
+                ", ".join(str(y) for y in self.years)
+                if self.years
+                else (
+                    "All purchase orders in the governed extract"
+                    if self.intent == "supplier_concentration"
+                    else None
+                )
+            ),
         }
 
 
@@ -128,29 +140,47 @@ def _ql(q: str) -> str:
 def wants_supplier_concentration(ql: str) -> bool:
     """Semantic purchase-share / concentration — not R3 'show their suppliers'."""
     q = (ql or "").lower()
+    # R3 contextual listing stays distinct unless the user also asks for share/PO value.
+    if re.search(r"\b(their\s+suppliers|their\s+vendors)\b", q) and not re.search(
+        r"\b(concentration|concentrated|share|percent|po\s+value|purchase\s+value)\b", q
+    ):
+        return False
     if re.search(
-        r"\b(buy the most from|who do we buy|largest supplier|biggest supplier|"
-        r"supplier concentration|purchasing share|purchase share|share of purchas|"
-        r"single[\s-]?source|top suppliers?|rank suppliers|"
-        r"percentage of purchas|percent of purchas|"
-        r"dominat\w*\s+purchas|largest\s+po\s+share|compare\s+suppliers)\b",
+        r"\b("
+        r"supplier\s+concentration|supplier\s+po\s+concentration|po\s+concentration|"
+        r"purchasing\s+share|purchase\s+share|share\s+of\s+purchas|"
+        r"single[\s-]?source|rank\s+suppliers|"
+        r"top\s+\d+\s+suppliers?|top\s+suppliers?|"
+        r"largest\s+suppliers?|biggest\s+suppliers?|"
+        r"buy\s+the\s+most\s+from|who\s+do\s+we\s+buy|"
+        r"percentage\s+of\s+purchas|percent\s+of\s+purchas|"
+        r"dominat\w*\s+purchas|largest\s+po\s+share|"
+        r"compare\s+suppliers|most\s+concentrated\s+suppliers|"
+        r"concentrated\s+suppliers|"
+        r"highest\s+(po|purchase)\s+value|"
+        r"account\s+for\s+(the\s+)?most\s+(purchas|po)"
+        r")\b",
         q,
     ):
         return True
-    if not any(x in q for x in ("supplier", "vendor")):
+    if not re.search(r"\b(supplier|suppliers|vendor|vendors)\b", q):
         return False
     return any(
         x in q
         for x in (
             "concentration",
+            "concentrated",
             "percent",
             "percentage",
             "share of",
             "po share",
             "po value",
+            "po concentration",
+            "purchase value",
             "largest",
             "biggest",
             "highest po",
+            "highest purchase",
             "most purchas",
             "most purchase",
             "account for",
@@ -165,6 +195,8 @@ def _is_basic_engine_query(ql: str) -> bool:
 
     Protects GA golden paths like highest sales + customer + industry.
     """
+    if wants_supplier_concentration(ql):
+        return False
     if any(
         x in ql
         for x in (
@@ -274,6 +306,8 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
     ql = _ql(question)
     if not ql:
         return False
+    if wants_supplier_concentration(ql):
+        return True
     if _is_basic_engine_query(ql):
         return False
 
@@ -1064,8 +1098,14 @@ def build_analytical_plan(
         conc_limit = max(limit, 20)
         if _TOP_N_RE.search(ql) or _LIMIT_RE.search(ql):
             conc_limit = limit
-        elif re.search(r"\b(which|who).{0,40}\b(highest|largest|biggest)\b", ql) or re.search(
-            r"\b(highest|largest|biggest)\s+supplier\b", ql
+        elif re.search(
+            r"\b("
+            r"(which|who).{0,40}\b(highest|largest|biggest)\b|"
+            r"(highest|largest|biggest)\s+supplier\b|"
+            r"the\s+(highest|largest|biggest)\s+one\b|"
+            r"show\s+the\s+(highest|largest|biggest)\.?$"
+            r")",
+            ql,
         ):
             conc_limit = 1
         plan.ranking = {
@@ -2005,12 +2045,12 @@ SELECT
   purchase_value,
   purchase_qty,
   product_count,
-  ROW_NUMBER() OVER (ORDER BY purchase_value DESC NULLS LAST) AS supplier_rank,
+  ROW_NUMBER() OVER (ORDER BY purchase_value DESC NULLS LAST, supplier) AS supplier_rank,
   CASE WHEN SUM(purchase_value) OVER () > 0
     THEN ROUND(100.0 * purchase_value / SUM(purchase_value) OVER (), 2)
     ELSE NULL END AS share_of_po_value_pct
 FROM po
-ORDER BY purchase_value DESC NULLS LAST
+ORDER BY purchase_value DESC NULLS LAST, supplier
 LIMIT {limit}
 """.strip(),
         })
@@ -2163,7 +2203,7 @@ def _fmt_num(v: Any) -> str:
         return str(v)
 
 
-def _analysis_heading(intent: str) -> str:
+def _analysis_heading(intent: str, ranking: Optional[Dict[str, Any]] = None) -> str:
     titles = {
         "product_profitability": "Product profitability",
         "supplier_concentration": "Supplier concentration",
@@ -2186,15 +2226,28 @@ def _analysis_heading(intent: str) -> str:
         "purchase_history": "Purchase history",
         "period_compare_selection": "Period comparison",
     }
+    if intent == "supplier_concentration":
+        try:
+            lim = int((ranking or {}).get("limit") or 0)
+        except (TypeError, ValueError):
+            lim = 0
+        if lim == 1:
+            return "Highest supplier by purchase value"
+        if 1 < lim < 20:
+            return f"Top {lim} suppliers by purchase value"
+        return "Supplier concentration"
     if titles.get(intent or ""):
         return titles[intent]
-    return (intent or "Governed analysis").replace("_", " ").replace(" gap", "")
+    raw = (intent or "Governed analysis").replace("_", " ").strip()
+    if re.fullmatch(r"[a-z0-9 ]+", raw) and "_" in (intent or ""):
+        return "Governed SAP analysis"
+    return raw or "Governed SAP analysis"
 
 
 def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
     findings: List[str] = []
     lines: List[str] = []
-    lines.append(f"**{_analysis_heading(plan.intent)}**")
+    lines.append(f"**{_analysis_heading(plan.intent, plan.ranking)}**")
     lines.append("")
     non_billing = {
         "supplier_concentration",
@@ -2466,7 +2519,9 @@ def try_deep_multidim_analysis(
             prior_plan if prior_plan.get("deep_analysis") else None
         )
 
-    if not is_deep_analysis_candidate(question, prior_ctx):
+    if not is_deep_analysis_candidate(question, prior_ctx) and not wants_supplier_concentration(
+        _ql(question)
+    ):
         return None
 
     plan = build_analytical_plan(question, prior_ctx)
@@ -2670,7 +2725,7 @@ def try_deep_multidim_analysis(
         )
         primary_sql = bundled[0].get("sql") or ""
         summary = (
-            f"**{_analysis_heading(plan.intent)}**\n\n"
+            f"**{_analysis_heading(plan.intent, plan.ranking)}**\n\n"
             f"No billing records are available for that period in the current extract.\n\n"
             "### Data limitations\n"
             + "\n".join(f"- {g}" for g in plan.data_gaps)
@@ -2830,7 +2885,7 @@ def try_deep_multidim_analysis(
         )
         charts.append({
             "type": "bar",
-            "title": _analysis_heading(plan.intent)[:120],
+            "title": _analysis_heading(plan.intent, plan.ranking)[:120],
             "description": "Governed metric for the current investigation",
             "data": [
                 {"name": str(r.get(label_key) or ""), "value": float(r.get(value_key) or 0)}
@@ -2849,10 +2904,10 @@ def try_deep_multidim_analysis(
         "query_plan": query_plan,
         "suggested_followups": (
             [
-                "Which supplier is highest?",
-                "What percentage?",
+                "Show the highest supplier.",
+                "Show the percentage.",
                 "Show top 3.",
-                "Show their inventory.",
+                "Show PO value.",
             ]
             if plan.intent == "supplier_concentration"
             else [d.get("label") for d in plan.drilldowns]

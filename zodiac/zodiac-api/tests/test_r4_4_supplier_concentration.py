@@ -1,6 +1,12 @@
 """R4-4 supplier concentration: PO-grain share of purchase value. Not supplier profit."""
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import pytest
+from dotenv import load_dotenv
+
 from app.services.analytical_deep_dive import build_analytical_plan, compile_queries
 from app.services.analytical_followup_resolver import resolve_analytical_followup
 from app.services.sql_grain_guard import grain_contract, sql_has_unsafe_monetary_fanout
@@ -148,13 +154,45 @@ def test_first_question_concentration_paraphrases():
     from app.services.analytical_deep_dive import is_deep_analysis_candidate
 
     for q in (
+        "Show supplier concentration.",
+        "Show supplier concentration",
+        "What is supplier concentration?",
+        "Which suppliers account for most purchase value?",
+        "Show top suppliers by purchase value.",
+        "Show supplier PO concentration.",
+        "Which suppliers have the highest PO value?",
+        "Show the top 3 suppliers by purchase value.",
+        "Who are the most concentrated suppliers?",
         "Which suppliers dominate purchases?",
         "Which supplier has the largest PO share?",
         "Compare suppliers by PO value",
-        "Show supplier concentration.",
     ):
         assert is_deep_analysis_candidate(q), q
         assert build_analytical_plan(q, None).intent == "supplier_concentration", q
+    assert not is_deep_analysis_candidate("Show their suppliers.")
+    assert build_analytical_plan("Show their suppliers.", PRIOR).intent == "suppliers_of_selection"
+
+
+def test_standalone_top_n_limit_is_honored():
+    sql = compile_queries(
+        build_analytical_plan("Show the top 3 suppliers by purchase value.", None)
+    )[0][0]["sql"].upper()
+    assert "LIMIT 3" in sql
+    assert "LIMIT 20" not in sql
+    assert "EKPO" in sql and "VBRP" not in sql
+
+
+def test_concentration_heading_is_business_facing():
+    from app.services.analytical_deep_dive import _analysis_heading, _interpret
+
+    assert "supplier_concentration" not in _analysis_heading("supplier_concentration")
+    assert "_" not in _analysis_heading("supplier_concentration")
+    assert _analysis_heading("supplier_concentration", {"limit": 3}) == "Top 3 suppliers by purchase value"
+    assert _analysis_heading("supplier_concentration", {"limit": 1}) == "Highest supplier by purchase value"
+    plan = build_analytical_plan("Show supplier concentration.", None)
+    summary, _ = _interpret(plan, [{"id": "supplier_concentration", "sql": "SELECT 1", "rows": []}])
+    assert "supplier_concentration" not in summary
+    assert "deep_multidim" not in summary.lower()
 
 
 def test_concentration_followups_stay_in_intent():
@@ -165,14 +203,21 @@ def test_concentration_followups_stay_in_intent():
         "dimensions": ["supplier"],
         "selected_products": [],
     }
-    assert build_analytical_plan("Which supplier is highest?", ctx).intent == "supplier_concentration"
-    assert build_analytical_plan("What percentage?", ctx).intent == "supplier_concentration"
-    assert build_analytical_plan("Show their PO value.", ctx).intent == "supplier_concentration"
+    for q in (
+        "Show the highest one.",
+        "Show the highest supplier.",
+        "Show the percentage.",
+        "Show top 3.",
+        "Show PO value.",
+        "Show the largest supplier.",
+        "Why is the first one highest?",
+    ):
+        assert build_analytical_plan(q, ctx).intent == "supplier_concentration", q
     top3 = build_analytical_plan("Show top 3.", ctx)
     assert top3.intent == "supplier_concentration"
     sql = compile_queries(top3)[0][0]["sql"].upper()
     assert "LIMIT 3" in sql
-    highest = compile_queries(build_analytical_plan("Which supplier is highest?", ctx))[0][0]["sql"].upper()
+    highest = compile_queries(build_analytical_plan("Show the highest one.", ctx))[0][0]["sql"].upper()
     assert "LIMIT 1" in highest
     assert build_analytical_plan("Show their suppliers.", ctx).intent == "suppliers_of_selection"
 
@@ -181,3 +226,50 @@ def test_standalone_concentration_default_limit_is_display_size():
     sql = compile_queries(build_analytical_plan("Show supplier concentration.", None))[0][0]["sql"].upper()
     assert "LIMIT 20" in sql
     assert "VBRP" not in sql
+
+
+def test_first_question_turn_is_new_analytical():
+    from app.services.ai_followup_routing import TurnIntent, classify_turn
+
+    turn = classify_turn("Show supplier concentration.")
+    assert turn.intent == TurnIntent.NEW_ANALYTICAL_QUERY
+    turn3 = classify_turn("Show the top 3 suppliers by purchase value.")
+    assert turn3.intent == TurnIntent.NEW_ANALYTICAL_QUERY
+
+
+def test_concentration_context_exposes_po_grain_not_billing():
+    ctx = build_analytical_plan("Show supplier concentration.", None).to_context()
+    assert ctx["fact_grain"] == "po_item"
+    assert ctx["aggregation_grain"] == "supplier"
+    assert "purchase" in (ctx.get("period_label") or "").lower()
+    assert "vbrp" not in str(ctx).lower()
+
+
+def test_independent_po_grain_shares_match_compiled_sql():
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+    url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or ""
+    if not url:
+        pytest.skip("DATABASE_URL missing")
+    from sqlalchemy import create_engine, text
+
+    sql = compile_queries(build_analytical_plan("Show supplier concentration.", None))[0][0]["sql"]
+    assert "vbrp" not in sql.lower()
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        rows = [dict(r._mapping) for r in conn.execute(text(sql))]
+    assert rows
+    by_id = {str(r.get("supplier")): r for r in rows}
+    s5557 = by_id.get("0000005557")
+    s1095 = by_id.get("0000001095")
+    assert s5557 is not None and s1095 is not None
+    assert abs(float(s5557["share_of_po_value_pct"]) - 49.86) <= 0.05
+    assert abs(float(s1095["share_of_po_value_pct"]) - 42.45) <= 0.05
+    assert float(s5557["purchase_value"]) >= float(s1095["purchase_value"])
+    top3_sql = compile_queries(
+        build_analytical_plan("Show the top 3 suppliers by purchase value.", None)
+    )[0][0]["sql"]
+    with engine.connect() as conn:
+        top3 = [dict(r._mapping) for r in conn.execute(text(top3_sql))]
+    assert len(top3) == 3
+    assert str(top3[0]["supplier"]) == str(rows[0]["supplier"])
+

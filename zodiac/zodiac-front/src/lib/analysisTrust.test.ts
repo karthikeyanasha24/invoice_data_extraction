@@ -28,6 +28,30 @@ describe('analysisTrustFromResult', () => {
     assert.equal(trust.grain?.toLowerCase().includes('snapshot') || trust.grain?.toLowerCase().includes('valuation'), true);
     assert.equal(trust.analysisLabel, 'Current inventory snapshot');
   });
+
+  it('uses business headings and PO provenance for supplier concentration', () => {
+    const trust = analysisTrustFromResult({
+      rowCount: 3,
+      query_plan: {
+        intent: 'supplier_concentration',
+        analytical_context: {
+          intent: 'supplier_concentration',
+          fact_grain: 'po_item',
+          aggregation_grain: 'supplier',
+          period_label: 'All purchase orders in the governed extract',
+          data_gaps: ['Share of purchase-order value by supplier (EKPO.NETWR).'],
+        },
+      },
+    });
+    assert.equal(trust.analysisLabel, 'Supplier concentration');
+    assert.equal(trust.analysisLabel?.includes('_'), false);
+    assert.ok(trust.source?.toLowerCase().includes('purchase'));
+    assert.ok(trust.calculation?.toLowerCase().includes('percentage'));
+    assert.ok(trust.aggregation?.toLowerCase().includes('supplier'));
+    assert.ok(trust.grain?.toLowerCase().includes('po') || trust.grain?.toLowerCase().includes('purchas'));
+    assert.ok(trust.rowLimit?.startsWith('3 row'));
+    assert.ok(!trust.source?.includes('supplier_concentration'));
+  });
 });
 
 describe('DATA_GAP_TRY_INSTEAD', () => {

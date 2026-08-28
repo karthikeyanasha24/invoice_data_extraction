@@ -2602,7 +2602,7 @@ async def post_query_adaptive(
     thread_id = (threadId or "").strip() or None
     if thread_id and not thread_id.startswith("ada_"):
         thread_id = None  # ignore non-adaptive thread ids
-    user_id = int(current_user.id)
+    user_id = int(current_user.id) if current_user is not None and getattr(current_user, "id", None) is not None else 0
 
     routing_meta: Dict[str, Any] = {}
 
@@ -2762,7 +2762,10 @@ async def post_query_adaptive(
     )
 
     if turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}:
-        return _persist_and_return(clarification_payload(clean_q, turn.reason))
+        from ..services.analytical_deep_dive import wants_supplier_concentration as _wants_sc
+
+        if not _wants_sc(clean_q):
+            return _persist_and_return(clarification_payload(clean_q, turn.reason))
 
     # ── Path 1.5: governed multi-dimensional deep analysis (schema-backed) ──
     # After classify_turn only. Falls through when not a deep candidate / unsafe.

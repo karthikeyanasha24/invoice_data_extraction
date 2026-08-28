@@ -20,8 +20,12 @@ const INVENTORY =
 const PURCHASE =
   'Purchase value = EKPO.NETWR at purchase-order item grain. This is not invoice COGS and not supplier profit.';
 
+const CONCENTRATION =
+  'Supplier PO value as a percentage of total PO value (EKPO.NETWR / sum of EKPO.NETWR × 100). Share is unavailable when total PO value is zero. This is not supplier profit.';
+
 function definitionFor(intent?: string): string {
   const i = (intent || '').toLowerCase();
+  if (i.includes('supplier_concentration') || i.includes('purchase concentration')) return CONCENTRATION;
   if (i.startsWith('inventory')) return INVENTORY;
   if (i.includes('supplier') || i.includes('purchase')) return PURCHASE;
   return BILLING;
@@ -30,15 +34,17 @@ function definitionFor(intent?: string): string {
 function sourceFor(intent?: string): string {
   const i = (intent || '').toLowerCase();
   if (i.startsWith('inventory')) return 'Current inventory snapshot (not historical stock movements)';
+  if (i.includes('supplier_concentration')) return 'Purchasing / purchase-order data (EKPO, EKKO, LFA1)';
   if (i.includes('supplier') || i.includes('purchase')) return 'SAP purchase orders (EKPO/EKKO/LFA1)';
   return 'SAP billing extract (governed metrics)';
 }
 
 function grainFor(intent?: string, ac: Record<string, unknown> = {}): string | undefined {
-  const fromCtx = String(ac.fact_grain || ac.grain || '').trim();
-  if (fromCtx) return fromCtx;
   const i = (intent || '').toLowerCase();
-  if (i.includes('supplier_concentration')) return 'Purchase-order item, then supplier';
+  if (i.includes('supplier_concentration')) return 'PO / supplier purchasing grain';
+  const fact = typeof ac.fact_grain === 'string' ? ac.fact_grain.trim() : '';
+  if (fact === 'po_item') return 'Purchase-order item, then supplier';
+  if (fact) return fact;
   if (i.includes('supplier')) return 'Purchase-order item, then supplier × product';
   if (i.startsWith('inventory_by_plant')) return 'Storage location stock, then plant';
   if (i.startsWith('inventory_sales') || i.includes('inventory_risk')) {
@@ -65,15 +71,20 @@ function analysisLabelFor(intent?: string): string | undefined {
   };
   if (labels[i]) return labels[i];
   if (!intent) return undefined;
-  return intent.replace(/_/g, ' ');
+  if (/_/.test(intent)) return 'Governed SAP analysis';
+  return intent;
 }
 
 function aggregationFor(intent?: string, ac: Record<string, unknown> = {}): string | undefined {
-  const fromCtx = String(ac.aggregation || ac.aggregation_grain || '').trim();
-  if (fromCtx) return fromCtx;
   const i = (intent || '').toLowerCase();
+  if (i.includes('supplier_concentration')) return 'Supplier-level purchase-order aggregation';
+  const fromCtx = typeof ac.aggregation === 'string'
+    ? ac.aggregation.trim()
+    : typeof ac.aggregation_grain === 'string'
+      ? String(ac.aggregation_grain).trim()
+      : '';
+  if (fromCtx) return fromCtx;
   if (i.startsWith('inventory')) return 'Product (and plant when requested) on the current snapshot';
-  if (i.includes('supplier_concentration')) return 'Supplier on purchase-order item totals, then share of those totals';
   if (i.includes('supplier')) return 'Supplier × product on purchase-order items';
   if (i.includes('monthly')) return 'Calendar month from billing date (FKDAT)';
   if (i.includes('quarterly')) return 'Calendar quarter from billing date (FKDAT)';

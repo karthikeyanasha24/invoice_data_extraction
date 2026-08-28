@@ -273,7 +273,7 @@ function exportCsv(data: any[], filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function DataTable({ data, totalCount, sql }: { data: any[]; totalCount?: number; sql?: string }) {
+function DataTable({ data, totalCount, sql, heading }: { data: any[]; totalCount?: number; sql?: string; heading?: string }) {
   const [showSql, setShowSql] = useState(false);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -322,7 +322,7 @@ function DataTable({ data, totalCount, sql }: { data: any[]; totalCount?: number
           <span className="text-sm font-medium text-slate-700">
             {isEmpty
               ? <span className="text-amber-700">No rows for this question</span>
-              : `${data.length.toLocaleString()} rows`}
+              : `${heading || 'Results'} · ${data.length.toLocaleString()} rows`}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -450,6 +450,7 @@ function InsightsPanel({ findings }: { findings: string[] }) {
 function publicSummary(summary: string): string {
   return (summary || '')
     .replace(/Deep analysis\s+[—\-]\s+intent\s+`?[\w.]+`?/gi, '')
+    .replace(/\b(deep_multidim|supplier_concentration|suppliers_of_selection|dimensional_extend)\b/g, '')
     .replace(/###\s+(supplier_concentration|inventory_analysis|inventory_risk_analysis|inventory_sales_comparison|inventory_by_plant|suppliers_of_selection|product_profitability|product_growth_decline)\b/gi, '### Result')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -634,6 +635,7 @@ function ResultDashboard({
   const hasInsights = (keyFindings?.length ?? 0) > 0 && keyFindings?.[0] !== 'No results found.';
   const followups = humanizeFollowups(suggested_followups);
   const isGap = result.answer_status === 'CANNOT_ANSWER';
+  const heading = analysisTrustFromResult(result).analysisLabel;
 
   if (isGap) {
     return (
@@ -650,7 +652,7 @@ function ResultDashboard({
       {hasSummary && <SummaryCard summary={summary!} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
-      {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} />}
+      {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} heading={heading || 'Results'} />}
       {hasInsights && <InsightsPanel findings={keyFindings!} />}
       <TrustPanel result={result} />
       {followups.length > 0 && onAskFollowup && (

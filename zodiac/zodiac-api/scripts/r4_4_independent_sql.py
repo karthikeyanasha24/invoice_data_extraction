@@ -150,14 +150,31 @@ def main() -> None:
     if chain_intent == "supplier_concentration" and chain_rows and "share_of_po_value_pct" in (chain_rows[0] or {}):
         chain_status, chain_cmp = compare(db_filtered or db_global, chain_rows)
 
-    status = "PASS" if chain_status == "PASS" and stand_status in {"PASS", "BLOCKED"} else (
-        "FAIL" if "FAIL" in {stand_status, chain_status} else "BLOCKED"
+    top3 = post("Show the top 3 suppliers by purchase value.")
+    top3_intent = intent_of(top3)
+    top3_rows = top3.get("data") or []
+    top3_status, top3_cmp = ("BLOCKED", [])
+    if top3_intent == "supplier_concentration" and len(top3_rows) == 3:
+        top3_status, top3_cmp = compare(db_global[:3], top3_rows)
+        if len(top3_rows) != 3:
+            top3_status = "FAIL"
+    elif top3_intent == "supplier_concentration":
+        top3_status = "FAIL"
+        top3_cmp = [{"status": "FAIL", "reason": f"expected 3 rows, got {len(top3_rows)}"}]
+
+    refs = {
+        str(r.get("supplier")): float(r.get("share_of_po_value_pct") or 0)
+        for r in db_global
+    }
+    ref_ok = (
+        abs(refs.get("0000005557", -1) - 49.86) <= 0.05
+        and abs(refs.get("0000001095", -1) - 42.45) <= 0.05
     )
-    if stand_status == "BLOCKED" and chain_status == "PASS":
-        status = "PASS"
-        note = "Chained product-filtered concentration matches independent SQL. Standalone first-question path not yet deep_multidim on this backend."
-    else:
-        note = "Independent SQL is PO-grain EKPO.NETWR share with LOEKZ filter."
+
+    status = "PASS" if stand_status == "PASS" and chain_status == "PASS" and top3_status == "PASS" and ref_ok else (
+        "FAIL" if "FAIL" in {stand_status, chain_status, top3_status} or not ref_ok else "BLOCKED"
+    )
+    note = "Independent SQL is PO-grain EKPO.NETWR share with LOEKZ filter. Standalone must match global shares."
 
     out = {
         "status": status,
@@ -166,6 +183,8 @@ def main() -> None:
         "products_n": len(products),
         "standalone": {"status": stand_status, "comparisons": stand_cmp},
         "chained": {"status": chain_status, "comparisons": chain_cmp},
+        "top3": {"status": top3_status, "n": len(top3_rows), "comparisons": top3_cmp},
+        "reference_shares_ok": ref_ok,
         "db_global": [{"supplier": r.get("supplier"), "share": float(r.get("share_of_po_value_pct") or 0)} for r in db_global],
         "note": note,
     }

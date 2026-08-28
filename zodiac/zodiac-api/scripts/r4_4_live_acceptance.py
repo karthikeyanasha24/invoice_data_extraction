@@ -64,16 +64,62 @@ def classify(r: Dict[str, Any], expect: Optional[str] = None) -> str:
 def main() -> None:
     rows: List[Dict[str, Any]] = []
     r_stand, ms_stand = post("Show supplier concentration.")
+    sql_stand = (r_stand.get("sql") or "").upper()
     first = (r_stand.get("data") or [{}])[0] if r_stand.get("data") else {}
+    stand_verdict = classify(r_stand, "supplier_concentration")
+    if "COUNT(*)" in sql_stand.replace(" ", "") or "INVOICE_BUSINESS_DATA" in sql_stand:
+        stand_verdict = "FAIL(fallback_count)"
     rows.append({
         "q": "Show supplier concentration. [standalone]",
         "ms": ms_stand,
-        "verdict": classify(r_stand, "supplier_concentration"),
+        "verdict": stand_verdict,
         "intent": intent_of(r_stand),
         "status": r_stand.get("answer_status"),
         "has_share": "share_of_po_value_pct" in first,
-        "has_vbrp": "VBRP" in (r_stand.get("sql") or "").upper(),
-        "has_ekpo": "EKPO" in (r_stand.get("sql") or "").upper(),
+        "has_vbrp": "VBRP" in sql_stand,
+        "has_ekpo": "EKPO" in sql_stand,
+        "n": len(r_stand.get("data") or []),
+    })
+
+    ctx_conc = ctx_from("Show supplier concentration.", r_stand) if stand_verdict == "PASS" else None
+    if ctx_conc:
+        for q, extra in (
+            ("Show the highest one.", {"n_expect": 1}),
+            ("Show the percentage.", {}),
+        ):
+            r, ms = post(q, ctx_conc)
+            verdict = classify(r, "supplier_concentration")
+            n = len(r.get("data") or [])
+            if extra.get("n_expect") and n != extra["n_expect"] and verdict == "PASS":
+                verdict = f"FAIL(n={n})"
+            rows.append({
+                "q": q,
+                "ms": ms,
+                "verdict": verdict,
+                "intent": intent_of(r),
+                "status": r.get("answer_status"),
+                "n": n,
+            })
+            if r.get("answer_status") == "SUCCESS":
+                ctx_conc = ctx_from(q, r)
+
+    r_top3, ms_top3 = post("Show the top 3 suppliers by purchase value.")
+    sql_top3 = (r_top3.get("sql") or "").upper()
+    n3 = len(r_top3.get("data") or [])
+    v3 = classify(r_top3, "supplier_concentration")
+    if v3 == "PASS" and n3 != 3:
+        v3 = f"FAIL(n={n3})"
+    if "COUNT(*)" in sql_top3.replace(" ", "") or "INVOICE_BUSINESS_DATA" in sql_top3:
+        v3 = "FAIL(fallback_count)"
+    rows.append({
+        "q": "Show the top 3 suppliers by purchase value. [standalone]",
+        "ms": ms_top3,
+        "verdict": v3,
+        "intent": intent_of(r_top3),
+        "status": r_top3.get("answer_status"),
+        "n": n3,
+        "has_ekpo": "EKPO" in sql_top3,
+        "has_vbrp": "VBRP" in sql_top3,
     })
 
     r0, ms0 = post("Show the products with the highest profits.")

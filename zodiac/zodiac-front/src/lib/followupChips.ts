@@ -1,7 +1,10 @@
 export type FollowupChip = { label: string; question: string };
 
 const FOLLOWUP_MAP: { match: RegExp; label: string; question: string }[] = [
-  { match: /supplier concentration|share of po|po value|purchase-order value/i, label: 'Show supplier concentration', question: 'Show supplier concentration.' },
+  { match: /supplier concentration|purchase-order value|concentrated suppliers/i, label: 'Show supplier concentration', question: 'Show supplier concentration.' },
+  { match: /highest supplier|which supplier is highest|the highest one|largest supplier/i, label: 'Show the highest supplier', question: 'Show the highest supplier.' },
+  { match: /what percentage|show the percentage|share of purchase/i, label: 'Show the percentage', question: 'Show the percentage.' },
+  { match: /^show top 3\.?$|top 3 suppliers/i, label: 'Show top 3', question: 'Show top 3.' },
   { match: /customer contribution/i, label: 'Show customers', question: 'Show their customers.' },
   { match: /industry breakdown/i, label: 'Break down by industry', question: 'Show their industries.' },
   { match: /country|region|land1/i, label: 'Break down by region', question: 'Show their regions.' },

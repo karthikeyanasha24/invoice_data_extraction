@@ -1,405 +1,213 @@
 # BridgeEDI V2.1 + R4 — Final Production Acceptance
 
-**Date:** 2026-08-28 (re-audit after `c10a92e`)  
+**Date:** 2026-08-28  
 **Branch:** `phase12-first-customer-ready`  
 **Canonical frontend:** `https://www.bridgeedi.com`  
 **Canonical backend:** `https://zodiac-back.vercel.app`  
-**Forbidden target:** `zodiac-api-nu` (not used)
-
-# BRIDGEEDI V2.1 + R4 — NOT COMPLETE
+**Forbidden target:** `zodiac-api-nu` (not used, not deployed)
 
 ---
 
-## 0. Re-audit (same day)
+## Executive verdict
 
-HEAD at start of this pass was still `c10a92e`. Local work since then strengthens first-question paraphrases, concentration follow-ups (`highest` / `percentage` / `top 3` / PO value), display LIMIT, human headings, investigation breadcrumb, and trust-panel language.
+**NOT COMPLETE — PRODUCTION DEPLOYMENT BLOCKED**
 
-**Live re-probe (mandatory):** `Show supplier concentration.` with no prior context still returns `SUCCESS`, `intent=None`, `SELECT COUNT(*) AS total_rows FROM invoice_business_data`. First-question R4-4 is **not** on `zodiac-back`.
+Local implementation, unit tests, compiled independent SQL, and GitHub push are done. This CLI cannot deploy to the canonical Vercel projects, so live first-question R4-4, live independent SQL vs AI, and live Full Chat / Overview chip acceptance remain unverified on production.
 
-Vercel account `karthikeyanasha24` still only sees `zodiac-api-nu`, `hrm53v1`, `banyanqi-react`. No deploy attempted.
-
-Local goldens this pass: **86 PASS** (R3–R4-4 + follow-up). Frontend UX tests: **16 PASS**.
+Do not declare `BRIDGEEDI V2.1 + R4 — COMPLETE` until `zodiac-back` and `www.bridgeedi.com` are redeployed from this branch and the live matrix below is re-run.
 
 ---
 
----
+## Implementation
 
-## 1. Executive verdict
+This pass fixed the remaining first-question R4-4 routing hole: `Show the top 3 suppliers by purchase value.` (and similar) was classified as a basic-engine `top N` query, so `try_deep_multidim_analysis` returned `None` and production fell through to `COUNT(*)` on `invoice_business_data` (~22s).
 
-Product V2.1 is **live** on `www.bridgeedi.com`. Frozen analytical contracts R3 / R4-1 / R4-2 / R4-3 **still hold on live** with **0 FAIL**. R4-4 supplier concentration is **live as a follow-up** after product context, and independent SQL matches those shares at **0.00 difference**.
+Actual changes:
 
-R4-4 is **not** live as a first question. Overview and AI welcome chips that send `Show supplier concentration.` do not enter the governed engine on the currently deployed backend. This CLI cannot deploy `zodiac-back` or the BridgeEDI frontend project.
-
-Until that backend commit is on `zodiac-back` and first-question concentration independently matches global PO share, production completion cannot be declared.
-
----
-
-## 2. Current production state
-
-| Surface | Live now |
-| --- | --- |
-| Frontend | Product V2.1 (Understand / Ask / Operate / Manage; Overview command center; analyst-only AI route; Settings session language; SAT inbound-not-ERP copy) |
-| Backend | R3 + R4-1 + R4-2 + R4-3 + **R4-4 follow-up** + adaptive JWT + dashboard routers |
-| R4-4 first question | Count / non-deep fallback (`intent` empty, `query_plan={}`) |
-| This CLI deploy | No access to canonical projects |
-
----
-
-## 3. Architecture
-
-See `zodiac/docs/BRIDGEEDI_V2_1_R4_SYSTEM_AUDIT.md`.
-
-Governed path: question → semantic candidate → plan → SQL compiler → grain guard → execute → explain → follow-ups.
-
-Sales = billing item. Inventory = MBEW/MARD snapshot. Purchase concentration = EKPO⋈EKKO⋈LFA1 at PO-item grain, then supplier. No VBRP⋈EKPO / VBRP⋈MBEW monetary joins.
+- `wants_supplier_concentration` now recognizes semantic paraphrases (concentration, PO share/value, top-N suppliers, concentrated suppliers, account-for-most, etc.) and still excludes R3 `Show their suppliers.`
+- `is_deep_analysis_candidate` returns true for concentration **before** the basic-engine `top N` steal
+- Adaptive path still enters deep analysis when concentration is recognized even if `classify_turn` is conservative
+- Top-N LIMIT honored on standalone concentration (`LIMIT 3` / `LIMIT 1` / default display 20)
+- Follow-ups stay in concentration: highest one / highest supplier / percentage / top 3 / PO value / largest / why-highest
+- R3 `Show their suppliers.` remains `suppliers_of_selection`
+- Share is `NULL` when total PO value is zero (no divide-by-zero)
+- Concentration SQL ranks with a supplier tie-break; grain is EKPO/EKKO/LFA1 only
+- Human headings (`Supplier concentration`, `Top 3 suppliers by purchase value`) — no intent slugs
+- Trust panel: Source → Definition → Aggregation → Period → Grain → Result size → Limitations, with PO provenance
+- Follow-up chips no longer remap concentration questions to `Show their suppliers.`
+- Unused `sap_sql_agent` import removed from `dashboard.py` so router load cannot fail on that module
+- Intent-gate tests no longer crash when the handler is invoked without a user object (HTTP JWT gate unchanged)
 
 ---
 
-## 4. Page-by-page audit (live www)
+## Backend
 
-### Login (`/`)
+### Auth
 
-Not re-run logged-out in this pass (session already authenticated). Code + prior live: BridgeEDI branding, purpose line, password visibility, `publicApiError`, loading, redirect with `?next=`. Customer-org link to portal login.
+HTTP `Depends(get_current_user)` still runs before SQL. Adaptive without JWT / empty Bearer / wrong scheme / malformed / invalid token → 401, no SQL. Direct-function tests may pass `current_user=None`; that path no longer AttributeErrors and still does not execute SAP SQL for gated nonsense.
 
-### Overview (`/overview`) — PASS (product)
+### Routing
 
-Live at **390×844**: What to do next, Needs attention (“No merges are waiting to send.” — not “healthy because empty”), EDI invoice total **not SAP P&L**, 14 inbound documents labeled as SAT not ERP push, investigation chips including **Supplier concentration**, skip-to-content, no horizontal overflow.
+Standalone first-question concentration is a deep-analysis candidate. It no longer loses to the generic `top N` basic engine. Clarification/non-business turns still short-circuit unless the question is concentration.
 
-**Caveat:** the Supplier concentration chip navigates to `/dashboard/ai?q=Show supplier concentration.` which currently **does not** run R4-4 on live.
+### R4-4
 
-### AI Analyst (`/dashboard/ai`) — PASS (shell) / FAIL (first-question concentration)
+Intent `supplier_concentration`. Metric = supplier PO value / total PO value × 100 at PO-item grain. Tables: EKPO, EKKO, LFA1. Not VBRP/VBRK, not supplier profit, not HHI.
 
-Question → verified analysis → next investigation. No EDI tabs. Welcome chips. Inventory aging disclaimer. View SQL. How this was calculated. DATA GAP card with Show current inventory / Compare with sales / Highest inventory (does **not** suggest aging). Follow-up / New question. Cancel. Saved on this device.
+### Grain safety
 
-Live chat still shows **`Deep analysis — intent inventory_analysis`** headings. Branch replaces this with `_analysis_heading()`; not on `zodiac-back` yet.
+Compiled concentration SQL contains no VBRP. Unit tests still reject VBRP⋈EKPO, VBRP⋈MBEW/MARD, and EKPO⋈MBEW monetary fan-out.
 
-### Settings — PASS
+### DATA GAP
 
-Profile (read-only username/email). Security: session language, **no JWT jargon**, no fake self-serve password reset. API keys. Account. Skip link. Loading/retry exist in code.
+Aging, true turnover, net profit, logistics cost, budget remain unavailable. Recovery chips still point at current inventory / inventory vs sales / highest inventory / gross profit — not aging or fabricated profit.
 
-### SAT documents — PASS
+### Performance
 
-14 documents, 0 waiting, 4 sent. Subtitle: inbound SAT activity, not a live ERP push. Tabs: Documents / Merge / Merged invoices / Send to SAP. Filters. Details/Delete. Loading then list. No AxiosError in UI.
-
-### EDI operations (`/dashboard`) — PASS with copy nits
-
-Tab **Inbound SAT** (not labeled as a push). Tooltip/title on inbound: not a live ERP push. Subtitle still says **“To ERP tab”** on www; branch removes that phrase. From ERP / Business / Customer Comparison remain.
+Wrong-engine ~22s path is removed in this branch because concentration no longer falls through to invoice `COUNT(*)`. Normal analytical P50/P95 baseline is unchanged (no new cache). Live R4-4 latency cannot be re-measured until `zodiac-back` is redeployed.
 
 ---
 
-## 5. UX improvements on this branch (not all live)
+## Frontend
 
-- First-question concentration candidate gate (`is_deep_analysis_candidate` +3)
-- Follow-up regex `account for (the )?most purchas`
-- Force `supplier_concentration` after follow-up merge so paraphrases do not steal R3 suppliers incorrectly
-- Trust panel order: Source, Definition, Aggregation, Period, Grain, Result size, Limitations
-- Hide intent slug from meta strip
-- EDI subtitle without “To ERP tab”
-- Login purpose line (governed SAP intelligence + data limitations)
+### Overview
+
+Supplier concentration remains a first-click investigation chip (`Show supplier concentration.`). EDI invoice total is not labeled as SAP P&L. Empty pending is honest.
+
+### AI Analyst
+
+Question → What we found → Results (business heading) → How this was calculated → Next investigation. View SQL hidden by default. Saved analyses labeled **Saved on this device**. `?q=` deep-link preserved. No EDI Operations tabs inside the analyst.
+
+### Trust
+
+Source, Definition, Aggregation, Period, Grain, Result size, Limitations. Concentration definition states PO share of total PO value and NULL-if-zero.
+
+### Follow-ups
+
+Concentration chips: highest supplier, percentage, top 3. Generic `/supplier/` map no longer steals those chips into R3 listing.
+
+### SAT / Settings / responsive / accessibility
+
+Unchanged from the prior V2.1 pass: human SAT statuses, no raw AxiosError, inbound SAT is not a fake ERP push, Settings Profile/Security/API/Account, skip-to-content, keyboard controls. Live responsive QA was previously done on www; this CLI did not re-deploy frontend, so later heading/chip copy is **locally verified** only.
 
 ---
 
-## 6. Product improvements
+## Test matrix
 
-Differentiator preserved: governed SAP semantics, DATA GAP as a feature, adaptive context, explainability, grain safety. Did not add forecasting, aging, HHI, supplier risk, net profit, or fake turnover.
-
----
-
-## 7. Security
-
-Live `POST /api/query/adaptive` with `Show inventory.`:
-
-| Case | HTTP | SQL leak |
+| Suite | Result | Notes |
 | --- | --- | --- |
-| No Authorization | 401 | No |
-| Empty Bearer | 401 | No |
-| Wrong scheme (Basic) | 401 | No |
-| Malformed token | 401 | No |
-| Invalid JWT | 401 | No |
+| R3 unit (`test_r3_bi_expansion` + golden benchmark) | PASS | Local. Live golden 23/2/0 last verified on production in the prior pass; not re-run this pass |
+| R4-1 unit | PASS | Local. Live 47/2/0 last verified prior pass |
+| R4-2 unit | PASS | Local. Live 40/1/0 last verified prior pass |
+| R4-3 unit | PASS | Local. Live 31/6/0 last verified prior pass |
+| R4-4 unit | PASS (21 tests) | Standalone paraphrases, top-N, R3 distinction, grain, headings, follow-ups, zero-total SQL |
+| Combined governed pytest this pass | **135 passed** | R3–R4-4 + follow-up + deep dive + auth + dashboard + Andy cases |
+| Intent-gate nonsense + dashboard registration | **9 passed** | After null-user and unused-import fixes |
+| Adaptive auth | PASS | 401 before SQL |
+| Independent SQL (compiled vs DB) | **PASS locally** | `0000005557` ≈ 49.86%, `0000001095` ≈ 42.45%, top-3 row count 3 |
+| Independent SQL (live AI vs DB) | **blocked by credentials/access** | Requires `zodiac-back` on this commit |
+| Frontend `test:ux` | **18 passed** | Concentration heading/trust/chips included |
+| Frontend `test:adaptive-context` | **8 passed** | |
 
-`get_current_user` runs before SQL. Dashboard inbound requires the same Axios bearer. Frontend: unauthenticated protected routes redirect to sign-in. JWT not shown in Settings Security.
-
-**Status: PASS**
-
----
-
-## 8. AI Analyst
-
-Shell and follow-up R4-4: PASS. First-question concentration: FAIL on live until backend deploy.
-
----
-
-## 9. Adaptive context
-
-R3 live chain 10/10. R4-1 context chain PASS. R4-3 product context chain 13 turns including aging DATA GAP + inventory recovery: included in **31/6/0**. R3 “Show their suppliers.” remains `suppliers_of_selection` (live R4-4 suite).
+R3/R4-1/R4-2/R4-3 **golden live scores were not silently updated**. Local unit tests did not require changing those expected scores.
 
 ---
 
-## 10. DATA GAP
+## Live matrix
 
-Aging and net profit return `CANNOT_ANSWER` with alternatives that do not re-ask aging. Recovery to inventory PASS (R3 3 PASS / 2 GAP recovery block; R4-3 recovery section; R4-4 suite aging → inventory).
-
----
-
-## 11. R4-3 inventory
-
-Live **31 PASS / 6 DATA GAP / 0 FAIL**. Snapshot only. SALK3 / LABST / LBKUM. No aging. Ratios not labeled turnover. Grain: independent sales agg ⋈ inventory agg.
-
----
-
-## 12. R4-4 supplier concentration
-
-| Path | Live |
+| Check | Status |
 | --- | --- |
-| After highest-profit products → Show supplier concentration. | PASS, intent `supplier_concentration`, EKPO, share %, no VBRP |
-| Show their suppliers. | PASS, `suppliers_of_selection` |
-| Show supplier profit. | PASS (no billing fan-out; listing, not profit) |
-| Standalone Show supplier concentration. | **FAIL(intent empty)** — 22049 ms count fallback |
-| Independent SQL (product-filtered chain) | **PASS**, diffs 0.00 |
-| Independent SQL (global standalone) | **BLOCKED** (AI intent null) |
+| Frozen live R3 23/2/0 | verified live in prior same-day pass — **not re-run after this commit** |
+| Frozen live R4-1 47/2/0 | verified live prior pass — **not re-run after this commit** |
+| Frozen live R4-2 40/1/0 | verified live prior pass — **not re-run after this commit** |
+| Frozen live R4-3 31/6/0 | verified live prior pass — **not re-run after this commit** |
+| Live first-question `Show supplier concentration.` | **blocked by credentials/access** (still the old engine on current production) |
+| Live top-3 standalone | **blocked by credentials/access** |
+| Live concentration follow-ups | **blocked by credentials/access** for this commit; follow-up-after-profits was live on the previous backend |
+| Live R3 `Show their suppliers.` | verified live prior pass (`suppliers_of_selection`) |
+| Live independent SQL vs AI (global 49.86 / 42.45) | **blocked by credentials/access** |
+| Local compiled SQL vs DB (global 49.86 / 42.45) | **locally verified** |
+| Live Full Chat 15-turn | **not re-run this pass** |
+| Live Overview / AI / SAT / Settings | Product V2.1 **verified live** earlier; this commit’s analyst heading/chip mapping is **locally verified** only |
+| Live responsive QA | **verified live** earlier on www; no frontend deploy this pass |
+| Canonical production deploy | **blocked by credentials/access** |
 
-Governed definition (branch + follow-up live):
-
-- `supplier_rank` = `ROW_NUMBER() OVER (ORDER BY purchase_value DESC)`
-- `share_of_po_value_pct` = supplier EKPO.NETWR / total × 100, NULL if total ≤ 0
-- LOEKZ empty on EKPO and EKKO
-- Missing LFA1 name → supplier code
-- No HHI / risk thresholds / supplier profit
-
----
-
-## 13. Grain safety
-
-Unit tests reject VBRP⋈MARD, VBRP⋈EKPO, EKPO⋈MBEW with NETWR. Compiled concentration SQL has no VBRP. Live follow-up SQL has EKPO, not VBRP. **PASS** (unit + live follow-up). Adversarial suite in `tests/test_r4_4_supplier_concentration.py`.
+Never treat local pytest or compiled-SQL DB checks as production verification.
 
 ---
 
-## 14. Independent SQL
+## Deployment
 
-Product-filtered (selected top-profit materials):
-
-| Supplier | Independent share % | AI share % | Diff | Status |
-| --- | --- | --- | --- | --- |
-| 0000001011 | 98.57 | 98.57 | 0.00 | PASS |
-| 0000003902 | 1.35 | 1.35 | 0.00 | PASS |
-| 0000003000 | 0.06 | 0.06 | 0.00 | PASS |
-
-Global PO share (LOEKZ filter, no product filter) from the same DB, **not** comparable to the chained AI result:
-
-0000005557 49.86 · 0000001095 42.45 · 0000001075 1.84 · 0000000300 1.26 · 0000003511 0.69
-
-Standalone AI vs global SQL: **BLOCKED**.
-
-**Matrix status: BLOCKED** (standalone required for Overview chip / production-complete rule).
-
----
-
-## 15–18. Frozen live regression (re-run 2026-08-28 after R4-4 follow-up was live)
-
-| Suite | Required | Actual | Evidence |
-| --- | --- | --- | --- |
-| R3 | 23 / 2 / 0 | **23 / 2 / 0** | `r3_post_deploy_live_results.json` |
-| R4-1 | 47 / 2 / 0 | **47 / 2 / 0** | `r4_1_live_acceptance.json` |
-| R4-2 | 40 / 1 / 0 | **40 / 1 / 0** | `r4_2_live_acceptance.json` |
-| R4-3 | 31 / 6 / 0 | **31 / 6 / 0** | `r4_3_live_acceptance.json` |
-
-Local pytest goldens this pass: **83 passed** (R3–R4-4 + follow-up) plus **23** additional deep-dive tests. Frontend `test:ux` 15 PASS, `test:adaptive-context` 8 PASS.
-
----
-
-## 19. R4-4 acceptance
-
-Follow-up: PASS. First question: FAIL on live. Golden unit: PASS on branch. **Not production-complete.**
-
----
-
-## 20. Full Chat
-
-R4-3 live `product_context_chain` + `data_gap_recovery` covers:
-
-highest profits → inventory → sales → high inventory / low sales → product groups → suppliers → customers → regions → inventory by plant → compare last year → why → aging (DATA GAP) → inventory again → net profit (DATA GAP) → inventory.
-
-**PASS** on live (inside 31/6/0). Additional R4-4 concentration turn after profits: **PASS**.
-
----
-
-## 21. SAT — PASS (live)
-
-14 / 0 waiting / 4 sent. Inbound vs send-to-SAP distinguished. Loading then rows.
-
----
-
-## 22. Settings — PASS (live)
-
----
-
-## 23. Responsive QA
-
-| Viewport | Overflow | Notes |
-| --- | --- | --- |
-| 390×844 | None | Overview + AI Analyst |
-| 768×1024 | None | EDI operations loaded |
-| 1280×800 | None | Dashboard |
-| 1440×900 | None | SAT documents |
-
-430 and 1024×768 not separately captured; 390 and 768 bracket those widths. Mobile tables may scroll internally by design. Sidebar hamburger on <1024.
-
-**PASS** for captured viewports. Residual: live EDI subtitle “To ERP tab”.
-
----
-
-## 24. Accessibility
-
-Skip to content, `main#main-content`, section headings, tab names, password show/hide aria-labels, trust panel `aria-expanded` (branch), Settings field labels. Keyboard: skip link present. No critical contrast failure observed.
-
-Mobile a11y tree still lists Close menu when overlay is visually closed — not a blocker.
-
-**PASS** (no critical blocker).
-
----
-
-## 25. Performance
-
-| Suite | P50 | P95 | Max |
-| --- | --- | --- | --- |
-| R3 live | 715 ms | 1082 ms | 1779 ms |
-| R4-2 live | 698 ms | 946 ms | 1393 ms |
-| R4-3 live | 616 ms | 1178 ms | 2680 ms |
-| R4-4 follow-up concentration | 984 ms | — | — |
-| R4-1 basic GA `2004` / `Top 5` | — | — | ~9.3 s |
-
-Normal analytical queries meet **P50 < 1s** and **P95 < 3s**. Basic-engine ~9s turns are **explicitly accepted** as cold/deep outliers; correctness was not weakened.
-
-Standalone concentration 22 s is the **wrong engine**, not a performance target.
-
-**PASS** with documented GA outliers.
-
----
-
-## 26. Console
-
-Installed error collector on live session: no `console.error` / `window.onerror` events during Overview / AI / SAT / Dashboard. No blank screen after load. SAT and Overview loading copy is intentional.
-
-**PASS** for this session.
-
----
-
-## 27. Deployment
-
-| Action | Result |
+| Item | Value |
 | --- | --- |
-| `npx vercel whoami` | `karthikeyanasha24` |
-| `npx vercel project ls` | `zodiac-api` → **zodiac-api-nu**, `hrm53v1`, `banyanqi-react` only |
-| Inspect `www.bridgeedi.com` / `zodiac-back` | Not visible to this account |
-| Deploy to zodiac-api-nu | **Not done** |
-| New Vercel project | **Not created** |
-| DNS | **Unchanged** |
+| Frontend deployment target | Existing BridgeEDI Vercel project serving `www.bridgeedi.com` |
+| Backend deployment target | Existing `zodiac-back` project serving `zodiac-back.vercel.app` |
+| Commit SHA | recorded at push time on `phase12-first-customer-ready` |
+| Deployment status | **No deployment occurred** |
+| This CLI Vercel account | `karthikeyanasha24` / team `ashas-projects-a0fae821` |
+| Visible projects | `zodiac-api` → `zodiac-api-nu`, `hrm53v1`, `banyanqi-react` |
+| Not visible | `zodiac-back`, BridgeEDI frontend |
 
-V2.1 frontend and R4-4 follow-up reached production via an account that **can** see those projects (not this CLI).
+**No deploy to `zodiac-api-nu`. No new Vercel project. No DNS change.**
 
-### Handoff (required)
+### Owner deploy (canonical projects only)
 
-1. Owner of **zodiac-back** deploys this branch (`phase12-first-customer-ready`) to the **existing** `zodiac-back` project only.  
-2. Re-run `python scripts/r4_4_live_acceptance.py` — standalone must be PASS with `supplier_concentration`.  
-3. Re-run `python scripts/r4_4_independent_sql.py` — standalone comparisons vs global shares must PASS.  
-4. Owner of the **www.bridgeedi.com** project deploys the same branch for trust-panel / EDI subtitle / login tagline polish.  
-5. Hard-refresh Overview → Supplier concentration chip and confirm share % (not a row-count card).
+From a CLI that can see `zodiac-back` and the BridgeEDI frontend project, on this branch:
 
----
+```text
+# backend — existing zodiac-back only
+cd zodiac/zodiac-api
+vercel --prod --yes
+# confirm the production URL is https://zodiac-back.vercel.app
 
-## 28. Remaining limitations
+# frontend — existing www.bridgeedi.com project only
+cd zodiac/zodiac-front
+vercel --prod --yes
+# confirm the production URL is https://www.bridgeedi.com
+```
 
-No inventory aging, true turnover, net profit, logistics cost, HHI, supplier risk, forecasting. Inventory vs sales is snapshot-vs-activity. Saved analyses are local. First-question R4-4 not live.
+Then:
 
----
+```text
+cd zodiac/zodiac-api
+python scripts/r4_4_live_acceptance.py
+python scripts/r4_4_independent_sql.py
+```
 
-## 29. Technical debt
+Required live probes after deploy:
 
-See system audit §12. Do not start R4-5.
-
----
-
-## 30. Product roadmap recommendations (after this scope is accepted)
-
-- Persist saved analyses server-side only if there is a real multi-device need.
-- Reduce basic-GA ~9s cold path without changing answers.
-- Tighten mobile drawer a11y (inert when closed).
-- Optional: cloud sync of analyses — deferred, not required for V2.1.
-
----
-
-## 31. Final score (/10)
-
-| Dimension | Score | Note |
-| --- | --- | --- |
-| Product clarity | 8 | Overview explains what/why/next |
-| UI | 8 | Coherent V2.1 shell |
-| UX | 7 | Concentration chip does not work first-click |
-| Analytical intelligence | 9 | Frozen suites + exact PO share match |
-| Trust | 7 | Panel exists; live headings still dump intent slugs |
-| Security | 9 | Adaptive 401, no SQL leak |
-| Reliability | 8 | 0 FAIL on frozen live suites |
-| Performance | 8 | P50/P95 met; GA outliers accepted |
-| Responsiveness | 8 | 390–1440 no overflow |
-| Accessibility | 8 | Skip, headings, labels |
-| Enterprise readiness | 6 | Deploy access + first-question hole |
-| Customer-demo readiness | 6 | Demo chip for concentration fails |
-| Differentiation | 9 | Governed + DATA GAP + context |
-
-**Overall: 7.6 / 10.** A production blocker prevents a higher score and prevents completion.
+1. Fresh session: `Show supplier concentration.` → intent `supplier_concentration`, EKPO SQL, share %, no `COUNT(*)` invoice fallback
+2. Fresh session: `Show top 3 suppliers by purchase value.` → exactly 3 rows
+3. Follow-up: `Show the highest one.` / `Show the percentage.` stay in concentration
+4. After product analysis: `Show their suppliers.` remains `suppliers_of_selection`
+5. Independent SQL: `0000005557` ≈ 49.86% and `0000001095` ≈ 42.45% vs AI, not rank-only
 
 ---
 
-## 32. Final verdict
+## Known DATA GAPs
 
-# BRIDGEEDI V2.1 + R4 — NOT COMPLETE
-
-### Exact blockers
-
-**1. R4-4 first question is not live on `zodiac-back`**
-
-- Evidence: `Show supplier concentration. [standalone]` → `FAIL(intent=)` · 22049 ms · `standalone_intent: null` in `r4_4_independent_sql.json`.
-- Cause: live `is_deep_analysis_candidate` does not score supplier concentration, so the Overview/AI chip never reaches the R4-4 SQL.
-- Required action: deploy this branch to **existing** `zodiac-back` (never `zodiac-api-nu`), then re-run standalone live + independent SQL.
-
-**2. This CLI cannot deploy canonical production**
-
-- Evidence: Vercel project list is only `zodiac-api-nu`, `hrm53v1`, `banyanqi-react`.
-- Required action: project-owner deploy as in §27.
+- Inventory aging (no historical stock movements)
+- True inventory turnover (required movement fields absent)
+- Net profit / EBIT / opex
+- Logistics / freight cost
+- Budget
+- Supplier profit / HHI / supplier risk thresholds (not fabricated)
+- Cloud/team saved analyses (device-local only)
 
 ---
 
-## Acceptance matrix
+## Remaining blockers
 
-| Area | Expected | Actual | Evidence | Status |
-| --- | --- | --- | --- | --- |
-| Login | PASS | Session language / branding live | www Settings + AuthForm | PASS |
-| Overview | PASS | V2.1 live; concentration chip misfires on backend | www `/overview` 390px | PASS* |
-| AI Analyst | PASS | Shell PASS; first-question R4-4 FAIL | www `/dashboard/ai` | FAIL |
-| Trust panel | PASS | Live panel + View SQL; slug headings remain | www AI chat | PASS* |
-| Follow-ups | PASS | R3/R4 chains | live JSON | PASS |
-| DATA GAP | PASS | Aging / net profit | R4-3 / R4-4 live | PASS |
-| DATA GAP recovery | PASS | Inventory after gap | R3 + R4-3 + R4-4 | PASS |
-| SAT | PASS | 14 / 0 / 4 | www `/sat-documents` | PASS |
-| Settings | PASS | No JWT jargon | www `/settings` | PASS |
-| Security | PASS | 401 × 5, no SQL | live probes | PASS |
-| Router health | PASS | `failed=[]`, dashboard loaded, inbound in OpenAPI | `/health/routers` | PASS |
-| R3 | 23/2/0 | 23/2/0 | `r3_post_deploy_live_results.json` | PASS |
-| R4-1 | 47/2/0 | 47/2/0 | `r4_1_live_acceptance.json` | PASS |
-| R4-2 | 40/1/0 | 40/1/0 | `r4_2_live_acceptance.json` | PASS |
-| R4-3 | 31/6/0 | 31/6/0 | `r4_3_live_acceptance.json` | PASS |
-| R4-4 | PASS | Follow-up PASS; standalone FAIL | `r4_4_live_acceptance.json` | FAIL |
-| Independent SQL | PASS | Chained 0.00; standalone BLOCKED | `r4_4_independent_sql.json` | BLOCKED |
-| Grain safety | PASS | Guard + no VBRP in follow-up SQL | tests + live | PASS |
-| Full Chat | PASS | R4-3 chain + R4-4 after profits | live JSON | PASS |
-| Responsive | PASS | 390 / 768 / 1280 / 1440 | browser | PASS |
-| Accessibility | PASS | Skip, headings; no critical blocker | browser | PASS |
-| Performance | PASS | P50/P95 met; GA ~9s accepted | live JSON | PASS |
-| Console | PASS | No critical errors this session | CDP | PASS |
-| Production deployment | PASS | V2.1 + R4-4 follow-up live; this CLI cannot ship remaining commits | Vercel ls | BLOCKED |
+1. **This CLI cannot deploy canonical production.** Vercel account does not see `zodiac-back` or the BridgeEDI frontend project.
+2. Until that deploy, live first-question R4-4 on `zodiac-back` still uses the generic fallback (`intent` empty, `COUNT(*)` on `invoice_business_data`).
+3. Live independent SQL vs AI (global shares) and live Full Chat / Overview-chip acceptance for **this commit** cannot be claimed.
 
-\*Overview and trust panel pass as product surfaces; they are marked with a caveat because the concentration chip and heading copy depend on the blocked backend deploy.
+No other product blockers remain in local code for V2.1 + R4-4 first-question concentration.
 
 ---
 
-# BRIDGEEDI V2.1 + R4 — NOT COMPLETE
+## What must not be claimed
+
+This is **not** `BRIDGEEDI V2.1 + R4 — COMPLETE`.
+
+Local tests passing is not production verification.

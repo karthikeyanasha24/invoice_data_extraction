@@ -55,6 +55,7 @@ _BUSINESS_TOKENS = (
     "regions", "country", "countries", "component", "components", "breakdown",
     "decline", "process", "delivery", "logistics", "freight", "expiry", "expir",
     "history", "buying", "selling", "purchase", "supplier", "inventory",
+    "concentration", "vendor", "vendors", "purchasing", "percent", "percentage",
 )
 
 _NONSENSE_HINTS = (
@@ -73,6 +74,7 @@ _SHORT_FOLLOWUP_TOKENS = {
     "region", "regions", "country", "customer", "customers", "product",
     "components", "breakdown", "decline", "process", "delivery", "why",
     "history", "buying", "selling", "purchase", "year", "years",
+    "supplier", "suppliers", "percent", "percentage", "share", "vendor",
 }
 
 

@@ -413,9 +413,14 @@ def resolve_analytical_followup(
         return res
 
     if re.search(
-        r"\b(supplier\s+concentration|purchase\s+share|share\s+of\s+purchas|purchasing\s+share|"
-        r"single[\s-]?source|top\s+suppliers?|largest\s+supplier|biggest\s+supplier|"
-        r"rank\s+suppliers|buy\s+the\s+most|percentage\s+of\s+purchas|account\s+for\s+(the\s+)?most\s+purchas)\b",
+        r"\b(supplier\s+concentration|supplier\s+po\s+concentration|po\s+concentration|"
+        r"purchase\s+share|share\s+of\s+purchas|purchasing\s+share|"
+        r"single[\s-]?source|top\s+\d+\s+suppliers?|top\s+suppliers?|"
+        r"largest\s+suppliers?|biggest\s+suppliers?|"
+        r"rank\s+suppliers|buy\s+the\s+most|percentage\s+of\s+purchas|"
+        r"account\s+for\s+(the\s+)?most\s+(purchas|po)|"
+        r"concentrated\s+suppliers|highest\s+(po|purchase)\s+value|"
+        r"suppliers?\s+by\s+purchase\s+value)\b",
         ql,
     ):
         res.kind = KIND_DIMENSION_EXPANSION
@@ -446,6 +451,9 @@ def resolve_analytical_followup(
         ) or (
             len(_tokens(ql)) <= 8
             and any(x in ql for x in ("supplier", "share", "percent", "po"))
+        ) or bool(
+            re.search(r"\bwhy\b", ql)
+            and re.search(r"\b(highest|first|supplier|concentrat)\b", ql)
         )
         if stay and not re.search(r"\b(their suppliers|show suppliers)\b", ql):
             res.kind = KIND_RANKING_CHANGE
