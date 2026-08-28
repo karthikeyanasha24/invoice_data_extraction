@@ -424,6 +424,35 @@ def resolve_analytical_followup(
         res.resolved = True
         return res
 
+    if prior_intent == "supplier_concentration" and not any(
+        x in ql
+        for x in (
+            "customer",
+            "region",
+            "inventor",
+            "aging",
+            "profit",
+            "sales",
+            "revenue",
+            "plant",
+        )
+    ):
+        stay = bool(
+            re.search(
+                r"\b(highest|largest|biggest|top|percent|percentage|share|"
+                r"po value|purchase value|rank|dominat)\b",
+                ql,
+            )
+        ) or (
+            len(_tokens(ql)) <= 8
+            and any(x in ql for x in ("supplier", "share", "percent", "po"))
+        )
+        if stay and not re.search(r"\b(their suppliers|show suppliers)\b", ql):
+            res.kind = KIND_RANKING_CHANGE
+            res.intent = "supplier_concentration"
+            res.resolved = True
+            return res
+
     # ── Dimension remove / replace ──
     rm = _REMOVE_DIM_RE.search(ql)
     if rm:

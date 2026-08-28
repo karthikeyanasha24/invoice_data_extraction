@@ -1,12 +1,26 @@
 # BridgeEDI V2.1 + R4 — Final Production Acceptance
 
-**Date:** 2026-08-28  
+**Date:** 2026-08-28 (re-audit after `c10a92e`)  
 **Branch:** `phase12-first-customer-ready`  
 **Canonical frontend:** `https://www.bridgeedi.com`  
 **Canonical backend:** `https://zodiac-back.vercel.app`  
 **Forbidden target:** `zodiac-api-nu` (not used)
 
 # BRIDGEEDI V2.1 + R4 — NOT COMPLETE
+
+---
+
+## 0. Re-audit (same day)
+
+HEAD at start of this pass was still `c10a92e`. Local work since then strengthens first-question paraphrases, concentration follow-ups (`highest` / `percentage` / `top 3` / PO value), display LIMIT, human headings, investigation breadcrumb, and trust-panel language.
+
+**Live re-probe (mandatory):** `Show supplier concentration.` with no prior context still returns `SUCCESS`, `intent=None`, `SELECT COUNT(*) AS total_rows FROM invoice_business_data`. First-question R4-4 is **not** on `zodiac-back`.
+
+Vercel account `karthikeyanasha24` still only sees `zodiac-api-nu`, `hrm53v1`, `banyanqi-react`. No deploy attempted.
+
+Local goldens this pass: **86 PASS** (R3–R4-4 + follow-up). Frontend UX tests: **16 PASS**.
+
+---
 
 ---
 

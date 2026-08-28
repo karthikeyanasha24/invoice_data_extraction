@@ -132,7 +132,8 @@ def wants_supplier_concentration(ql: str) -> bool:
         r"\b(buy the most from|who do we buy|largest supplier|biggest supplier|"
         r"supplier concentration|purchasing share|purchase share|share of purchas|"
         r"single[\s-]?source|top suppliers?|rank suppliers|"
-        r"percentage of purchas|percent of purchas)\b",
+        r"percentage of purchas|percent of purchas|"
+        r"dominat\w*\s+purchas|largest\s+po\s+share|compare\s+suppliers)\b",
         q,
     ):
         return True
@@ -145,6 +146,8 @@ def wants_supplier_concentration(ql: str) -> bool:
             "percent",
             "percentage",
             "share of",
+            "po share",
+            "po value",
             "largest",
             "biggest",
             "highest po",
@@ -152,6 +155,7 @@ def wants_supplier_concentration(ql: str) -> bool:
             "most purchase",
             "account for",
             "dominate",
+            "compare",
         )
     )
 
@@ -1051,6 +1055,27 @@ def build_analytical_plan(
         plan.data_gaps.append(
             "Supplier analysis is at PO-item grain (EKPO.NETWR). It is not invoice COGS (WAVWR) "
             "and uses a material bridge, so document-level attribution is partial."
+        )
+    elif plan.intent == "supplier_concentration":
+        plan.metrics = ["purchase_value", "share_of_po_value_pct"]
+        plan.entities = ["supplier", "purchase"]
+        plan.dimensions = ["supplier"]
+        plan.relationships = ["purchase_header→vendor", "purchase_item (EKPO.NETWR)"]
+        conc_limit = max(limit, 20)
+        if _TOP_N_RE.search(ql) or _LIMIT_RE.search(ql):
+            conc_limit = limit
+        elif re.search(r"\b(which|who).{0,40}\b(highest|largest|biggest)\b", ql) or re.search(
+            r"\b(highest|largest|biggest)\s+supplier\b", ql
+        ):
+            conc_limit = 1
+        plan.ranking = {
+            "metric": "purchase_value",
+            "direction": "desc",
+            "limit": conc_limit,
+        }
+        plan.grain = grain_contract("supplier_concentration", ["supplier"])
+        plan.data_gaps.append(
+            "Share of purchase-order value by supplier (EKPO.NETWR). This is association only — not supplier profit, not invoice COGS, and not a single-source risk threshold."
         )
     elif plan.intent == "product_group_breakdown":
         plan.metrics = ["revenue", "cogs", "gross_profit"]
@@ -1986,7 +2011,7 @@ SELECT
     ELSE NULL END AS share_of_po_value_pct
 FROM po
 ORDER BY purchase_value DESC NULLS LAST
-LIMIT {max(limit, 20)}
+LIMIT {limit}
 """.strip(),
         })
         gaps.append(
@@ -2153,8 +2178,17 @@ def _analysis_heading(intent: str) -> str:
         "customers_of_selection": "Customers for the selected products",
         "country_breakdown": "Regional breakdown",
         "product_group_breakdown": "Product group breakdown",
+        "cogs_by_product": "Cost of goods sold",
+        "margin_by_product": "Gross margin",
+        "lowest_margin_products": "Lowest-margin products",
+        "profit_components": "Profit components",
+        "margin_decline_drivers": "Margin decline",
+        "purchase_history": "Purchase history",
+        "period_compare_selection": "Period comparison",
     }
-    return titles.get(intent or "", "Governed analysis")
+    if titles.get(intent or ""):
+        return titles[intent]
+    return (intent or "Governed analysis").replace("_", " ").replace(" gap", "")
 
 
 def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
@@ -2195,9 +2229,9 @@ def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str
         qid = block.get("id")
         rows = block.get("rows") or []
         if not rows:
-            lines.append(f"- `{qid}`: no rows returned.")
+            lines.append(f"- {_analysis_heading(str(qid))}: no rows returned.")
             continue
-        lines.append(f"### {qid} ({len(rows)} rows)")
+        lines.append(f"### {_analysis_heading(str(qid))} ({len(rows)} rows)")
         top = rows[0]
         if qid in {"product_growth_decline", "product_change_customer_drivers"} or (
             "revenue_change_abs" in top or "period_status" in top
@@ -2796,8 +2830,8 @@ def try_deep_multidim_analysis(
         )
         charts.append({
             "type": "bar",
-            "title": question[:120],
-            "description": "Governed deep-analysis metric chart",
+            "title": _analysis_heading(plan.intent)[:120],
+            "description": "Governed metric for the current investigation",
             "data": [
                 {"name": str(r.get(label_key) or ""), "value": float(r.get(value_key) or 0)}
                 for r in primary_rows[:15]
@@ -2813,7 +2847,16 @@ def try_deep_multidim_analysis(
         "charts": charts,
         "answer_status": "SUCCESS",
         "query_plan": query_plan,
-        "suggested_followups": [d.get("label") for d in plan.drilldowns],
+        "suggested_followups": (
+            [
+                "Which supplier is highest?",
+                "What percentage?",
+                "Show top 3.",
+                "Show their inventory.",
+            ]
+            if plan.intent == "supplier_concentration"
+            else [d.get("label") for d in plan.drilldowns]
+        ),
         "meta": {
             "deep_analysis": True,
             "analytical_plan": ctx,

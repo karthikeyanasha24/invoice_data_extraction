@@ -1,6 +1,7 @@
 export type FollowupChip = { label: string; question: string };
 
 const FOLLOWUP_MAP: { match: RegExp; label: string; question: string }[] = [
+  { match: /supplier concentration|share of po|po value|purchase-order value/i, label: 'Show supplier concentration', question: 'Show supplier concentration.' },
   { match: /customer contribution/i, label: 'Show customers', question: 'Show their customers.' },
   { match: /industry breakdown/i, label: 'Break down by industry', question: 'Show their industries.' },
   { match: /country|region|land1/i, label: 'Break down by region', question: 'Show their regions.' },

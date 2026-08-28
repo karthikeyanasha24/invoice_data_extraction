@@ -142,3 +142,42 @@ def test_standalone_concentration_is_deep_candidate():
     assert '"EKPO"' in sql and '"EKKO"' in sql
     assert "SHARE_OF_PO_VALUE_PCT" in sql
     assert "VBRP" not in sql and "NETWR" in sql
+
+
+def test_first_question_concentration_paraphrases():
+    from app.services.analytical_deep_dive import is_deep_analysis_candidate
+
+    for q in (
+        "Which suppliers dominate purchases?",
+        "Which supplier has the largest PO share?",
+        "Compare suppliers by PO value",
+        "Show supplier concentration.",
+    ):
+        assert is_deep_analysis_candidate(q), q
+        assert build_analytical_plan(q, None).intent == "supplier_concentration", q
+
+
+def test_concentration_followups_stay_in_intent():
+    ctx = {
+        "deep_analysis": True,
+        "intent": "supplier_concentration",
+        "metrics": ["purchase_value", "share_of_po_value_pct"],
+        "dimensions": ["supplier"],
+        "selected_products": [],
+    }
+    assert build_analytical_plan("Which supplier is highest?", ctx).intent == "supplier_concentration"
+    assert build_analytical_plan("What percentage?", ctx).intent == "supplier_concentration"
+    assert build_analytical_plan("Show their PO value.", ctx).intent == "supplier_concentration"
+    top3 = build_analytical_plan("Show top 3.", ctx)
+    assert top3.intent == "supplier_concentration"
+    sql = compile_queries(top3)[0][0]["sql"].upper()
+    assert "LIMIT 3" in sql
+    highest = compile_queries(build_analytical_plan("Which supplier is highest?", ctx))[0][0]["sql"].upper()
+    assert "LIMIT 1" in highest
+    assert build_analytical_plan("Show their suppliers.", ctx).intent == "suppliers_of_selection"
+
+
+def test_standalone_concentration_default_limit_is_display_size():
+    sql = compile_queries(build_analytical_plan("Show supplier concentration.", None))[0][0]["sql"].upper()
+    assert "LIMIT 20" in sql
+    assert "VBRP" not in sql

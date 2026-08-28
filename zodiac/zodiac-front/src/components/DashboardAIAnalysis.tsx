@@ -447,6 +447,14 @@ function InsightsPanel({ findings }: { findings: string[] }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Summary card
 // ═══════════════════════════════════════════════════════════════════════════════
+function publicSummary(summary: string): string {
+  return (summary || '')
+    .replace(/Deep analysis\s+[—\-]\s+intent\s+`?[\w.]+`?/gi, '')
+    .replace(/###\s+(supplier_concentration|inventory_analysis|inventory_risk_analysis|inventory_sales_comparison|inventory_by_plant|suppliers_of_selection|product_profitability|product_growth_decline)\b/gi, '### Result')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function SummaryCard({ summary }: { summary: string }) {
   return (
     <div className="relative bg-gradient-to-br from-white via-amber-50/30 to-orange-50/40 rounded-xl border border-amber-100 p-4 shadow-sm mb-4 overflow-hidden">
@@ -455,10 +463,10 @@ function SummaryCard({ summary }: { summary: string }) {
         <div className="p-1 rounded-md bg-amber-100">
           <Sparkles className="h-3.5 w-3.5 text-amber-600" />
         </div>
-        <span className="text-sm font-bold text-slate-800">Executive Summary</span>
+        <span className="text-sm font-bold text-slate-800">What we found</span>
       </div>
       <div className="prose prose-sm prose-slate max-w-none text-slate-700 text-sm leading-relaxed">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{publicSummary(summary)}</ReactMarkdown>
       </div>
     </div>
   );
@@ -889,6 +897,16 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     }
   };
 
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.result);
+  const investigation = lastAssistant?.result
+    ? analysisTrustFromResult(lastAssistant.result)
+    : null;
+  const selectedN = Array.isArray(
+    (lastAssistant?.result as any)?.query_plan?.analytical_context?.selected_products
+  )
+    ? (lastAssistant?.result as any).query_plan.analytical_context.selected_products.length
+    : 0;
+
   return (
     <div
       className="flex flex-col h-full bg-slate-50"
@@ -905,6 +923,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <div>
               <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
               <p className="text-xs text-slate-500">Question → verified analysis → next investigation</p>
+              {investigation?.analysisLabel && (
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Current investigation: {investigation.analysisLabel}
+                  {selectedN > 0 ? ` · ${selectedN} product${selectedN === 1 ? '' : 's'} selected` : ''}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">

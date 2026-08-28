@@ -19,6 +19,11 @@ describe('humanizeFollowups', () => {
     assert.equal(chips[1].question, 'Show their regions.');
   });
 
+  it('does not remap concentration suggestions to supplier listing', () => {
+    const chips = humanizeFollowups(['Supplier concentration by PO share']);
+    assert.equal(chips[0].question, 'Show supplier concentration.');
+  });
+
   it('strips leftover SAP parentheticals', () => {
     const chips = humanizeFollowups(['Something custom (VBRK.FKDAT)']);
     assert.equal(chips[0].label, 'Something custom');
