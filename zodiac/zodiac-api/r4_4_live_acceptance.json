@@ -1,0 +1,56 @@
+{
+  "PASS": 4,
+  "DATA_GAP": 1,
+  "NOT_DEPLOYED": 1,
+  "FAIL": 0,
+  "rows": [
+    {
+      "q": "Show the products with the highest profits.",
+      "ms": 11703,
+      "verdict": "PASS",
+      "intent": "product_profitability"
+    },
+    {
+      "q": "Show their suppliers.",
+      "ms": 645,
+      "verdict": "PASS",
+      "intent": "suppliers_of_selection",
+      "status": "SUCCESS",
+      "has_share": false,
+      "has_vbrp": false,
+      "has_ekpo": true
+    },
+    {
+      "q": "Show supplier concentration.",
+      "ms": 889,
+      "verdict": "NOT_DEPLOYED",
+      "intent": "suppliers_of_selection",
+      "status": "SUCCESS",
+      "has_share": false,
+      "has_vbrp": false,
+      "has_ekpo": true
+    },
+    {
+      "q": "Show supplier profit.",
+      "ms": 580,
+      "verdict": "PASS",
+      "intent": "suppliers_of_selection",
+      "status": "SUCCESS",
+      "has_share": false,
+      "has_vbrp": false,
+      "has_ekpo": true
+    },
+    {
+      "q": "Show inventory aging.",
+      "ms": 1058,
+      "verdict": "DATA_GAP",
+      "intent": "suppliers_of_selection"
+    },
+    {
+      "q": "Show inventory again.",
+      "ms": 490,
+      "verdict": "PASS",
+      "intent": "inventory_analysis"
+    }
+  ]
+}

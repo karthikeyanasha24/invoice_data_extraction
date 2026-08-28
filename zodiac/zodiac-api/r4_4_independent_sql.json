@@ -1,0 +1,28 @@
+{
+  "status": "BLOCKED",
+  "ai_intent": null,
+  "db_top": [
+    {
+      "supplier": "0000005557",
+      "share": 49.35
+    },
+    {
+      "supplier": "0000001095",
+      "share": 42.02
+    },
+    {
+      "supplier": "0000001075",
+      "share": 1.96
+    },
+    {
+      "supplier": "0000000300",
+      "share": 1.35
+    },
+    {
+      "supplier": "0000001235",
+      "share": 0.74
+    }
+  ],
+  "comparisons": [],
+  "note": "Independent SQL is PO-grain EKPO.NETWR share. Not live until intent is supplier_concentration."
+}
