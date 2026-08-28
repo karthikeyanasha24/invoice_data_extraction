@@ -412,6 +412,16 @@ def resolve_analytical_followup(
         res.resolved = True
         return res
 
+    if re.search(
+        r"\b(supplier\s+concentration|purchase\s+share|share\s+of\s+purchas|single[\s-]?source)\b",
+        ql,
+    ):
+        res.kind = KIND_DIMENSION_EXPANSION
+        res.add_dimensions = ["supplier"]
+        res.intent = "supplier_concentration"
+        res.resolved = True
+        return res
+
     # ── Dimension remove / replace ──
     rm = _REMOVE_DIM_RE.search(ql)
     if rm:

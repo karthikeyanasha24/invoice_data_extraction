@@ -571,6 +571,17 @@ def build_analytical_plan(
     )
     inv_intent = resolve_inventory_intent(ql)
     wants_supplier = any(x in ql for x in ("supplier", "vendor", "procurement"))
+    wants_concentration = any(
+        x in ql
+        for x in (
+            "concentration",
+            "share of purchas",
+            "purchase share",
+            "single source",
+            "single-source",
+            "dominate purchas",
+        )
+    )
     wants_product_group = any(x in ql for x in ("product group", "material group", "category"))
     wants_asp = any(x in ql for x in ("average selling price", "unit price", "asp"))
     wants_why = ql.startswith("why ") or " why " in ql or ql.startswith("explain why")
@@ -641,6 +652,8 @@ def build_analytical_plan(
             plan.intent = "process_buy"
         elif wants_logistics:
             plan.intent = "process_sell"
+        elif wants_supplier and wants_concentration:
+            plan.intent = "supplier_concentration"
         elif wants_supplier:
             plan.intent = "suppliers_of_selection"
         elif wants_product_group:
@@ -706,6 +719,8 @@ def build_analytical_plan(
             plan.filters["period_grain"] = resolve_period_grain(ql)
         elif wants_history and (wants_customers or wants_product or prior_ctx):
             plan.intent = "purchase_history"
+        elif wants_supplier and wants_concentration:
+            plan.intent = "supplier_concentration"
         elif wants_supplier:
             plan.intent = "suppliers_of_selection"
         elif wants_product_group:
@@ -1907,6 +1922,47 @@ LIMIT {max(limit, 30)}
         })
         gaps.append(
             "Purchase value is EKPO.NETWR at PO grain. Do not equate to billing WAVWR COGS."
+        )
+
+    elif plan.intent == "supplier_concentration":
+        pfilter_po = ""
+        if products:
+            clean = [p.replace("'", "''") for p in products if p]
+            vals = ", ".join(f"'{p}'" for p in clean[:50])
+            pfilter_po = f' AND TRIM(CAST(p."matnr" AS TEXT)) IN ({vals})'
+        queries.append({
+            "id": "supplier_concentration",
+            "sql": f"""
+WITH po AS (
+  SELECT
+    TRIM(CAST(ek."lifnr" AS TEXT)) AS supplier,
+    MAX(l."name1") AS supplier_name,
+    SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), '') AS NUMERIC)) AS purchase_value,
+    SUM(CAST(NULLIF(TRIM(CAST(p."menge" AS TEXT)), '') AS NUMERIC)) AS purchase_qty,
+    COUNT(DISTINCT TRIM(CAST(p."matnr" AS TEXT))) AS product_count
+  FROM "EKPO" p
+  JOIN "EKKO" ek ON TRIM(CAST(p."ebeln" AS TEXT)) = TRIM(CAST(ek."ebeln" AS TEXT))
+  LEFT JOIN "LFA1" l ON TRIM(CAST(ek."lifnr" AS TEXT)) = TRIM(CAST(l."lifnr" AS TEXT))
+  WHERE p."matnr" IS NOT NULL AND TRIM(CAST(p."matnr" AS TEXT)) <> ''
+    {pfilter_po}
+  GROUP BY TRIM(CAST(ek."lifnr" AS TEXT))
+)
+SELECT
+  supplier,
+  supplier_name,
+  purchase_value,
+  purchase_qty,
+  product_count,
+  CASE WHEN SUM(purchase_value) OVER () > 0
+    THEN ROUND(100.0 * purchase_value / SUM(purchase_value) OVER (), 2)
+    ELSE NULL END AS share_of_po_value_pct
+FROM po
+ORDER BY purchase_value DESC NULLS LAST
+LIMIT {max(limit, 20)}
+""".strip(),
+        })
+        gaps.append(
+            "Share of purchase-order value by supplier (EKPO.NETWR). This is association only — not supplier profit, not invoice COGS, and not a single-source risk threshold."
         )
 
     elif plan.intent == "product_group_breakdown":

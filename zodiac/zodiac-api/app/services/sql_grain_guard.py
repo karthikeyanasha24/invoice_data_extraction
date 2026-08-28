@@ -36,11 +36,11 @@ _INV_JOIN_RE = re.compile(r'\bJOIN\s+"?(MBEW|MARD)"?', re.I)
 
 def grain_contract(intent: str, dimensions: List[str]) -> Dict[str, Any]:
     dims = set(dimensions or [])
-    if intent in {"suppliers_of_selection", "purchase_cost_by_product"}:
+    if intent in {"suppliers_of_selection", "purchase_cost_by_product", "supplier_concentration"}:
         return {
             "fact_grain": "po_item",
             "join_grain": "EKPO⋈EKKO⋈LFA1",
-            "aggregation_grain": "supplier/product",
+            "aggregation_grain": "supplier" if intent == "supplier_concentration" else "supplier/product",
             "monetary_source": "EKPO.NETWR (purchase value, not invoice COGS)",
             "fanout_safe": True,
         }
