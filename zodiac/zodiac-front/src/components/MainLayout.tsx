@@ -62,7 +62,7 @@ export default function MainLayout({ children, topSection, fillViewport = false 
     }
   };
 
-  if (authLoading) {
+  if (authLoading && !user) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
         <Loader className="h-8 w-8 animate-spin text-emerald-600" aria-label="Checking your session" />

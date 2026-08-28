@@ -12,6 +12,7 @@ import {
   CheckCircle,
   Eye
 } from 'lucide-react';
+import { publicApiError } from '@/lib/apiErrors';
 import { format } from 'date-fns';
 
 interface CanonicalDocument {
@@ -62,7 +63,7 @@ export default function SATCanonicalTab() {
       setTotalCount(response.total || 0);
     } catch (err: any) {
       console.error('Error fetching canonical documents:', err);
-      setError(err.message || 'Failed to fetch canonical documents.');
+      setError(publicApiError(err, 'Failed to fetch merged invoices.'));
     } finally {
       setLoading(false);
     }
@@ -110,7 +111,7 @@ export default function SATCanonicalTab() {
       await fetchIndividualDocuments();
     } catch (err: any) {
       console.error('❌ Error merging documents:', err);
-      setError(err.message || 'Failed to merge documents.');
+      setError(publicApiError(err, 'Failed to merge documents.'));
     } finally {
       setMerging(false);
     }

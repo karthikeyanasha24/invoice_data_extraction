@@ -8,19 +8,30 @@ import SATCanonicalTab from '@/components/SATCanonicalTab';
 import SAPSendTab from '@/components/SAPSendTab';
 import { FileText } from 'lucide-react';
 import { dashboardApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 
 export default function SATDocumentsPage() {
   const [activeTab, setActiveTab] = useState('documents');
   const [summary, setSummary] = useState<any>(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState('');
+
+  const loadSummary = async () => {
+    try {
+      setSummaryLoading(true);
+      setSummaryError('');
+      const res = await dashboardApi.getV2Inbound(0);
+      setSummary(res?.summary || null);
+    } catch (err: any) {
+      setSummary(null);
+      setSummaryError(publicApiError(err, 'Could not load SAT status counts. Try again.'));
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    dashboardApi.getV2Inbound(0).then((res) => {
-      if (!cancelled) setSummary(res?.summary || null);
-    }).catch(() => {
-      if (!cancelled) setSummary(null);
-    });
-    return () => { cancelled = true; };
+    void loadSummary();
   }, []);
 
   const docs = Number(summary?.total_documents || 0);
@@ -38,7 +49,25 @@ export default function SATDocumentsPage() {
           <p className="text-sm sm:text-base text-gray-600">
             CFDI intake, merge, and send to SAP. Status counts below are inbound SAT activity, not a live ERP push.
           </p>
-          {summary && (
+          {summaryLoading && (
+            <div className="mt-3 grid grid-cols-3 gap-2 max-w-xl text-xs" aria-busy="true">
+              {['Documents', 'Waiting to send', 'Sent to SAP'].map((label) => (
+                <div key={label} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-slate-500">{label}</p>
+                  <p className="text-base font-semibold text-slate-400">…</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {summaryError && (
+            <div className="mt-3 max-w-xl rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+              {summaryError}{' '}
+              <button type="button" className="font-medium underline" onClick={() => void loadSummary()}>
+                Retry
+              </button>
+            </div>
+          )}
+          {!summaryLoading && summary && (
             <div className="mt-3 grid grid-cols-3 gap-2 max-w-xl text-xs">
               <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                 <p className="text-slate-500">Documents</p>

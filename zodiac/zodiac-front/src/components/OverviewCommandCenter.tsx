@@ -63,6 +63,28 @@ export default function OverviewCommandCenter() {
       : trendPct;
   const pending = Number(summary.merges_pending || 0);
   const docs = Number(summary.total_documents || 0);
+  const sent = Number(summary.merges_sent_to_sap || 0);
+  const nextActions: { label: string; why: string; href?: string; question?: string }[] = [];
+  if (pending > 0) {
+    nextActions.push({
+      label: `Send ${pending} merge${pending === 1 ? '' : 's'} to SAP`,
+      why: 'Validated inbound documents are waiting to post.',
+      href: '/sat-documents',
+    });
+  }
+  if (docs === 0) {
+    nextActions.push({
+      label: 'Upload the first SAT document',
+      why: 'There is no inbound CFDI activity for this account yet.',
+      href: '/sat-documents',
+    });
+  } else if (pending === 0) {
+    nextActions.push({
+      label: 'Investigate highest-profit products',
+      why: 'Operations are clear. Start with governed SAP profitability.',
+      question: 'Show the products with the highest profits.',
+    });
+  }
 
   const ask = (q: string) => {
     router.push(`/dashboard/ai?q=${encodeURIComponent(q)}`);
@@ -98,9 +120,33 @@ export default function OverviewCommandCenter() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Overview</h1>
         <p className="mt-1 text-sm text-slate-600">
-          What is happening in operations, and what to investigate in governed SAP data.
+          What is happening in operations, what needs attention, and what you can investigate in governed SAP data.
         </p>
       </div>
+
+      {nextActions.length > 0 && (
+        <section aria-labelledby="next-heading">
+          <h2 id="next-heading" className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+            What to do next
+          </h2>
+          <div className="mt-3 space-y-2">
+            {nextActions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => (action.question ? ask(action.question) : router.push(action.href || '/overview'))}
+                className="flex w-full items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-left hover:bg-emerald-50"
+              >
+                <span>
+                  <span className="block text-sm font-medium text-slate-900">{action.label}</span>
+                  <span className="mt-0.5 block text-xs text-slate-600">{action.why}</span>
+                </span>
+                <ArrowRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-800" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section aria-labelledby="attention-heading">
         <h2 id="attention-heading" className="text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -116,7 +162,9 @@ export default function OverviewCommandCenter() {
             <p className="mt-1 text-xs text-slate-600">
               {pending > 0
                 ? 'Validated inbound merges have not been sent to SAP yet.'
-                : 'No pending merges. Inbound pipeline is clear.'}
+                : docs === 0
+                  ? 'No inbound documents yet. Upload a CFDI to start the SAT workflow.'
+                  : 'No pending merges. Inbound pipeline is clear.'}
             </p>
             <button
               type="button"
@@ -148,14 +196,14 @@ export default function OverviewCommandCenter() {
 
       <section aria-labelledby="kpis-heading">
         <h2 id="kpis-heading" className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Business snapshot
+          EDI invoice activity
         </h2>
         <p className="mt-1 text-xs text-slate-500">
-          Invoice-document revenue from the EDI business dashboard (last 90 days). Governed SAP profitability lives in AI Analyst.
+          Invoice-document totals from EDI (last 90 days). This is not SAP P&amp;L. Governed profitability is in AI Analyst.
         </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Period revenue</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">EDI invoice total</p>
             <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
               {money(trend?.current_period_revenue)}
             </p>
@@ -181,9 +229,7 @@ export default function OverviewCommandCenter() {
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Sent to SAP</p>
-            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
-              {Number(summary.merges_sent_to_sap || 0)}
-            </p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{sent}</p>
             <p className="mt-1 text-xs text-slate-500">of {Number(summary.merges_total || 0)} merges</p>
           </div>
         </div>

@@ -20,7 +20,7 @@ import {
   Trash2,
   Flag
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { publicApiError } from '@/lib/apiErrors';
 import { cn } from '@/lib/utils';
 
 interface SATDocument {
@@ -204,7 +204,7 @@ export default function SATSimpleMergeTab({ customerUserMode }: SATSimpleMergeTa
       setDocumentGroups(groups);
     } catch (err: any) {
       console.error('Error fetching documents for simple merge:', err);
-      setError(err.message || 'Failed to fetch documents.');
+      setError(publicApiError(err, 'Failed to fetch documents.'));
     } finally {
       setLoading(false);
     }
@@ -335,7 +335,7 @@ export default function SATSimpleMergeTab({ customerUserMode }: SATSimpleMergeTa
       alert('Documents merged successfully!');
     } catch (err: any) {
       console.error('Error merging documents:', err);
-      setError(err.message || 'Failed to merge documents.');
+      setError(publicApiError(err, 'Failed to merge documents.'));
     } finally {
       setMergingGroup(null);
     }
@@ -361,7 +361,7 @@ export default function SATSimpleMergeTab({ customerUserMode }: SATSimpleMergeTa
       alert('Merged document deleted successfully!');
     } catch (err: any) {
       console.error('Error deleting merged document:', err);
-      setError(err.message || 'Failed to delete merged document.');
+      setError(publicApiError(err, 'Failed to delete merged document.'));
     } finally {
       setDeletingId(null);
     }

@@ -17,7 +17,7 @@ import {
   X,
   Copy
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { publicApiError } from '@/lib/apiErrors';
 
 interface CanonicalDocument {
   id: string;
@@ -90,7 +90,7 @@ export default function SAPSendTab() {
       setSimpleDocs(simpleResponse.documents || []);
     } catch (err: any) {
       console.error('Error fetching documents:', err);
-      setError(err.message || 'Failed to fetch documents.');
+      setError(publicApiError(err, 'Failed to fetch documents.'));
     } finally {
       setLoading(false);
     }
@@ -108,7 +108,7 @@ export default function SAPSendTab() {
       await fetchData(); // Refresh to show updated status
     } catch (err: any) {
       console.error('Error sending canonical to SAP:', err);
-      setError(err.message || 'Failed to send canonical document to SAP.');
+      setError(publicApiError(err, 'Failed to send document to SAP.'));
     } finally {
       setSending(prev => ({ ...prev, [docKey]: false }));
     }
@@ -126,7 +126,7 @@ export default function SAPSendTab() {
       setSuccess(`✅ CSRF Token fetched! Token: ${response.csrf_token.substring(0, 20)}...`);
     } catch (err: any) {
       console.error('Error fetching CSRF token:', err);
-      setError(err.message || 'Failed to fetch CSRF token from SAP.');
+      setError(publicApiError(err, 'Failed to fetch CSRF token from SAP.'));
     } finally {
       setFetchingCsrf(prev => ({ ...prev, [docKey]: false }));
     }
@@ -163,7 +163,7 @@ export default function SAPSendTab() {
       });
     } catch (err: any) {
       console.error('Error sending simple merge to SAP:', err);
-      setError(err.message || 'Failed to send simple merged document to SAP.');
+      setError(publicApiError(err, 'Failed to send merged document to SAP.'));
     } finally {
       setSending(prev => ({ ...prev, [docKey]: false }));
     }

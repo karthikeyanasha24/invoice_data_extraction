@@ -16,7 +16,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
 import { humanizeFollowups } from '@/lib/followupChips';
-import { analysisTrustFromResult, DATA_GAP_TRY_INSTEAD } from '@/lib/analysisTrust';
+import { analysisTrustFromResult, dataGapTryInstead } from '@/lib/analysisTrust';
 import { loadSavedAnalyses, saveAnalysis, type SavedAnalysis } from '@/lib/savedAnalyses';
 import { SUPPORTED_INVESTIGATIONS } from '@/lib/navConfig';
 import {
@@ -540,7 +540,7 @@ function DataGapCard({
   const seen = new Set(mapped.map((c) => c.question.toLowerCase()));
   const chips = [
     ...mapped,
-    ...DATA_GAP_TRY_INSTEAD.filter((c) => !seen.has(c.question.toLowerCase())),
+    ...dataGapTryInstead(message).filter((c) => !seen.has(c.question.toLowerCase())),
   ].slice(0, 6);
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3" role="status">
@@ -586,11 +586,13 @@ function TrustPanel({ result }: { result: QueryResult }) {
       </button>
       {open && (
         <div className="px-3 pb-3 text-xs text-slate-600 space-y-1.5 border-t border-slate-100 pt-2">
-          {trust.intent && <p><span className="font-semibold text-slate-800">Analysis:</span> {trust.intent.replace(/_/g, ' ')}</p>}
-          {trust.metric && <p><span className="font-semibold text-slate-800">Metric:</span> {trust.metric.replace(/_/g, ' ')}</p>}
-          {trust.period && <p><span className="font-semibold text-slate-800">Period:</span> {trust.period}</p>}
+          <p><span className="font-semibold text-slate-800">Analysis:</span> {trust.intent ? trust.intent.replace(/_/g, ' ') : 'Not specified'}</p>
+          <p><span className="font-semibold text-slate-800">Metric:</span> {trust.metric ? trust.metric.replace(/_/g, ' ') : 'Not specified'}</p>
+          <p><span className="font-semibold text-slate-800">Period:</span> {trust.period}</p>
+          {trust.aggregation && <p><span className="font-semibold text-slate-800">Aggregation:</span> {trust.aggregation}</p>}
           {trust.source && <p><span className="font-semibold text-slate-800">Source:</span> {trust.source}</p>}
           {trust.calculation && <p><span className="font-semibold text-slate-800">Definitions:</span> {trust.calculation}</p>}
+          {trust.rowLimit && <p><span className="font-semibold text-slate-800">Result size:</span> {trust.rowLimit}</p>}
           {trust.limitations.map((g) => (
             <p key={g} className="text-amber-800"><span className="font-semibold">Limitation:</span> {g}</p>
           ))}

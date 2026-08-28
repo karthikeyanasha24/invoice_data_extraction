@@ -274,12 +274,12 @@ export default function SettingsPage() {
                 <h3 className="text-lg leading-6 font-medium text-gray-900">Security</h3>
               </div>
               <p className="mt-2 text-sm text-gray-600">
-                Sessions use a signed JWT. Protected pages and adaptive analytics require a valid token.
+                You are signed in with a secure session. Protected pages and SAP analysis require that session to stay valid.
               </p>
               <div className="mt-6 bg-slate-50 border border-slate-200 rounded-md p-4">
                 <h4 className="text-sm font-medium text-slate-800">Password and account changes</h4>
                 <p className="mt-2 text-sm text-slate-600">
-                  Password resets and role changes are handled by your administrator. This page does not expose unused notification or processing toggles.
+                  Password resets and role changes are handled by your administrator. This product does not offer self-serve password reset.
                 </p>
               </div>
             </div>

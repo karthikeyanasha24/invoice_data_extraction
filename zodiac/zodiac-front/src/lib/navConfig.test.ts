@@ -34,4 +34,13 @@ describe('SUPPORTED_INVESTIGATIONS', () => {
     const { SUPPORTED_INVESTIGATIONS } = await import('./navConfig.ts');
     assert.equal(SUPPORTED_INVESTIGATIONS.some((x) => /aging/i.test(x.question)), false);
   });
+
+  it('includes governed supplier concentration, not supplier profit', async () => {
+    const { SUPPORTED_INVESTIGATIONS } = await import('./navConfig.ts');
+    assert.equal(
+      SUPPORTED_INVESTIGATIONS.some((x) => x.question === 'Show supplier concentration.'),
+      true,
+    );
+    assert.equal(SUPPORTED_INVESTIGATIONS.some((x) => /supplier profit/i.test(x.question)), false);
+  });
 });

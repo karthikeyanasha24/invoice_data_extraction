@@ -104,6 +104,16 @@ export default function SATDocumentsTab() {
     return styles[docType as keyof typeof styles] || 'bg-gray-100 text-gray-800';
   };
 
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      RECEIVED: 'Received',
+      VALIDATED: 'Validated',
+      MERGED: 'Merged',
+      SAP_SENT: 'Sent to SAP',
+    };
+    return labels[status] || status;
+  };
+
   const getStatusBadge = (status: string) => {
     const styles = {
       RECEIVED: 'bg-gray-100 text-gray-800',
@@ -135,7 +145,7 @@ export default function SATDocumentsTab() {
       // Clear success message after 5 seconds
       setTimeout(() => setUploadSuccess(null), 5000);
     } catch (err: any) {
-      setError(err.message || 'Failed to upload files');
+      setError(publicApiError(err, 'Failed to upload files'));
     } finally {
       setUploading(false);
     }
@@ -166,7 +176,7 @@ export default function SATDocumentsTab() {
       setUploadSuccess(`✅ Document deleted successfully!`);
       setTimeout(() => setUploadSuccess(null), 3000);
     } catch (err: any) {
-      setDeleteError(err.message || 'Failed to delete document');
+      setDeleteError(publicApiError(err, 'Failed to delete document'));
     } finally {
       setDeleting(false);
     }
@@ -395,7 +405,7 @@ export default function SATDocumentsTab() {
                     </td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(doc.status)}`}>
-                        {doc.status}
+                        {getStatusLabel(doc.status)}
                       </span>
                     </td>
                     <td className="px-6 py-4">

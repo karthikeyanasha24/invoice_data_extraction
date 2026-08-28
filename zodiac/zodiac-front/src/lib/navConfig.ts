@@ -20,6 +20,7 @@ export const SUPPORTED_INVESTIGATIONS = [
   { label: 'Inventory versus sales', question: 'Show inventory versus sales.' },
   { label: 'Why did margin decline?', question: 'Which products had the biggest margin decline?' },
   { label: 'Customers behind the change', question: 'Show their customers.' },
+  { label: 'Supplier concentration', question: 'Show supplier concentration.' },
 ];
 
 export function adminNavGroups(opts: { isAdmin: boolean; workspaceUi: boolean }): NavGroup[] {
@@ -58,7 +59,7 @@ export function adminNavGroups(opts: { isAdmin: boolean; workspaceUi: boolean })
           id: 'edi',
           label: 'EDI operations',
           path: '/dashboard',
-          description: 'Inbound SAT, outbound invoices, business KPIs',
+          description: 'Inbound SAT and outbound invoice operations',
           icon: 'ArrowDownToLine',
         },
         {
@@ -113,16 +114,16 @@ export function adminNavGroups(opts: { isAdmin: boolean; workspaceUi: boolean })
           : []),
         {
           id: 'account-mapping',
-          label: 'Account mapping',
+          label: 'RFC to G/L mapping',
           path: '/admin/account-mapping',
-          description: 'RFC to SAP G/L mapping',
+          description: 'Map supplier RFC codes to SAP G/L accounts',
           icon: 'MapPin',
         },
         {
           id: 'supplier-tokens',
-          label: 'Supplier tokens',
+          label: 'Supplier API access',
           path: '/admin/supplier-tokens',
-          description: 'Supplier API access',
+          description: 'Tokens for supplier document intake',
           icon: 'Key',
         },
         {

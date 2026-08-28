@@ -75,17 +75,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       console.log('🔐 AuthContext - Checking authentication...');
       
-      // First, clear any potentially stale auth data
       const token = localStorage.getItem('access_token');
       console.log('🔐 AuthContext - Token found:', !!token);
-      
+
       if (token) {
+        try {
+          const cached = localStorage.getItem('user_data');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.email || parsed?.username) {
+              setUser(parsed);
+              setIsAuthenticated(true);
+              setLoading(false);
+            }
+          }
+        } catch {
+          /* ignore corrupt cache */
+        }
         try {
           console.log('🔐 AuthContext - Fetching user data...');
           const userData = await authApi.fetchUser();
           console.log('🔐 AuthContext - User data received:', { username: userData.username, email: userData.email });
           setUser(userData);
           setIsAuthenticated(true);
+          try {
+            localStorage.setItem('user_data', JSON.stringify(userData));
+          } catch {
+            /* ignore quota */
+          }
         } catch (error: any) {
           // Only clear session on explicit 401 (token actually invalid/expired).
           // Network errors or server restarts should NOT log the user out — the
@@ -135,6 +152,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Only access localStorage on client side
       if (typeof window !== 'undefined') {
         localStorage.setItem('access_token', response.access_token);
+        if (response.user) {
+          localStorage.setItem('user_data', JSON.stringify(response.user));
+        }
       }
       
       setUser(response.user);
@@ -165,6 +185,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Only access localStorage on client side
       if (typeof window !== 'undefined') {
         localStorage.setItem('access_token', response.access_token);
+        if (response.user) {
+          localStorage.setItem('user_data', JSON.stringify(response.user));
+        }
       }
       
       setUser(response.user);
