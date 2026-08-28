@@ -580,6 +580,8 @@ def build_analytical_plan(
             "single source",
             "single-source",
             "dominate purchas",
+            "top supplier",
+            "top suppliers",
         )
     )
     wants_product_group = any(x in ql for x in ("product group", "material group", "category"))
@@ -1944,15 +1946,18 @@ WITH po AS (
   JOIN "EKKO" ek ON TRIM(CAST(p."ebeln" AS TEXT)) = TRIM(CAST(ek."ebeln" AS TEXT))
   LEFT JOIN "LFA1" l ON TRIM(CAST(ek."lifnr" AS TEXT)) = TRIM(CAST(l."lifnr" AS TEXT))
   WHERE p."matnr" IS NOT NULL AND TRIM(CAST(p."matnr" AS TEXT)) <> ''
+    AND TRIM(COALESCE(p."loekz", '')) = ''
+    AND TRIM(COALESCE(ek."loekz", '')) = ''
     {pfilter_po}
   GROUP BY TRIM(CAST(ek."lifnr" AS TEXT))
 )
 SELECT
   supplier,
-  supplier_name,
+  COALESCE(NULLIF(TRIM(supplier_name), ''), supplier) AS supplier_name,
   purchase_value,
   purchase_qty,
   product_count,
+  ROW_NUMBER() OVER (ORDER BY purchase_value DESC NULLS LAST) AS supplier_rank,
   CASE WHEN SUM(purchase_value) OVER () > 0
     THEN ROUND(100.0 * purchase_value / SUM(purchase_value) OVER (), 2)
     ELSE NULL END AS share_of_po_value_pct
@@ -2110,17 +2115,57 @@ def _fmt_num(v: Any) -> str:
         return str(v)
 
 
+def _analysis_heading(intent: str) -> str:
+    titles = {
+        "product_profitability": "Product profitability",
+        "supplier_concentration": "Supplier concentration",
+        "suppliers_of_selection": "Suppliers for the selected products",
+        "inventory_analysis": "Current inventory snapshot",
+        "inventory_sales_comparison": "Inventory compared with sales activity",
+        "inventory_risk_analysis": "Inventory versus sales ranking",
+        "inventory_by_plant": "Inventory by plant",
+        "monthly_trend": "Monthly trend",
+        "quarterly_trend": "Quarterly trend",
+        "product_growth_decline": "Product growth and decline",
+        "customers_of_selection": "Customers for the selected products",
+        "country_breakdown": "Regional breakdown",
+        "product_group_breakdown": "Product group breakdown",
+    }
+    return titles.get(intent or "", "Governed analysis")
+
+
 def _interpret(plan: AnalyticalPlan, bundled: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
     findings: List[str] = []
     lines: List[str] = []
-    lines.append(f"**Deep analysis** — intent `{plan.intent}`")
+    lines.append(f"**{_analysis_heading(plan.intent)}**")
     lines.append("")
-    lines.append(
-        "Metrics use governed definitions: "
-        "**Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); "
-        "**Gross profit** = Revenue − COGS; **Gross margin %** = Gross profit / Revenue. "
-        "This is **not** true net profit."
-    )
+    non_billing = {
+        "supplier_concentration",
+        "suppliers_of_selection",
+        "inventory_analysis",
+        "inventory_sales_comparison",
+        "inventory_risk_analysis",
+        "inventory_by_plant",
+        "inventory_aging_gap",
+        "inventory_turnover_gap",
+        "inventory_trend_gap",
+    }
+    if plan.intent == "supplier_concentration":
+        lines.append(
+            "Share of purchase-order value uses EKPO.NETWR at PO-item grain, "
+            "excluding deleted PO header/item records. This is **not** supplier profit."
+        )
+    elif plan.intent in non_billing and str(plan.intent).startswith("inventory"):
+        lines.append(
+            "Inventory is a **current snapshot** (MBEW/MARD), not historical stock and not true turnover."
+        )
+    elif plan.intent not in non_billing:
+        lines.append(
+            "Metrics use governed definitions: "
+            "**Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); "
+            "**Gross profit** = Revenue − COGS; **Gross margin %** = Gross profit / Revenue. "
+            "This is **not** true net profit."
+        )
     lines.append("")
 
     for block in bundled:
@@ -2568,7 +2613,7 @@ def try_deep_multidim_analysis(
         )
         primary_sql = bundled[0].get("sql") or ""
         summary = (
-            f"**Deep analysis** — intent `{plan.intent}`\n\n"
+            f"**{_analysis_heading(plan.intent)}**\n\n"
             f"No billing records are available for that period in the current extract.\n\n"
             "### Data limitations\n"
             + "\n".join(f"- {g}" for g in plan.data_gaps)

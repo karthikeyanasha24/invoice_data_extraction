@@ -28,6 +28,8 @@ WITH po AS (
   JOIN "EKKO" ek ON TRIM(CAST(p.ebeln AS TEXT)) = TRIM(CAST(ek.ebeln AS TEXT))
   LEFT JOIN "LFA1" l ON TRIM(CAST(ek.lifnr AS TEXT)) = TRIM(CAST(l.lifnr AS TEXT))
   WHERE p.matnr IS NOT NULL AND TRIM(CAST(p.matnr AS TEXT)) <> ''
+    AND TRIM(COALESCE(p.loekz, '')) = ''
+    AND TRIM(COALESCE(ek.loekz, '')) = ''
   GROUP BY TRIM(CAST(ek.lifnr AS TEXT))
 )
 SELECT supplier, supplier_name, purchase_value,

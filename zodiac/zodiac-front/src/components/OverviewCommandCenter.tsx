@@ -164,7 +164,7 @@ export default function OverviewCommandCenter() {
                 ? 'Validated inbound merges have not been sent to SAP yet.'
                 : docs === 0
                   ? 'No inbound documents yet. Upload a CFDI to start the SAT workflow.'
-                  : 'No pending merges. Inbound pipeline is clear.'}
+                  : 'No merges are waiting to send.'}
             </p>
             <button
               type="button"

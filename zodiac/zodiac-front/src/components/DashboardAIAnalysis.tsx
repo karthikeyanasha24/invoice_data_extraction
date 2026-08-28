@@ -18,7 +18,6 @@ import { publicApiError } from '@/lib/apiErrors';
 import { humanizeFollowups } from '@/lib/followupChips';
 import { analysisTrustFromResult, dataGapTryInstead } from '@/lib/analysisTrust';
 import { loadSavedAnalyses, saveAnalysis, type SavedAnalysis } from '@/lib/savedAnalyses';
-import { SUPPORTED_INVESTIGATIONS } from '@/lib/navConfig';
 import {
   ADAPTIVE_CONTEXT_POLICY,
   buildFollowupContextData,
@@ -59,8 +58,12 @@ const PALETTE = [
 
 // ─── Quick-question chips ────────────────────────────────────────────────────
 const QUICK_QUESTIONS = [
-  ...SUPPORTED_INVESTIGATIONS.slice(0, 5).map((x) => ({ label: x.label, q: x.question })),
+  { label: 'Highest-profit products', q: 'Show the products with the highest profits.' },
+  { label: 'Inventory versus sales', q: 'Show inventory versus sales.' },
+  { label: 'Supplier concentration', q: 'Show supplier concentration.' },
+  { label: 'What changed this month?', q: 'Show monthly revenue.' },
   { label: 'High stock / low sales', q: 'Which have high inventory but low sales?' },
+  { label: 'Products driving growth', q: 'Which products grew the most?' },
 ];
 
 // ─── Pipeline progress steps ─────────────────────────────────────────────────
@@ -948,7 +951,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
             {saved.length > 0 && (
               <div className="mt-8 text-left">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Saved analyses</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Saved on this device</p>
+                <p className="text-xs text-slate-500 mb-2">These are stored in this browser only, not as enterprise history.</p>
                 <div className="space-y-1">
                   {saved.slice(0, 8).map((s) => (
                     <button

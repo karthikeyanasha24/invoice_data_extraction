@@ -62,3 +62,44 @@ def test_supplier_profit_still_not_concentration():
     queries, _ = compile_queries(plan)
     if queries:
         assert not sql_has_unsafe_monetary_fanout(queries[0]["sql"])
+
+
+def test_top_suppliers_phrase_is_concentration():
+    plan = build_analytical_plan("Show the top suppliers.", PRIOR)
+    assert plan.intent == "supplier_concentration"
+
+
+def test_concentration_sql_excludes_deleted_pos_and_ranks():
+    queries, _ = compile_queries(build_analytical_plan("Show supplier concentration.", PRIOR))
+    sql = queries[0]["sql"].upper()
+    assert "LOEKZ" in sql
+    assert "SHARE_OF_PO_VALUE_PCT" in sql
+    assert "SUPPLIER_RANK" in sql
+    assert "SUM(purchase_value) OVER () > 0" in queries[0]["sql"]
+    assert "VBRP" not in sql
+    assert "MBEW" not in sql
+
+
+def test_concentration_zero_total_share_is_null_not_divzero():
+    queries, _ = compile_queries(build_analytical_plan("Show supplier concentration.", {}))
+    sql = queries[0]["sql"]
+    assert "ELSE NULL END AS share_of_po_value_pct" in sql.replace("\n", " ").replace("  ", " ") or "ELSE NULL END AS share_of_po_value_pct" in sql
+
+
+def test_missing_supplier_name_still_keeps_lifnr():
+    queries, _ = compile_queries(build_analytical_plan("Show supplier concentration.", PRIOR))
+    sql = queries[0]["sql"]
+    assert "LEFT JOIN" in sql.upper() and "LFA1" in sql.upper()
+    assert "COALESCE(NULLIF(TRIM(supplier_name), ''), supplier)" in sql
+
+
+def test_adversarial_vbrp_mbew_and_ekpo_fanout_rejected():
+    assert sql_has_unsafe_monetary_fanout(
+        'SELECT SUM(v.netwr) FROM "vbrp" v JOIN "MBEW" m ON v.matnr = m.matnr'
+    )
+    assert sql_has_unsafe_monetary_fanout(
+        'SELECT SUM(v.netwr) FROM "vbrp" v JOIN "MARD" d ON v.matnr = d.matnr'
+    )
+    assert sql_has_unsafe_monetary_fanout(
+        'SELECT SUM(v.netwr) FROM "vbrp" v JOIN "EKPO" p ON v.matnr = p.matnr'
+    )

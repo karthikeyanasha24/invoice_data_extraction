@@ -413,7 +413,7 @@ def resolve_analytical_followup(
         return res
 
     if re.search(
-        r"\b(supplier\s+concentration|purchase\s+share|share\s+of\s+purchas|single[\s-]?source)\b",
+        r"\b(supplier\s+concentration|purchase\s+share|share\s+of\s+purchas|single[\s-]?source|top\s+suppliers?)\b",
         ql,
     ):
         res.kind = KIND_DIMENSION_EXPANSION
