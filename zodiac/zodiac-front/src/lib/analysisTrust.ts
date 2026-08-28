@@ -1,8 +1,10 @@
 export type AnalysisTrust = {
   intent?: string;
+  analysisLabel?: string;
   metric?: string;
   period?: string;
   aggregation?: string;
+  grain?: string;
   rowLimit?: string;
   calculation?: string;
   limitations: string[];
@@ -32,8 +34,42 @@ function sourceFor(intent?: string): string {
   return 'SAP billing extract (governed metrics)';
 }
 
+function grainFor(intent?: string, ac: Record<string, unknown> = {}): string | undefined {
+  const fromCtx = String(ac.fact_grain || ac.grain || '').trim();
+  if (fromCtx) return fromCtx;
+  const i = (intent || '').toLowerCase();
+  if (i.includes('supplier_concentration')) return 'Purchase-order item, then supplier';
+  if (i.includes('supplier')) return 'Purchase-order item, then supplier × product';
+  if (i.startsWith('inventory_by_plant')) return 'Storage location stock, then plant';
+  if (i.startsWith('inventory_sales') || i.includes('inventory_risk')) {
+    return 'Independent sales totals joined to independent inventory totals at product grain';
+  }
+  if (i.startsWith('inventory')) return 'Current material valuation snapshot';
+  if (i.includes('monthly')) return 'Billing item, then calendar month';
+  if (i.includes('quarterly')) return 'Billing item, then calendar quarter';
+  return 'Billing item, then the selected business dimension';
+}
+
+function analysisLabelFor(intent?: string): string | undefined {
+  const i = (intent || '').toLowerCase();
+  const labels: Record<string, string> = {
+    supplier_concentration: 'Supplier concentration',
+    suppliers_of_selection: 'Suppliers of the selected products',
+    inventory_analysis: 'Current inventory snapshot',
+    inventory_sales_comparison: 'Inventory versus sales',
+    inventory_by_plant: 'Inventory by plant',
+    inventory_risk_analysis: 'Inventory versus sales risk',
+    product_profitability: 'Product profitability',
+    product_growth: 'Product growth',
+    product_decline: 'Product decline',
+  };
+  if (labels[i]) return labels[i];
+  if (!intent) return undefined;
+  return intent.replace(/_/g, ' ');
+}
+
 function aggregationFor(intent?: string, ac: Record<string, unknown> = {}): string | undefined {
-  const fromCtx = String(ac.aggregation || ac.aggregation_grain || ac.grain || '').trim();
+  const fromCtx = String(ac.aggregation || ac.aggregation_grain || '').trim();
   if (fromCtx) return fromCtx;
   const i = (intent || '').toLowerCase();
   if (i.startsWith('inventory')) return 'Product (and plant when requested) on the current snapshot';
@@ -68,9 +104,11 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
       : undefined;
   return {
     intent,
+    analysisLabel: analysisLabelFor(intent),
     metric,
     period,
     aggregation: aggregationFor(intent, ac),
+    grain: grainFor(intent, ac),
     rowLimit,
     calculation: definitionFor(intent),
     limitations: Array.from(new Set(gaps)),

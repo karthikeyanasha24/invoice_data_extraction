@@ -4,7 +4,7 @@
     "probes": [
       {
         "question": "Which products grew the most?",
-        "ms": 1630,
+        "ms": 1393,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -63,13 +63,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products declined the most?",
-        "ms": 729,
+        "ms": 725,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -128,13 +128,13 @@
           "currency": "EUR"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products had the highest revenue growth?",
-        "ms": 735,
+        "ms": 725,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -193,13 +193,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products had the highest gross profit growth?",
-        "ms": 715,
+        "ms": 691,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -258,13 +258,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products grew the fastest?",
-        "ms": 699,
+        "ms": 694,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -323,13 +323,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products increased their revenue the most?",
-        "ms": 768,
+        "ms": 698,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -388,13 +388,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products grew the most from 2004 to 2005?",
-        "ms": 702,
+        "ms": 695,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -453,13 +453,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products grew month over month?",
-        "ms": 730,
+        "ms": 718,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -509,13 +509,13 @@
           "currency": "EUR"
         },
         "sql_head": "WITH by_period AS ( SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS period_label, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products declined quarter over quarter?",
-        "ms": 794,
+        "ms": 752,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -572,13 +572,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH by_period AS ( SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS period_label, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show products whose margins improved.",
-        "ms": 734,
+        "ms": 729,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -637,13 +637,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show products whose margins declined.",
-        "ms": 718,
+        "ms": 663,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -702,13 +702,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products had the biggest ASP increase?",
-        "ms": 732,
+        "ms": 690,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -766,13 +766,13 @@
           "currency": "EUR"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Which products grew fastest by volume?",
-        "ms": 740,
+        "ms": 734,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -831,7 +831,7 @@
           "currency": "EUR"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       }
@@ -839,7 +839,7 @@
     "growth_chain": [
       {
         "question": "Which products grew the most?",
-        "ms": 723,
+        "ms": 712,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -898,13 +898,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show their customers.",
-        "ms": 866,
+        "ms": 787,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -960,13 +960,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(vk.kunag) AS customer, MAX(k.name1) AS customer_name, MAX(k.brsch) AS industry, MAX(k.land1) AS country, vk.waerk AS currency, TRIM(v.matnr) AS product, COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `customers_of_selection`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Customers for the selected products**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Break them down by industry.",
-        "ms": 784,
+        "ms": 720,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "industry_breakdown",
@@ -1015,13 +1015,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT COALESCE(NULLIF(TRIM(t.brtxt), ''), NULLIF(TRIM(k.brsch), ''), 'Unknown') AS industry, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS T",
-        "summary_head": "**Deep analysis** \u2014 intent `industry_breakdown`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross mar",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their regions.",
-        "ms": 584,
+        "ms": 548,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "country_breakdown",
@@ -1069,13 +1069,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown') AS country, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) - S",
-        "summary_head": "**Deep analysis** \u2014 intent `country_breakdown`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross marg",
+        "summary_head": "**Regional breakdown**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / ",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Compare their growth with the previous year.",
-        "ms": 1367,
+        "ms": 545,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "period_compare_selection",
@@ -1128,13 +1128,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(v.matnr) AS product, COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)",
-        "summary_head": "**Deep analysis** \u2014 intent `period_compare_selection`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gro",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their ASP.",
-        "ms": 767,
+        "ms": 567,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -1178,13 +1178,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(N",
-        "summary_head": "**Deep analysis** \u2014 intent `product_profitability`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross ",
+        "summary_head": "**Product profitability**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their COGS.",
-        "ms": 604,
+        "ms": 566,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product",
@@ -1228,13 +1228,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(N",
-        "summary_head": "**Deep analysis** \u2014 intent `cogs_by_product`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Which of them had the biggest margin improvement?",
-        "ms": 840,
+        "ms": 601,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1293,7 +1293,7 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
@@ -1358,13 +1358,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Why did those products decline?",
-        "ms": 925,
+        "ms": 1229,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1423,13 +1423,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show the quantity change.",
-        "ms": 1122,
+        "ms": 830,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1488,13 +1488,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show their product groups.",
-        "ms": 780,
+        "ms": 765,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_group_breakdown",
@@ -1533,13 +1533,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT COALESCE(NULLIF(TRIM(CAST(a.\"matkl\" AS TEXT)), ''), 'Unknown') AS product_group, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)",
-        "summary_head": "**Deep analysis** \u2014 intent `product_group_breakdown`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gros",
+        "summary_head": "**Product group breakdown**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross prof",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their suppliers.",
-        "ms": 791,
+        "ms": 585,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "suppliers_of_selection",
@@ -1586,13 +1586,13 @@
           "product_name": "SunFun / 1200 cm3"
         },
         "sql_head": "SELECT TRIM(CAST(ek.\"lifnr\" AS TEXT)) AS supplier, MAX(l.\"name1\") AS supplier_name, TRIM(CAST(p.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(p.\"matnr\" AS TEXT))) AS product_name, SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS purchase_value, SUM(CAST(NULLIF(TRIM(CAST(p.\"menge\" AS",
-        "summary_head": "**Deep analysis** \u2014 intent `suppliers_of_selection`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Suppliers for the selected products**\n\n\n### suppliers_of_selection (15 rows)\n- Sample keys: supplier, supplier_name, product, product_name, purchase_value, purchase_qty\n\n### Data limitations\n- Suppl",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their inventory.",
-        "ms": 541,
+        "ms": 473,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "inventory_analysis",
@@ -1639,7 +1639,7 @@
           "product_name": "SunFun / 1200 cm3"
         },
         "sql_head": "SELECT TRIM(CAST(b.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(b.\"matnr\" AS TEXT))) AS product_name, TRIM(CAST(b.\"bwkey\" AS TEXT)) AS valuation_area, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b.\"salk3\", '0') AS TEXT)), '') AS NUMERIC)) AS stock_value, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(b.\"lbkum\", '0') AS ",
-        "summary_head": "**Deep analysis** \u2014 intent `inventory_analysis`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross mar",
+        "summary_head": "**Current inventory snapshot**\n\nInventory is a **current snapshot** (MBEW/MARD), not historical stock and not true turnover.\n\n### stock_value_by_material (22 rows)\n- Current inventory snapshot: **SunF",
         "observed_language": false,
         "result": "PASS"
       }
@@ -1647,7 +1647,7 @@
     "decline_chain": [
       {
         "question": "Which products declined the most?",
-        "ms": 713,
+        "ms": 674,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1706,13 +1706,13 @@
           "currency": "EUR"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Why?",
-        "ms": 984,
+        "ms": 892,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -1771,13 +1771,13 @@
           "currency": "EUR"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show their customers.",
-        "ms": 869,
+        "ms": 863,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -1833,13 +1833,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(vk.kunag) AS customer, MAX(k.name1) AS customer_name, MAX(k.brsch) AS industry, MAX(k.land1) AS country, vk.waerk AS currency, TRIM(v.matnr) AS product, COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `customers_of_selection`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Customers for the selected products**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their ASP.",
-        "ms": 600,
+        "ms": 542,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -1883,13 +1883,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(N",
-        "summary_head": "**Deep analysis** \u2014 intent `product_profitability`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross ",
+        "summary_head": "**Product profitability**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show their quantity.",
-        "ms": 587,
+        "ms": 524,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "dimensional_extend",
@@ -1933,13 +1933,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(N",
-        "summary_head": "**Deep analysis** \u2014 intent `dimensional_extend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross mar",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show COGS.",
-        "ms": 776,
+        "ms": 558,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product",
@@ -1983,13 +1983,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(N",
-        "summary_head": "**Deep analysis** \u2014 intent `cogs_by_product`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Show margins.",
-        "ms": 582,
+        "ms": 560,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "margin_by_product",
@@ -2033,7 +2033,7 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(N",
-        "summary_head": "**Deep analysis** \u2014 intent `margin_by_product`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross marg",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       }
@@ -2041,7 +2041,7 @@
     "data_gap_recovery": [
       {
         "question": "Which products grew the most?",
-        "ms": 723,
+        "ms": 696,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -2100,13 +2100,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show their logistics cost.",
-        "ms": 745,
+        "ms": 646,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -2142,7 +2142,7 @@
       },
       {
         "question": "Show their revenue growth.",
-        "ms": 848,
+        "ms": 623,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_growth_decline",
@@ -2201,7 +2201,7 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `product_growth_decline`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Product growth and decline**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross p",
         "observed_language": true,
         "result": "PASS"
       }
@@ -2209,7 +2209,7 @@
     "regression_guards": [
       {
         "question": "Which products had the biggest margin decline?",
-        "ms": 723,
+        "ms": 711,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "margin_decline_drivers",
@@ -2255,13 +2255,13 @@
           "currency": "USD"
         },
         "sql_head": "WITH yearly AS ( SELECT SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAS",
-        "summary_head": "**Deep analysis** \u2014 intent `margin_decline_drivers`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / R",
         "observed_language": false,
         "result": "PASS"
       },
       {
         "question": "Which month had the biggest margin decline?",
-        "ms": 766,
+        "ms": 946,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2293,13 +2293,13 @@
           "currency": "CNY"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / Reven",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show monthly sales.",
-        "ms": 759,
+        "ms": 740,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2331,13 +2331,13 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / Reven",
         "observed_language": true,
         "result": "PASS"
       },
       {
         "question": "Show quarterly sales.",
-        "ms": 799,
+        "ms": 771,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2369,7 +2369,7 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMER",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = Gross profit / Rev",
         "observed_language": true,
         "result": "PASS"
       }
@@ -2381,51 +2381,51 @@
     "DATA_GAP": 1,
     "FAIL": 0,
     "latencies_ms": [
-      541,
-      582,
-      584,
-      587,
-      600,
-      604,
-      699,
-      702,
-      713,
-      715,
+      473,
+      524,
+      542,
+      545,
+      548,
+      558,
+      560,
+      566,
+      567,
+      585,
+      601,
+      623,
+      646,
+      663,
+      674,
+      690,
+      691,
+      694,
+      695,
+      696,
+      698,
+      711,
+      712,
       718,
-      723,
-      723,
-      723,
+      720,
+      725,
+      725,
       729,
-      730,
-      732,
       734,
-      735,
       740,
-      745,
-      759,
-      766,
-      767,
-      768,
-      776,
-      780,
-      784,
-      791,
-      794,
-      799,
-      840,
-      848,
+      752,
+      765,
+      771,
+      787,
+      830,
       851,
-      866,
-      869,
-      925,
-      984,
-      1122,
-      1367,
-      1630
+      863,
+      892,
+      946,
+      1229,
+      1393
     ],
-    "P50": 745,
-    "P95": 1122,
-    "P99": 1630,
-    "Max": 1630
+    "P50": 698,
+    "P95": 946,
+    "P99": 1393,
+    "Max": 1393
   }
 }

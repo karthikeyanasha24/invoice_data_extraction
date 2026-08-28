@@ -496,8 +496,7 @@ function MetaStrip({ meta, sqlStrategy, rowCount, totalCount }: {
       {open && (
         <div className="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-100 text-xs text-slate-600 space-y-1">
           {tables.length > 0 && <div><span className="font-medium">Tables:</span> {tables.join(', ')}</div>}
-          {meta.domain  && <div><span className="font-medium">Domain:</span> {meta.domain}</div>}
-          {meta.intent  && <div><span className="font-medium">Intent:</span> {meta.intent}</div>}
+          {meta.domain  && <div><span className="font-medium">Business area:</span> {meta.domain}</div>}
           {warnings.map((w, i) => (
             <div key={i} className="flex items-start gap-1.5 text-amber-600">
               <AlertCircle className="h-3.5 w-3.5 mt-px flex-shrink-0" /> {w}
@@ -582,6 +581,7 @@ function TrustPanel({ result }: { result: QueryResult }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
         className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
       >
         <span>How this was calculated</span>
@@ -589,15 +589,16 @@ function TrustPanel({ result }: { result: QueryResult }) {
       </button>
       {open && (
         <div className="px-3 pb-3 text-xs text-slate-600 space-y-1.5 border-t border-slate-100 pt-2">
-          <p><span className="font-semibold text-slate-800">Analysis:</span> {trust.intent ? trust.intent.replace(/_/g, ' ') : 'Not specified'}</p>
-          <p><span className="font-semibold text-slate-800">Metric:</span> {trust.metric ? trust.metric.replace(/_/g, ' ') : 'Not specified'}</p>
-          <p><span className="font-semibold text-slate-800">Period:</span> {trust.period}</p>
-          {trust.aggregation && <p><span className="font-semibold text-slate-800">Aggregation:</span> {trust.aggregation}</p>}
           {trust.source && <p><span className="font-semibold text-slate-800">Source:</span> {trust.source}</p>}
-          {trust.calculation && <p><span className="font-semibold text-slate-800">Definitions:</span> {trust.calculation}</p>}
+          {trust.calculation && <p><span className="font-semibold text-slate-800">Definition:</span> {trust.calculation}</p>}
+          {trust.aggregation && <p><span className="font-semibold text-slate-800">Aggregation:</span> {trust.aggregation}</p>}
+          <p><span className="font-semibold text-slate-800">Period:</span> {trust.period}</p>
+          {trust.grain && <p><span className="font-semibold text-slate-800">Grain:</span> {trust.grain}</p>}
           {trust.rowLimit && <p><span className="font-semibold text-slate-800">Result size:</span> {trust.rowLimit}</p>}
-          {trust.limitations.map((g) => (
-            <p key={g} className="text-amber-800"><span className="font-semibold">Limitation:</span> {g}</p>
+          {trust.limitations.length === 0 ? (
+            <p><span className="font-semibold text-slate-800">Limitations:</span> None reported for this result.</p>
+          ) : trust.limitations.map((g) => (
+            <p key={g} className="text-amber-800"><span className="font-semibold">Limitations:</span> {g}</p>
           ))}
         </div>
       )}

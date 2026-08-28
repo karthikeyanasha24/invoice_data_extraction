@@ -63,6 +63,19 @@ def classify(r: Dict[str, Any], expect: Optional[str] = None) -> str:
 
 def main() -> None:
     rows: List[Dict[str, Any]] = []
+    r_stand, ms_stand = post("Show supplier concentration.")
+    first = (r_stand.get("data") or [{}])[0] if r_stand.get("data") else {}
+    rows.append({
+        "q": "Show supplier concentration. [standalone]",
+        "ms": ms_stand,
+        "verdict": classify(r_stand, "supplier_concentration"),
+        "intent": intent_of(r_stand),
+        "status": r_stand.get("answer_status"),
+        "has_share": "share_of_po_value_pct" in first,
+        "has_vbrp": "VBRP" in (r_stand.get("sql") or "").upper(),
+        "has_ekpo": "EKPO" in (r_stand.get("sql") or "").upper(),
+    })
+
     r0, ms0 = post("Show the products with the highest profits.")
     ctx = ctx_from("Show the products with the highest profits.", r0)
     rows.append({"q": "Show the products with the highest profits.", "ms": ms0, "verdict": classify(r0, "product_profitability"), "intent": intent_of(r0)})

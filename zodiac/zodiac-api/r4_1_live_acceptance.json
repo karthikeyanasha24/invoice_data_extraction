@@ -4,7 +4,7 @@
     "gate": [
       {
         "question": "Show monthly revenue.",
-        "ms": 2459,
+        "ms": 1513,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -62,12 +62,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show quarterly revenue.",
-        "ms": 801,
+        "ms": 1063,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -125,14 +125,14 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       }
     ],
     "probes": [
       {
         "question": "Show monthly revenue.",
-        "ms": 930,
+        "ms": 706,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -190,12 +190,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show quarterly revenue.",
-        "ms": 796,
+        "ms": 783,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -253,12 +253,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Show monthly COGS.",
-        "ms": 1067,
+        "ms": 1012,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -316,12 +316,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show quarterly COGS.",
-        "ms": 1064,
+        "ms": 794,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -379,12 +379,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Show monthly margins.",
-        "ms": 801,
+        "ms": 1122,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -442,12 +442,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show quarterly margins.",
-        "ms": 775,
+        "ms": 782,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -505,12 +505,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Which month had the highest revenue?",
-        "ms": 823,
+        "ms": 759,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -568,12 +568,12 @@
           "currency": "INR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Which quarter had the highest gross profit?",
-        "ms": 816,
+        "ms": 787,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -631,12 +631,12 @@
           "currency": "INR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Compare this month with last month.",
-        "ms": 984,
+        "ms": 935,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -694,12 +694,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Compare this quarter with last quarter.",
-        "ms": 1088,
+        "ms": 972,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -757,12 +757,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Compare 2004 and 2005 by month.",
-        "ms": 610,
+        "ms": 752,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -821,12 +821,12 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Compare 2004 and 2005 by quarter.",
-        "ms": 800,
+        "ms": 782,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -885,14 +885,14 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       }
     ],
     "context_chain": [
       {
         "question": "Show the highest-profit products.",
-        "ms": 834,
+        "ms": 806,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -955,13 +955,13 @@
           "currency": "INR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
-        "summary_head": "**Deep analysis** \u2014 intent `product_profitability`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Reve",
+        "summary_head": "**Product profitability**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margi",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Show their monthly revenue.",
-        "ms": 581,
+        "ms": 574,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1027,13 +1027,13 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Show their quarterly revenue.",
-        "ms": 598,
+        "ms": 591,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1099,13 +1099,13 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Compare 2004 and 2005.",
-        "ms": 582,
+        "ms": 551,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1172,13 +1172,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Show COGS.",
-        "ms": 628,
+        "ms": 2466,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1241,13 +1241,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Show margins.",
-        "ms": 561,
+        "ms": 580,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1310,13 +1310,13 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Which quarter had the biggest decline?",
-        "ms": 531,
+        "ms": 540,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1379,13 +1379,13 @@
           "currency": "USD"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS",
         "products_n": 10
       },
       {
         "question": "Why?",
-        "ms": 743,
+        "ms": 727,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1448,7 +1448,7 @@
           "currency": "EUR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS",
         "products_n": 10
       }
@@ -1456,7 +1456,7 @@
     "followups": [
       {
         "question": "Show COGS.",
-        "ms": 788,
+        "ms": 718,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1508,12 +1508,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show margins.",
-        "ms": 998,
+        "ms": 735,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1565,12 +1565,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show customers.",
-        "ms": 1041,
+        "ms": 1146,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "customers_of_selection",
@@ -1640,12 +1640,12 @@
           "currency": "INR"
         },
         "sql_head": "SELECT TRIM(vk.kunag) AS customer, MAX(k.name1) AS customer_name, MAX(k.brsch) AS industry, MAX(k.land1) AS country, vk.waerk AS currency, TRIM(v.matnr) AS product, COALESCE(MAX(m.maktx), TRIM(v.matnr)) AS product_name, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERI",
-        "summary_head": "**Deep analysis** \u2014 intent `customers_of_selection`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Rev",
+        "summary_head": "**Customers for the selected products**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS;",
         "result": "PASS"
       },
       {
         "question": "Show regions.",
-        "ms": 655,
+        "ms": 800,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "country_breakdown",
@@ -1709,12 +1709,12 @@
           "currency": "INR"
         },
         "sql_head": "SELECT COALESCE(NULLIF(TRIM(vk.land1), ''), 'Unknown') AS country, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT)), '') AS NUMERIC)) AS cogs, SUM(CAST(NULLIF(TRIM(CAST(v",
-        "summary_head": "**Deep analysis** \u2014 intent `country_breakdown`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue ",
+        "summary_head": "**Regional breakdown**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %",
         "result": "PASS"
       },
       {
         "question": "Show quarterly.",
-        "ms": 741,
+        "ms": 531,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1788,12 +1788,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Compare last year.",
-        "ms": 610,
+        "ms": 530,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -1867,12 +1867,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Which month was best?",
-        "ms": 614,
+        "ms": 921,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -1946,12 +1946,12 @@
           "currency": "INR"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Which quarter was worst?",
-        "ms": 814,
+        "ms": 553,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2025,12 +2025,12 @@
           "currency": "KRW"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Why?",
-        "ms": 948,
+        "ms": 581,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2104,12 +2104,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       },
       {
         "question": "Show the components.",
-        "ms": 807,
+        "ms": 792,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "profit_components",
@@ -2172,14 +2172,14 @@
           "currency": "INR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
-        "summary_head": "**Deep analysis** \u2014 intent `profit_components`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue ",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %*",
         "result": "PASS"
       }
     ],
     "empty_period": [
       {
         "question": "Show monthly revenue for 2024.",
-        "ms": 482,
+        "ms": 495,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2211,13 +2211,13 @@
         "sample_keys": [],
         "sample_row": {},
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are available for ye",
+        "summary_head": "**Monthly trend**\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are available for year(s) [2024] in the curre",
         "result": "PASS",
         "honest_empty": true
       },
       {
         "question": "Show quarterly revenue for 2025.",
-        "ms": 552,
+        "ms": 493,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2249,7 +2249,7 @@
         "sample_keys": [],
         "sample_row": {},
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are available for ",
+        "summary_head": "**Quarterly trend**\n\nNo billing records are available for that period in the current extract.\n\n### Data limitations\n- No billing records are available for year(s) [2025] in the cur",
         "result": "PASS",
         "honest_empty": true
       }
@@ -2257,7 +2257,7 @@
     "root_cause": [
       {
         "question": "Which month had the biggest margin decline?",
-        "ms": 861,
+        "ms": 771,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2315,12 +2315,12 @@
           "currency": "CNY"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Why?",
-        "ms": 780,
+        "ms": 729,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2378,7 +2378,7 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS",
         "observed_language": true,
         "causal_claim": false
@@ -2387,7 +2387,7 @@
     "data_gap_recovery": [
       {
         "question": "Show highest-profit products.",
-        "ms": 891,
+        "ms": 815,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -2450,12 +2450,12 @@
           "currency": "INR"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
-        "summary_head": "**Deep analysis** \u2014 intent `product_profitability`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Reve",
+        "summary_head": "**Product profitability**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margi",
         "result": "PASS"
       },
       {
         "question": "Show logistics cost.",
-        "ms": 823,
+        "ms": 436,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -2499,7 +2499,7 @@
       },
       {
         "question": "Show net profit.",
-        "ms": 508,
+        "ms": 412,
         "status": "CANNOT_ANSWER",
         "pipeline": "deep_multidim",
         "intent": "product_profitability",
@@ -2543,7 +2543,7 @@
       },
       {
         "question": "Show COGS.",
-        "ms": 707,
+        "ms": 685,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "cogs_by_product",
@@ -2604,12 +2604,12 @@
           "currency": "KRW"
         },
         "sql_head": "SELECT TRIM(CAST(v.\"matnr\" AS TEXT)) AS product, COALESCE(MAX(m.\"maktx\"), TRIM(CAST(v.\"matnr\" AS TEXT))) AS product_name, vk.\"waerk\" AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS revenue, SUM(CAST(NULLIF(TRIM(CAST(COALESCE(v.\"wavwr\", '0') AS TEXT",
-        "summary_head": "**Deep analysis** \u2014 intent `cogs_by_product`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Governed analysis**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %*",
         "result": "PASS"
       },
       {
         "question": "Show monthly revenue.",
-        "ms": 652,
+        "ms": 894,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "monthly_trend",
@@ -2673,12 +2673,12 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-' || SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2)) AS year_month, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRIM(CAST(v.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS reve",
-        "summary_head": "**Deep analysis** \u2014 intent `monthly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 CO",
+        "summary_head": "**Monthly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** = ",
         "result": "PASS"
       },
       {
         "question": "Show quarterly revenue.",
-        "ms": 630,
+        "ms": 747,
         "status": "SUCCESS",
         "pipeline": "deep_multidim",
         "intent": "quarterly_trend",
@@ -2742,14 +2742,14 @@
           "currency": "DEM"
         },
         "sql_head": "SELECT (SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) || '-Q' || CAST((((CAST(SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 5, 2) AS INTEGER) - 1) / 3) + 1) AS TEXT)) AS year_quarter, SUBSTRING(TRIM(CAST(vk.\"fkdat\" AS TEXT)), 1, 4) AS year, vk.waerk AS currency, SUM(CAST(NULLIF(TRI",
-        "summary_head": "**Deep analysis** \u2014 intent `quarterly_trend`\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 ",
+        "summary_head": "**Quarterly trend**\n\nMetrics use governed definitions: **Revenue** = billing NETWR; **COGS** = billing WAVWR (document cost); **Gross profit** = Revenue \u2212 COGS; **Gross margin %** ",
         "result": "PASS"
       }
     ],
     "basic_ga": [
       {
         "question": "2004",
-        "ms": 13104,
+        "ms": 9265,
         "status": "SUCCESS",
         "pipeline": null,
         "intent": "",
@@ -2758,7 +2758,7 @@
       },
       {
         "question": "Meaning of life",
-        "ms": 486,
+        "ms": 490,
         "status": "CLARIFICATION",
         "pipeline": null,
         "intent": "",
@@ -2767,7 +2767,7 @@
       },
       {
         "question": "Top 5",
-        "ms": 9190,
+        "ms": 8941,
         "status": "SUCCESS",
         "pipeline": null,
         "intent": "",
@@ -2776,7 +2776,7 @@
       },
       {
         "question": "2004",
-        "ms": 9317,
+        "ms": 9293,
         "status": "SUCCESS",
         "pipeline": null,
         "intent": "",
@@ -2785,7 +2785,7 @@
       },
       {
         "question": "Meaning of life",
-        "ms": 548,
+        "ms": 452,
         "status": "CLARIFICATION",
         "pipeline": null,
         "intent": "",
@@ -2794,7 +2794,7 @@
       },
       {
         "question": "Show sales for 2005",
-        "ms": 806,
+        "ms": 631,
         "status": "SUCCESS",
         "pipeline": "intent_sql_fast",
         "intent": "",
@@ -2803,7 +2803,7 @@
       },
       {
         "question": "Top 3",
-        "ms": 529,
+        "ms": 637,
         "status": "SUCCESS",
         "pipeline": "deterministic_sql_delta",
         "intent": "",

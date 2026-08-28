@@ -95,13 +95,14 @@ def sql_has_unsafe_monetary_fanout(sql: str) -> bool:
     raw = sql or ""
     if "NETWR" not in s and "WAVWR" not in s:
         return False
-    if "VBRP" not in s and '"VBRP"' not in s and "vbrp" not in raw.lower():
-        return False
-    for t in UNSAFE_MONETARY_JOINS:
-        if t in s and "VBRP" in s:
+    has_billing = "VBRP" in s or "vbrp" in raw.lower()
+    if has_billing:
+        for t in UNSAFE_MONETARY_JOINS:
+            if t in s:
+                return True
+        if _INV_JOIN_RE.search(raw):
             return True
-    # Billing fact joined to inventory snapshot before aggregation → fan-out.
-    # Independent CTEs (FROM "MBEW" inside WITH, then JOIN aliases) are allowed.
-    if _INV_JOIN_RE.search(raw):
+    # Purchase NETWR joined to inventory snapshot before aggregation.
+    if "EKPO" in s and _INV_JOIN_RE.search(raw):
         return True
     return False

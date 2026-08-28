@@ -125,6 +125,37 @@ def _ql(q: str) -> str:
     return (q or "").strip().lower()
 
 
+def wants_supplier_concentration(ql: str) -> bool:
+    """Semantic purchase-share / concentration — not R3 'show their suppliers'."""
+    q = (ql or "").lower()
+    if re.search(
+        r"\b(buy the most from|who do we buy|largest supplier|biggest supplier|"
+        r"supplier concentration|purchasing share|purchase share|share of purchas|"
+        r"single[\s-]?source|top suppliers?|rank suppliers|"
+        r"percentage of purchas|percent of purchas)\b",
+        q,
+    ):
+        return True
+    if not any(x in q for x in ("supplier", "vendor")):
+        return False
+    return any(
+        x in q
+        for x in (
+            "concentration",
+            "percent",
+            "percentage",
+            "share of",
+            "largest",
+            "biggest",
+            "highest po",
+            "most purchas",
+            "most purchase",
+            "account for",
+            "dominate",
+        )
+    )
+
+
 def _is_basic_engine_query(ql: str) -> bool:
     """True when existing intent_sql/catalog/universal should keep the question.
 
@@ -356,6 +387,8 @@ def is_deep_analysis_candidate(question: str, prior_ctx: Optional[Dict[str, Any]
         score += 3
     if wants_product_change(ql):
         score += 3
+    if wants_supplier_concentration(ql):
+        score += 3
     # Multi-dimension ask without saying "profit"
     if ("product" in ql and "customer" in ql) or (
         "customer" in ql and "industry" in ql and "region" in ql
@@ -438,6 +471,8 @@ def build_analytical_plan(
             if follow.add_dimensions and plan.intent in {"generic", "dimensional_extend"}:
                 plan.intent = compose_intent(follow.add_dimensions)
             plan = _merge_prior(plan, prior_ctx)
+            if wants_supplier_concentration(ql):
+                plan.intent = "supplier_concentration"
             # Apply intent-specific metrics/dimensions below via shared block
             if plan.intent not in {"generic", "unsupported_deep"}:
                 pass  # fall through to metrics/dimensions assignment
@@ -571,19 +606,7 @@ def build_analytical_plan(
     )
     inv_intent = resolve_inventory_intent(ql)
     wants_supplier = any(x in ql for x in ("supplier", "vendor", "procurement"))
-    wants_concentration = any(
-        x in ql
-        for x in (
-            "concentration",
-            "share of purchas",
-            "purchase share",
-            "single source",
-            "single-source",
-            "dominate purchas",
-            "top supplier",
-            "top suppliers",
-        )
-    )
+    wants_concentration = wants_supplier_concentration(ql)
     wants_product_group = any(x in ql for x in ("product group", "material group", "category"))
     wants_asp = any(x in ql for x in ("average selling price", "unit price", "asp"))
     wants_why = ql.startswith("why ") or " why " in ql or ql.startswith("explain why")
@@ -654,7 +677,7 @@ def build_analytical_plan(
             plan.intent = "process_buy"
         elif wants_logistics:
             plan.intent = "process_sell"
-        elif wants_supplier and wants_concentration:
+        elif wants_concentration:
             plan.intent = "supplier_concentration"
         elif wants_supplier:
             plan.intent = "suppliers_of_selection"
@@ -721,7 +744,7 @@ def build_analytical_plan(
             plan.filters["period_grain"] = resolve_period_grain(ql)
         elif wants_history and (wants_customers or wants_product or prior_ctx):
             plan.intent = "purchase_history"
-        elif wants_supplier and wants_concentration:
+        elif wants_concentration:
             plan.intent = "supplier_concentration"
         elif wants_supplier:
             plan.intent = "suppliers_of_selection"

@@ -1,18 +1,28 @@
 {
-  "PASS": 4,
+  "PASS": 5,
   "DATA_GAP": 1,
-  "NOT_DEPLOYED": 1,
-  "FAIL": 0,
+  "NOT_DEPLOYED": 0,
+  "FAIL": 1,
   "rows": [
     {
+      "q": "Show supplier concentration. [standalone]",
+      "ms": 22049,
+      "verdict": "FAIL(intent=)",
+      "intent": "",
+      "status": "SUCCESS",
+      "has_share": false,
+      "has_vbrp": false,
+      "has_ekpo": false
+    },
+    {
       "q": "Show the products with the highest profits.",
-      "ms": 11703,
+      "ms": 1767,
       "verdict": "PASS",
       "intent": "product_profitability"
     },
     {
       "q": "Show their suppliers.",
-      "ms": 645,
+      "ms": 1264,
       "verdict": "PASS",
       "intent": "suppliers_of_selection",
       "status": "SUCCESS",
@@ -22,17 +32,17 @@
     },
     {
       "q": "Show supplier concentration.",
-      "ms": 889,
-      "verdict": "NOT_DEPLOYED",
-      "intent": "suppliers_of_selection",
+      "ms": 984,
+      "verdict": "PASS",
+      "intent": "supplier_concentration",
       "status": "SUCCESS",
-      "has_share": false,
+      "has_share": true,
       "has_vbrp": false,
       "has_ekpo": true
     },
     {
       "q": "Show supplier profit.",
-      "ms": 580,
+      "ms": 815,
       "verdict": "PASS",
       "intent": "suppliers_of_selection",
       "status": "SUCCESS",
@@ -42,13 +52,13 @@
     },
     {
       "q": "Show inventory aging.",
-      "ms": 1058,
+      "ms": 474,
       "verdict": "DATA_GAP",
       "intent": "suppliers_of_selection"
     },
     {
       "q": "Show inventory again.",
-      "ms": 490,
+      "ms": 625,
       "verdict": "PASS",
       "intent": "inventory_analysis"
     }

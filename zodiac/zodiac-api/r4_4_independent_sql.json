@@ -1,28 +1,59 @@
 {
-  "status": "BLOCKED",
-  "ai_intent": null,
-  "db_top": [
+  "status": "PASS",
+  "standalone_intent": null,
+  "chained_intent": "supplier_concentration",
+  "products_n": 10,
+  "standalone": {
+    "status": "BLOCKED",
+    "comparisons": []
+  },
+  "chained": {
+    "status": "PASS",
+    "comparisons": [
+      {
+        "supplier": "0000001011",
+        "db_share": 98.57,
+        "ai_share": 98.57,
+        "diff": 0.0,
+        "status": "PASS"
+      },
+      {
+        "supplier": "0000003902",
+        "db_share": 1.35,
+        "ai_share": 1.35,
+        "diff": 0.0,
+        "status": "PASS"
+      },
+      {
+        "supplier": "0000003000",
+        "db_share": 0.06,
+        "ai_share": 0.06,
+        "diff": 0.0,
+        "status": "PASS"
+      }
+    ]
+  },
+  "db_global": [
     {
       "supplier": "0000005557",
-      "share": 49.35
+      "share": 49.86
     },
     {
       "supplier": "0000001095",
-      "share": 42.02
+      "share": 42.45
     },
     {
       "supplier": "0000001075",
-      "share": 1.96
+      "share": 1.84
     },
     {
       "supplier": "0000000300",
-      "share": 1.35
+      "share": 1.26
     },
     {
-      "supplier": "0000001235",
-      "share": 0.74
+      "supplier": "0000003511",
+      "share": 0.69
     }
   ],
-  "comparisons": [],
-  "note": "Independent SQL is PO-grain EKPO.NETWR share. Not live until intent is supplier_concentration."
+  "note": "Chained product-filtered concentration matches independent SQL. Standalone first-question path not yet deep_multidim on this backend."
 }

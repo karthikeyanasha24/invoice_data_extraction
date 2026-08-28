@@ -25,6 +25,8 @@ describe('analysisTrustFromResult', () => {
     assert.equal(trust.period, 'Current snapshot');
     assert.equal(trust.limitations[0], 'No historical inventory movements');
     assert.ok(trust.source?.includes('inventory snapshot'));
+    assert.equal(trust.grain?.toLowerCase().includes('snapshot') || trust.grain?.toLowerCase().includes('valuation'), true);
+    assert.equal(trust.analysisLabel, 'Current inventory snapshot');
   });
 });
 

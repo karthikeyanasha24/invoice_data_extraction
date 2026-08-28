@@ -103,3 +103,42 @@ def test_adversarial_vbrp_mbew_and_ekpo_fanout_rejected():
     assert sql_has_unsafe_monetary_fanout(
         'SELECT SUM(v.netwr) FROM "vbrp" v JOIN "EKPO" p ON v.matnr = p.matnr'
     )
+    assert sql_has_unsafe_monetary_fanout(
+        'SELECT SUM(p.netwr) FROM "EKPO" p JOIN "MBEW" m ON p.matnr = m.matnr'
+    )
+
+
+def test_concentration_paraphrases_do_not_steal_r3_suppliers():
+    from app.services.analytical_deep_dive import wants_supplier_concentration
+
+    assert wants_supplier_concentration("who do we buy the most from?")
+    assert wants_supplier_concentration("what percentage of purchasing comes from each supplier?")
+    assert wants_supplier_concentration("which suppliers account for the most purchasing?")
+    assert wants_supplier_concentration("who is our largest supplier?")
+    assert wants_supplier_concentration("rank suppliers by purchasing.")
+    assert not wants_supplier_concentration("Show their suppliers.")
+    for q in (
+        "Who do we buy the most from?",
+        "What percentage of purchasing comes from each supplier?",
+        "Which suppliers account for the most purchasing?",
+        "Who is our largest supplier?",
+        "Rank suppliers by purchasing.",
+    ):
+        assert build_analytical_plan(q, PRIOR).intent == "supplier_concentration"
+    assert build_analytical_plan("Show their suppliers.", PRIOR).intent == "suppliers_of_selection"
+
+
+def test_standalone_concentration_is_deep_candidate():
+    from app.services.analytical_deep_dive import is_deep_analysis_candidate
+
+    assert is_deep_analysis_candidate("Show supplier concentration.")
+    assert is_deep_analysis_candidate("Which suppliers account for the most purchasing?")
+    assert is_deep_analysis_candidate("Who is our largest supplier?")
+    assert not is_deep_analysis_candidate("Show their suppliers.")
+    plan = build_analytical_plan("Show supplier concentration.", None)
+    assert plan.intent == "supplier_concentration"
+    queries, _ = compile_queries(plan)
+    sql = queries[0]["sql"].upper()
+    assert '"EKPO"' in sql and '"EKKO"' in sql
+    assert "SHARE_OF_PO_VALUE_PCT" in sql
+    assert "VBRP" not in sql and "NETWR" in sql

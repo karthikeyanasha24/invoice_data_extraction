@@ -74,7 +74,7 @@ export default function AuthForm({ isLogin, onToggleMode }: AuthFormProps) {
             </div>
             <h1 className="mt-4 text-2xl sm:text-3xl font-bold text-slate-900">Welcome to BridgeEDI</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-sm mx-auto px-4">
-              Invoice operations and governed questions over your SAP business data.
+            Invoice operations and governed SAP intelligence — ask business questions and know when the data cannot support an answer.
             </p>
             <p className="mt-3 text-xs text-slate-500">
               Customer organization?{' '}

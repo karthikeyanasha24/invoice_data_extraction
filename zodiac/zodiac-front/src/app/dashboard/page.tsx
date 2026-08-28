@@ -27,7 +27,7 @@ export default function DashboardPage() {
       topSection={
         <TopSection
           title="EDI operations"
-          subtitle="Inbound SAT documents (To ERP tab), outbound invoices, and invoice-based business analytics"
+          subtitle="Inbound SAT documents, outbound invoices from ERP, and invoice-based business analytics"
         />
       }
     >
