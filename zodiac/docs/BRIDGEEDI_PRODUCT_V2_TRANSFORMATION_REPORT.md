@@ -1,7 +1,8 @@
 # BridgeEDI Product V2 — Transformation Report
 
-**Date:** 2026-08-27  
+**Date:** 2026-08-28  
 **Baseline commit:** `7f1f7cd`  
+**V2 frontend commit:** `5220444` (HEAD docs note `e382fb8`)  
 **R4-4:** not started  
 **Analytical engine:** not rewritten
 
@@ -13,22 +14,18 @@ Product V2 is a **frontend product transformation** around the already-verified 
 
 The analytical contracts are unchanged. Live production backend `https://zodiac-back.vercel.app` still scores:
 
-| Suite | Required | This run |
+| Suite | Required | This run (2026-08-28) |
 | --- | --- | --- |
-| R3 | 23 PASS / 2 DATA GAP / 0 FAIL | **23 / 2 / 0** (p50 753ms) |
+| R3 | 23 PASS / 2 DATA GAP / 0 FAIL | **23 / 2 / 0** (p50 651ms) |
 | R4-1 | 47 PASS / 2 DATA GAP / 0 FAIL | **47 / 2 / 0** |
-| R4-2 | 40 PASS / 1 DATA GAP / 0 FAIL | **40 / 1 / 0** (p50 745ms) |
-| R4-3 | 31 PASS / 6 DATA GAP / 0 FAIL | **31 / 6 / 0** (p50 765ms) |
+| R4-2 | 40 PASS / 1 DATA GAP / 0 FAIL | **40 / 1 / 0** |
+| R4-3 | 31 PASS / 6 DATA GAP / 0 FAIL | **31 / 6 / 0** |
 
-Unauthenticated `POST /api/query/adaptive` remains **HTTP 401** with **no SQL**.
+Unauthenticated `POST /api/query/adaptive` remains **HTTP 401** with **no SQL**. Frontend XHR goes to `https://zodiac-back.vercel.app` (not `zodiac-api-nu`). Backend was not redeployed.
 
-# BRIDGEEDI PRODUCT V2 NOT COMPLETE
+# BRIDGEEDI PRODUCT V2 COMPLETE
 
-**Exact blocker:** this environment cannot deploy the frontend to `https://www.bridgeedi.com`. Vercel CLI is `karthikeyanasha24` / team `Asha's projects`. Visible projects are `zodiac-api` → `zodiac-api-nu`, plus unrelated apps. Andy’s `bridgeedi.com` / `zodiac-front` project is not visible. No new Vercel project was created. Backend was not redeployed (not required).
-
-Live `https://www.bridgeedi.com` still shows the **pre-V2** navigation (`Dashboard`, `Intelligence`, `Full Chat` as a third tab). V2 was verified locally against the production API at `http://127.0.0.1:3001` with `NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app`.
-
-To finish: Andy (or a CLI linked to the BridgeEDI Vercel project) deploys **frontend only** from this branch. Then re-check production Overview, AI Analyst, Settings, SAT, and the 390–1440px pass.
+Live `https://www.bridgeedi.com` now serves Product V2. `/overview` is **HTTP 200**. Navigation is Understand / Ask / Operate / Manage. Old Dashboard / Intelligence / Full Chat chrome is gone.
 
 ---
 
@@ -310,10 +307,10 @@ Local V2 vs production API:
 
 ## Production Deployment
 
-**Checked:** 2026-08-27 (frontend-only deploy attempt)
+**Checked:** 2026-08-28 (Andy deployed the existing BridgeEDI frontend project)
 
 ```text
-BLOCKED — current Vercel account does not have access to the existing BridgeEDI frontend project.
+LIVE — https://www.bridgeedi.com serves Product V2. /overview → 200.
 ```
 
 | Item | Value |
@@ -336,7 +333,7 @@ Do not create another project, attach the domain elsewhere, or change DNS.
 
 Local `.env.local` is `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` (dev only, not committed). Production frontend must keep `NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app` in **Vercel project env**, not from this file.
 
-**Git (ready for Andy to deploy):** commit `5220444` on `phase12-first-customer-ready` (pushed). Live `https://www.bridgeedi.com/overview` remains **404** after push — this GitHub push did not change the production alias.
+**Git:** V2 implementation `5220444` on `phase12-first-customer-ready`. Production domain now serves that frontend. Backend `zodiac-back` was not redeployed.
 
 
 
@@ -344,11 +341,15 @@ Local `.env.local` is `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` (dev only, not
 
 ## Live Acceptance
 
-### Production (`www.bridgeedi.com`) — pre-V2 UI still live
+### Production (`www.bridgeedi.com`) — Product V2 live (2026-08-28)
 
-- Title BridgeEDI  
-- Nav: Dashboard, Intelligence, Invoices, …  
-- Intelligence tabs: Real-time / Snapshot / Full Chat  
+- Title BridgeEDI, mark **B**, tagline “Governed SAP intelligence”
+- Nav: Understand / Ask / Operate / Manage (Overview, AI Analyst, EDI operations, SAT documents, Settings)
+- `/overview` 200: attention (0 pending / 14 SAT), 90-day EDI snapshot (invoice revenue 0, not fabricated SAP P&L), investigate chips
+- AI Analyst: profits → inventory → sales → high stock/low sales; SQL hidden (`View SQL`); DATA GAP on aging with Try instead (no aging suggestion); inventory again recovers context
+- Settings: Profile / Security / API / Account; no fake notification toggles
+- SAT: 14 documents / 0 waiting / 4 sent; missing id → “Document not found”
+- Viewports 390 / 768 / 1024 / 1280 / 1440: no page overflow; 390 hamburger overlay; 1024+ persistent sidebar; tables scroll internally
 - Adaptive without JWT: 401  
 
 ### Local V2 (`127.0.0.1:3001` → production API)
@@ -374,66 +375,63 @@ Previous overall: **5/10**.
 | --- | --- | --- |
 | Product clarity | 7 | Tagline + Overview purpose in <30s locally |
 | Information architecture | 8 | Four groups match actual capabilities |
-| Navigation | 8 | Local; production still old |
+| Navigation | 8 | Understand / Ask / Operate / Manage on production |
 | Visual design | 7 | Restrained; brand consistent; not a visual system overhaul |
 | Dashboard | 6 | Useful operations snapshot; not a full SAP P&L command center |
 | AI UX | 8 | Hierarchy, cancel, examples, follow-ups |
 | Analytics UX | 7 | Tables improved; charts unchanged in type selection |
 | Data trust | 8 | How calculated + DATA GAP product state |
 | Accessibility | 7 | Landmarks, skip, sort, focus; charts still weak |
-| Responsive UX | 7 | 390 hamburger + 1440 sidebar; mid breakpoints not re-shot |
+| Responsive UX | 8 | 390 overlay + 768 cards + 1024–1440 sidebar; no page overflow |
 | Performance | 8 | Sub-1.5s typical adaptive; Overview avoids adaptive |
 | Security | 8 | JWT still required |
 | Reliability | 8 | R3–R4-3 unchanged |
-| Enterprise readiness | 6 | Local save only; V2 not on production domain |
+| Enterprise readiness | 7 | V2 is on www.bridgeedi.com; saved analyses still local-only |
 | Actionability | 6 | Investigate + SAT; no fake ERP actions |
 | Differentiation | 7 | Governed SAP + safe SQL + investigation, not “a chatbot” |
-| **Overall** | **7** | Up from 5; not 9 because production UI is not V2 and Overview is operational not full BI |
+| **Overall** | **8** | Up from 5; not 9 because Overview is operational EDI (not fabricated SAP P&L) and saved analyses are local-only |
 
 ---
 
 ## Remaining Limitations
 
-1. **`www.bridgeedi.com` is not on Product V2** until Andy deploys the frontend.  
-2. Overview EDI 90-day invoice revenue can be 0; SAP P&L lives in AI Analyst.  
-3. Saved analyses are device-local.  
-4. “Checking your session…” flash on client route changes.  
-5. Intelligence Operations/Snapshot tabs still exist as secondary EDI pulse views (not removed; Ask is default).  
-6. No PDF/share, no anomaly product, no role views, no R4-4.
+1. Overview EDI 90-day invoice revenue can be 0; SAP P&L lives in AI Analyst.  
+2. Saved analyses are device-local.  
+3. “Checking your session…” flash on client route changes.  
+4. Intelligence Operations/Snapshot tabs still exist as secondary EDI pulse views (not removed; Ask is default).  
+5. No PDF/share, no anomaly product, no role views, no R4-4.
 
 ---
 
 ## Recommended Future Direction
 
-1. Deploy frontend to BridgeEDI Vercel (`bridgeedi.com` only).  
-2. After deploy: repeat Overview / AI / Settings / SAT / 390–1440 live.  
-3. Optional: persist saved analyses server-side with the existing adaptive thread id.  
-4. Optional: reduce MainLayout session flash.  
-5. Do not start R4-4 or rewrite the analytical engine to decorate the UI.
+1. Optional: persist saved analyses server-side with the existing adaptive thread id.  
+2. Optional: reduce MainLayout session flash.  
+3. Do not start R4-4 or rewrite the analytical engine to decorate the UI. The next task is a separate product strategy decision.
 
 ---
 
 ## Production Acceptance Matrix
 
-| Area | Before | After (local V2) | Production www | Status |
+| Area | Before | After | Production www | Status |
 | --- | --- | --- | --- | --- |
-| Product identity | Mixed Z/Intelligence | BridgeEDI B + governed SAP | Still mixed/old nav | BLOCKED on deploy |
-| Navigation | Flat list | Understand/Ask/Operate/Manage | Old | BLOCKED on deploy |
-| Dashboard | EDI tabs as home | Overview command center | Old home `/dashboard` | BLOCKED on deploy |
-| AI UX | Chat-like Intelligence | AI Analyst hierarchy | Old Full Chat tab | BLOCKED on deploy |
+| Product identity | Mixed Z/Intelligence | BridgeEDI B + governed SAP | V2 live | PASS |
+| Navigation | Flat list | Understand/Ask/Operate/Manage | V2 live | PASS |
+| Dashboard | EDI tabs as home | Overview command center | `/overview` 200 | PASS |
+| AI UX | Chat-like Intelligence | AI Analyst hierarchy | `/dashboard/ai` | PASS |
 | AI context | Working | Unchanged engine | Working | PASS |
 | Follow-ups | Canonical chips | Same + Next investigation | Working | PASS |
-| DATA GAP | Engine PASS | Product limitation card | Engine PASS | PASS engine / BLOCKED UI deploy |
-| Analytics | Charts/tables | Sort/filter/CSV | Old tables | BLOCKED on deploy |
-| Tables | Basic | Sort, filter, page, CSV | Old | BLOCKED on deploy |
-| Charts | Recharts specs | Same renderer | Same | PASS |
-| Inventory UX | R4-3 engine | No aging in examples | Engine PASS | PASS |
-| Settings | Fake toggles | Profile/Security/API | Old | BLOCKED on deploy |
-| SAT | Working list | Counts + copy | Working | BLOCKED UI deploy |
-| Responsive | 390–1440 prior | 390 + 1440 rechecked locally | Not re-run on V2 prod | PARTIAL |
-| Accessibility | Partial | Skip, labels, sort | Old | BLOCKED on deploy |
-| Error UX | Mixed Axios | Sanitized | Mixed | BLOCKED on deploy |
-| Performance | Sub-1.5s | Maintained | Maintained | PASS |
+| DATA GAP | Engine PASS | Product limitation card | Aging → Try instead | PASS |
+| Analytics | Charts/tables | Sort/filter/CSV | Live | PASS |
+| Tables | Basic | Sort, filter, page, CSV | Internal scroll at 390 | PASS |
+| Charts | Recharts specs | Same renderer | Present | PASS |
+| Inventory UX | R4-3 engine | No aging in examples | DATA GAP + recovery | PASS |
+| Settings | Fake toggles | Profile/Security/API/Account | Live | PASS |
+| SAT | Working list | Counts + copy | 14 / 0 / 4 | PASS |
+| Responsive | 390–1440 prior | Rechecked on production | 390–1440 | PASS |
+| Accessibility | Partial | Skip, labels, sort | Skip + grouped nav | PASS |
+| Error UX | Mixed Axios | Sanitized | SAT missing id | PASS |
+| Performance | Sub-1.5s | Maintained | R3 p50 651ms | PASS |
 | Security | JWT 401 | JWT 401 | JWT 401 | PASS |
 | R3 | 23/2/0 | 23/2/0 | 23/2/0 | PASS |
 | R4-1 | 47/2/0 | 47/2/0 | 47/2/0 | PASS |
