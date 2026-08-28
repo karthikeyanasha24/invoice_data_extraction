@@ -142,7 +142,7 @@ Never treat local pytest or compiled-SQL DB checks as production verification.
 | --- | --- |
 | Frontend deployment target | Existing BridgeEDI Vercel project serving `www.bridgeedi.com` |
 | Backend deployment target | Existing `zodiac-back` project serving `zodiac-back.vercel.app` |
-| Commit SHA | recorded at push time on `phase12-first-customer-ready` |
+| Commit SHA | `90e6106` on `phase12-first-customer-ready` |
 | Deployment status | **No deployment occurred** |
 | This CLI Vercel account | `karthikeyanasha24` / team `ashas-projects-a0fae821` |
 | Visible projects | `zodiac-api` → `zodiac-api-nu`, `hrm53v1`, `banyanqi-react` |
