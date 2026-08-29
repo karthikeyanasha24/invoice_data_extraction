@@ -2,91 +2,92 @@
 
 **Date:** 2026-08-29  
 **Branch:** `phase12-first-customer-ready`  
+**Final Git SHA:** `acd4969` (`acd496967977e0d3b8a40582cdba3d5e34f67179` — confirm with `git rev-parse HEAD` after this report commit)  
 **Canonical frontend:** `https://www.bridgeedi.com`  
 **Canonical backend:** `https://zodiac-back.vercel.app`  
 **Forbidden:** `zodiac-api-nu` (not used). No replacement Vercel project. No DNS change. No force-push.
 
 ---
 
-## FINAL STATUS
+## FINAL VERDICT
 
 ```text
-BRIDGEEDI PRODUCT EXCELLENCE + R4
-FINAL STATUS: NOT COMPLETE
+CODE COMPLETE — PRODUCTION DEPLOYMENT BLOCKED
 ```
 
-Product Excellence **is live on www** for Overview copy, investigation isolation, `?q=` consume, Continue/Start new, SAT, and Settings. Frozen R3–R4-4 contracts remain intact on `zodiac-back`.
+Code, local tests, and live Product Excellence UX (including route titles) are in place. This CLI still cannot deploy to or inspect the Vercel projects that serve www and zodiac-back. Latest SHA `acd4969` is on GitHub. Official python live suites (R3, R4-1, R4-2, R4-3, `r4_4_independent_sql.py`) returned **401** in this agent because `LIVE_API_EMAIL` / `LIVE_API_PASSWORD` were not present in the shell. Live R4-4 and Full Chat were verified through the authenticated www session against `zodiac-back`.
 
-This is **not** a full production close: document titles on www remain `BridgeEDI`, restored history can still show `Deep analysis — intent …`, and this CLI cannot record or trigger the canonical Vercel deployment IDs. A follow-up SHA (server route titles + broader heading humanize) is on GitHub and is **not proven on www**.
+This is **not** `COMPLETE` (no deployment IDs; official R3–R4-3 scripts not executed this session).
 
 ---
 
-## Git
+## A. Exact Git SHA
 
 | Item | Value |
 | --- | --- |
-| Protected analytical baseline | `426f293` |
-| Remote integrate this pass | `17771b5` (`29_08_03`, blank line in `dashboard.py` only) — rebased, not force-pushed |
-| Isolation / IntelligencePage removal | `68d9971` (pushed) |
-| Titles + restored-heading humanize | this report commit |
-| Working tree at finish | clean after this docs commit |
+| Branch | `phase12-first-customer-ready` |
+| Remote at start of this pass | `ec94c18` (`29_08_04`, blank line in `dashboard.py` only) |
+| Product Excellence code this pass | `acd4969` — route titles + stored-heading humanize + DocumentTitle |
+| Prior PE (layouts already on www) | `9a132a8` |
 | Force-push | not used |
+
+Accidental `server.py` indent breakage in the working tree was **reverted** and not committed.
 
 ---
 
-## Local vs production (do not mix)
+## B. Frontend deployment
 
-### Local (this branch)
+| Item | Value |
+| --- | --- |
+| Canonical project | existing project serving `www.bridgeedi.com` |
+| Domain | `https://www.bridgeedi.com` |
+| Status | **Live Product Excellence titles observed.** This CLI cannot deploy. |
+| Deployment ID | **Deployment ID unavailable from this CLI account** |
+| Deployed SHA | **Not readable from this CLI.** Live titles match `9a132a8` layouts (`Overview · BridgeEDI`, etc.). `acd4969` (DocumentTitle + backtick heading regex) is **not proven** as the www JS bundle. |
+
+`NEXT_PUBLIC_API_URL` must remain `https://zodiac-back.vercel.app`.
+
+---
+
+## C. Backend deployment
+
+| Item | Value |
+| --- | --- |
+| Canonical project | existing project serving `zodiac-back.vercel.app` |
+| Domain | `https://zodiac-back.vercel.app` |
+| Status | **Live and serving R4-4.** No backend code change this pass. |
+| Deployment ID | **Deployment ID unavailable from this CLI account** |
+| Deployed SHA | unknown from this CLI |
+
+---
+
+## D–H. R3 / R4 live scripts (this session)
+
+| Suite | Required | This session | Notes |
+| --- | --- | --- | --- |
+| R3 python | 23 PASS / 2 DATA GAP / 0 FAIL | **NOT RUN** | `scripts/r3_post_deploy_live_acceptance.py` → HTTP 401 (no live login env) |
+| R4-1 python | 47 / 2 / 0 | **NOT RUN** | same |
+| R4-2 python | 40 / 1 / 0 | **NOT RUN** | same |
+| R4-3 python | 31 / 6 / 0 | **NOT RUN** | same |
+| R4-4 python | 9 / 1 / 0 | **NOT RUN** (script) | **Live browser-authenticated probes PASS** (below) |
+
+Do not treat prior-session script scores as verification of SHA `acd4969`.
+
+---
+
+## I. Independent SQL
 
 | Check | Result |
 | --- | --- |
-| Governed pytest (R3–R4-4, follow-up, deep dive, auth, dashboard, Andy, guardrails, schema-mode) | **224 passed** |
-| Frontend `test:ux` | **42 passed** |
-| Frontend `test:adaptive-context` | **8 passed** |
-| Frontend `next build` | **PASS** |
-| `IntelligencePage.tsx` | **Removed** after proving no route/test/dynamic import; production build succeeded without it |
-| R4-5 / R4-6 | **Not implemented** (no complete governed contract) |
-| Cloud saved investigations | **Not implemented** — browser/device local only (honest) |
-
-### Production (canonical URLs, this session)
-
-| Area | Required | Live result | Scope |
-| --- | --- | --- | --- |
-| Authentication unauth / empty Bearer / wrong scheme / malformed / invalid | 401, no SQL | **PASS** | Production backend |
-| Dashboard routers | loaded, failed=[] | **PASS** `status=ok`, `dashboard.loaded=true`, `failed=[]`, `loaded_count=20` | Production backend |
-| Independent SQL | 0.00 vs 49.86 / 42.45 / 1.84 | **PASS** | Production AI vs DB |
-| Full Chat excellence chain | PASS + honest DATA GAP | **17 PASS / 2 DATA GAP / 0 FAIL**; top 3 n=3; last turn `suppliers_of_selection` | Production backend |
-| R3 / R4-1 / R4-2 / R4-3 / R4-4 live scripts | frozen scores | **Not re-run this SHA** (frontend-only change). Last verified live: 23/2/0, 47/2/0, 40/1/0, 31/6/0, 9/1/0 | Production backend (prior pass) |
-| Overview copy | honest, not empty-success | **PASS** “No merges are waiting to send”; EDI totals not SAP P&L; concentration chip | Production frontend |
-| Overview / `?q=` isolation | global PO grain | **PASS** dirty `?q=Show supplier concentration.` → banner “Starting a new investigation from Overview”; `0000005557` 49.86 / `0000001095` 42.45 / `0000001075` 1.84; `q` dropped; history kept (older 98.57 still visible) | Production frontend |
-| Continue vs New | both present | **PASS** | Production frontend |
-| Restored headings | Inventory position | **FAIL** restored turn still shows `Deep analysis — intent inventory_analysis` (table heading already “Inventory position”) | Production frontend |
-| Page titles | `Overview · BridgeEDI` | **FAIL** live `document.title` remains `BridgeEDI` | Production frontend |
-| SAT 390px | usable, no page overflow | **PASS** 14 / 0 waiting / 4 sent; `scrollWidth=390`; hamburger `aria-expanded`; Escape closes; no JWT/Axios | Production frontend |
-| Settings | Profile / Security / API / Account | **PASS** session language; no JWT; no fake notification controls | Production frontend |
-| Vercel deployment IDs | recorded | **BLOCKED** | This CLI |
+| `scripts/r4_4_independent_sql.py` | **NOT RUN** (401, no live login env) |
+| Local `EKPO` via `.env` `DATABASE_URL` | **BLOCKED** — `relation "ekpo" does not exist` in that connection’s default schema; expected values were **not** edited |
+| Live AI first question vs frozen independent values | **MATCH** `0000005557` 49.86, `0000001095` 42.45, `0000001075` 1.84 |
 
 ---
 
-## Independent SQL (live, this session)
+## J. Security (live, this session)
 
-Standalone global PO share (`scripts/r4_4_independent_sql.py`):
-
-| Supplier | DB | AI | Diff |
-| --- | --- | --- | --- |
-| 0000005557 | 49.86 | 49.86 | 0.00 |
-| 0000001095 | 42.45 | 42.45 | 0.00 |
-| 0000001075 | 1.84 | 1.84 | 0.00 |
-
-Status: **PASS**. Expected values were not edited to match AI.
-
-Chained (product-filtered) shares also matched DB at 98.57 / 1.35 / 0.06 with diff 0.00. That is a filtered grain, not the Overview global launch.
-
----
-
-## Security (live, this session)
-
-| Case | HTTP | SQL in body |
+| Case | HTTP | SQL |
 | --- | --- | --- |
 | No Authorization | 401 | none |
 | Empty Bearer | 401 | none |
@@ -94,110 +95,139 @@ Chained (product-filtered) shares also matched DB at 98.57 / 1.35 / 0.06 with di
 | Malformed JWT | 401 | none |
 | Invalid JWT | 401 | none |
 
-Expired JWT is covered by local `tests/test_adaptive_auth.py`. Settings UI uses session language. No AxiosError/JWT in SAT/Overview/Analyst/Settings DOM.
+Expired JWT: local `tests/test_adaptive_auth.py` (included in 224 pytest). Settings UI: session language, no JWT jargon.
 
 ---
 
-## Full Chat (live, this session)
+## K. Grain safety (live R4-4 probes)
 
-19-turn chain (`scripts/full_chat_excellence_live.py`):
-
-profits → inventory → sales → high inventory/low sales → groups → suppliers → customers → regions → plant → YoY → Why? → aging DATA GAP → inventory recovery → net profit DATA GAP → inventory recovery → concentration → top 3 (n=3) → percentage → Show their suppliers (`suppliers_of_selection`).
-
-**17 PASS / 2 DATA GAP / 0 FAIL.** Turn 16 concentration is n=7 because the chain still holds product context (not an Overview new investigation). Isolation of global 20-row 49.86 was verified separately via `/dashboard/ai?q=`.
-
----
-
-## Frontend production evidence (www.bridgeedi.com)
-
-Authenticated session (`puspesh@gmail.com`):
-
-| Check | Observed |
+| Probe | Result |
 | --- | --- |
-| Nav | Understand / Ask / Operate / Manage |
-| Overview | 14 SAT docs, 0 waiting, 4 sent; EDI invoice total **not** SAP P&L |
-| Overview copy | “No merges are waiting to send…” (not “Operations are clear”) |
-| PRODUCTION badge | not shown |
-| `?q=` | consumed after run (`/dashboard/ai`) |
-| Isolation banner | “Starting a new investigation from Overview.” |
-| Global concentration after `?q=` | 49.86 / 42.45 / 1.84 present; 20-row result present; prior 7-row 98.57 retained in history |
-| Continue vs New | **Continue this investigation** / **Start a new investigation** |
-| Restored history | still **`Deep analysis — intent inventory_analysis`** in “What we found” |
-| Page title | still `BridgeEDI` |
-| Saved label | “Save on this device” (honest; not cloud) |
-| SAT 390×844 | 14/0/4; no horizontal page overflow; skip-to-content; hamburger expand/Escape close |
-| Settings | Profile / Security / API access / Account; “secure session”; no JWT; no notification fake controls |
+| First `Show supplier concentration.` | intent `supplier_concentration`, EKPO present, **no VBRP**, `share_of_po_value_pct`, n=20, 377–690ms |
+| Highest | n=1, 49.86%, same intent |
+| Percentage | stays concentration, n=20 |
+| Top 3 | **n=3** |
+| Show their suppliers (after concentration) | `suppliers_of_selection`, no share %, no VBRP⋈EKPO |
+| Full Chat | no VBRP×EKPO fan-out on any turn |
 
 ---
 
-## Deploy
+## L. DATA GAP
 
-| Target | This CLI (`karthikeyanasha24` / team `ashas-projects-a0fae821`) |
+Aging and net profit in Full Chat: **DATA GAP**, recovery to inventory succeeded. Supplier profit was not remapped to a fake P&L. R4-5 / R4-6 not implemented.
+
+---
+
+## M. Full Chat (live, authenticated browser session)
+
+19-turn chain against `zodiac-back`: **17 PASS / 2 DATA GAP / 0 FAIL**.
+
+Top 3 n=3. Last turn `suppliers_of_selection`. API summaries had **no** `Deep analysis` heading. Turn 16 concentration n=7 (product context from the chain, not Overview isolation).
+
+---
+
+## N. Product Excellence (live www, hard navigation)
+
+| Surface | Live |
 | --- | --- |
-| `www.bridgeedi.com` | **Cannot inspect or deploy** from this account. `vercel ls --yes` from a non-repo directory attempted a new project create and was **aborted** (invalid name). **Not** deployed to `zodiac-api-nu`. |
-| `zodiac-back.vercel.app` | **Cannot inspect or deploy** |
-| Deployment IDs | **Deployment ID unavailable from this CLI account** |
-| GitHub push | **Done** (`17771b5..68d9971` plus this follow-up). www already served Product Excellence copy **before** `68d9971` (auto-deploy or a deploy from the owning account). This CLI did not perform that deploy. |
-
-GitHub push is **not** claimed as a Vercel deploy. No `.vercel` linkage was left in the repo.
-
----
-
-## Intentionally not implemented
-
-- **R4-5 delivery cycle / R4-6 customer mix:** LIKP/LIPS exist in catalog; no grain + independent SQL + golden contract. Not a pseudo-R4.
-- **Cloud saved investigations:** `ai_chat_threads` is user-scoped conversation memory, not bookmarks. No list/delete/ownership API. Device-local max 25 retained, labeled as browser/device storage.
-
----
-
-## Remaining limitations
-
-- Saved investigations remain browser-local.
-- Inventory aging, true turnover, net profit, logistics cost, budget/plan, supplier profit, HHI, supplier-risk thresholds remain DATA GAP.
-- Full Chat after product questions yields product-filtered concentration (n=7 / 98.57). That is correct continuation. Global 49.86 requires a **new** investigation (Overview / `?q=` / Start a new investigation).
-- Basic-GA cold 9–11s remain documented from the prior live R4-1 pass; not hidden.
+| Overview title | `Overview · BridgeEDI` |
+| AI Analyst title | `AI Analyst · BridgeEDI` |
+| SAT title | `SAT documents · BridgeEDI` |
+| Settings title | `Settings · BridgeEDI` |
+| EDI operations title | `EDI operations · BridgeEDI` |
+| Overview copy | “No merges are waiting…”; EDI totals not SAP P&L |
+| `?q=` isolation | `Show supplier concentration.` → banner, `q` dropped, **49.86** present, history kept |
+| Fresh API heading | `**Supplier concentration**` / `**Inventory position**` via `_analysis_heading` |
+| Restored old `Deep analysis — intent …` | **Not observed** on this clean/welcome + fresh `?q=` session. `acd4969` hardens stored backtick format; not proven as www bundle |
+| Saved label (code) | “This browser only” in `acd4969` |
+| Continue / New | implemented; Continue shown after results |
+| SAT | 14 / 0 waiting / 4 sent; retry/loading exist |
+| Settings | Profile / Security / API / Account |
 
 ---
 
-## Remaining blockers (exact)
+## O. Responsive
 
-1. **Document titles on www are still `BridgeEDI`.**  
-   Evidence: live `document.title` on `/overview`, `/dashboard/ai`, `/sat-documents`, `/settings`.  
-   Cause: root `metadata.title` stays `BridgeEDI`; client `document.title` is overwritten.  
-   Fix in this branch: server `layout.tsx` metadata per route + delayed client title set.  
-   Required action: production-deploy the SHA that contains those layouts to the **existing** www project. Keep `NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app`.  
-   Production as-is: **safe** (copy and isolation already live); titles remain generic.
-
-2. **Restored “What we found” can still show `Deep analysis — intent inventory_analysis`.**  
-   Evidence: live AI Analyst history after isolation test. Table heading already says Inventory position.  
-   Fix in this branch: broader `humanizePublicSummary` dash/slug matching.  
-   Required action: same frontend deploy.  
-   Production as-is: **safe**; one restored heading is still internal.
-
-3. **Vercel deployment IDs cannot be recorded from this CLI.**  
-   Evidence: CLI user `karthikeyanasha24` cannot see the canonical projects.  
-   Required action: from the owning Vercel account, record frontend and backend deployment IDs.  
-   Production as-is: **safe**; IDs unknown, behavior verified on canonical URLs.
+390px SAT: `innerWidth=390`, `scrollWidth=390`, **no page overflow**. Hamburger `aria-expanded`; Escape closes. 430–1440 not exhaustively re-shot this pass beyond 390 + default desktop.
 
 ---
 
-## Product score
+## P. Accessibility
 
-| Surface | Score |
+Skip-to-content present. Hamburger `aria-controls=app-sidebar`, `aria-expanded`. SAT loading `aria-live` in code. Titles now meaningful on live routes checked.
+
+---
+
+## Q. Performance (this session, live adaptive)
+
+| Probe | Latency |
 | --- | --- |
-| Production (www + zodiac-back, verified this session) | **9.5/10** |
-| Remaining (titles + restored heading + deployment-ID proof) | not 10/10 |
+| R4-4 first question | 377–690ms |
+| R4-4 follow-ups | ~368–388ms |
+| Full Chat first profits | 1216ms |
+| Full Chat later turns | typically 250–830ms |
 
-10/10 is not claimed. No R4-5/R4-6 was invented to raise the score.
+Normal analytical P50 &lt; 1s on this chain. Official R4-1 basic-GA 9–11s cold outliers **not re-measured** this session.
 
 ---
 
-## Exact next action
+## R. Console
 
-On the Vercel team that already deploys **www.bridgeedi.com**, production-deploy this branch HEAD to that **existing** frontend project. Then hard-refresh `/overview` and `/dashboard/ai` and confirm:
+No Axios/JWT/HTTP 500 in SAT/Overview/Settings/Analyst DOM. No Next error overlay observed. Full console dump not captured.
 
-- Title `Overview · BridgeEDI` / `AI Analyst · BridgeEDI`
-- Restored chats show **Inventory position**, not `Deep analysis — intent inventory_analysis`
-- Isolation still yields global ~49.86 / 20 rows from Overview / `?q=`
+---
 
-No analytical-engine change is required for R3–R4-4.
+## S. Remaining limitations
+
+- Device-local saved investigations only (honest).
+- Aging, true turnover, net profit, logistics cost, budget/plan, supplier profit, HHI remain DATA GAP.
+- Full Chat after product questions yields product-filtered concentration (n=7). Global 49.86 requires a new investigation.
+- R4-5 / R4-6 not implemented.
+
+---
+
+## T. Remaining blockers
+
+1. **This CLI cannot deploy or record canonical Vercel IDs.**  
+   Evidence: user `karthikeyanasha24` / team `ashas-projects-a0fae821` cannot see www / zodiac-back.  
+   Action: owning account production-deploys `acd4969` to the **existing** www project. Keep `NEXT_PUBLIC_API_URL=https://zodiac-back.vercel.app`.  
+   Production as-is: **safe**; titles from the previous PE SHA are already live.
+
+2. **Official R3 / R4-1 / R4-2 / R4-3 / independent-SQL python suites NOT RUN this session.**  
+   Evidence: 401 Unauthorized without `LIVE_API_EMAIL`.  
+   Action: re-run those scripts with live login env after deploy.  
+   Production as-is: R4-4 + Full Chat were verified live via the www session; frozen suite files were not re-executed.
+
+---
+
+## Local (do not mix with production)
+
+| Check | Result |
+| --- | --- |
+| Governed pytest | **224 passed** |
+| Frontend `test:ux` | **43 passed** |
+| Frontend `test:adaptive-context` | **8 passed** |
+| `next build` | **PASS** |
+
+---
+
+## Product score (recalculated after this live pass)
+
+| Dimension | Score |
+| --- | --- |
+| Product clarity / titles now live | 9.5 |
+| Analytical intelligence (R4-4 + Full Chat live) | 9.5 |
+| Trust / DATA GAP | 9.5 |
+| Security | 9.5 |
+| Production deployment completeness | 7 (IDs unknown; latest SHA unproven) |
+| **Overall** | **9.4 / 10** |
+
+10/10 is not claimed.
+
+---
+
+## Owner next action
+
+1. Set `LIVE_API_EMAIL` / `LIVE_API_PASSWORD` and run `r3_post_deploy_live_acceptance.py`, `r4_1/2/3_live_acceptance.py`, `r4_4_live_acceptance.py`, `r4_4_independent_sql.py`.
+2. Deploy Git `acd4969` (or this report commit) to the existing www project only.
+3. Hard-refresh `/overview` and a **dirty restored** AI thread and confirm stored `**Deep analysis** — intent \`inventory_analysis\`` renders as **Inventory position**.
