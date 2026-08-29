@@ -45,7 +45,7 @@ Accepted live baseline at that SHA:
 
 ## 2. Final commit
 
-Recorded after this report is committed on `phase12-first-customer-ready`. See git log for the SHA of this change set.
+`ce60afe` — `fix: replace restored intent slugs with business headings and isolate Overview investigations.`
 
 Analytical routing, grain guards, SQL compilers, and JWT gates were **not** rewritten.
 
