@@ -20,3 +20,5 @@ htmlcov/
 r4_4_live_acceptance.json
 r4_4_independent_sql.json
 *_live_acceptance.json
+*_live_results.json
+r3_post_deploy_live_results.json

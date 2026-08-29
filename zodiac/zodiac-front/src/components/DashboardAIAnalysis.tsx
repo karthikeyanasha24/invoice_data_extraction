@@ -763,7 +763,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const sendQuestion = useCallback(async (question: string) => {
+  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading) return;
 
@@ -778,9 +778,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
     // Follow-up context is the last successful analytical state, not the latest
     // chat turn. Clarification / non-business replies do not update this ref.
+    // Overview / ?q= deep-links are standalone investigations.
+    const treatAsNew = Boolean(opts?.asNew) || isNewQuestion;
     const contextData = buildFollowupContextData(
       lastSuccessfulAnalyticalRef.current,
-      isNewQuestion,
+      treatAsNew,
     );
     setIsNewQuestion(false); // reset after each send
 
@@ -874,7 +876,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     const q = (initialQuestion || '').trim();
     if (q && historyLoaded && initialSentRef.current !== q && !loading) {
       initialSentRef.current = q;
-      sendQuestion(q);
+      void sendQuestion(q, { asNew: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuestion, historyLoaded]);
@@ -1031,7 +1033,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                     <>
                       {msg.content && msg.content !== msg.result?.summary && (
                         <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{publicSummary(msg.content)}</ReactMarkdown>
                         </div>
                       )}
                       {msg.result && (
@@ -1062,7 +1064,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                       )}
                       {!msg.result && msg.content && (
                         <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{publicSummary(msg.content)}</ReactMarkdown>
                         </div>
                       )}
                     </>
