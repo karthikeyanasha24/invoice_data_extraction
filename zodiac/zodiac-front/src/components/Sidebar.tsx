@@ -28,17 +28,11 @@ import { adminNavGroups, isNavActive, type NavItem } from '@/lib/navConfig';
 // ── Environment detection ─────────────────────────────────────────────────────
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || '').trim();
 const IS_LOCAL  = !API_URL || API_URL.includes('localhost') || API_URL.includes('127.0.0.1');
-const IS_PROD   = API_URL.includes('vercel.app') || (!!API_URL && !IS_LOCAL);
-const ENV_LABEL = IS_LOCAL ? '⚠ LOCAL DEV' : IS_PROD ? '● PRODUCTION' : 'UNKNOWN';
-const ENV_COLOR = IS_LOCAL
-  ? 'bg-amber-100 text-amber-800 border-amber-300'
-  : IS_PROD
-  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-  : 'bg-slate-100 text-slate-600 border-slate-200';
-const ENV_DOT   = IS_LOCAL ? 'bg-amber-400' : 'bg-emerald-400';
-const ENV_TIP   = IS_LOCAL
-  ? `Connecting to: ${API_URL || 'localhost:8000'}\nLocal API. The database behind this API may still contain SAP demo data.`
-  : `Connecting to: ${API_URL}\n✓ Production database — real SAP data.`;
+const ENV_COLOR = 'bg-amber-100 text-amber-800 border-amber-300';
+const ENV_DOT   = 'bg-amber-400';
+const ENV_TIP   =
+  `Connecting to: ${API_URL || 'localhost:8000'}\nLocal API. The database behind this API may still contain SAP demo data.`;
+const ENV_LABEL = 'Local development';
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -109,6 +103,7 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
             <button
               onClick={onToggle}
               className="p-1.5 rounded-md hover:bg-slate-200 transition-colors flex-shrink-0 cursor-pointer"
+              aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
               {isCollapsed ? (
@@ -122,6 +117,7 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
             <button
               onClick={onToggle}
               className="p-1.5 rounded-md hover:bg-slate-200 transition-colors flex-shrink-0 cursor-pointer lg:hidden"
+              aria-label="Close menu"
               title="Close menu"
             >
               <ChevronLeft className="h-5 w-5 text-slate-500" />
@@ -189,8 +185,8 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
         )}
       </nav>
 
-      {/* Environment Indicator */}
-      {(!isCollapsed || isMobile) && (
+      {/* Environment Indicator — local only; do not show production/debug chrome to business users */}
+      {IS_LOCAL && (!isCollapsed || isMobile) && (
         <div className="px-3 pb-2">
           <div
             className={cn(
@@ -201,16 +197,14 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
           >
             <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse', ENV_DOT)} />
             <span className="flex-1 truncate">{ENV_LABEL}</span>
-            {IS_LOCAL && <AlertCircle className="h-3 w-3 flex-shrink-0 text-amber-600" />}
+            <AlertCircle className="h-3 w-3 flex-shrink-0 text-amber-600" />
           </div>
-          {IS_LOCAL && (
-            <p className="text-[10px] text-amber-700 mt-1 px-1 leading-tight">
-              Connecting to local API. SAP demo data may still be present in the configured database.
-            </p>
-          )}
+          <p className="text-[10px] text-amber-700 mt-1 px-1 leading-tight">
+            Connecting to local API. SAP demo data may still be present in the configured database.
+          </p>
         </div>
       )}
-      {isCollapsed && !isMobile && (
+      {IS_LOCAL && isCollapsed && !isMobile && (
         <div className="flex justify-center pb-2">
           <div
             className={cn('w-2 h-2 rounded-full animate-pulse', ENV_DOT)}

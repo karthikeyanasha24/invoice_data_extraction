@@ -34,10 +34,10 @@ export function publicApiError(err: any, fallback = 'Something went wrong. Pleas
   if (!err?.response && (code === 'ERR_NETWORK' || /network error|failed to fetch/i.test(raw))) {
     return 'Could not reach the server. Check your connection and try again.';
   }
-  if (/axioserror|request failed with status code|typeerror|undefined|null/i.test(raw)) {
+  if (/axioserror|request failed with status code|typeerror|undefined|null|jwt|traceback|stack trace|http\s*50[0-9]/i.test(raw)) {
     return fallback;
   }
-  if (raw && raw.length < 180 && !/\/[A-Za-z]:\\|traceback|stack/i.test(raw)) {
+  if (raw && raw.length < 180 && !/\/[A-Za-z]:\\|traceback|stack|jwt|bearer/i.test(raw)) {
     return raw;
   }
   return fallback;

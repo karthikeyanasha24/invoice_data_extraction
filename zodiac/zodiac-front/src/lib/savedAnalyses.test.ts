@@ -23,6 +23,16 @@ describe('savedAnalyses', () => {
     assert.equal(loaded[0].intent, 'inventory_analysis');
   });
 
+  it('stores an optional business title for restored saved investigations', () => {
+    saveAnalysis({
+      question: 'Show supplier concentration.',
+      summary: 'Share of PO value',
+      title: 'Supplier concentration',
+      intent: 'supplier_concentration',
+    });
+    assert.equal(loadSavedAnalyses()[0].title, 'Supplier concentration');
+  });
+
   it('removes by id', () => {
     const list = saveAnalysis({ question: 'Show inventory.', summary: 'Snapshot' });
     const after = removeSavedAnalysis(list[0].id);

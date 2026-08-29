@@ -81,7 +81,7 @@ export default function OverviewCommandCenter() {
   } else if (pending === 0) {
     nextActions.push({
       label: 'Investigate highest-profit products',
-      why: 'Operations are clear. Start with governed SAP profitability.',
+      why: 'No merges are waiting to send. You can start a new investigation in AI Analyst.',
       question: 'Show the products with the highest profits.',
     });
   }
@@ -240,7 +240,8 @@ export default function OverviewCommandCenter() {
           Investigate in AI Analyst
         </h2>
         <p className="mt-1 text-xs text-slate-500">
-          These questions use governed SAP metrics. Inventory aging is not available in this extract.
+          Each chip opens a new investigation in AI Analyst. Previous filters from an unrelated question are not applied.
+          Use Open AI Analyst to continue the current investigation.
         </p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {SUPPORTED_INVESTIGATIONS.map((item) => (

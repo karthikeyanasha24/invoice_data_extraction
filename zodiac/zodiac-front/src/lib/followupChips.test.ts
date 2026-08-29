@@ -36,6 +36,11 @@ describe('humanizeFollowups', () => {
     assert.equal(chips.some((c) => c.question === 'Show the percentage.'), true);
   });
 
+  it('keeps R3 supplier listing distinct from concentration', () => {
+    const chips = humanizeFollowups(['Vendors sourcing the current materials (PO grain, not invoice COGS)']);
+    assert.equal(chips[0].question, 'Show their suppliers.');
+  });
+
   it('strips leftover SAP parentheticals', () => {
     const chips = humanizeFollowups(['Something custom (VBRK.FKDAT)']);
     assert.equal(chips[0].label, 'Something custom');

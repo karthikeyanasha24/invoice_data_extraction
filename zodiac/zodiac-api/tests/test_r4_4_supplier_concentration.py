@@ -189,6 +189,9 @@ def test_concentration_heading_is_business_facing():
     assert "_" not in _analysis_heading("supplier_concentration")
     assert _analysis_heading("supplier_concentration", {"limit": 3}) == "Top 3 suppliers by purchase value"
     assert _analysis_heading("supplier_concentration", {"limit": 1}) == "Highest supplier by purchase value"
+    assert _analysis_heading("inventory_analysis") == "Inventory position"
+    assert _analysis_heading("product_profitability") == "Revenue performance"
+    assert _analysis_heading("period_compare_selection") == "Year-over-year comparison"
     plan = build_analytical_plan("Show supplier concentration.", None)
     summary, _ = _interpret(plan, [{"id": "supplier_concentration", "sql": "SELECT 1", "rows": []}])
     assert "supplier_concentration" not in summary

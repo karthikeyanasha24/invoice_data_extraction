@@ -2,11 +2,21 @@ export type SavedAnalysis = {
   id: string;
   question: string;
   summary: string;
+  title?: string;
   intent?: string;
   rowCount?: number;
   savedAt: number;
 };
 
+/**
+ * Device-local saved investigations (localStorage).
+ *
+ * Server persistence is intentionally not implemented: authenticated
+ * chat_thread_store exists with user_id isolation, but there is no
+ * dedicated saved-investigation table, list/delete API, or ownership
+ * contract for bookmarks. Do not fake cloud sync. Fallback is this
+ * browser-only list (max 25).
+ */
 const KEY = 'bridgeedi_saved_analyses';
 const MAX = 25;
 

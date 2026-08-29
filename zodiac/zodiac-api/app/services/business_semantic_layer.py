@@ -635,7 +635,7 @@ def data_gap_payload(
             )
         ),
         "keyFindings": [
-            "Data gap — refusing to invent unsupported metrics or joins.",
+            "The available data does not support this metric. No unsupported number was calculated.",
             reason,
         ],
         "meta": {

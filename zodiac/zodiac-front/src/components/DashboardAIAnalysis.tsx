@@ -13,11 +13,21 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
 import { humanizeFollowups } from '@/lib/followupChips';
-import { analysisTrustFromResult, dataGapTryInstead } from '@/lib/analysisTrust';
-import { loadSavedAnalyses, saveAnalysis, type SavedAnalysis } from '@/lib/savedAnalyses';
+import {
+  analysisTrustFromResult,
+  dataGapTryInstead,
+  humanizePublicSummary,
+  humanizeDataGapMessage,
+} from '@/lib/analysisTrust';
+import { loadSavedAnalyses, saveAnalysis, removeSavedAnalysis, type SavedAnalysis } from '@/lib/savedAnalyses';
+import {
+  analystPathWithoutQuery,
+  investigationLaunch,
+} from '@/lib/investigationLaunch';
 import {
   ADAPTIVE_CONTEXT_POLICY,
   buildFollowupContextData,
@@ -447,16 +457,7 @@ function InsightsPanel({ findings }: { findings: string[] }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Summary card
 // ═══════════════════════════════════════════════════════════════════════════════
-function publicSummary(summary: string): string {
-  return (summary || '')
-    .replace(/Deep analysis\s+[—\-]\s+intent\s+`?[\w.]+`?/gi, '')
-    .replace(/\b(deep_multidim|supplier_concentration|suppliers_of_selection|dimensional_extend)\b/g, '')
-    .replace(/###\s+(supplier_concentration|inventory_analysis|inventory_risk_analysis|inventory_sales_comparison|inventory_by_plant|suppliers_of_selection|product_profitability|product_growth_decline)\b/gi, '### Result')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function SummaryCard({ summary }: { summary: string }) {
+function SummaryCard({ summary, intent }: { summary: string; intent?: string }) {
   return (
     <div className="relative bg-gradient-to-br from-white via-amber-50/30 to-orange-50/40 rounded-xl border border-amber-100 p-4 shadow-sm mb-4 overflow-hidden">
       <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-amber-400 to-orange-400" />
@@ -467,7 +468,7 @@ function SummaryCard({ summary }: { summary: string }) {
         <span className="text-sm font-bold text-slate-800">What we found</span>
       </div>
       <div className="prose prose-sm prose-slate max-w-none text-slate-700 text-sm leading-relaxed">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{publicSummary(summary)}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{humanizePublicSummary(summary, intent)}</ReactMarkdown>
       </div>
     </div>
   );
@@ -476,7 +477,7 @@ function SummaryCard({ summary }: { summary: string }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Meta strip (pipeline info)
 // ═══════════════════════════════════════════════════════════════════════════════
-function MetaStrip({ meta, sqlStrategy, rowCount, totalCount }: {
+function MetaStrip({ meta, sqlStrategy: _sqlStrategy, rowCount, totalCount }: {
   meta?: QueryResult['meta'];
   sqlStrategy?: string;
   rowCount?: number;
@@ -493,18 +494,14 @@ function MetaStrip({ meta, sqlStrategy, rowCount, totalCount }: {
       <button onClick={() => setOpen(v => !v)}
         className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 transition-colors">
         <Database className="h-3 w-3" />
-        {tables.length > 0 && <span>{tables.length} tables</span>}
-        {ms && <><span className="text-slate-300">·</span><span>{ms}ms</span></>}
-        {sqlStrategy && sqlStrategy !== 'full' && (
-          <><span className="text-slate-300">·</span>
-          <span className="capitalize text-amber-600">{sqlStrategy}</span></>
-        )}
+        <span>View SQL sources</span>
         {rowCount != null && <><span className="text-slate-300">·</span><span>{rowCount.toLocaleString()} rows{totalCount && totalCount > rowCount ? ` of ${totalCount.toLocaleString()}` : ''}</span></>}
         {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
       </button>
       {open && (
         <div className="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-100 text-xs text-slate-600 space-y-1">
-          {tables.length > 0 && <div><span className="font-medium">Tables:</span> {tables.join(', ')}</div>}
+          {tables.length > 0 && <div><span className="font-medium">Data sources:</span> {tables.join(', ')}</div>}
+          {ms != null && <div><span className="font-medium">Processing time:</span> {ms} ms</div>}
           {meta.domain  && <div><span className="font-medium">Business area:</span> {meta.domain}</div>}
           {warnings.map((w, i) => (
             <div key={i} className="flex items-start gap-1.5 text-amber-600">
@@ -556,7 +553,7 @@ function DataGapCard({
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3" role="status">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Data limitation</p>
-      <p className="text-sm text-slate-800 leading-relaxed">{message}</p>
+      <p className="text-sm text-slate-800 leading-relaxed">{humanizeDataGapMessage(message)}</p>
       <p className="text-xs text-slate-600">
         This is not an application failure. The question was understood, but the required data is not in this extract.
         No unsupported number was calculated. Previous conversation context is kept.
@@ -635,7 +632,8 @@ function ResultDashboard({
   const hasInsights = (keyFindings?.length ?? 0) > 0 && keyFindings?.[0] !== 'No results found.';
   const followups = humanizeFollowups(suggested_followups);
   const isGap = result.answer_status === 'CANNOT_ANSWER';
-  const heading = analysisTrustFromResult(result).analysisLabel;
+  const trust = analysisTrustFromResult(result);
+  const heading = trust.analysisLabel;
 
   if (isGap) {
     return (
@@ -649,7 +647,7 @@ function ResultDashboard({
 
   return (
     <div className="space-y-0">
-      {hasSummary && <SummaryCard summary={summary!} />}
+      {hasSummary && <SummaryCard summary={summary!} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
       {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} heading={heading || 'Results'} />}
@@ -683,12 +681,14 @@ function ResultDashboard({
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function DashboardAIAnalysis({ initialQuestion }: { initialQuestion?: string } = {}) {
+  const router = useRouter();
   const [messages,   setMessages]   = useState<Message[]>([]);
   const [input,      setInput]      = useState('');
   const [loading,    setLoading]    = useState(false);
   const [elapsed,    setElapsed]    = useState(0);
   const [error,      setError]      = useState<string | null>(null);
   const [isNewQuestion, setIsNewQuestion] = useState(false);
+  const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef   = useRef<HTMLDivElement>(null);
@@ -715,11 +715,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         if (cancelled) return;
         const restored: Message[] = (hist.messages || [])
           .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m, i) => ({
-            id: `hist-${i}-${Date.now()}`,
-            role: m.role as 'user' | 'assistant',
-            content: m.content || '',
-            result: m.role === 'assistant' && m.result ? {
+          .map((m, i) => {
+            const rawResult = m.role === 'assistant' && m.result ? {
               sql: m.result.sql,
               data: m.result.data || [],
               rowCount: m.result.rowCount ?? (m.result.data?.length ?? 0),
@@ -728,9 +725,21 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               query_plan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
               answer_status: (m.result as any).answer_status
                 || ((m.result.sql || '').trim() ? 'SUCCESS' : 'CLARIFICATION'),
-            } : undefined,
-            ts: Date.now() + i,
-          }));
+            } : undefined;
+            const intent = rawResult ? analysisTrustFromResult(rawResult).intent : undefined;
+            return {
+              id: `hist-${i}-${Date.now()}`,
+              role: m.role as 'user' | 'assistant',
+              content: m.role === 'assistant'
+                ? humanizePublicSummary(m.content || '', intent)
+                : (m.content || ''),
+              result: rawResult ? {
+                ...rawResult,
+                summary: humanizePublicSummary(rawResult.summary || '', intent),
+              } : undefined,
+              ts: Date.now() + i,
+            };
+          });
         if (restored.length > 0) {
           setMessages((prev) => {
             if (prev.length !== 0) return prev;
@@ -763,7 +772,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean }) => {
+  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue' }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading) return;
 
@@ -784,6 +793,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       lastSuccessfulAnalyticalRef.current,
       treatAsNew,
     );
+    const dirty = lastSuccessfulAnalyticalRef.current != null;
+    const source = opts?.source
+      || (opts?.asNew ? 'overview-url' : isNewQuestion ? 'explicit-new' : dirty ? 'typed-continue' : 'typed-continue');
+    const launch = investigationLaunch(source, dirty);
+    if (launch.banner) setLaunchBanner(launch.banner);
     setIsNewQuestion(false); // reset after each send
 
     abortRef.current?.abort();
@@ -812,7 +826,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         rowCount:    isCannotAnswer ? 0 : (res.rowCount ?? res.row_count ?? (res.data?.length ?? 0)),
         totalCount:  res.totalCount ?? res.total_count ?? -1,
         sqlStrategy: res.sqlStrategy || res.sql_strategy || 'full',
-        summary:     res.summary || res.executive_summary || res.answer || '',
+        summary:     humanizePublicSummary(
+          res.summary || res.executive_summary || res.answer || '',
+          String((res.query_plan || res.queryPlan || {}).analytical_context?.intent || res.intent || ''),
+        ),
         keyFindings: res.keyFindings || res.key_findings || [],
         kpis:        isCannotAnswer ? [] : (res.kpis || []),
         charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
@@ -833,12 +850,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
       // If it's a pure analysis reply (follow-up text answer)
       const summaryContent = isCannotAnswer
-        ? (res.summary || res.answer || 'I could not reliably answer this question.')
+        ? humanizeDataGapMessage(res.summary || res.answer || 'The available data does not support this question.')
         : res.type === 'analysis' || isClarification
-        ? (res.answer || res.summary || 'Done.')
+        ? humanizePublicSummary(res.answer || res.summary || 'Done.')
         : (result.summary || (result.rowCount === 0
-            ? 'Query executed but returned no data for this environment.'
-            : `Query returned ${result.rowCount} row(s).`));
+            ? 'No rows were returned for this question.'
+            : `This result includes ${result.rowCount} row(s).`));
 
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -876,7 +893,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     const q = (initialQuestion || '').trim();
     if (q && historyLoaded && initialSentRef.current !== q && !loading) {
       initialSentRef.current = q;
-      void sendQuestion(q, { asNew: true });
+      const dirty = lastSuccessfulAnalyticalRef.current != null || messages.length > 0;
+      setLaunchBanner(investigationLaunch('overview-url', dirty).banner);
+      void sendQuestion(q, { asNew: true, source: 'overview-url' });
+      router.replace(analystPathWithoutQuery(), { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuestion, historyLoaded]);
@@ -892,6 +912,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setMessages([]);
     lastSuccessfulAnalyticalRef.current = null;
     setError(null);
+    setLaunchBanner(investigationLaunch('explicit-new', true).banner);
     // Start a fresh adaptive thread so cleared UI does not reload old turns
     if (typeof window !== 'undefined') {
       const tid = `ada_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -931,6 +952,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                 <p className="text-[11px] text-slate-600 mt-0.5">
                   Current investigation: {investigation.analysisLabel}
                   {selectedN > 0 ? ` · ${selectedN} product${selectedN === 1 ? '' : 's'} selected` : ''}
+                </p>
+              )}
+              {launchBanner && (
+                <p className="text-[11px] text-emerald-800 mt-0.5" role="status">
+                  {launchBanner}
                 </p>
               )}
             </div>
@@ -981,17 +1007,31 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             {saved.length > 0 && (
               <div className="mt-8 text-left">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Saved on this device</p>
-                <p className="text-xs text-slate-500 mb-2">These are stored in this browser only, not as enterprise history.</p>
+                <p className="text-xs text-slate-500 mb-2">
+                  Stored in this browser only. Opening a saved investigation starts a new question so previous filters are not applied.
+                </p>
                 <div className="space-y-1">
                   {saved.slice(0, 8).map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => sendQuestion(s.question)}
-                      className="w-full text-left text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
-                    >
-                      {s.question}
-                    </button>
+                    <div key={s.id} className="flex items-stretch gap-1">
+                      <button
+                        type="button"
+                        onClick={() => sendQuestion(s.question, { asNew: true, source: 'saved-restore' })}
+                        className="flex-1 text-left text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
+                      >
+                        <span className="block font-medium text-slate-800">{s.title || s.question}</span>
+                        {s.title && s.title !== s.question && (
+                          <span className="block text-xs text-slate-500 mt-0.5">{s.question}</span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove saved investigation: ${s.title || s.question}`}
+                        onClick={() => setSaved(removeSavedAnalysis(s.id))}
+                        className="px-2 rounded-lg border border-slate-200 text-slate-400 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1026,14 +1066,16 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                       result={msg.result}
                       onAskFollowup={(fq) => {
                         setIsNewQuestion(false);
-                        void sendQuestion(fq);
+                        void sendQuestion(fq, { source: 'followup-chip' });
                       }}
                     />
                   ) : (
                     <>
                       {msg.content && msg.content !== msg.result?.summary && (
                         <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{publicSummary(msg.content)}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {humanizePublicSummary(msg.content, msg.result ? analysisTrustFromResult(msg.result).intent : undefined)}
+                          </ReactMarkdown>
                         </div>
                       )}
                       {msg.result && (
@@ -1041,7 +1083,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                           result={msg.result}
                           onAskFollowup={(fq) => {
                             setIsNewQuestion(false);
-                            void sendQuestion(fq);
+                            void sendQuestion(fq, { source: 'followup-chip' });
                           }}
                         />
                       )}
@@ -1050,21 +1092,23 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                           type="button"
                           className="text-xs text-slate-500 hover:text-slate-800"
                           onClick={() => {
+                            const trust = analysisTrustFromResult(msg.result);
                             const next = saveAnalysis({
                               question: lastUserQuestion(messages) || msg.content,
-                              summary: msg.result?.summary || msg.content,
-                              intent: analysisTrustFromResult(msg.result).intent,
+                              summary: humanizePublicSummary(msg.result?.summary || msg.content, trust.intent),
+                              title: trust.analysisLabel,
+                              intent: trust.intent,
                               rowCount: msg.result?.rowCount,
                             });
                             setSaved(next);
                           }}
                         >
-                          Save this analysis
+                          Save on this device
                         </button>
                       )}
                       {!msg.result && msg.content && (
                         <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{publicSummary(msg.content)}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{humanizePublicSummary(msg.content)}</ReactMarkdown>
                         </div>
                       )}
                     </>
@@ -1081,7 +1125,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <div className="flex-none w-8 h-8 rounded-full bg-emerald-800 flex items-center justify-center">
               <Loader2 className="h-4 w-4 text-white animate-spin" />
             </div>
-            <div className="bg-white rounded-2xl rounded-tl-sm border border-slate-100 shadow-sm px-5 py-4 max-w-sm w-full">
+            <div className="bg-white rounded-2xl rounded-tl-sm border border-slate-100 shadow-sm px-5 py-4 max-w-sm w-full" aria-live="polite" aria-busy="true">
               <div className="text-xs font-semibold text-slate-500 mb-3 flex items-center gap-1.5">
                 Working on your question
               </div>
@@ -1132,7 +1176,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                   : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"
               )}>
               <ArrowRight className="h-3 w-3" />
-              Follow-up
+              Continue this investigation
             </button>
             <button
               onClick={() => { setIsNewQuestion(true); setInput(''); }}
@@ -1143,11 +1187,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                   : "bg-white text-slate-500 border-slate-200 hover:border-emerald-400 hover:text-emerald-600"
               )}>
               <Sparkles className="h-3 w-3" />
-              New question
+              Start a new investigation
             </button>
             {isNewQuestion && (
               <span className="text-xs text-emerald-600 font-medium ml-1">
-                Next question will run independently
+                The next question will not use previous filters
               </span>
             )}
           </div>

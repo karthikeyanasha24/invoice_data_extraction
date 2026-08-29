@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { Menu, Loader } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { CUSTOMER_HOME_PATH, isCustomerPortalUser } from '@/lib/customerPortal';
+import { documentTitleForPath } from '@/lib/pageTitles';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -53,6 +54,19 @@ export default function MainLayout({ children, topSection, fillViewport = false 
   useEffect(() => {
     setMobileSidebarOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    document.title = documentTitleForPath(pathname || '/');
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!isMobile || !mobileSidebarOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isMobile, mobileSidebarOpen]);
 
   const toggleSidebar = () => {
     if (isMobile) {
@@ -102,12 +116,14 @@ export default function MainLayout({ children, topSection, fillViewport = false 
       <div className="flex relative">
         {isMobile && mobileSidebarOpen && (
           <div
-            className="fixed inset-0 bg-opacity-50 z-40 lg:hidden"
+            className="fixed inset-0 bg-black/50 z-40 lg:hidden"
             onClick={() => setMobileSidebarOpen(false)}
+            aria-hidden="true"
           />
         )}
 
         <div
+          id="app-sidebar"
           className={cn(
             'fixed lg:relative z-50',
             isMobile && !mobileSidebarOpen && '-translate-x-full lg:translate-x-0'
@@ -133,8 +149,9 @@ export default function MainLayout({ children, topSection, fillViewport = false 
               <button
                 onClick={toggleSidebar}
                 className="p-2 rounded-md hover:bg-gray-100 transition-colors min-h-11 min-w-11"
-                aria-label="Open navigation menu"
+                aria-label={mobileSidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
                 aria-expanded={mobileSidebarOpen}
+                aria-controls="app-sidebar"
               >
                 <Menu className="h-6 w-6 text-gray-600" />
               </button>
