@@ -9,5 +9,6 @@ describe('documentTitleForPath', () => {
     assert.equal(documentTitleForPath('/overview'), 'Overview · BridgeEDI');
     assert.equal(documentTitleForPath('/sat-documents'), 'SAT documents · BridgeEDI');
     assert.equal(documentTitleForPath('/settings'), 'Settings · BridgeEDI');
+    assert.equal(documentTitleForPath('/'), 'Login · BridgeEDI');
   });
 });

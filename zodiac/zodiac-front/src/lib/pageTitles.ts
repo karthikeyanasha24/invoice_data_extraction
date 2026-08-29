@@ -14,6 +14,7 @@ const TITLES: { prefix: string; title: string }[] = [
 
 export function documentTitleForPath(pathname: string): string {
   const path = pathname || '/';
+  if (path === '/') return 'Login · BridgeEDI';
   for (const row of TITLES) {
     if (path === row.prefix || path.startsWith(row.prefix + '/')) return row.title;
   }

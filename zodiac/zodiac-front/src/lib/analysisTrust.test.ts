@@ -106,6 +106,15 @@ function trustIncludesBilling(calc?: string) {
 }
 
 describe('humanizePublicSummary', () => {
+  it('replaces backtick restored headings used by stored chat history', () => {
+    const restored = '**Deep analysis** — intent `inventory_analysis`\n\nMetrics use governed definitions.';
+    const out = humanizePublicSummary(restored, 'inventory_analysis');
+    assert.equal(summaryHasDeveloperHeading(out), false);
+    assert.match(out, /Inventory position/);
+    assert.doesNotMatch(out, /inventory_analysis/);
+    assert.doesNotMatch(out, /Deep analysis/i);
+  });
+
   it('replaces restored Deep analysis headings with business titles', () => {
     const restored = '**Deep analysis — intent product_profitability**\n\nMetrics use governed definitions.';
     const out = humanizePublicSummary(restored, 'product_profitability');

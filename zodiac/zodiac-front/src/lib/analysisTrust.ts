@@ -194,10 +194,11 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
  */
 export function humanizePublicSummary(text: string, intent?: string): string {
   let out = String(text || '');
-  // Restored history used several dash glyphs and markdown wrappers.
-  out = out.replace(/Deep analysis[\s\S]{0,12}?intent\s+`?([\w.]+)`?/gi, (_m, slug: string) => {
-    return analysisLabelFor(slug) || analysisLabelFor(intent) || 'Governed analysis';
-  });
+  // Stored history used: **Deep analysis** — intent `inventory_analysis`
+  out = out.replace(
+    /\*{0,2}Deep analysis\*{0,2}[\s\S]{0,24}?intent\s*`?([\w.]+)`?/gi,
+    (_m, slug: string) => analysisLabelFor(slug) || analysisLabelFor(intent) || 'Governed analysis',
+  );
   out = out.replace(/^(#{1,3}\s+)([\w]+(?:_[\w]+)+)\s*$/gm, (_m, hashes: string, slug: string) => {
     return `${hashes}${analysisLabelFor(slug) || 'Result'}`;
   });
@@ -265,6 +266,6 @@ export function dataGapTryInstead(message: string): { label: string; question: s
 }
 
 export function summaryHasDeveloperHeading(text: string): boolean {
-  return /Deep analysis\s*[—\-]\s*intent\s+\S+/i.test(text || '')
+  return /\*{0,2}Deep analysis\*{0,2}[\s\S]{0,24}?intent\s*`?[\w.]+/i.test(text || '')
     || /(?:^|\n)#{1,3}\s+[\w]+(?:_[\w]+)+/m.test(text || '');
 }

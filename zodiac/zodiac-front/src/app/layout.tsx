@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import DocumentTitle from "@/components/DocumentTitle";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,7 +16,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BridgeEDI",
+  title: {
+    default: "Login · BridgeEDI",
+    template: "%s",
+  },
   description: "Governed SAP intelligence — invoice operations and AI business analysis",
 };
 
@@ -31,6 +35,7 @@ export default function RootLayout({
       >
         <ErrorBoundary>
           <AuthProvider>
+            <DocumentTitle />
             {children}
           </AuthProvider>
         </ErrorBoundary>

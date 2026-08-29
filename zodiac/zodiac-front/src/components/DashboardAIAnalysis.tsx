@@ -993,7 +993,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <div className="grid grid-cols-2 gap-2 text-left">
               {QUICK_QUESTIONS.map(({ label, q }, qi) => (
                 <button key={label}
-                  onClick={() => sendQuestion(q)}
+                  onClick={() => sendQuestion(q, { asNew: true, source: 'explicit-new' })}
                   className="flex items-start gap-2.5 p-3 bg-white rounded-xl border border-slate-200 hover:shadow-md transition-all text-left group"
                   style={{ borderLeft: `3px solid ${PALETTE[qi % PALETTE.length]}` }}>
                   <ArrowRight className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 group-hover:translate-x-0.5 transition-transform"
@@ -1007,7 +1007,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
             {saved.length > 0 && (
               <div className="mt-8 text-left">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Saved on this browser/device</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">This browser only</p>
                 <p className="text-xs text-slate-500 mb-2">
                   Stored in this browser only, not in cloud history. Opening a saved investigation starts a new question so previous filters are not applied.
                 </p>
@@ -1104,12 +1104,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                             setSaved(next);
                           }}
                         >
-                          Save on this device
+                          Save in this browser only
                         </button>
                       )}
                       {!msg.result && msg.content && (
                         <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{humanizePublicSummary(msg.content)}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {humanizePublicSummary(msg.content, msg.result ? analysisTrustFromResult(msg.result).intent : undefined)}
+                          </ReactMarkdown>
                         </div>
                       )}
                     </>
