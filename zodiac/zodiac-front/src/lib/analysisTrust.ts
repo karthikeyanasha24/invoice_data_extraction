@@ -194,7 +194,8 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
  */
 export function humanizePublicSummary(text: string, intent?: string): string {
   let out = String(text || '');
-  out = out.replace(/Deep analysis\s*[—\-]\s*intent\s+`?([\w.]+)`?/gi, (_m, slug: string) => {
+  // Restored history used several dash glyphs and markdown wrappers.
+  out = out.replace(/Deep analysis[\s\S]{0,12}?intent\s+`?([\w.]+)`?/gi, (_m, slug: string) => {
     return analysisLabelFor(slug) || analysisLabelFor(intent) || 'Governed analysis';
   });
   out = out.replace(/^(#{1,3}\s+)([\w]+(?:_[\w]+)+)\s*$/gm, (_m, hashes: string, slug: string) => {
@@ -204,6 +205,10 @@ export function humanizePublicSummary(text: string, intent?: string): string {
     const label = analysisLabelFor(slug);
     return label ? `**${label}**` : m;
   });
+  const label = analysisLabelFor(intent);
+  if (label && intent && /_/.test(intent)) {
+    out = out.replace(new RegExp(intent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), label);
+  }
   out = out.replace(/\b(deep_multidim|dimensional_extend)\b/gi, '');
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return out;

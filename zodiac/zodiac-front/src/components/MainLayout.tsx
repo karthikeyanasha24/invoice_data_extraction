@@ -56,7 +56,13 @@ export default function MainLayout({ children, topSection, fillViewport = false 
   }, [pathname]);
 
   useEffect(() => {
-    document.title = documentTitleForPath(pathname || '/');
+    const title = documentTitleForPath(pathname || '/');
+    document.title = title;
+    // Next metadata can win the first paint; keep the client title aligned.
+    const id = window.setTimeout(() => {
+      document.title = title;
+    }, 0);
+    return () => window.clearTimeout(id);
   }, [pathname]);
 
   useEffect(() => {

@@ -118,6 +118,8 @@ describe('humanizePublicSummary', () => {
   it('humanizes follow-up, concentration, inventory, and yoy restored headings', () => {
     const cases: [string, string, string][] = [
       ['Deep analysis — intent inventory_analysis', 'inventory_analysis', 'Inventory position'],
+      ['Deep analysis – intent inventory_analysis', 'inventory_analysis', 'Inventory position'],
+      ['Deep analysis - intent inventory_analysis', 'inventory_analysis', 'Inventory position'],
       ['Deep analysis — intent inventory_risk_analysis', 'inventory_risk_analysis', 'High inventory with low sales'],
       ['Deep analysis — intent supplier_concentration', 'supplier_concentration', 'Supplier concentration'],
       ['Deep analysis — intent customers_of_selection', 'customers_of_selection', 'Customer analysis'],
