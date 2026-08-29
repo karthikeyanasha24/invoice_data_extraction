@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { satApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import {
   RefreshCw,
   FileText,
@@ -44,7 +45,7 @@ export default function CustomerSATDocumentsTab() {
       setDocuments(response.documents || []);
       setTotalCount(response.total ?? 0);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch documents.');
+      setError(publicApiError(err, 'Could not load SAT documents. Please try again.'));
     } finally {
       setLoading(false);
     }

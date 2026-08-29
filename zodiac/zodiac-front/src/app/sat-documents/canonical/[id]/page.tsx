@@ -5,6 +5,7 @@ import { use } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { satCanonicalApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import MainLayout from '@/components/MainLayout';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { 
@@ -71,7 +72,7 @@ export default function CanonicalMergedDetailPage({ params }: { params: Promise<
       setDocument(data);
     } catch (err: any) {
       console.error('Error fetching canonical document:', err);
-      setError(err.message || 'Failed to fetch document details.');
+      setError(publicApiError(err, 'Could not load this merged SAT document. Please try again.'));
     } finally {
       setLoading(false);
     }

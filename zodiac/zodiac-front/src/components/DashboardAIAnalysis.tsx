@@ -807,7 +807,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     try {
       const res = await dashboardApi.postAdaptiveQuery({
         question: q,
-        contextData,
+        // Explicit null (not omitted) so a dirty thread cannot leak prior SQL/filters.
+        contextData: treatAsNew ? null : contextData,
         threadId: tid,
       }, { signal: ac.signal });
 
@@ -1006,9 +1007,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
             {saved.length > 0 && (
               <div className="mt-8 text-left">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Saved on this device</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Saved on this browser/device</p>
                 <p className="text-xs text-slate-500 mb-2">
-                  Stored in this browser only. Opening a saved investigation starts a new question so previous filters are not applied.
+                  Stored in this browser only, not in cloud history. Opening a saved investigation starts a new question so previous filters are not applied.
                 </p>
                 <div className="space-y-1">
                   {saved.slice(0, 8).map((s) => (

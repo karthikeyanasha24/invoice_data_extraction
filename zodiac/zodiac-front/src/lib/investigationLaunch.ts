@@ -38,7 +38,9 @@ export function investigationLaunch(
 ): InvestigationLaunch {
   const asNew = NEW_SOURCES.includes(source);
   const sendQuestion = source !== 'history-restore' && source !== 'refresh';
-  const keepHistory = source !== 'explicit-new';
+  // Never wipe the visible conversation to isolate filters. Only "Start a new
+  // investigation" (clearAll) mints a new thread. The new-question toggle is asNew.
+  const keepHistory = true;
 
   let banner: string | null = null;
   if (source === 'overview-url' || source === 'overview-chip') {

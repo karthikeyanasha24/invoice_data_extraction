@@ -43,11 +43,18 @@ describe('investigationLaunch isolation', () => {
     assert.match(r.banner || '', /new investigation/i);
   });
 
-  it('explicit new investigation is asNew and may clear history', () => {
+  it('explicit new investigation is asNew and keeps visible history', () => {
     const r = investigationLaunch('explicit-new', true);
     assert.equal(r.asNew, true);
-    assert.equal(r.keepHistory, false);
+    assert.equal(r.keepHistory, true);
     assert.match(r.banner || '', /new investigation/i);
+  });
+
+  it('dirty Overview concentration launch is a new investigation without wiping history', () => {
+    const r = investigationLaunch('overview-chip', true);
+    assert.equal(r.asNew, true);
+    assert.equal(r.keepHistory, true);
+    assert.equal(r.sendQuestion, true);
   });
 
   it('saved restore is a new question and does not steal current filters', () => {

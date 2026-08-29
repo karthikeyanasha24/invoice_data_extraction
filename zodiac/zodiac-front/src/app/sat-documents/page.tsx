@@ -50,7 +50,7 @@ export default function SATDocumentsPage() {
             CFDI intake, merge, and send to SAP. Status counts below are inbound SAT activity, not a live ERP push.
           </p>
           {summaryLoading && (
-            <div className="mt-3 grid grid-cols-3 gap-2 max-w-xl text-xs" aria-busy="true">
+            <div className="mt-3 grid grid-cols-3 gap-2 max-w-xl text-xs" aria-busy="true" aria-live="polite">
               {['Documents', 'Waiting to send', 'Sent to SAP'].map((label) => (
                 <div key={label} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                   <p className="text-slate-500">{label}</p>

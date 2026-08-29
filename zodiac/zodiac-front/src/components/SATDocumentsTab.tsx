@@ -301,7 +301,7 @@ export default function SATDocumentsTab() {
         </div>
 
         {loading ? (
-          <div className="p-12 text-center">
+          <div className="p-12 text-center" aria-live="polite" aria-busy="true">
             <RefreshCw className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
             <p className="text-gray-600">Loading documents...</p>
           </div>

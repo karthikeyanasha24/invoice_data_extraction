@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import MainLayout from '@/components/MainLayout';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { satApi } from '@/lib/api';
+import { publicApiError } from '@/lib/apiErrors';
 import {
   FileText,
   ArrowLeft,
@@ -73,7 +74,7 @@ export default function SATDocumentDetailPage() {
       setDocument(data);
     } catch (err: any) {
       console.error('Error fetching document:', err);
-      setError(err.message || 'Failed to fetch document details');
+      setError(publicApiError(err, 'Could not load this SAT document. Please try again.'));
     } finally {
       setLoading(false);
     }
