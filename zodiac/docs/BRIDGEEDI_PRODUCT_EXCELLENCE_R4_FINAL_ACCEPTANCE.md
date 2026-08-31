@@ -260,3 +260,126 @@ Observed request-infra signals this session (NOT deployment IDs): frontend `x-ve
 **G. Final verdict:** `BRIDGEEDI PRODUCT EXCELLENCE + R4 — NOT COMPLETE` — single hard blocker: canonical deployment-ID provenance (owner running the deploy). All other required gates pass with objective evidence; production is live, secure, and analytically correct.
 
 *Live JSON artifacts from this run were not committed.*
+
+---
+
+## R5 SAP Data Intelligence / Multi-Domain Table Coverage
+
+**Date:** 2026-08-31  
+**Status:** **CODE COMPLETE — NOT PRODUCTION-COMPLETE**  
+Implementation is in the working tree on `phase12-first-customer-ready`. It has **not** been committed or deployed. Do **not** treat production www / zodiac-back as R5 until a canonical backend deploy and live R5 question matrix are run. Frozen R3/R4 contracts were not rewritten.
+
+### ROOT CAUSE
+
+AI Analyst already knew VBAK/VBAP/VBEP in scattered JSON catalogs, but:
+
+1. Unqualified “sales” ranking is the frozen **billing** path (VBRK/VBRP).
+2. The NL gate used a **length heuristic** (`too_short` if `len < 12` after missing tokens). The client sentence is long and contains business tokens; the original `too_short` UX was a clarification-path leak. “Highest sales?” is now allowed and clarified by dimension, not rejected.
+3. There was **no single catalog-driven source selector**, so “sales orders” / VBAK could fall through to billed sales.
+4. **VBED is not in the migrated schema.** Schedule lines are **VBEP** (verified live and in `schema_full.json`).
+
+### DISCOVERED TABLES
+
+| Evidence | Count | Notes |
+| --- | --- | --- |
+| VERIFIED FROM DATABASE (`schema_full.json`) | **121** | Physical columns for SQL |
+| VERIFIED FROM DATABASE (live `information_schema`, 2026-08-31) | **129** | Same 121 + 8 application tables not in the snapshot: `alert_history`, `erp_push_outbox`, `pipeline_*`, `workspace_*` |
+| VBED | **ABSENT** | Do not pretend it exists |
+
+Independent SQL (live, this session): VBAK distinct VBELN **65720**; VBAP **61512** rows; VBEP **112734** rows; VBRK distinct VBELN **35050**. Sales-order count ≠ invoice count.
+
+### DOMAIN MAPPING (physical ∩ documentation)
+
+| Domain | Tables present (examples) | Evidence |
+| --- | --- | --- |
+| Sales | VBAK, VBAP, VBEP, VBFA, LIKP, LIPS | DATABASE + DOCUMENTATION |
+| Invoice / billing | VBRK, vbrp, RBKP, RSEG | DATABASE + DOCUMENTATION |
+| Finance | BKPF, BSEG, BSAD, FAGLFLEXA, DFKKOP | DATABASE + DOCUMENTATION |
+| Cost | COEP, COSP, COSS, CKIS, CKHS, KEKO, KEPH | DATABASE + DOCUMENTATION |
+| P&L | CEPC, CE1*/CE2* COPA extracts | DATABASE; COPA grain PARTIAL |
+| Production | AFKO, AFPO, AUFK, RESB, CRHD | DATABASE + DOCUMENTATION |
+| Purchasing | EKKO, EKPO, EBAN, EINA, EINE | DATABASE + R4-4 |
+| Customer | KNA1, KNVV, KNVP, KNBK, T016T | DATABASE + R3 |
+| Product | MARA, MAKT, MARC, MARD, MBEW, MVKE | DATABASE + R4-3 |
+| Vendor | LFA1, LFB1, LFM1 | DATABASE + R4-4 |
+
+Unclassified SAP-style tables remain listed in the physical inventory with `evidence_meaning: UNVERIFIED`.
+
+### CATALOG IMPLEMENTATION
+
+`zodiac/zodiac-api/app/data_catalog/` is the source of truth for R5 routing:
+
+- `physical.py` — schema_full columns (DATABASE wins)
+- `registry.py` — domains, metrics, verified joins
+- `source_selector.py` — compositional plan (metric + dimensions + domain)
+- `knowledge.py` — local resolve + optional LLM **meaning only** (`R5_EXTERNAL_KNOWLEDGE=true`); never SQL; cache `knowledge_cache.json`
+- `capability.py` — dynamic capability text (not billing-only)
+- `format_semantics.py` — money / % / date / integer metadata
+
+### SALES TABLES VERIFIED
+
+VBAK (158 cols including vbeln, audat, kunnr, netwr, vkorg, vtweg, auart).  
+VBAP (388 cols including vbeln, posnr, matnr, kwmeng, netwr).  
+VBEP (65 cols including vbeln, posnr, etenr, edatu, wmeng).  
+VBED: **not available**.
+
+### RELATIONSHIPS USED IN SQL
+
+Verified (both tables + keys exist): VBAK→VBAP (vbeln), VBAP→VBEP (vbeln+posnr), VBAK→KNA1 (kunnr), VBAP→MAKT (matnr), VBRK→vbrp, VBRK→KNA1, KNA1→T016T, EKKO→EKPO, EKKO→LFA1.
+
+**UNSAFE / unused:** VBAK.vbeln = VBRK.vbeln (different document numbers). Grain guard now rejects VBAP/VBAK **and** VBRP in the same NETWR statement.
+
+### METRIC REGISTRY
+
+sales_order_count (VBAK), sales_order_value (VBAP.NETWR), sales_quantity (KWMENG), billing_revenue (frozen R3 VBRP/VBRK), invoice_count, purchase_value, production_quantity (AFKO.GAMNG), cogs/gross_profit (frozen WAVWR), inventory_quantity.
+
+**Unqualified “highest sales” ranking still uses billed revenue** so R3/R4 do not regress. Explicit “sales orders” / VBAK / VBAP uses the sales-order compiler.
+
+### EXTERNAL KNOWLEDGE
+
+LOCAL CATALOG → schema_full → glossary → optional OpenAI proposal (unverified, cached, **no SQL**). Database schema remains authoritative for columns. Default **off** unless `R5_EXTERNAL_KNOWLEDGE` is set.
+
+### SECURITY
+
+Unauthenticated adaptive still 401. Catalog SQL is allowlisted templates. External research cannot execute. No JWT/password logging added. `zodiac-api-nu` not used.
+
+### TEST RESULTS (this session)
+
+| Suite | Result |
+| --- | --- |
+| `tests/test_r5_sap_catalog.py` | PASS |
+| ranking normalizer + NL hardening + turn routing | PASS |
+| R4-1 / R4-2 / R4-3 / R4-4 unit tests | **82 passed** |
+| Frontend `test:ux` including analysisTrust | **PASS** |
+| Live R3–R4-4 python acceptance | **not re-run** (no production deploy of R5) |
+| Independent SQL | VBAK/VBAP/VBEP/VBRK counts above (diff N/A vs AI until live adaptive) |
+
+### CUSTOMER QUESTIONS (routing)
+
+| Question | Domain / route | Notes |
+| --- | --- | --- |
+| “Can you show me which customer and country and industry the highest sales reflected?” | **not too_short**; rewritten to `top customers by sales with countries and industries`; **existing billed path** (R3) | After |
+| “Highest sales?” | Clarification (dimension), not rejection | After |
+| “How many sales orders…?” | sales_order / VBAK COUNT DISTINCT | After |
+| “Show me information from VBAK/VBAP” | sales_order listings | After |
+| “from VBED” | DATA GAP — table absent; VBEP offered | After |
+| “Show invoices” | invoice / existing | After |
+| “Show purchasing/production/customer/product” | domain_overview | After |
+| “Show me our sales data.” | Clarification: orders vs billed | After |
+
+**Before:** client ranking sentence could surface `too_short` / “rephrase as a business question” / billing-only capability copy.  
+**After:** business-signal gate; catalog capability copy; ranking rewrite preserved; sales-order language no longer rewritten onto VBRK.
+
+### PERFORMANCE / DATA GAPS
+
+Catalog path is deterministic SQL (no extra LLM). VBED absent. COPA P&L not a substitute for net profit (R3 freeze). Live AI vs DB for sales-order **value** rankings not yet captured (requires deployed backend).
+
+### REMAINING BLOCKERS
+
+1. **Commit + canonical backend deploy** (`zodiac-back.vercel.app` only). Frontend trust-panel/format changes need **www** deploy.
+2. Re-run live R3–R4-4 after deploy (must stay 0 FAIL).
+3. Live adaptive matrix for the R5 question list vs independent SQL (numeric diff 0.00).
+4. Owner-controlled Vercel deployment IDs (unchanged R4 blocker).
+
+R5 score as implemented locally: **analytical architecture ~8.5/10**; **not 10/10** (not committed, not production-verified, COPA unused, live AI=DB pending).
+

@@ -135,6 +135,7 @@ type QueryResult = {
   suggested_followups?: string[];
   answer_status?: string;
   query_plan?: any;
+  column_semantics?: Record<string, { semantic_type?: string; precision?: number; format?: string }>;
   meta?: {
     domain?: string;
     intent?: string;
@@ -283,7 +284,19 @@ function exportCsv(data: any[], filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function DataTable({ data, totalCount, sql, heading }: { data: any[]; totalCount?: number; sql?: string; heading?: string }) {
+function DataTable({
+  data,
+  totalCount,
+  sql,
+  heading,
+  columnSemantics,
+}: {
+  data: any[];
+  totalCount?: number;
+  sql?: string;
+  heading?: string;
+  columnSemantics?: QueryResult['column_semantics'];
+}) {
   const [showSql, setShowSql] = useState(false);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -396,18 +409,39 @@ function DataTable({ data, totalCount, sql, heading }: { data: any[]; totalCount
                     {headers.map(h => {
                       const v = row[h];
                       const n = cellNum(v);
-                      const isNum = !isIdLike(h, v) && Number.isFinite(n);
+                      const sem = columnSemantics?.[h];
+                      const isDate = sem?.semantic_type === 'date' || /(_date|fkdat|audat|erdat|bedat)$/i.test(h);
+                      const isPct = sem?.semantic_type === 'percentage';
+                      const isInt = sem?.semantic_type === 'integer';
+                      const isNum = !isIdLike(h, v) && !isDate && Number.isFinite(n);
+                      const display = (() => {
+                        if (v == null) return null;
+                        if (isDate) {
+                          const s = String(v).trim();
+                          if (/^\d{8}$/.test(s)) {
+                            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                            const mo = Number(s.slice(4, 6));
+                            if (mo >= 1 && mo <= 12) return `${s.slice(6, 8)} ${months[mo - 1]} ${s.slice(0, 4)}`;
+                          }
+                          return String(v);
+                        }
+                        if (isPct && Number.isFinite(n)) return `${n.toFixed(2)}%`;
+                        if (isInt && Number.isFinite(n)) return Math.round(n).toLocaleString('en-US');
+                        if (isNum) {
+                          const digits = isMoneyName(h) || sem?.semantic_type === 'money' ? 2 : (sem?.precision ?? 2);
+                          return n.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: sem?.semantic_type === 'money' ? 2 : 0 });
+                        }
+                        return String(v);
+                      })();
                       return (
                         <td key={h} className={cn(
                           'px-3 py-2 whitespace-nowrap border-b border-slate-100 max-w-[260px] overflow-hidden text-ellipsis',
                           isNum ? 'text-right tabular-nums text-slate-800' : 'text-slate-700',
                           isNum && n < 0 ? 'text-red-700' : ''
                         )}>
-                          {v == null
+                          {display == null
                             ? <span className="text-slate-400">—</span>
-                            : isNum
-                              ? n.toLocaleString('en-US', { maximumFractionDigits: 2 })
-                              : String(v)}
+                            : display}
                         </td>
                       );
                     })}
@@ -434,6 +468,49 @@ function DataTable({ data, totalCount, sql, heading }: { data: any[]; totalCount
 // ═══════════════════════════════════════════════════════════════════════════════
 // Insights panel
 // ═══════════════════════════════════════════════════════════════════════════════
+// Internal reason codes must never surface to a business user.
+const INTERNAL_REASON_CODES = new Set([
+  'too_short','no_business_signal','non_business','empty_question',
+  'unsafe_or_non_business','business_token','year','followup_context',
+  'schema','deep_analytical_followup','clarification','needs_clarification',
+]);
+function humanizeFindings(findings?: string[]): string[] {
+  if (!Array.isArray(findings)) return [];
+  return findings
+    .map((f) => String(f || '').trim())
+    .filter(Boolean)
+    .filter((f) => {
+      const key = f.toLowerCase();
+      if (INTERNAL_REASON_CODES.has(key)) return false;
+      if (/^[a-z]+(_[a-z]+)+$/.test(key)) return false; // bare snake_case code
+      if (/sql generation|query generation failed|no unrelated edi fallback/i.test(f)) return false;
+      return true;
+    });
+}
+
+function ClarificationCard({ message, onAskFollowup }: { message: string; onAskFollowup?: (q: string) => void }) {
+  const examples = [
+    { label: 'Top customers by sales', question: 'Show the top customers by sales.' },
+    { label: 'Highest sales by country', question: 'Show the highest sales by country.' },
+    { label: 'Highest sales by industry', question: 'Show the highest sales by industry.' },
+  ];
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
+      <p className="text-sm text-slate-800 whitespace-pre-line">{message}</p>
+      {onAskFollowup && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {examples.map((e) => (
+            <button key={e.question} type="button" onClick={() => onAskFollowup(e.question)}
+              className="text-left text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100 transition-colors">
+              {e.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InsightsPanel({ findings }: { findings: string[] }) {
   if (!findings?.length) return null;
   return (
@@ -595,7 +672,10 @@ function TrustPanel({ result }: { result: QueryResult }) {
       </button>
       {open && (
         <div className="px-3 pb-3 text-xs text-slate-600 space-y-1.5 border-t border-slate-100 pt-2">
+          {trust.domain && <p><span className="font-semibold text-slate-800">Domain:</span> {trust.domain}</p>}
           {trust.source && <p><span className="font-semibold text-slate-800">Source:</span> {trust.source}</p>}
+          {trust.tables && <p><span className="font-semibold text-slate-800">Tables:</span> {trust.tables}</p>}
+          {trust.joins && <p><span className="font-semibold text-slate-800">Join path:</span> {trust.joins}</p>}
           {trust.calculation && <p><span className="font-semibold text-slate-800">Definition:</span> {trust.calculation}</p>}
           {trust.aggregation && <p><span className="font-semibold text-slate-800">Aggregation:</span> {trust.aggregation}</p>}
           <p><span className="font-semibold text-slate-800">Period:</span> {trust.period}</p>
@@ -629,11 +709,23 @@ function ResultDashboard({
   const hasCharts  = (charts?.length ?? 0) > 0;
   const hasData    = (data?.length ?? 0) > 0;
   const hasSummary = !!summary;
-  const hasInsights = (keyFindings?.length ?? 0) > 0 && keyFindings?.[0] !== 'No results found.';
+  const cleanFindings = humanizeFindings(keyFindings);
+  const hasInsights = cleanFindings.length > 0 && cleanFindings[0] !== 'No results found.';
   const followups = humanizeFollowups(suggested_followups);
-  const isGap = result.answer_status === 'CANNOT_ANSWER';
+  const status = String(result.answer_status || '').toUpperCase();
+  const isGap = status === 'CANNOT_ANSWER';
+  const isClarification = status === 'CLARIFICATION' || status === 'NEEDS_CLARIFICATION';
   const trust = analysisTrustFromResult(result);
   const heading = trust.analysisLabel;
+
+  if (isClarification) {
+    return (
+      <ClarificationCard
+        message={summary || 'I need a little more detail to answer that.'}
+        onAskFollowup={onAskFollowup}
+      />
+    );
+  }
 
   if (isGap) {
     return (
@@ -650,8 +742,8 @@ function ResultDashboard({
       {hasSummary && <SummaryCard summary={summary!} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
-      {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} heading={heading || 'Results'} />}
-      {hasInsights && <InsightsPanel findings={keyFindings!} />}
+      {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
+      {hasInsights && <InsightsPanel findings={cleanFindings} />}
       <TrustPanel result={result} />
       {followups.length > 0 && onAskFollowup && (
         <div className="mt-3 mb-1 px-1">

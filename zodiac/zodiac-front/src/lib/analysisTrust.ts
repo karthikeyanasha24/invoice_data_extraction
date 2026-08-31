@@ -9,6 +9,9 @@ export type AnalysisTrust = {
   calculation?: string;
   limitations: string[];
   source?: string;
+  domain?: string;
+  tables?: string;
+  joins?: string;
 };
 
 const BILLING =
@@ -61,6 +64,13 @@ export const ANALYSIS_LABELS: Record<string, string> = {
   product_expiry: 'Product expiry',
   product_expiry_by_industry: 'Product expiry by industry',
   dimensional_extend: 'Further breakdown',
+  sales_order_analysis: 'Sales orders',
+  purchasing_overview: 'Purchasing',
+  production_overview: 'Production',
+  customer_master: 'Customer master',
+  product_master: 'Product master',
+  vendor_master: 'Vendor master',
+  schema_knowledge: 'Data catalog',
   unsupported_deep: 'Governed analysis',
   logistics_cost_gap: 'Data limitation',
   inventory_aging_gap: 'Data limitation',
@@ -83,18 +93,41 @@ export function analysisLabelFor(intent?: string): string | undefined {
   return intent;
 }
 
-function definitionFor(intent?: string, isGap = false): string {
+function definitionFor(intent?: string, isGap = false, ac: Record<string, unknown> = {}): string {
   if (isGap) return GAP_DEFINITION;
   const i = (intent || '').toLowerCase();
+  const agg = typeof ac.aggregation === 'string' ? ac.aggregation.trim() : '';
+  if (i.includes('sales_order')) {
+    return agg || 'Sales-order value = VBAP.NETWR; sales-order count = COUNT(DISTINCT VBAK.VBELN). This is not billed revenue.';
+  }
+  if (i.includes('purchasing')) return agg || PURCHASE;
+  if (i.includes('production')) return agg || 'Production order quantity from AFKO. This is not sales quantity.';
+  if (i.includes('schema_knowledge')) return 'Catalog meaning plus migrated-schema existence. No business number was calculated.';
   if (i.includes('supplier_concentration') || i.includes('purchase concentration')) return CONCENTRATION;
   if (i.startsWith('inventory')) return INVENTORY;
   if (i.includes('supplier') || i.includes('purchase')) return PURCHASE;
   return BILLING;
 }
 
-function sourceFor(intent?: string, isGap = false): string {
+function sourceFor(intent?: string, isGap = false, ac: Record<string, unknown> = {}): string {
   if (isGap) return 'Not available in this extract';
   const i = (intent || '').toLowerCase();
+  const domain = String(ac.domain || '').toLowerCase();
+  const tables = Array.isArray(ac.tables) ? ac.tables.filter(Boolean).join(', ') : '';
+  if (i.includes('sales_order') || (domain === 'sales' && i.includes('order'))) {
+    return tables
+      ? `SAP sales orders (${tables}) — not billed invoices`
+      : 'SAP sales orders (VBAK/VBAP) — not billed invoices';
+  }
+  if (i.includes('purchasing') || domain === 'purchasing') {
+    return tables ? `Purchase orders (${tables})` : 'Purchase orders (EKKO/EKPO)';
+  }
+  if (i.includes('production') || domain === 'production') {
+    return tables ? `Production (${tables})` : 'Production orders (AFKO)';
+  }
+  if (i.includes('customer_master')) return 'Customer master (KNA1)';
+  if (i.includes('product_master')) return 'Material master (MARA/MAKT)';
+  if (i.includes('vendor_master')) return 'Vendor master (LFA1)';
   if (i.startsWith('inventory')) return 'Current inventory valuation (not billing, not historical stock movements)';
   if (i.includes('supplier_concentration')) {
     return 'Purchase orders (not billing revenue, not supplier profit)';
@@ -102,12 +135,18 @@ function sourceFor(intent?: string, isGap = false): string {
   if (i.includes('supplier') || i.includes('purchase')) {
     return 'Purchase orders for the selected products (not billing revenue)';
   }
-  return 'Customer billing documents (governed sales extract — not a full P&L)';
+  return 'Customer billing documents (governed billed-sales extract — not sales orders, not a full P&L)';
 }
 
 function grainFor(intent?: string, ac: Record<string, unknown> = {}, isGap = false): string | undefined {
   if (isGap) return 'Not applicable';
   const i = (intent || '').toLowerCase();
+  if (typeof ac.fact_grain === 'string' && ac.fact_grain.trim() && i.includes('sales_order')) {
+    return String(ac.fact_grain);
+  }
+  if (i.includes('sales_order')) return 'Sales document item (VBAP), then the requested dimension';
+  if (i.includes('purchasing')) return 'Purchase-order item';
+  if (i.includes('production')) return 'Production order header';
   if (i.includes('supplier_concentration')) return 'Purchase-order item, then supplier';
   const fact = typeof ac.fact_grain === 'string' ? ac.fact_grain.trim() : '';
   if (fact === 'po_item') return 'Purchase-order item, then supplier';
@@ -171,9 +210,11 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
   const total = result?.totalCount ?? result?.rowCount ?? meta?.row_count;
   const rowLimit = gap
     ? 'No rows — the requested metric is not in this extract'
-    : total != null && Number.isFinite(Number(total))
+    : total != null && Number.isFinite(Number(total)) && Number(total) >= 0
       ? `${Number(total)} row${Number(total) === 1 ? '' : 's'} returned (display may be paginated)`
       : undefined;
+  const tablesList = Array.isArray(ac.tables) ? ac.tables.map(String).filter(Boolean) : [];
+  const joinsList = Array.isArray(ac.joins) ? ac.joins.map(String).filter(Boolean) : [];
   return {
     intent,
     analysisLabel: gap ? (analysisLabelFor(intent) || 'Data limitation') : analysisLabelFor(intent),
@@ -182,9 +223,12 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
     aggregation: aggregationFor(intent, ac, gap),
     grain: grainFor(intent, ac, gap),
     rowLimit,
-    calculation: definitionFor(intent, gap),
+    calculation: definitionFor(intent, gap, ac),
     limitations: Array.from(new Set(gaps)),
-    source: sourceFor(intent, gap),
+    source: sourceFor(intent, gap, ac),
+    domain: String(ac.domain || qp.domain || meta.domain || '').trim() || undefined,
+    tables: tablesList.length ? tablesList.join(' → ') : undefined,
+    joins: joinsList.length ? joinsList.join('; ') : undefined,
   };
 }
 

@@ -2598,6 +2598,19 @@ async def post_query_adaptive(
     if len(q) > 4000:
         raise HTTPException(status_code=400, detail="question_too_long (max 4000)")
 
+    # Normalize interrogative sales/revenue ranking phrasings ("which customer had
+    # the highest sales?") to the governed canonical form before routing. The
+    # user's original wording is preserved for display/history.
+    _original_question = q
+    try:
+        from ..services.ranking_question_normalizer import normalize_ranking_question
+        q = normalize_ranking_question(q)
+        if q != _original_question:
+            logger.info("[adaptive] normalized ranking question: %r -> %r", _original_question, q)
+    except Exception as _norm_err:  # never block a query on normalization
+        logger.warning("[adaptive] ranking normalizer failed: %s", _norm_err)
+        q = _original_question
+
     api_key = _get_openai_key()
     thread_id = (threadId or "").strip() or None
     if thread_id and not thread_id.startswith("ada_"):
@@ -2635,7 +2648,7 @@ async def post_query_adaptive(
         snapshot = {
             "user_id": user_id,
             "thread_id": thread_id,
-            "question": q[:10000],
+            "question": _original_question[:10000],
             "summary": str(
                 payload.get("summary")
                 or payload.get("answer")
@@ -2766,6 +2779,46 @@ async def post_query_adaptive(
 
         if not _wants_sc(clean_q):
             return _persist_and_return(clarification_payload(clean_q, turn.reason))
+
+    # ── Path 1.4: catalog source selection (sales-order vs billing vs domain) ──
+    # Additive. Frozen R3/R4 billing ranking stays on route="existing".
+    try:
+        from ..data_catalog.source_selector import select_source
+        from ..services.domain_overview_analysis import knowledge_payload, try_domain_overview
+        from ..services.sales_order_analysis import try_sales_order_analysis
+
+        spec = select_source(clean_q, prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None)
+        routing_meta["r5_source"] = spec.to_log_dict()
+        catalog_db = db
+        if USE_SAP_DB_FOR_AI:
+            try:
+                sap_for_cat = get_sap_session()
+                if sap_for_cat is not None:
+                    catalog_db = sap_for_cat
+            except Exception:
+                pass
+        if spec.route == "knowledge" or spec.reason == "table_absent":
+            return _persist_and_return(knowledge_payload(clean_q, spec))
+        if spec.needs_clarification:
+            payload = clarification_payload(clean_q, spec.reason)
+            if spec.clarification_message:
+                payload["summary"] = spec.clarification_message
+                payload["answer"] = spec.clarification_message
+            return _persist_and_return(payload)
+        if spec.route == "sales_order":
+            so = try_sales_order_analysis(clean_q, spec, catalog_db, _execute_sql)
+            if so:
+                meta = so.get("meta") if isinstance(so.get("meta"), dict) else {}
+                so["meta"] = {**routing_meta, **meta}
+                return _persist_and_return(so)
+        if spec.route == "domain_overview":
+            ov = try_domain_overview(clean_q, spec, catalog_db, _execute_sql)
+            if ov:
+                meta = ov.get("meta") if isinstance(ov.get("meta"), dict) else {}
+                ov["meta"] = {**routing_meta, **meta}
+                return _persist_and_return(ov)
+    except Exception as cat_err:
+        logger.info("[adaptive] catalog source selection skipped: %s", cat_err)
 
     # ── Path 1.5: governed multi-dimensional deep analysis (schema-backed) ──
     # After classify_turn only. Falls through when not a deep candidate / unsafe.

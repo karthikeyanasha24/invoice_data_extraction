@@ -86,6 +86,32 @@ describe('analysisTrustFromResult', () => {
     assert.ok(!/share of po|percentage of total/i.test(listing.calculation || ''));
   });
 
+  it('sales-order provenance is not billed invoices', () => {
+    const trust = analysisTrustFromResult({
+      rowCount: 5,
+      query_plan: {
+        intent: 'sales_order_analysis',
+        domain: 'sales',
+        analytical_context: {
+          intent: 'sales_order_analysis',
+          domain: 'sales',
+          metric: 'sales_order_value',
+          tables: ['VBAK', 'VBAP'],
+          joins: ['VBAK.vbeln = VBAP.vbeln'],
+          fact_grain: 'sales document item, then customer',
+          aggregation: 'SUM(VBAP.NETWR); N:1 customer master only',
+          period_label: '2004',
+        },
+      },
+    });
+    assert.equal(trust.analysisLabel, 'Sales orders');
+    assert.equal(trust.domain, 'sales');
+    assert.ok(trust.tables?.includes('VBAK'));
+    assert.ok(/sales order/i.test(trust.source || ''));
+    assert.ok(!/billed invoices/i.test(trust.source || '') || /not billed/i.test(trust.source || ''));
+    assert.ok(/VBAP\.NETWR/i.test(trust.calculation || ''));
+  });
+
   it('DATA GAP trust does not claim a P&L or invent a metric', () => {
     const trust = analysisTrustFromResult({
       answer_status: 'CANNOT_ANSWER',

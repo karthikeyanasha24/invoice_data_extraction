@@ -105,4 +105,10 @@ def sql_has_unsafe_monetary_fanout(sql: str) -> bool:
     # Purchase NETWR joined to inventory snapshot before aggregation.
     if "EKPO" in s and _INV_JOIN_RE.search(raw):
         return True
+    # Sales-order monetary grain must not mix with billing or schedule-line fan-out.
+    has_order = "VBAK" in s or "VBAP" in s
+    if has_order and has_billing:
+        return True
+    if "VBEP" in s and "VBAP" in s and "NETWR" in s:
+        return True
     return False

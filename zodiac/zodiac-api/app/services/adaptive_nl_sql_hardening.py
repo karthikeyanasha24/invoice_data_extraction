@@ -47,15 +47,24 @@ _BUSINESS_TOKENS = (
     "sales", "sale", "revenue", "invoice", "invoices", "billing", "customer",
     "customers", "industry", "product", "products", "material", "materials",
     "year", "years", "top", "lowest", "highest", "biggest", "compare", "versus",
-    "vbrk", "vbrp", "kna1", "t016t", "makt", "edi", "failed", "count", "total",
+    "vbrk", "vbrp", "vbak", "vbap", "vbep", "vbed", "kna1", "t016t", "makt",
+    "ekko", "ekpo", "afko", "afpo", "mara", "lfa1", "edi", "failed", "count", "total",
     "bought", "buyer", "sold", "order", "orders", "currency", "eur", "usd",
-    "trading", "motomarkt", "rank",
+    "trading", "motomarkt", "rank", "reflected", "generated",
     # Deep analytical metrics / dimensions
     "cogs", "margin", "margins", "profit", "profits", "cost", "goods", "region",
     "regions", "country", "countries", "component", "components", "breakdown",
     "decline", "process", "delivery", "logistics", "freight", "expiry", "expir",
     "history", "buying", "selling", "purchase", "supplier", "inventory",
     "concentration", "vendor", "vendors", "purchasing", "percent", "percentage",
+    "production", "produced", "finance", "posting", "ledger",
+)
+
+_SEMANTIC_BUSINESS = re.compile(
+    r"\b(sales|revenue|invoice|billing|customer|product|industry|country|order|"
+    r"profit|margin|cogs|inventory|supplier|vendor|purchase|production|material|"
+    r"highest|lowest|top|compare|vbak|vbap|vbep|vbrk|ekko|afko)\b",
+    re.I,
 )
 
 _NONSENSE_HINTS = (
@@ -638,21 +647,38 @@ def is_supported_business_question(
     tokens = set(re.findall(r"[a-z0-9]+", ql))
     if tokens.intersection({t.lower() for t in _BUSINESS_TOKENS}):
         return True, "business_token"
+    if _SEMANTIC_BUSINESS.search(q):
+        return True, "business_signal"
     if re.search(r"\b(20\d{2}|19\d{2})\b", q):
         return True, "year"
     if has_active_analysis and tokens.intersection(_SHORT_FOLLOWUP_TOKENS):
         return True, "followup_context"
-    if len(q) < 12:
-        return False, "too_short"
+    # Length is not a business signal. Short non-business text is still unsupported.
+    if len(q) < 3:
+        return False, "empty_question"
     return False, "no_business_signal"
 
 
 def clarification_payload(question: str, reason: str) -> Dict[str, Any]:
-    summary = (
-        "I can answer questions about SAP billing, customers, industries, products, "
-        "invoice counts, and year comparisons. Please rephrase as a business question "
-        "(for example: 'highest sales in 2004 by customer')."
-    )
+    try:
+        from ..data_catalog.capability import capability_summary
+        from ..data_catalog.source_selector import select_source
+
+        spec = select_source(question)
+        if spec.needs_clarification and spec.clarification_message:
+            summary = spec.clarification_message
+        else:
+            summary = capability_summary()
+            if reason == "no_business_signal":
+                summary = (
+                    capability_summary()
+                    + " I could not identify a business metric or dimension in that message."
+                )
+    except Exception:
+        summary = (
+            "I can answer governed SAP questions across sales orders, billing, purchasing, "
+            "production, customers, and products when those tables exist in this extract."
+        )
     return {
         "type": "clarification",
         "answer_status": "CLARIFICATION",
