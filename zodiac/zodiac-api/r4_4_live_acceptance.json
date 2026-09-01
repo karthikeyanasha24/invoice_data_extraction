@@ -1,28 +1,55 @@
 {
-  "PASS": 5,
+  "PASS": 9,
   "DATA_GAP": 1,
   "NOT_DEPLOYED": 0,
-  "FAIL": 1,
+  "FAIL": 0,
   "rows": [
     {
       "q": "Show supplier concentration. [standalone]",
-      "ms": 22049,
-      "verdict": "FAIL(intent=)",
-      "intent": "",
+      "ms": 1720,
+      "verdict": "PASS",
+      "intent": "supplier_concentration",
       "status": "SUCCESS",
-      "has_share": false,
+      "has_share": true,
       "has_vbrp": false,
-      "has_ekpo": false
+      "has_ekpo": true,
+      "n": 20
+    },
+    {
+      "q": "Show the highest one.",
+      "ms": 445,
+      "verdict": "PASS",
+      "intent": "supplier_concentration",
+      "status": "SUCCESS",
+      "n": 1
+    },
+    {
+      "q": "Show the percentage.",
+      "ms": 615,
+      "verdict": "PASS",
+      "intent": "supplier_concentration",
+      "status": "SUCCESS",
+      "n": 20
+    },
+    {
+      "q": "Show the top 3 suppliers by purchase value. [standalone]",
+      "ms": 448,
+      "verdict": "PASS",
+      "intent": "supplier_concentration",
+      "status": "SUCCESS",
+      "n": 3,
+      "has_ekpo": true,
+      "has_vbrp": false
     },
     {
       "q": "Show the products with the highest profits.",
-      "ms": 1767,
+      "ms": 718,
       "verdict": "PASS",
       "intent": "product_profitability"
     },
     {
       "q": "Show their suppliers.",
-      "ms": 1264,
+      "ms": 683,
       "verdict": "PASS",
       "intent": "suppliers_of_selection",
       "status": "SUCCESS",
@@ -32,7 +59,7 @@
     },
     {
       "q": "Show supplier concentration.",
-      "ms": 984,
+      "ms": 1213,
       "verdict": "PASS",
       "intent": "supplier_concentration",
       "status": "SUCCESS",
@@ -42,7 +69,7 @@
     },
     {
       "q": "Show supplier profit.",
-      "ms": 815,
+      "ms": 762,
       "verdict": "PASS",
       "intent": "suppliers_of_selection",
       "status": "SUCCESS",
@@ -52,13 +79,13 @@
     },
     {
       "q": "Show inventory aging.",
-      "ms": 474,
+      "ms": 339,
       "verdict": "DATA_GAP",
       "intent": "suppliers_of_selection"
     },
     {
       "q": "Show inventory again.",
-      "ms": 625,
+      "ms": 376,
       "verdict": "PASS",
       "intent": "inventory_analysis"
     }

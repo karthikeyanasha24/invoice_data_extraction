@@ -1,11 +1,33 @@
 {
   "status": "PASS",
-  "standalone_intent": null,
+  "standalone_intent": "supplier_concentration",
   "chained_intent": "supplier_concentration",
   "products_n": 10,
   "standalone": {
-    "status": "BLOCKED",
-    "comparisons": []
+    "status": "PASS",
+    "comparisons": [
+      {
+        "supplier": "0000005557",
+        "db_share": 49.86,
+        "ai_share": 49.86,
+        "diff": 0.0,
+        "status": "PASS"
+      },
+      {
+        "supplier": "0000001095",
+        "db_share": 42.45,
+        "ai_share": 42.45,
+        "diff": 0.0,
+        "status": "PASS"
+      },
+      {
+        "supplier": "0000001075",
+        "db_share": 1.84,
+        "ai_share": 1.84,
+        "diff": 0.0,
+        "status": "PASS"
+      }
+    ]
   },
   "chained": {
     "status": "PASS",
@@ -33,6 +55,34 @@
       }
     ]
   },
+  "top3": {
+    "status": "PASS",
+    "n": 3,
+    "comparisons": [
+      {
+        "supplier": "0000005557",
+        "db_share": 49.86,
+        "ai_share": 49.86,
+        "diff": 0.0,
+        "status": "PASS"
+      },
+      {
+        "supplier": "0000001095",
+        "db_share": 42.45,
+        "ai_share": 42.45,
+        "diff": 0.0,
+        "status": "PASS"
+      },
+      {
+        "supplier": "0000001075",
+        "db_share": 1.84,
+        "ai_share": 1.84,
+        "diff": 0.0,
+        "status": "PASS"
+      }
+    ]
+  },
+  "reference_shares_ok": true,
   "db_global": [
     {
       "supplier": "0000005557",
@@ -55,5 +105,5 @@
       "share": 0.69
     }
   ],
-  "note": "Chained product-filtered concentration matches independent SQL. Standalone first-question path not yet deep_multidim on this backend."
+  "note": "Independent SQL is PO-grain EKPO.NETWR share with LOEKZ filter. Standalone must match global shares."
 }
