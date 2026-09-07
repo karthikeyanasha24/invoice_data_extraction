@@ -136,6 +136,16 @@ type QueryResult = {
   answer_status?: string;
   query_plan?: any;
   column_semantics?: Record<string, { semantic_type?: string; precision?: number; format?: string }>;
+  mode?: string;
+  route?: string;
+  calculation?: {
+    source?: string;
+    definition?: string;
+    aggregation?: string;
+    period?: string;
+    grain?: string;
+    limitations?: string[];
+  };
   meta?: {
     domain?: string;
     intent?: string;
@@ -143,6 +153,7 @@ type QueryResult = {
     pipeline_ms?: number;
     warnings?: string[];
     deep_analysis?: boolean;
+    mode?: string;
   };
 };
 type Message = {
@@ -488,7 +499,13 @@ function humanizeFindings(findings?: string[]): string[] {
     });
 }
 
-function ClarificationCard({ message, onAskFollowup }: { message: string; onAskFollowup?: (q: string) => void }) {
+function ConversationCard({ message }: { message: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
+      <p className="text-sm text-slate-800 whitespace-pre-line leading-relaxed">{message}</p>
+    </div>
+  );
+}
   const examples = [
     { label: 'Top customers by sales', question: 'Show the top customers by sales.' },
     { label: 'Highest sales by country', question: 'Show the highest sales by country.' },
@@ -713,10 +730,18 @@ function ResultDashboard({
   const hasInsights = cleanFindings.length > 0 && cleanFindings[0] !== 'No results found.';
   const followups = humanizeFollowups(suggested_followups);
   const status = String(result.answer_status || '').toUpperCase();
+  const mode = String(result.mode || result.meta?.mode || result.route || '').toLowerCase();
+  const isGeneral = mode === 'general_chat' || mode === 'general' || (
+    status === 'SUCCESS' && !(result.sql || '').trim() && !hasData
+  );
   const isGap = status === 'CANNOT_ANSWER';
   const isClarification = status === 'CLARIFICATION' || status === 'NEEDS_CLARIFICATION';
   const trust = analysisTrustFromResult(result);
   const heading = trust.analysisLabel;
+
+  if (isGeneral && !isClarification && !isGap) {
+    return <ConversationCard message={summary || 'Hello! How can I help you today?'} />;
+  }
 
   if (isClarification) {
     return (
@@ -744,7 +769,7 @@ function ResultDashboard({
       {hasCharts  && <ChartsGrid charts={charts!} />}
       {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
       {hasInsights && <InsightsPanel findings={cleanFindings} />}
-      <TrustPanel result={result} />
+      {!isGeneral && <TrustPanel result={result} />}
       {followups.length > 0 && onAskFollowup && (
         <div className="mt-3 mb-1 px-1">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-2">
@@ -816,7 +841,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               summary: m.result.summary || m.content,
               query_plan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
               answer_status: (m.result as any).answer_status
-                || ((m.result.sql || '').trim() ? 'SUCCESS' : 'CLARIFICATION'),
+                || ((m.result as any).mode === 'general_chat' ? 'SUCCESS'
+                  : ((m.result.sql || '').trim() ? 'SUCCESS' : 'SUCCESS')),
+              mode: (m.result as any).mode,
             } : undefined;
             const intent = rawResult ? analysisTrustFromResult(rawResult).intent : undefined;
             return {
@@ -928,6 +955,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
         suggested_followups: res.suggested_followups || res.suggestedFollowups || [],
         answer_status: answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS'),
+        mode:        res.mode || res.route || res.meta?.mode,
+        calculation: res.calculation,
         meta:        res.meta || {
           domain:        res.domain,
           intent:        res.intent,

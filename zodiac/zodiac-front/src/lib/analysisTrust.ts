@@ -191,15 +191,21 @@ function isDataGapResult(result: any): boolean {
 
 export function analysisTrustFromResult(result: any): AnalysisTrust {
   const qp = result?.query_plan || result?.queryPlan || {};
-  const ac = qp.analytical_context || {};
+  const ac = qp.analytical_context || qp.investigation_state || {};
   const meta = result?.meta || {};
+  const calc = result?.calculation || {};
+  const mode = String(result?.mode || meta.mode || result?.route || '').toLowerCase();
+  if (mode === 'general_chat' || mode === 'general') {
+    return { limitations: [] };
+  }
   const intent = String(ac.intent || qp.intent || meta.intent || '').trim() || undefined;
   const gap = isDataGapResult(result);
-  const metric = String(ac.metric || ac.primary_metric || ac.selected_metric || '').trim() || undefined;
+  const metric = String(ac.metric || ac.primary_metric || ac.selected_metric || calc.definition || '').trim() || undefined;
   const period =
-    String(ac.period_label || ac.period || ac.time_grain || ac.comparison_window || '').trim() ||
+    String(calc.period || ac.period_label || ac.period || ac.time_grain || ac.comparison_window || '').trim() ||
     (gap ? 'Not applicable' : intent?.startsWith('inventory') ? 'Current snapshot' : 'Not specified in this result');
   const gaps = [
+    ...(Array.isArray(calc.limitations) ? calc.limitations : []),
     ...(Array.isArray(meta.warnings) ? meta.warnings : []),
     ...(Array.isArray(ac.data_gaps) ? ac.data_gaps : []),
     ...(Array.isArray(meta.data_gaps) ? meta.data_gaps : []),
@@ -214,6 +220,7 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
       ? `${Number(total)} row${Number(total) === 1 ? '' : 's'} returned (display may be paginated)`
       : undefined;
   const tablesList = Array.isArray(ac.tables) ? ac.tables.map(String).filter(Boolean) : [];
+  const fromCalc = String(calc.source || '').split(',').map((s: string) => s.trim()).filter(Boolean);
   const joinsList = Array.isArray(ac.joins) ? ac.joins.map(String).filter(Boolean) : [];
   return {
     intent,
@@ -221,13 +228,13 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
     metric,
     period,
     aggregation: aggregationFor(intent, ac, gap),
-    grain: grainFor(intent, ac, gap),
+    grain: String(calc.grain || '') || grainFor(intent, ac, gap),
     rowLimit,
-    calculation: definitionFor(intent, gap, ac),
+    calculation: String(calc.definition || '') || definitionFor(intent, gap, ac),
     limitations: Array.from(new Set(gaps)),
-    source: sourceFor(intent, gap, ac),
+    source: fromCalc.length ? fromCalc.join(' + ') : sourceFor(intent, gap, ac),
     domain: String(ac.domain || qp.domain || meta.domain || '').trim() || undefined,
-    tables: tablesList.length ? tablesList.join(' → ') : undefined,
+    tables: tablesList.length ? tablesList.join(' → ') : (fromCalc.length ? fromCalc.join(' → ') : undefined),
     joins: joinsList.length ? joinsList.join('; ') : undefined,
   };
 }

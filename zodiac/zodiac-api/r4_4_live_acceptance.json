@@ -6,7 +6,7 @@
   "rows": [
     {
       "q": "Show supplier concentration. [standalone]",
-      "ms": 1720,
+      "ms": 1117,
       "verdict": "PASS",
       "intent": "supplier_concentration",
       "status": "SUCCESS",
@@ -17,7 +17,7 @@
     },
     {
       "q": "Show the highest one.",
-      "ms": 445,
+      "ms": 432,
       "verdict": "PASS",
       "intent": "supplier_concentration",
       "status": "SUCCESS",
@@ -25,7 +25,7 @@
     },
     {
       "q": "Show the percentage.",
-      "ms": 615,
+      "ms": 441,
       "verdict": "PASS",
       "intent": "supplier_concentration",
       "status": "SUCCESS",
@@ -33,7 +33,7 @@
     },
     {
       "q": "Show the top 3 suppliers by purchase value. [standalone]",
-      "ms": 448,
+      "ms": 416,
       "verdict": "PASS",
       "intent": "supplier_concentration",
       "status": "SUCCESS",
@@ -43,13 +43,13 @@
     },
     {
       "q": "Show the products with the highest profits.",
-      "ms": 718,
+      "ms": 671,
       "verdict": "PASS",
       "intent": "product_profitability"
     },
     {
       "q": "Show their suppliers.",
-      "ms": 683,
+      "ms": 470,
       "verdict": "PASS",
       "intent": "suppliers_of_selection",
       "status": "SUCCESS",
@@ -59,7 +59,7 @@
     },
     {
       "q": "Show supplier concentration.",
-      "ms": 1213,
+      "ms": 1060,
       "verdict": "PASS",
       "intent": "supplier_concentration",
       "status": "SUCCESS",
@@ -69,7 +69,7 @@
     },
     {
       "q": "Show supplier profit.",
-      "ms": 762,
+      "ms": 665,
       "verdict": "PASS",
       "intent": "suppliers_of_selection",
       "status": "SUCCESS",
@@ -79,13 +79,13 @@
     },
     {
       "q": "Show inventory aging.",
-      "ms": 339,
+      "ms": 302,
       "verdict": "DATA_GAP",
       "intent": "suppliers_of_selection"
     },
     {
       "q": "Show inventory again.",
-      "ms": 376,
+      "ms": 362,
       "verdict": "PASS",
       "intent": "inventory_analysis"
     }

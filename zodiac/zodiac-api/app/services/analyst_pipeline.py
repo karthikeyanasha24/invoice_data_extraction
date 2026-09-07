@@ -948,29 +948,7 @@ def run_analyst_pipeline(
         if not ok:
             if reason == "CANNOT_ANSWER":
                 # On first CANNOT_ANSWER, try a simpler fallback: just count rows from primary table
-                if attempt == 0 and intent.selected_tables:
-                    primary = intent.selected_tables[0]
-                    logger.warning("[pipeline] CANNOT_ANSWER — fallback count for table %s", primary)
-                    # Mark this as a degraded fallback up front — whether or not the
-                    # COUNT(*) itself succeeds, the original question was not answered,
-                    # and downstream summarization must not invent a narrative from it.
-                    intent.degraded_fallback = True
-                    sql = f"SELECT COUNT(*) AS total_rows FROM {primary}"
-                    ok2, _ = stage9_validate_sql(sql, intent)
-                    if ok2:
-                        try:
-                            rows, total_count, strategy = stage10_execute(sql, db_session, intent)
-                            exec_error = None
-                            intent.warnings.append(
-                                f"Original question was too complex — showing row count for {primary} instead."
-                            )
-                            break
-                        except Exception as e:
-                            exec_error = str(e)
-                            intent.warnings.append(
-                                f"Original question was too complex, and the fallback row-count "
-                                f"query also failed: {exec_error}"
-                            )
+                logger.warning("[pipeline] CANNOT_ANSWER — no COUNT(*) fallback")
                 break
             logger.warning("[pipeline] S9 invalid attempt=%d: %s", attempt + 1, reason)
             continue

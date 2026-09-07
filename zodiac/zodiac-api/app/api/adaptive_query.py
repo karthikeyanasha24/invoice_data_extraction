@@ -412,7 +412,9 @@ def _annotate_answer_status(payload: Dict[str, Any]) -> Dict[str, Any]:
         payload["answer_status"] = "ERROR"
         return payload
     sql = (payload.get("sql") or "").strip().lower()
-    if "invoice_v2_business_data" in sql and "total_rows" in sql:
+    if "total_rows" in sql and (
+        "invoice_v2_business_data" in sql or "invoice_business_data" in sql
+    ):
         # Legacy degraded count shape — never SUCCESS
         payload["answer_status"] = "CANNOT_ANSWER"
         payload["degraded_fallback"] = True
@@ -2472,6 +2474,16 @@ async def get_query_adaptive() -> Dict[str, Any]:
     return {"error": "method_not_allowed", "message": "Use POST /api/query/adaptive"}
 
 
+@router.get("/api/ai/schema/capabilities")
+async def get_ai_schema_capabilities(
+    current_user: ZodiacUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Diagnostic: which imported tables the AI Analyst can see and query."""
+    from ..services.adaptive_analyst.capabilities import schema_capabilities
+
+    return schema_capabilities()
+
+
 @router.get("/api/query/adaptive/history")
 async def get_adaptive_chat_history(
     thread_id: str = Query(..., min_length=8),
@@ -2611,7 +2623,19 @@ async def post_query_adaptive(
         logger.warning("[adaptive] ranking normalizer failed: %s", _norm_err)
         q = _original_question
 
-    api_key = _get_openai_key()
+    openai_key = (
+        os.getenv("OPENAI_API_KEY") or os.getenv("OPEN_AI_KEY") or OPENAI_API_KEY or ""
+    ).strip()
+    google_key = (os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GEMINI_API_KEY") or "").strip()
+    from ..services.ai_native_pipeline import ai_native_enabled
+    from ..services.adaptive_analyst import orchestrator_enabled, run_adaptive_orchestrator
+
+    if not openai_key and not google_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Set OPEN_AI_KEY or GOOGLE_API_KEY on the server",
+        )
+    api_key = openai_key
     thread_id = (threadId or "").strip() or None
     if thread_id and not thread_id.startswith("ada_"):
         thread_id = None  # ignore non-adaptive thread ids
@@ -2758,6 +2782,40 @@ async def post_query_adaptive(
             prev_plan_dict = None
             rows_list = []
             logger.info("[adaptive] cleared contaminated prior SQL/rows before turn classification")
+
+    # Generative AI page: one orchestrator (general LLM → DB intelligence → result).
+    # Compilers remain fallback only if the orchestrator crashes.
+    if (orchestrator_enabled() or ai_native_enabled()) and not (overrideSql and overrideSql.strip()):
+        try:
+            orch = run_adaptive_orchestrator(
+                _original_question or clean_q,
+                db,
+                _execute_sql,
+                use_sap=bool(USE_SAP_DB_FOR_AI),
+                chart_fn=lambda qq, sql, rows: _ensure_charts(qq, sql or "", rows or [], []),
+                prior_question=prev_q,
+                prior_sql=prev_sql,
+                prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+                prior_rows=rows_list,
+                get_sap_session=get_sap_session,
+                thread_id=thread_id or "",
+            )
+            if orch:
+                orch["tableHint"] = tableHint
+                logger.info(
+                    "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s",
+                    orch.get("mode"),
+                    orch.get("route"),
+                    orch.get("llm_calls"),
+                    orch.get("rowCount"),
+                )
+                return _persist_and_return(orch)
+        except Exception as native_err:
+            logger.warning("[adaptive] orchestrator failed, falling back to compilers: %s", native_err)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     turn = classify_turn(
         clean_q,

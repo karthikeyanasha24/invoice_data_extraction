@@ -21,6 +21,11 @@ ENABLE_MULTI_MODEL = os.getenv(
     "true" if GOOGLE_API_KEY else "false",
 ).lower() == "true"
 ENABLE_SECONDARY_LLM_SQL = os.getenv("ENABLE_SECONDARY_LLM_SQL", "true").lower() == "true"
+# When true (default), adaptive query uses the LLM for analyse → tables → columns → SQL → summary.
+# Catalog/metric JSON is a GUIDE only. Set AI_NATIVE_PIPELINE=false to restore compiler-first routing.
+AI_NATIVE_PIPELINE = os.getenv("AI_NATIVE_PIPELINE", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 
 # AI Analysis Model Configuration
 # For insights/summaries, use a more powerful model. Options:
