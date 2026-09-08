@@ -30,7 +30,7 @@ import {
 } from '@/lib/investigationLaunch';
 import {
   ADAPTIVE_CONTEXT_POLICY,
-  buildFollowupContextData,
+  followupContextForSend,
   lastSuccessfulAnalyticalContext,
   updateLastSuccessfulAnalyticalContext,
   type LastSuccessfulAnalyticalContext,
@@ -506,11 +506,20 @@ function ConversationCard({ message }: { message: string }) {
     </div>
   );
 }
-  const examples = [
-    { label: 'Top customers by sales', question: 'Show the top customers by sales.' },
-    { label: 'Highest sales by country', question: 'Show the highest sales by country.' },
-    { label: 'Highest sales by industry', question: 'Show the highest sales by industry.' },
-  ];
+
+function ClarificationCard({ message, onAskFollowup }: { message: string; onAskFollowup?: (q: string) => void }) {
+  const asksLimit = /how many|should i return|answer with a number/i.test(message || '');
+  const examples = asksLimit
+    ? [
+        { label: 'Top 5', question: 'top 5 customers by billed sales' },
+        { label: 'Top 10', question: 'top 10 customers by billed sales' },
+        { label: 'Top 20', question: 'top 20 customers by billed sales' },
+      ]
+    : [
+        { label: 'Sales orders', question: 'How many sales orders are there?' },
+        { label: 'Billed invoices', question: 'Show the top customers by billed sales.' },
+        { label: 'Highest sales by country', question: 'Show the highest sales by country.' },
+      ];
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
       <p className="text-sm text-slate-800 whitespace-pre-line">{message}</p>
@@ -908,7 +917,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     // chat turn. Clarification / non-business replies do not update this ref.
     // Overview / ?q= deep-links are standalone investigations.
     const treatAsNew = Boolean(opts?.asNew) || isNewQuestion;
-    const contextData = buildFollowupContextData(
+    const contextData = followupContextForSend(
+      messages,
       lastSuccessfulAnalyticalRef.current,
       treatAsNew,
     );
@@ -954,7 +964,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         kpis:        isCannotAnswer ? [] : (res.kpis || []),
         charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
         suggested_followups: res.suggested_followups || res.suggestedFollowups || [],
-        answer_status: answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS'),
+        answer_status: isClarification
+          ? 'CLARIFICATION'
+          : (answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS')),
         mode:        res.mode || res.route || res.meta?.mode,
         calculation: res.calculation,
         meta:        res.meta || {
@@ -966,7 +978,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         },
         ...( {
           query_plan: res.query_plan || res.queryPlan,
-          answer_status: answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS'),
+          answer_status: isClarification
+            ? 'CLARIFICATION'
+            : (answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS')),
         } as any),
       };
 

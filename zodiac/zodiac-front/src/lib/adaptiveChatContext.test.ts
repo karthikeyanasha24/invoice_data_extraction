@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ADAPTIVE_CONTEXT_POLICY,
   buildFollowupContextData,
+  followupContextForSend,
   lastSuccessfulAnalyticalContext,
   updateLastSuccessfulAnalyticalContext,
   type AdaptiveChatMessage,
@@ -172,5 +173,47 @@ describe('last successful analytical context policy', () => {
     assert.equal(scanned?.previousQuestion, 'Show highest sales for 2004');
     assert.equal(scanned?.previousSQL, SQL_2004);
     assert.notEqual(scanned?.previousQuestion, 'Meaning of life');
+  });
+
+  it('after a sales clarification, typed sales order sends the pending choice context', () => {
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show me our sales data.' },
+      { role: 'assistant', content: 'Do you want sales orders or billed invoices?', result: {
+        sql: '',
+        data: [],
+        answer_status: 'CLARIFICATION',
+        query_plan: { awaiting_sales_choice: true },
+      } },
+    ];
+    const ctx = followupContextForSend(messages, null, false);
+    assert.equal(ctx?.previousAnswerStatus, 'CLARIFICATION');
+    assert.equal(ctx?.previousQuestion, 'Show me our sales data.');
+    assert.equal((ctx?.previousPlan as { awaiting_sales_choice?: boolean })?.awaiting_sales_choice, true);
+    assert.equal(followupContextForSend(messages, null, true), null);
+  });
+
+  it('general chat follow-up keeps prior general context for short questions', () => {
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'who is the cm of tn' },
+      { role: 'assistant', content: 'M. K. Stalin', result: {
+        sql: '',
+        data: [],
+        mode: 'general_chat',
+        answer_status: 'SUCCESS',
+        query_plan: {
+          last_mode: 'general_chat',
+          investigation_state: {
+            mode: 'general_chat',
+            last_user_question: 'who is the cm of tn',
+            last_summary: 'M. K. Stalin is the Chief Minister of Tamil Nadu.',
+          },
+        },
+      } },
+      { role: 'user', content: 'as of?' },
+    ];
+    const ctx = followupContextForSend(messages, null, false);
+    assert.equal(ctx?.previousQuestion, 'who is the cm of tn');
+    assert.equal((ctx?.previousPlan as { last_mode?: string })?.last_mode, 'general_chat');
+    assert.equal(ctx?.previousSQL, '');
   });
 });

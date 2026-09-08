@@ -70,11 +70,53 @@ _SEMANTIC_BUSINESS = re.compile(
 _NONSENSE_HINTS = (
     "meaning of life", "drop all tables", "write a poem", "tell me a joke",
     "what is 2+2", "hello world", "lorem ipsum", "sing a song",
-    "how are you", "what's your name", "who are you",
+    "what's your name", "who are you",
     "favorite color", "what's the weather", "weather today",
     "who is the president", "who invented the telephone",
     "ceo of microsoft",
 )
+
+_GREETING_EXACT = frozenset({
+    "hi", "hello", "hey", "hai", "hii", "heya", "hola", "yo", "sup",
+    "thanks", "thank you", "thankyou", "ok", "okay", "bye", "goodbye",
+    "good morning", "good evening", "good afternoon", "good night",
+    "how are you", "how are you doing", "what's up", "whats up",
+})
+
+_GREETING_SUBSTRINGS = (
+    "hi", "hello", "hey", "hai", "hola", "thanks", "thank you",
+    "good morning", "good evening", "good afternoon", "how are you",
+)
+
+_CHITCHAT_FILLER_WORDS = frozenset({
+    "i", "said", "just", "saying", "only", "simply", "well", "um", "uh",
+})
+
+_DATA_KEYWORDS_IN_GREETING = frozenset({
+    "invoice", "invoices", "sales", "revenue", "customer", "product",
+    "country", "industry", "order", "orders", "vendor", "billing", "purchase",
+    "material", "stock", "delivery", "profit", "margin",
+})
+
+
+def is_greeting_or_chitchat(question: str) -> bool:
+    """Short greetings/thanks that should not trigger SQL or a capability lecture."""
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    q_clean = re.sub(r"[?!.,]+$", "", q).strip()
+    if q_clean in _GREETING_EXACT:
+        return True
+    if any(k in q_clean for k in _DATA_KEYWORDS_IN_GREETING):
+        return False
+    words = q_clean.split()
+    if len(words) > 4:
+        return False
+    if any(g in q_clean for g in _GREETING_SUBSTRINGS):
+        non_greeting = [w for w in words if w not in _CHITCHAT_FILLER_WORDS and not any(g in w for g in ("hi", "hello", "hey", "hai", "hola"))]
+        if len(non_greeting) <= 1:
+            return True
+    return False
 
 _SHORT_FOLLOWUP_TOKENS = {
     "trading", "top", "bottom", "count", "sales", "remove", "filter",
@@ -627,6 +669,8 @@ def is_supported_business_question(
     q = (question or "").strip()
     if not q:
         return False, "empty_question"
+    if is_greeting_or_chitchat(q):
+        return False, "greeting"
     ql = q.lower()
     if any(h in ql for h in _NONSENSE_HINTS):
         return False, "non_business"
@@ -659,7 +703,26 @@ def is_supported_business_question(
     return False, "no_business_signal"
 
 
+def greeting_welcome_payload(question: str) -> Dict[str, Any]:
+    summary = "Hi there! How can I help you today?"
+    return {
+        "type": "clarification",
+        "answer_status": "CLARIFICATION",
+        "sql": "",
+        "rowCount": 0,
+        "data": [],
+        "charts": [],
+        "summary": summary,
+        "answer": summary,
+        "keyFindings": [],
+        "question": (question or "")[:500],
+        "failure_reason": "greeting",
+    }
+
+
 def clarification_payload(question: str, reason: str) -> Dict[str, Any]:
+    if reason == "greeting" or is_greeting_or_chitchat(question):
+        return greeting_welcome_payload(question)
     try:
         from ..data_catalog.capability import capability_summary
         from ..data_catalog.source_selector import select_source
@@ -667,13 +730,19 @@ def clarification_payload(question: str, reason: str) -> Dict[str, Any]:
         spec = select_source(question)
         if spec.needs_clarification and spec.clarification_message:
             summary = spec.clarification_message
+        elif reason in ("non_business", "unsafe_or_non_business", "non_analytical_topic"):
+            summary = (
+                "That's outside what I can analyze here. Ask a business question about sales, "
+                "billing, purchasing, customers, inventory, or EDI operations."
+            )
+        elif reason == "no_business_signal":
+            summary = (
+                "I didn't catch a business metric or dimension in that message. "
+                "Try something like: \"Show top 10 customers by billing revenue\" or "
+                "\"How many sales orders are there?\""
+            )
         else:
             summary = capability_summary()
-            if reason == "no_business_signal":
-                summary = (
-                    capability_summary()
-                    + " I could not identify a business metric or dimension in that message."
-                )
     except Exception:
         summary = (
             "I can answer governed SAP questions across sales orders, billing, purchasing, "

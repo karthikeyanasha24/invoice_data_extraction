@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -39,6 +40,221 @@ def orchestrator_enabled() -> bool:
     return os.getenv("AI_NATIVE_PIPELINE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
+SALES_ORDERS_VS_BILLED = (
+    "I found both sales-order data (VBAK/VBAP) and invoiced/billed sales (VBRK/VBRP). "
+    "Do you want: 1) Sales orders  2) Invoiced/billed sales?"
+)
+
+_GENERAL_CHAT_SYSTEM = (
+    "You are BridgeEDI AI Analyst. Always respond in clear English unless the user writes "
+    "their entire message in another language. Be concise and natural, like ChatGPT or Gemini. "
+    "Answer general knowledge directly. Do not invent SAP database numbers. "
+    "Do not mention pipelines, schemas, or internal tooling unless asked."
+)
+
+
+def _deterministic_greeting_reply(question: str) -> Optional[str]:
+    """Fast English greeting — avoids LLM language drift on hi/hai/hey."""
+    try:
+        from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
+    except Exception:
+        return None
+    if not is_greeting_or_chitchat(question):
+        return None
+    ql = re.sub(r"[?!.,]+$", "", (question or "").strip().lower())
+    if ql in {"thanks", "thank you", "thankyou"}:
+        return "You're welcome! Ask me anything — general questions or SAP business analysis."
+    if ql in {"bye", "goodbye", "good night"}:
+        return "Goodbye! Come back anytime you need help."
+    if ql in {"good morning", "good evening", "good afternoon"}:
+        return "Hello! How can I help you today?"
+    return "Hi there! How can I help you today?"
+
+
+def _is_questionnaire(text: str) -> bool:
+    t = text or ""
+    return (
+        t.count("?") >= 3
+        or len(t) > 280
+        or "currency conversion" in t.lower()
+        or "credit memo" in t.lower()
+        or "preferred output" in t.lower()
+    )
+
+
+def _is_sales_vs_billing_clarify(msg: str) -> bool:
+    t = (msg or "").lower()
+    return ("sales order" in t or "sales-order" in t) and (
+        "billed" in t or "invoice" in t or "billing" in t
+    )
+
+
+def _short_clarification(msg: str) -> str:
+    if not msg or _is_questionnaire(msg):
+        return SALES_ORDERS_VS_BILLED
+    return msg.strip()
+
+
+def _awaiting_sales_choice(prior_plan: Optional[Dict[str, Any]], prior_question: str = "") -> bool:
+    plan = prior_plan or {}
+    if plan.get("awaiting_sales_choice"):
+        return True
+    state = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
+    if str(state.get("awaiting") or "") == "sales_vs_billing":
+        return True
+    pq = (prior_question or "").strip().lower()
+    return bool(re.fullmatch(r"(show( me)?( our)? )?sales( data)?\.?", pq))
+
+
+_TOPN_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "fifteen": 15, "twenty": 20, "fifty": 50,
+}
+
+
+def _parse_topn(question: str) -> Optional[int]:
+    ql = re.sub(r"[.?!]+$", "", (question or "").strip().lower())
+    if re.fullmatch(r"\d{1,3}", ql):
+        n = int(ql)
+        return n if 1 <= n <= 100 else None
+    if ql in _TOPN_WORDS:
+        return _TOPN_WORDS[ql]
+    m = re.fullmatch(r"(top\s+)?(\d{1,3})(\s+customers?)?", ql)
+    if m:
+        n = int(m.group(2))
+        return n if 1 <= n <= 100 else None
+    return None
+
+
+def _prior_is_sales_ranking(prior_question: str) -> bool:
+    pq = (prior_question or "").strip().lower()
+    if not pq:
+        return False
+    if re.search(r"\btop\s+(\d+\s+)?(customers?|countries)\s+by\s+(sales|revenue)\b", pq):
+        return True
+    if re.search(r"\bhighest sales\b", pq) or re.search(r"\bwho(m)? had\b", pq):
+        return True
+    return False
+
+
+def ensure_default_ranking_limit(question: str) -> str:
+    """If the question is a top-customers ranking without N, default to top 10."""
+    q = (question or "").strip()
+    if re.search(r"\btop\s+\d+\b", q, re.I):
+        return q
+    return re.sub(
+        r"\btop\s+(customers?|countries)\s+by\s+",
+        r"top 10 \1 by ",
+        q,
+        count=1,
+        flags=re.I,
+    )
+
+
+def resolve_topn_choice(question: str, prior_question: str = "") -> Optional[str]:
+    """Map a bare number after a ranking question to 'top N customers by sales'."""
+    n = _parse_topn(question)
+    if n is None or not _prior_is_sales_ranking(prior_question):
+        return None
+    years = re.findall(r"\b((?:19|20)\d{2})\b", prior_question or "")
+    q = f"top {n} customers by sales"
+    if years:
+        q += " in " + " and ".join(sorted(set(years)))
+    return q
+
+
+def resolve_sales_choice(question: str, awaiting: bool = False) -> Optional[str]:
+    """Map a short answer to the sales-orders vs billed-invoices clarify into a real question."""
+    ql = re.sub(r"[.?!]+$", "", (question or "").strip().lower())
+    ql = re.sub(r"^\s*(option|choice|#)\s*", "", ql)
+    if awaiting and re.fullmatch(r"(1|1\))", ql):
+        return "How many sales orders are there?"
+    if awaiting and re.fullmatch(r"(2|2\))", ql):
+        return "Show the top customers by billed sales."
+    if re.fullmatch(r"(orders?|sales\s*orders?|sales-order|vbak|vbap)", ql):
+        return "How many sales orders are there?"
+    if re.fullmatch(
+        r"(billed|billing|invoices?|billed invoices?|invoiced|invoiced sales|"
+        r"recognized invoices?|vbrk|vbrp)",
+        ql,
+    ):
+        return "Show the top customers by billed sales."
+    if awaiting and re.fullmatch(r"(first|the first( one)?)", ql):
+        return "How many sales orders are there?"
+    if awaiting and re.fullmatch(r"(second|the second( one)?)", ql):
+        return "Show the top customers by billed sales."
+    return None
+
+
+def _is_limit_clarify(msg: str) -> bool:
+    t = (msg or "").lower()
+    return bool(
+        re.search(r"how many (top )?customers", t)
+        or "should i return" in t
+        or "answer with a number" in t
+        or ("how many" in t and "top" in t)
+    )
+
+
+@dataclass
+class AdaptedTurn:
+    """Deterministic reading of this user turn. LLM must not override it."""
+
+    action: str  # query | clarify | chat
+    question: str
+    drop_prior: bool = False
+    is_fragment: bool = False
+    clarify_message: str = ""
+
+
+def adapt_user_turn(
+    question: str,
+    *,
+    prior_question: str = "",
+    prior_plan: Optional[Dict[str, Any]] = None,
+    prior_status: str = "",
+) -> AdaptedTurn:
+    """Map the current message to query / one allowed clarify / chat. No LLM."""
+    from ...data_catalog.source_selector import _ambiguous_sales, _ql
+    from ..ai_followup_routing import looks_like_followup_utterance, looks_like_standalone_analytical
+    from ..ranking_question_normalizer import normalize_ranking_question
+
+    q = (question or "").strip()
+    if _force_general_chat(q):
+        return AdaptedTurn("chat", q)
+
+    awaiting_sales = _awaiting_sales_choice(prior_plan, prior_question)
+    chosen = resolve_sales_choice(q, awaiting=awaiting_sales)
+    if chosen:
+        return AdaptedTurn("query", chosen, drop_prior=True)
+
+    status = (prior_status or "").upper()
+    topn = resolve_topn_choice(q, prior_question)
+    if not topn and _parse_topn(q) and not awaiting_sales:
+        if status == "CLARIFICATION" or _prior_is_sales_ranking(prior_question):
+            topn = resolve_topn_choice(q, prior_question or "highest sales")
+    if topn:
+        return AdaptedTurn("query", ensure_default_ranking_limit(topn), drop_prior=True)
+
+    ranked = normalize_ranking_question(q)
+    ranked = ensure_default_ranking_limit(ranked)
+    ql = _ql(ranked)
+    if _ambiguous_sales(ql):
+        return AdaptedTurn(
+            "clarify",
+            ranked,
+            clarify_message=SALES_ORDERS_VS_BILLED,
+        )
+
+    standalone = looks_like_standalone_analytical(ranked)
+    fragment = looks_like_followup_utterance(q) and not standalone
+    drop = standalone or bool(
+        re.search(r"\b(highest sales|top \d+ customers by sales|who had)\b", ranked, re.I)
+    )
+    return AdaptedTurn("query", ranked, drop_prior=drop, is_fragment=fragment)
+
+
 def _log_stage(name: str, payload: Dict[str, Any]) -> None:
     safe = {k: payload.get(k) for k in list(payload)[:12]}
     logger.info("[adaptive-orch] %s %s", name, json.dumps(safe, default=str)[:800])
@@ -47,8 +263,22 @@ def _log_stage(name: str, payload: Dict[str, Any]) -> None:
 def _force_general_chat(question: str) -> bool:
     """Safety net: never send obvious non-data chat to SQL. LLM still classifies first."""
     ql = re.sub(r"[?!.,]+$", "", (question or "").strip().lower())
-    if ql in {"hi", "hello", "hey", "how are you", "how are you doing", "thanks", "thank you", "yo"}:
+    if ql in {
+        "hi", "hello", "hey", "hai", "hii", "heya", "hola", "yo", "sup",
+        "how are you", "how are you doing", "thanks", "thank you", "good morning",
+    }:
         return True
+    if re.fullmatch(r"(as of|since when|when|how about that)\??", ql):
+        return True
+    if re.search(r"\b(who is|chief minister|cm of|prime minister|president of)\b", ql):
+        return True
+    try:
+        from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
+
+        if is_greeting_or_chitchat(question):
+            return True
+    except Exception:
+        pass
     if "meaning of life" in ql:
         return True
     if ql.startswith("explain ") and not any(
@@ -56,6 +286,15 @@ def _force_general_chat(question: str) -> bool:
     ):
         return True
     return False
+
+
+def _general_chat_prompt(question: str, state: "InvestigationState") -> str:
+    parts: List[str] = []
+    if state.last_user_question and state.last_summary:
+        parts.append(f"Previous user message: {state.last_user_question}")
+        parts.append(f"Your previous answer: {state.last_summary}")
+    parts.append(f"Current user message: {question}")
+    return "\n".join(parts)
 
 
 _DIM_ALIASES = {
@@ -103,13 +342,22 @@ def _pipeline1_understand(
             "conversation_reference.\n"
             "Greetings, how are you, thanks, what can you do, what is SAP, meaning of life, "
             "explain machine learning → requires_database=false, question_type greeting/"
-            "general_conversation/general_knowledge.\n"
+            "general_conversation/general_knowledge. reply MUST be in English.\n"
             "OUR company facts (sales, invoices, VBAK, customers) → requires_database=true.\n"
             "Short follow-ups (which country?, reflected?, they, Germany, top 5, 2005, why?, "
             "industry?, the product, who supplied) MUST is_follow_up=true and rewritten_question "
             "must be a FULL question using investigation state. Never send 'reflected?' to SQL.\n"
-            "If sales orders vs billed invoices is ambiguous AND there is no prior investigation, "
-            "clarification_needed=true.\n"
+            "A COMPLETE question (who/which + highest sales + a year, or 'top customers by sales') "
+            "is a NEW investigation. Do not reuse the previous tables. Unqualified highest/top sales "
+            "means billed invoices (VBRK/VBRP), not sales orders.\n"
+            "clarification_needed for sales orders vs billed invoices ONLY if the user said bare "
+            "'sales' / 'show me our sales data' with no year, ranking, customer, or table name. "
+            "Never re-ask that choice after they already answered, and never ask it for "
+            "'who had the highest sales in 2004'. "
+            "Never ask how many rows or top-N to return — default LIMIT 10. "
+            "clarification_question MUST be exactly two short sentences. "
+            "Never ask about currency conversion, credit memos, output format, metrics list, "
+            "or more than one question mark.\n"
             f"User: {question}\n"
             f"Investigation state: {json.dumps(state.to_dict(), default=str)}\n"
             f"Prior result sample: {json.dumps(sample_rows[:5], default=str)[:1500]}\n"
@@ -118,6 +366,54 @@ def _pipeline1_understand(
     analysis["_provider"] = provider
     _log_stage("PIPELINE_1", analysis)
     return analysis
+
+
+def _run_four_stage_or_legacy_sql(
+    resolved: str,
+    original: str,
+    analysis: Dict[str, Any],
+    state: InvestigationState,
+    db: Session,
+    execute_sql: ExecuteSql,
+    *,
+    use_sap: bool,
+    get_sap_session: Optional[Callable[[], Any]],
+    prior_plan: Optional[Dict[str, Any]] = None,
+    prior_sql: str = "",
+) -> Dict[str, Any]:
+    """Four-stage schema-intelligence pipeline (primary). Legacy _pipeline2_sql on crash."""
+    sess = db
+    sap = None
+    try:
+        if use_sap and get_sap_session:
+            sap = get_sap_session()
+            if sap is not None:
+                sess = sap
+        from ..four_stage_db_pipeline import run_four_stage_database_query
+
+        merged_plan: Dict[str, Any] = dict(prior_plan or {})
+        inv = merged_plan.get("investigation_state")
+        if not isinstance(inv, dict):
+            merged_plan["investigation_state"] = state.to_dict()
+        return run_four_stage_database_query(
+            resolved,
+            sess,
+            execute_sql,
+            prior_plan=merged_plan,
+            prior_sql=(prior_sql or state.last_sql or "").strip(),
+        )
+    except Exception as exc:
+        logger.warning("[adaptive-orch] four_stage failed (%s); using legacy pipeline2", exc)
+        return _pipeline2_sql(
+            resolved, original, analysis, state, db, execute_sql,
+            use_sap=use_sap, get_sap_session=get_sap_session,
+        )
+    finally:
+        if sap is not None:
+            try:
+                sap.close()
+            except Exception:
+                pass
 
 
 def _pipeline2_sql(
@@ -290,13 +586,82 @@ def run_adaptive_orchestrator(
     prior_rows: Optional[List[Dict[str, Any]]] = None,
     get_sap_session: Optional[Callable[[], Any]] = None,
     thread_id: str = "",
+    prior_status: str = "",
 ) -> Dict[str, Any]:
     q = (question or "").strip()
+    adapted = adapt_user_turn(
+        q,
+        prior_question=prior_question,
+        prior_plan=prior_plan,
+        prior_status=prior_status,
+    )
+    q = adapted.question
+    if adapted.drop_prior:
+        prior_question = ""
+        prior_sql = ""
+        prior_plan = None
+        prior_rows = []
     state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
     if thread_id:
         state.conversation_id = thread_id
 
-    p1 = _pipeline1_understand(q, state, prior_rows or [])
+    from ...data_catalog.source_selector import (
+        _ambiguous_sales,
+        _explicit_invoice,
+        _explicit_sales_order,
+        _ql,
+        select_source,
+    )
+
+    if adapted.action == "clarify":
+        return {
+            "mode": "clarification",
+            "route": "clarification",
+            "status": "clarification",
+            "answer_status": "CLARIFICATION",
+            "type": "clarification",
+            "sql": "",
+            "data": [],
+            "rowCount": 0,
+            "summary": adapted.clarify_message or SALES_ORDERS_VS_BILLED,
+            "answer": adapted.clarify_message or SALES_ORDERS_VS_BILLED,
+            "keyFindings": [],
+            "pipeline": "adaptive_orchestrator",
+            "sql_generation_method": "turn_adapter",
+            "llm_calls": 0,
+            "query_plan": {
+                "investigation_state": {**state.to_dict(), "awaiting": "sales_vs_billing"},
+                "awaiting_sales_choice": True,
+            },
+            "suggested_followups": [
+                "How many sales orders are there?",
+                "Show the top customers by billed sales.",
+            ],
+        }
+
+    if adapted.action == "chat":
+        skip_p1_clarify = True
+        p1 = {
+            "question_type": "general_conversation",
+            "route": "general",
+            "requires_database": False,
+            "clarification_needed": False,
+            "rewritten_question": q,
+            "reply": "",
+        }
+    else:
+        skip_p1_clarify = not adapted.is_fragment
+        if skip_p1_clarify:
+            p1 = {
+                "question_type": "database_question",
+                "route": "database",
+                "requires_database": True,
+                "clarification_needed": False,
+                "rewritten_question": q,
+                "intent": "turn_adapter",
+            }
+        else:
+            p1 = _pipeline1_understand(q, state, prior_rows or [])
     qtype = str(p1.get("question_type") or "").lower()
     route = str(p1.get("route") or "").lower()
     requires_db = bool(p1.get("requires_database"))
@@ -313,44 +678,63 @@ def run_adaptive_orchestrator(
         if not _force_general_chat(q):
             requires_db = True
 
-    if (route == "clarification" or p1.get("clarification_needed")) and not _force_general_chat(q):
-        msg = str(p1.get("clarification_question") or p1.get("reply") or "").strip()
-        if not msg:
-            msg = (
-                "I can answer that from the imported SAP data. "
-                "Do you mean sales orders (VBAK/VBAP) or invoiced/billed sales (VBRK/VBRP)?"
-            )
-        return {
-            "mode": "clarification",
-            "route": "clarification",
-            "status": "clarification",
-            "answer_status": "CLARIFICATION",
-            "type": "clarification",
-            "sql": "",
-            "data": [],
-            "rowCount": 0,
-            "summary": msg,
-            "answer": msg,
-            "keyFindings": [],
-            "pipeline": "adaptive_orchestrator",
-            "sql_generation_method": "pipeline1_clarification",
-            "llm_calls": 1,
-            "query_plan": {"investigation_state": state.to_dict(), "pipeline1": p1},
-            "suggested_followups": [
-                "Show the top customers by billed sales.",
-                "How many sales orders are there?",
-            ],
-        }
+    skip_clarify = skip_p1_clarify and adapted.action != "chat"
+    if skip_clarify:
+        requires_db = True
+        route = "database"
+    if (
+        (route == "clarification" or p1.get("clarification_needed"))
+        and not _force_general_chat(q)
+        and not skip_clarify
+    ):
+        msg = _short_clarification(
+            str(p1.get("clarification_question") or p1.get("reply") or "").strip()
+        )
+        if (
+            (_is_sales_vs_billing_clarify(msg) and not _ambiguous_sales(_ql(q)))
+            or _is_limit_clarify(msg)
+        ):
+            requires_db = True
+            route = "database"
+        else:
+            return {
+                "mode": "clarification",
+                "route": "clarification",
+                "status": "clarification",
+                "answer_status": "CLARIFICATION",
+                "type": "clarification",
+                "sql": "",
+                "data": [],
+                "rowCount": 0,
+                "summary": msg,
+                "answer": msg,
+                "keyFindings": [],
+                "pipeline": "adaptive_orchestrator",
+                "sql_generation_method": "pipeline1_clarification",
+                "llm_calls": 1,
+                "query_plan": {
+                    "investigation_state": state.to_dict(),
+                    "pipeline1": p1,
+                    "awaiting_sales_choice": _is_sales_vs_billing_clarify(msg),
+                },
+                "suggested_followups": [
+                    "Show the top customers by billed sales.",
+                    "How many sales orders are there?",
+                ],
+            }
 
     if not requires_db:
-        reply = str(p1.get("reply") or "").strip()
+        reply = _deterministic_greeting_reply(q) or ""
+        if not reply:
+            reply = str(p1.get("reply") or "").strip()
         if not reply:
             text, _ = complete_text(
-                "You are a helpful SAP business analyst assistant. Be concise and friendly. "
-                "Do not invent company numbers.",
-                q,
+                _GENERAL_CHAT_SYSTEM,
+                _general_chat_prompt(q, state),
             )
             reply = text
+        state.last_user_question = q
+        state.last_summary = reply[:2000]
         return {
             "mode": "general_chat",
             "route": "general",
@@ -366,7 +750,11 @@ def run_adaptive_orchestrator(
             "pipeline": "adaptive_orchestrator",
             "sql_generation_method": "pipeline1_general",
             "llm_calls": 1,
-            "query_plan": {"investigation_state": state.to_dict(), "pipeline1": p1},
+            "query_plan": {
+                "investigation_state": {**state.to_dict(), "mode": "general_chat"},
+                "pipeline1": p1,
+                "last_mode": "general_chat",
+            },
             "meta": {"mode": "general_chat", "intent": p1.get("intent")},
         }
 
@@ -398,10 +786,36 @@ def run_adaptive_orchestrator(
         gov.setdefault("pipeline", gov.get("pipeline") or "governed_under_orchestrator")
         return gov
 
-    p2 = _pipeline2_sql(
+    p2 = _run_four_stage_or_legacy_sql(
         resolved, q, p1, state, db, execute_sql,
         use_sap=use_sap, get_sap_session=get_sap_session,
+        prior_plan=prior_plan,
+        prior_sql=prior_sql,
     )
+    if p2.get("data_limitation"):
+        msg = str(p2["data_limitation"])
+        return {
+            "mode": "data_limitation",
+            "route": "database",
+            "status": "cannot_answer",
+            "answer_status": "CANNOT_ANSWER",
+            "type": "cannot_answer",
+            "sql": "",
+            "data": [],
+            "rowCount": 0,
+            "summary": msg,
+            "answer": msg,
+            "keyFindings": [],
+            "charts": [],
+            "pipeline": "four_stage_db_pipeline",
+            "sql_generation_method": "pipeline1_data_limitation",
+            "query_plan": {
+                "investigation_state": state.to_dict(),
+                "pipeline1": p1,
+                "verified_db_context": p2.get("verified_context"),
+                "pipeline_log": p2.get("pipeline_log"),
+            },
+        }
     if p2.get("error"):
         missing = p2.get("missing") or []
         if any(str(m).upper() == "VBED" for m in missing) or "vbed" in q.lower():
@@ -461,7 +875,9 @@ def run_adaptive_orchestrator(
             sql, rows, tables = p2b["sql"], p2b["rows"], p2b["tables"]
             p2 = p2b
             missing_dims = missing_result_dimensions(rows, [str(d) for d in requested_dims])
-    p3 = _pipeline3_interpret(q, resolved, sql, rows, tables, p1)
+    p3 = p2.get("narrative") if isinstance(p2.get("narrative"), dict) else None
+    if not p3:
+        p3 = _pipeline3_interpret(q, resolved, sql, rows, tables, p1)
     charts: List[Dict[str, Any]] = []
     if chart_fn and rows:
         try:
@@ -521,6 +937,8 @@ def run_adaptive_orchestrator(
         ],
         "query_plan": {
             "investigation_state": state.to_dict(),
+            "verified_db_context": p2.get("verified_context"),
+            "pipeline_log": p2.get("pipeline_log"),
             "analytical_context": {
                 "intent": p1.get("intent") or "adaptive_analysis",
                 "metric": state.metric,

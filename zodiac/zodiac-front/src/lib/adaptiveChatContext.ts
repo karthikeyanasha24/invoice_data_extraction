@@ -38,6 +38,45 @@ function answerStatusOf(result: AdaptiveQueryResultLike | undefined): string {
   return String(result?.answer_status || result?.answerStatus || '').toUpperCase();
 }
 
+export function isGeneralChatResult(
+  result: AdaptiveQueryResultLike | null | undefined,
+): boolean {
+  if (!result) return false;
+  const status = answerStatusOf(result);
+  if (BLOCKED_STATUSES.has(status)) return false;
+  const mode = String((result as { mode?: string }).mode || '').toLowerCase();
+  if (mode === 'general_chat' || mode === 'general') return true;
+  const sql = String(result.sql || '').trim();
+  return status === 'SUCCESS' && !sql;
+}
+
+export function lastGeneralChatContext(
+  messages: AdaptiveChatMessage[],
+): LastSuccessfulAnalyticalContext | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'assistant' || !isGeneralChatResult(message.result)) {
+      continue;
+    }
+    const result = message.result!;
+    let previousQuestion = '';
+    for (let j = i - 1; j >= 0; j--) {
+      if (messages[j].role === 'user') {
+        previousQuestion = messages[j].content;
+        break;
+      }
+    }
+    return {
+      previousQuestion,
+      previousSQL: '',
+      previousPlan: result.query_plan || result.queryPlan || { last_mode: 'general_chat' },
+      previousAnswerStatus: answerStatusOf(result) || 'SUCCESS',
+      data: [],
+    };
+  }
+  return null;
+}
+
 export function isSuccessfulAnalyticalResult(
   result: AdaptiveQueryResultLike | null | undefined,
 ): boolean {
@@ -94,6 +133,48 @@ export function updateLastSuccessfulAnalyticalContext(
     previousAnswerStatus: answerStatusOf(result!) || 'SUCCESS',
     data: Array.isArray(result!.data) ? result!.data.slice(0, 20) : [],
   };
+}
+
+export function lastPendingClarificationContext(
+  messages: AdaptiveChatMessage[],
+): LastSuccessfulAnalyticalContext | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'assistant') continue;
+    if (answerStatusOf(message.result) !== 'CLARIFICATION') {
+      return null;
+    }
+    let previousQuestion = '';
+    for (let j = i - 1; j >= 0; j--) {
+      if (messages[j].role === 'user') {
+        previousQuestion = messages[j].content;
+        break;
+      }
+    }
+    return {
+      previousQuestion,
+      previousSQL: '',
+      previousPlan: message.result?.query_plan || message.result?.queryPlan || {
+        awaiting_sales_choice: /sales order/i.test(message.content || '') && /billed|invoice/i.test(message.content || ''),
+      },
+      previousAnswerStatus: 'CLARIFICATION',
+      data: [],
+    };
+  }
+  return null;
+}
+
+export function followupContextForSend(
+  messages: AdaptiveChatMessage[],
+  analytical: LastSuccessfulAnalyticalContext | null,
+  isNewQuestion: boolean,
+): LastSuccessfulAnalyticalContext | null {
+  if (isNewQuestion) return null;
+  return (
+    lastPendingClarificationContext(messages)
+    || buildFollowupContextData(analytical, false)
+    || lastGeneralChatContext(messages)
+  );
 }
 
 export function buildFollowupContextData(

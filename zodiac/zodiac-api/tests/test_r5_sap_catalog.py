@@ -100,6 +100,12 @@ def test_source_selector_sales_vs_invoice_vs_purchasing():
     spec = select_source("Show me our sales data.")
     assert spec.needs_clarification is True
     assert "sales-order" in spec.clarification_message.lower() or "vbak" in spec.clarification_message.lower()
+    ranked = select_source("Who had the highest sales in 2004?")
+    assert ranked.needs_clarification is False
+    assert ranked.reason != "ambiguous_sales_vs_billing"
+    canon = select_source("top customers by sales in 2004")
+    assert canon.needs_clarification is False
+    assert canon.domain == "invoice"
 
 
 def test_followup_sales_does_not_steal_r3_context():

@@ -37,6 +37,7 @@ from ..services.ai_followup_routing import (
     TurnIntent,
     classify_turn,
     resolve_follow_up_sql_need,
+    should_route_to_general_chat,
 )
 from ..services.adaptive_nl_sql_hardening import (
     StageTimer,
@@ -2783,39 +2784,37 @@ async def post_query_adaptive(
             rows_list = []
             logger.info("[adaptive] cleared contaminated prior SQL/rows before turn classification")
 
-    # Generative AI page: one orchestrator (general LLM → DB intelligence → result).
-    # Compilers remain fallback only if the orchestrator crashes.
-    if (orchestrator_enabled() or ai_native_enabled()) and not (overrideSql and overrideSql.strip()):
-        try:
-            orch = run_adaptive_orchestrator(
-                _original_question or clean_q,
-                db,
-                _execute_sql,
-                use_sap=bool(USE_SAP_DB_FOR_AI),
-                chart_fn=lambda qq, sql, rows: _ensure_charts(qq, sql or "", rows or [], []),
-                prior_question=prev_q,
-                prior_sql=prev_sql,
-                prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
-                prior_rows=rows_list,
-                get_sap_session=get_sap_session,
-                thread_id=thread_id or "",
-            )
-            if orch:
-                orch["tableHint"] = tableHint
-                logger.info(
-                    "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s",
-                    orch.get("mode"),
-                    orch.get("route"),
-                    orch.get("llm_calls"),
-                    orch.get("rowCount"),
-                )
-                return _persist_and_return(orch)
-        except Exception as native_err:
-            logger.warning("[adaptive] orchestrator failed, falling back to compilers: %s", native_err)
-            try:
-                db.rollback()
-            except Exception:
-                pass
+    from ..services.adaptive_analyst.orchestrator import adapt_user_turn
+
+    adapted = adapt_user_turn(
+        clean_q,
+        prior_question=prev_q,
+        prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+        prior_status=prev_status,
+    )
+    if adapted.action == "query":
+        clean_q = adapted.question
+        q = adapted.question
+        if adapted.drop_prior:
+            prev_q = ""
+            prev_sql = ""
+            prev_plan_dict = None
+            rows_list = []
+    elif adapted.action == "clarify":
+        return _persist_and_return({
+            "type": "clarification",
+            "answer_status": "CLARIFICATION",
+            "sql": "",
+            "rowCount": 0,
+            "data": [],
+            "summary": adapted.clarify_message,
+            "answer": adapted.clarify_message,
+            "query_plan": {"awaiting_sales_choice": True},
+            "suggested_followups": [
+                "How many sales orders are there?",
+                "Show the top customers by billed sales.",
+            ],
+        })
 
     turn = classify_turn(
         clean_q,
@@ -2831,6 +2830,74 @@ async def post_query_adaptive(
         turn.reason,
         bool(prev_sql or prev_plan_dict),
     )
+    if turn.intent == TurnIntent.NEW_ANALYTICAL_QUERY:
+        prev_q = ""
+        prev_sql = ""
+        prev_plan_dict = None
+        rows_list = []
+
+    # Generative AI page: orchestrator for business SQL and for general chat (greetings, world knowledge).
+    _orch_enabled = (orchestrator_enabled() or ai_native_enabled()) and not (overrideSql and overrideSql.strip())
+    _business_turn = turn.intent not in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}
+    _general_turn = should_route_to_general_chat(
+        clean_q,
+        turn,
+        previous_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+        previous_status=prev_status,
+        previous_sql=prev_sql,
+    )
+    if _orch_enabled and (_business_turn or _general_turn):
+        try:
+            orch = run_adaptive_orchestrator(
+                clean_q,
+                db,
+                _execute_sql,
+                use_sap=bool(USE_SAP_DB_FOR_AI),
+                chart_fn=lambda qq, sql, rows: _ensure_charts(qq, sql or "", rows or [], []),
+                prior_question=prev_q,
+                prior_sql=prev_sql,
+                prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+                prior_rows=rows_list,
+                get_sap_session=get_sap_session,
+                thread_id=thread_id or "",
+                prior_status=prev_status,
+            )
+            if orch:
+                orch["tableHint"] = tableHint
+                orch_status = str(orch.get("answer_status") or "").upper()
+                orch_mode = str(orch.get("mode") or "")
+                if _general_turn:
+                    if orch_mode == "general_chat" or (
+                        orch_status in {"SUCCESS", "CLARIFICATION"}
+                        and not str(orch.get("sql") or "").strip()
+                    ):
+                        logger.info(
+                            "[adaptive] general_chat mode=%s status=%s",
+                            orch_mode,
+                            orch_status,
+                        )
+                        return _persist_and_return(orch)
+                elif (
+                    orch_status in {"CANNOT_ANSWER", "ERROR"} or orch_mode == "error"
+                ) and not str(orch.get("sql") or "").strip():
+                    logger.info("[adaptive] orchestrator %s with no SQL — trying compilers", orch_status or orch_mode)
+                else:
+                    logger.info(
+                        "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s",
+                        orch.get("mode"),
+                        orch.get("route"),
+                        orch.get("llm_calls"),
+                        orch.get("rowCount"),
+                    )
+                    return _persist_and_return(orch)
+        except Exception as native_err:
+            logger.warning("[adaptive] orchestrator failed, falling back to compilers: %s", native_err)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    # Turn already classified above. Reuse that decision for compiler paths.
 
     if turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}:
         from ..services.analytical_deep_dive import wants_supplier_concentration as _wants_sc

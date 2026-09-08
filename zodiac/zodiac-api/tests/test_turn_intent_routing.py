@@ -9,6 +9,7 @@ from app.services.ai_followup_routing import (
     classify_turn,
     looks_like_followup_utterance,
     looks_like_standalone_analytical,
+    should_route_to_general_chat,
 )
 from app.services.ai_query_plan import apply_followup_delta, extract_query_plan
 from app.services.adaptive_nl_sql_hardening import is_supported_business_question
@@ -210,6 +211,17 @@ def test_standalone_2005_is_not_a_year_delta_on_invoice_count():
     assert not looks_like_followup_utterance("Show sales for 2005")
 
 
+def test_highest_sales_2004_is_new_query_after_sales_order_count():
+    vbak_sql = 'SELECT COUNT(*) AS order_count FROM "VBAK"'
+    for q in (
+        "Who had the highest sales in 2004?",
+        "top customers by sales in 2004",
+    ):
+        assert looks_like_standalone_analytical(q), q
+        got = _classify(q, "How many sales orders are there?", vbak_sql, {"domain": "sales"})
+        assert got.intent == TurnIntent.NEW_ANALYTICAL_QUERY, (q, got)
+
+
 def test_new_invoice_count_for_2005_does_not_keep_trading_filter():
     trading_plan = extract_query_plan(GOLDEN_TURNS[0])
     trading_plan = apply_followup_delta(trading_plan, "Only the Trading industry")
@@ -296,3 +308,24 @@ def test_context_data_alone_does_not_force_followup():
     assert got.intent != TurnIntent.FOLLOWUP_DELTA
     empty = _classify("Show sales for 2005")
     assert empty.intent == TurnIntent.NEW_ANALYTICAL_QUERY
+
+
+def test_should_route_general_chat_for_greetings_and_world_knowledge():
+    for q in ("hai", "hi", "who is the cm of tn", "i need to know who is the cm of tn"):
+        turn = classify_turn(q)
+        assert should_route_to_general_chat(q, turn), (q, turn.intent, turn.reason)
+    prior = {
+        "last_mode": "general_chat",
+        "investigation_state": {
+            "mode": "general_chat",
+            "last_user_question": "who is the cm of tn",
+            "last_summary": "M. K. Stalin is the Chief Minister of Tamil Nadu.",
+        },
+    }
+    turn = classify_turn("as of?")
+    assert should_route_to_general_chat(
+        "as of?",
+        turn,
+        previous_plan=prior,
+        previous_status="SUCCESS",
+    )

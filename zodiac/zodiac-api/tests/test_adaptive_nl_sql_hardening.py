@@ -372,6 +372,18 @@ def test_compose_nl_and_followup_sql_deltas():
     assert "ORDER BY total_sales" not in sql_cnt
 
 
+def test_greeting_returns_friendly_welcome_not_capability_dump():
+    for q in ("hi", "hai", "hello", "hey", "i said hi", "thanks"):
+        ok, reason = is_supported_business_question(q)
+        assert ok is False, q
+        assert reason == "greeting", (q, reason)
+        payload = clarification_payload(q, reason)
+        assert payload["answer_status"] == "CLARIFICATION"
+        assert "83 migrated" not in payload["summary"]
+        assert "BridgeEDI AI Analyst" not in payload["summary"] or "Hi there" in payload["summary"]
+        assert not (payload.get("sql") or "").strip()
+
+
 def test_intent_gate_allows_short_business_blocks_chit_chat():
     for q in ("sales 2004", "top customers", "invoice count", "highest industry"):
         ok, _reason = is_supported_business_question(q)

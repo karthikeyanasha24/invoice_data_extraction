@@ -49,7 +49,7 @@ def _years(q: str) -> List[str]:
 
 def _dims(ql: str) -> List[str]:
     dims = []
-    if re.search(r"\b(customers?|clients?|buyers?)\b", ql):
+    if re.search(r"\b(customers?|clients?|buyers?|who|whom|whose)\b", ql):
         dims.append("customer")
     if re.search(r"\b(countr(?:y|ies)|nations?)\b", ql):
         dims.append("country")

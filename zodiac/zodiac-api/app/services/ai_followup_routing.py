@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 from .ai_query_plan import QueryPlan, follow_up_needs_fresh_sql
-from .adaptive_nl_sql_hardening import is_supported_business_question
+from .adaptive_nl_sql_hardening import is_greeting_or_chitchat, is_supported_business_question
 
 
 class TurnIntent:
@@ -232,6 +232,16 @@ def looks_like_standalone_analytical(question: str) -> bool:
         return True
     if has_verb and has_metric and len(q) >= 24:
         return True
+    # Canonical ranking form after the interrogative normalizer ("Who had the
+    # highest sales in 2004?" → "top customers by sales in 2004").
+    if re.search(
+        r"\btop\s+(\d+\s+)?(customers?|countries|industries|products?)\s+by\s+(sales|revenue)\b",
+        q,
+        re.I,
+    ):
+        return True
+    if has_year and has_metric and re.search(r"\b(highest|who|which)\b", q, re.I):
+        return True
     return False
 
 
@@ -294,6 +304,53 @@ def _is_true_followup_delta(plan: QueryPlan) -> bool:
     return False
 
 
+def is_prior_general_chat(
+    previous_plan: Optional[Dict[str, Any]] = None,
+    previous_status: str = "",
+    previous_sql: str = "",
+) -> bool:
+    """True when the last turn was a general LLM reply (no SAP SQL)."""
+    sql = (previous_sql or "").strip()
+    if sql and re.search(r"\bselect\b", sql, re.I):
+        return False
+    if not isinstance(previous_plan, dict):
+        return False
+    if str(previous_plan.get("last_mode") or "").lower() == "general_chat":
+        return True
+    inv = previous_plan.get("investigation_state")
+    if isinstance(inv, dict) and str(inv.get("mode") or "").lower() == "general_chat":
+        return True
+    p1 = previous_plan.get("pipeline1")
+    if isinstance(p1, dict):
+        qt = str(p1.get("question_type") or "").lower()
+        if qt in {"greeting", "general_conversation", "general_knowledge"}:
+            return True
+    meta = previous_plan.get("meta")
+    if isinstance(meta, dict) and str(meta.get("mode") or "").lower() == "general_chat":
+        return True
+    return False
+
+
+def should_route_to_general_chat(
+    question: str,
+    turn: TurnClassification,
+    *,
+    previous_plan: Optional[Dict[str, Any]] = None,
+    previous_status: str = "",
+    previous_sql: str = "",
+) -> bool:
+    """Route to orchestrator Pipeline 1 general path (Gemini-style chat), not SQL compilers."""
+    if is_prior_general_chat(previous_plan, previous_status, previous_sql):
+        return True
+    if is_greeting_or_chitchat(question):
+        return True
+    if turn.intent == TurnIntent.NON_BUSINESS and turn.reason != "unsafe_or_non_business":
+        return True
+    if turn.intent == TurnIntent.CLARIFICATION_REQUIRED and turn.reason == "no_business_signal":
+        return True
+    return False
+
+
 def classify_turn(
     question: str,
     previous_question: str = "",
@@ -317,7 +374,7 @@ def classify_turn(
         q, has_active_analysis=has_active or has_deep, previous_plan=previous_plan
     )
     if not allowed:
-        if gate_reason == "non_business" or gate_reason == "unsafe_or_non_business":
+        if gate_reason in {"non_business", "unsafe_or_non_business", "greeting"}:
             return TurnClassification(TurnIntent.NON_BUSINESS, gate_reason)
         if _AMBIGUOUS_TURN.match(q):
             return TurnClassification(TurnIntent.CLARIFICATION_REQUIRED, "ambiguous")

@@ -155,6 +155,12 @@ def warmup_adaptive_runtime() -> Dict[str, Any]:
     info: Dict[str, Any] = {"ok": True}
     t0 = time.perf_counter()
     try:
+        from ..services.schema_intelligence_registry import warmup_schema_registry
+
+        info["schema_registry"] = warmup_schema_registry()
+    except Exception as exc:  # noqa: BLE001
+        info["schema_registry_error"] = str(exc)[:240]
+    try:
         from ..api.adaptive_query import _load_schema
 
         info["schema_tables"] = len(_load_schema() or {})
