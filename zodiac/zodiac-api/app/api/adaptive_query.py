@@ -395,6 +395,50 @@ def _annotate_answer_status(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Attach answer_status without breaking older frontend fields."""
     if not isinstance(payload, dict):
         return payload
+    # Cancellation must win over timeout-shaped payloads (type=timeout is reused).
+    cancelled = (
+        str(payload.get("answer_status") or "").upper() == "CANCELLED"
+        or str(payload.get("status") or "").lower() in {"cancelled", "cancelling"}
+        or str(payload.get("mode") or "").lower() in {"cancelled", "cancelling"}
+        or str(payload.get("pipeline_stage") or "").upper() in {"CANCELLED", "CANCELLING"}
+        or bool((payload.get("query_plan") or {}).get("investigation_cancelled"))
+        or bool((payload.get("meta") or {}).get("investigation_cancelled"))
+    )
+    if cancelled:
+        from ..services.investigation_budget import CANCELLED_USER_MESSAGE
+
+        payload["answer_status"] = "CANCELLED"
+        payload["status"] = "cancelled"
+        payload["mode"] = "cancelled"
+        payload["type"] = "cancelled"
+        payload["pipeline_stage"] = "CANCELLED"
+        if not (payload.get("summary") or "").strip() or "exceeded the allowed" in str(
+            payload.get("summary") or ""
+        ):
+            payload["summary"] = CANCELLED_USER_MESSAGE
+            payload["answer"] = CANCELLED_USER_MESSAGE
+        payload["data"] = []
+        payload["rowCount"] = 0
+        return payload
+    if (
+        payload.get("status") == "timeout"
+        or payload.get("mode") == "timeout"
+        or payload.get("type") == "timeout"
+        or payload.get("timeout")
+        or str(payload.get("answer_status") or "").upper() == "TIMEOUT"
+        or str(payload.get("error") or "") == "timeout"
+    ):
+        payload["answer_status"] = "TIMEOUT"
+        payload["status"] = "timeout"
+        payload["mode"] = "timeout"
+        if not (payload.get("summary") or "").strip():
+            from ..services.investigation_budget import TIMEOUT_USER_MESSAGE
+
+            payload["summary"] = TIMEOUT_USER_MESSAGE
+            payload["answer"] = TIMEOUT_USER_MESSAGE
+        payload["data"] = []
+        payload["rowCount"] = 0
+        return payload
     if payload.get("answer_status"):
         return payload
     if payload.get("type") == "clarification":
@@ -812,33 +856,9 @@ SAT DOCUMENTS NOT YET SENT TO SAP:
   FROM sat_simple_merged WHERE sent_to_sap = false
 
 KEYWORD → TABLES MAPPING:
-  "invoice" (without SAP/VBRK context) → invoice_v2_business_data, invoice_business_data
-  "invoice app" / "app invoice" → invoice_v2_business_data
-  "billed" / "billing" / "billing doc" → "VBRK", "vbrp"
-  "sales order" → "VBAK", "VBAP"
-  "delivery" / "shipment" → "LIKP", "LIPS"
-  "purchase order" / "PO" → "EKKO", "EKPO"
-  "requisition" → "EBAN"
-  "vendor" → "LFA1", "LFB1", "LFM1"
-  "customer master" → "KNA1", "KNVV"
-  "material master" / "material stock" → "MARA", "MARC", "MARD", "MAKT"
-  "GL" / "general ledger" → "FAGLFLEXA", "BSEG", "BKPF"
-  "profit center" → "FAGLFLEXA", "CEPC"
-  "cost center" → "COEP", "CSKS"
-  "pricing" / "conditions" → "KONV"
-  "tax" → "BSEG".mwskz, "VBRK"/"vbrp".mwsbp, "RBKP".rmwsk
-  "reversal" / "reversed" → "BKPF".stblg, "BKPF".stjah
-  "document flow" / "trace order to invoice" → "VBFA"
-  "invoice receipt" / "MM-IV" → "RBKP", "RSEG"
-  "conversion" → converted_invoices
-  "validation" → invoice_v2_validated, v2_validated_invoices
-  "failed" / "failure" → zodiac_invoice_failed_edi, invoice_business_data.failure_reason
-  "SAT" / "CFDI" / "RFC" → sat_documents, sat_simple_merged, sat_canonical_merged
-  "duplicate" → sat_duplicate_checks
-  "supplier token" / "API token" / "expired token" → supplier_tokens
-  "AI query" / "chat history" → ai_chat_turns, ai_query_memory
-  "margin" / "profit" / "profitability" / "what we paid vs charged" / "buy vs sell" →
-      "EKPO" (purchase cost) + "vbrp"/"VBRK" (sales revenue), aggregated separately then joined on matnr
+  Do NOT treat this as a table-selection authority. Keywords are retrieval
+  signals only. Select tables from schema intelligence + coverage validation.
+  Never answer by mapping "sales" or "customer" to a fixed SAP table list.
 
 ══════════════════════════════════════════════════════
 SECTION 3b: ADDITIONAL SAP ACCURACY RULES (mandatory)
@@ -1194,6 +1214,12 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     except Exception:
         pass
     apply_statement_timeout(db)
+    from ..services.investigation_budget import current_budget
+
+    budget = current_budget()
+    if budget is not None:
+        apply_statement_timeout(db, timeout_ms=budget.statement_timeout_ms())
+        budget.checkpoint("db_execute")
     result = db.execute(text(safe))
     rows = result.fetchall()
     keys = list(result.keys())
@@ -2595,16 +2621,51 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
         )
 
 
+@router.get("/api/query/adaptive/investigations/{request_id}")
+def get_investigation_status(
+    request_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from ..services.investigation_budget import get_investigation
+
+    budget = get_investigation(request_id)
+    if budget is None:
+        return {"request_id": request_id, "status": "unknown", "pipeline_stage": "UNDERSTANDING"}
+    return budget.public_status()
+
+
+@router.post("/api/query/adaptive/investigations/{request_id}/cancel")
+def cancel_investigation_endpoint(
+    request_id: str,
+    current_user: ZodiacUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from ..services.investigation_budget import cancel_investigation, get_investigation
+
+    ok = cancel_investigation(request_id)
+    budget = get_investigation(request_id)
+    return {
+        "cancelled": ok,
+        "request_id": request_id,
+        **(budget.public_status() if budget else {"status": "unknown"}),
+    }
+
+
 @router.post("/api/query/adaptive")
-async def post_query_adaptive(
+def post_query_adaptive(
     question: str = Body(..., embed=True),
     tableHint: Optional[str] = Body(default=None, embed=True),
     contextData: Optional[Dict[str, Any]] = Body(default=None, embed=True),
     overrideSql: Optional[str] = Body(default=None, embed=True),
     threadId: Optional[str] = Body(default=None, embed=True),
+    investigationId: Optional[str] = Body(default=None, embed=True),
     db: Session = Depends(get_db),
     current_user: ZodiacUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """Adaptive analytics entrypoint.
+
+    Intentionally synchronous so FastAPI runs it in a worker thread. That keeps
+    the event loop free for cancel/status endpoints while an investigation runs.
+    """
     q = (question or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail='Send JSON: {"question": "..."}')
@@ -2643,10 +2704,92 @@ async def post_query_adaptive(
     user_id = int(current_user.id) if current_user is not None and getattr(current_user, "id", None) is not None else 0
 
     routing_meta: Dict[str, Any] = {}
+    from ..services.investigation_budget import (
+        InvestigationTimeout,
+        begin_investigation,
+        end_investigation,
+        timeout_response,
+        current_budget,
+    )
+
+    inv = begin_investigation(q, request_id=(investigationId or "").strip())
+    inv.checkpoint("UNDERSTANDING")
 
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
+        # Final hard gate: validate against the USER's original wording, not any
+        # ranking normalizer rewrite. Wrong results must never become SUCCESS.
+        try:
+            if str(payload.get("answer_status") or "").upper() == "SUCCESS" and (
+                payload.get("sql") or payload.get("data") is not None
+            ):
+                pipe = str(payload.get("pipeline") or payload.get("sql_generation_method") or "").lower()
+                # Result-first follow-ups answer from prior rows; do not re-apply
+                # full analytical ranking/grouping gates meant for fresh SQL plans.
+                if "result_first" not in pipe:
+                    from ..services.plan_satisfaction import (
+                        answer_consistent_with_rows,
+                        result_matches_analytical_intent,
+                    )
+
+                    rows_chk = payload.get("data") or payload.get("rows") or []
+                    if not isinstance(rows_chk, list):
+                        rows_chk = []
+                    sql_chk = str(payload.get("sql") or "")
+                    gate_warn = result_matches_analytical_intent(
+                        rows_chk, _original_question, sql=sql_chk
+                    )
+                    gate_warn.extend(
+                        answer_consistent_with_rows(
+                            str(payload.get("answer") or payload.get("summary") or ""),
+                            rows_chk,
+                            _original_question,
+                        )
+                    )
+                    if gate_warn:
+                        logger.warning(
+                            "[adaptive] WRONG_SUCCESS blocked for %r: %s",
+                            _original_question[:120],
+                            gate_warn[:4],
+                        )
+                        msg = (
+                            "The investigation could not be validated against the analytical "
+                            "requirements: " + "; ".join(gate_warn[:4])
+                        )
+                        payload = {
+                            **payload,
+                            "answer_status": "CANNOT_ANSWER",
+                            "status": "cannot_answer",
+                            "type": "semantic_mismatch",
+                            "mode": "error",
+                            "data": [],
+                            "rowCount": 0,
+                            "summary": msg,
+                            "answer": msg,
+                            "keyFindings": [],
+                            "meta": {
+                                **(payload.get("meta") if isinstance(payload.get("meta"), dict) else {}),
+                                "validation_warnings": gate_warn,
+                                "wrong_success_blocked": True,
+                            },
+                        }
+        except Exception as gate_err:
+            logger.warning("[adaptive] final semantic gate failed open-safe: %s", gate_err)
+        budget_now = current_budget()
+        if budget_now is not None:
+            payload["request_id"] = budget_now.request_id
+            payload.setdefault("pipeline_stage", budget_now.pipeline_stage)
+            meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+            payload["meta"] = {**meta, **budget_now.public_status()}
+            if str(payload.get("answer_status") or "").upper() == "SUCCESS":
+                budget_now.final_status = "completed"
+                budget_now.pipeline_stage = "COMPLETED"
+                payload["pipeline_stage"] = "COMPLETED"
+            elif str(payload.get("answer_status") or "").upper() == "TIMEOUT":
+                payload["pipeline_stage"] = budget_now.pipeline_stage
+            elif str(payload.get("answer_status") or "").upper() == "CANNOT_ANSWER":
+                budget_now.final_status = "cannot_answer"
         if routing_meta.get("turn_intent"):
             meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
             payload["meta"] = {**meta, "turn_intent": routing_meta["turn_intent"]}
@@ -2660,6 +2803,7 @@ async def post_query_adaptive(
         if thread_id:
             payload = {**payload, "thread_id": thread_id}
         if not (user_id and thread_id):
+            end_investigation()
             return payload
         rows = payload.get("data") or payload.get("rows") or []
         if isinstance(rows, list) and len(rows) > 30:
@@ -2695,6 +2839,7 @@ async def post_query_adaptive(
         ).start()
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
         payload["meta"] = {**meta, "persist_async": True}
+        end_investigation()
         return payload
 
     def _ensure_charts(question_text: str, sql: str, rows: List[Dict[str, Any]], charts: Any) -> List[Dict[str, Any]]:
@@ -2747,12 +2892,49 @@ async def post_query_adaptive(
             "summary": summary, "tableHint": tableHint, "charts": charts,
         })
 
-    from ..services.operational_query_resolver import _extract_user_question
+    from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
 
     if _looks_like_schema_structure_question(clean_q):
         return _persist_and_return(_build_schema_structure_payload(clean_q))
+
+    # SAT / EDI / Zodiac app tables: answer before the SAP business-signal gate and
+    # before the orchestrator, which otherwise treats "SAT documents" as chitchat.
+    try:
+        if resolve_operational_query(clean_q, time_scope="current") is not None:
+            from ..services.dashboard_query_router import run_dashboard_query
+
+            op_payload = run_dashboard_query(
+                db, api_key, clean_q, [], time_scope="current", days=30,
+            )
+            reason = str(op_payload.get("sql_path_reason") or op_payload.get("reason") or "")
+            if reason.startswith("operational_"):
+                rows_out = op_payload.get("rows_preview") or []
+                sql_out = op_payload.get("sql") or ""
+                charts = _ensure_charts(clean_q, sql_out, rows_out, op_payload.get("charts"))
+                logger.info("[adaptive] early operational: %s — %d rows", reason, len(rows_out))
+                return _persist_and_return({
+                    "sql": sql_out,
+                    "rowCount": len(rows_out),
+                    "data": rows_out,
+                    "summary": op_payload.get("reply") or f"Query returned {len(rows_out)} row(s).",
+                    "tableHint": tableHint,
+                    "charts": charts,
+                    "pipeline": reason,
+                    "sql_generation_method": reason,
+                    "llm_calls": 0,
+                    "query_plan": extract_query_plan(clean_q).to_dict(),
+                })
+    except Exception as op_early_err:
+        logger.warning("[adaptive] early operational path failed: %s", op_early_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Catalog / intent compilers are test fixtures, not runtime answer authorities.
+    logger.info("[adaptive] skipping catalog/intent runtime authorities — four-stage is exclusive")
 
     # Previous context is an input to classification, never proof of continuation.
     prev_q = ""
@@ -2836,6 +3018,20 @@ async def post_query_adaptive(
         prev_plan_dict = None
         rows_list = []
 
+    if turn.intent != TurnIntent.NEW_ANALYTICAL_QUERY:
+        from ..services.result_first_followup import try_answer_from_prior_rows
+
+        reused = try_answer_from_prior_rows(
+            clean_q,
+            rows_list,
+            prior_sql=prev_sql,
+            prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+        )
+        if reused and not reused.get("needs_plan_expansion"):
+            reused["tableHint"] = tableHint
+            logger.info("[adaptive] result-first follow-up rows=%s", reused.get("rowCount"))
+            return _persist_and_return(reused)
+
     # Generative AI page: orchestrator for business SQL and for general chat (greetings, world knowledge).
     _orch_enabled = (orchestrator_enabled() or ai_native_enabled()) and not (overrideSql and overrideSql.strip())
     _business_turn = turn.intent not in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}
@@ -2866,6 +3062,12 @@ async def post_query_adaptive(
                 orch["tableHint"] = tableHint
                 orch_status = str(orch.get("answer_status") or "").upper()
                 orch_mode = str(orch.get("mode") or "")
+                if orch.get("timeout") or orch.get("error") == "timeout" or orch_status == "TIMEOUT" or orch_mode == "timeout":
+                    return _persist_and_return(timeout_response(
+                        str((orch.get("pipeline_log") or {}).get("timeout_stage") or "orchestrator"),
+                        float((orch.get("pipeline_log") or {}).get("elapsed_s") or 0),
+                        question=clean_q,
+                    ))
                 if _general_turn:
                     if orch_mode == "general_chat" or (
                         orch_status in {"SUCCESS", "CLARIFICATION"}
@@ -2877,25 +3079,49 @@ async def post_query_adaptive(
                             orch_status,
                         )
                         return _persist_and_return(orch)
-                elif (
-                    orch_status in {"CANNOT_ANSWER", "ERROR"} or orch_mode == "error"
-                ) and not str(orch.get("sql") or "").strip():
-                    logger.info("[adaptive] orchestrator %s with no SQL — trying compilers", orch_status or orch_mode)
-                else:
-                    logger.info(
-                        "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s",
-                        orch.get("mode"),
-                        orch.get("route"),
-                        orch.get("llm_calls"),
-                        orch.get("rowCount"),
-                    )
                     return _persist_and_return(orch)
+                logger.info(
+                    "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s status=%s",
+                    orch.get("mode"),
+                    orch.get("route"),
+                    orch.get("llm_calls"),
+                    orch.get("rowCount"),
+                    orch_status,
+                )
+                return _persist_and_return(orch)
+        except InvestigationTimeout as te:
+            return _persist_and_return(timeout_response(te.stage, te.elapsed_s, question=clean_q))
         except Exception as native_err:
-            logger.warning("[adaptive] orchestrator failed, falling back to compilers: %s", native_err)
+            from ..services.investigation_budget import InvestigationTimeout as _InvTimeout
+
+            if isinstance(native_err, _InvTimeout):
+                return _persist_and_return(timeout_response(native_err.stage, native_err.elapsed_s, question=clean_q))
+            logger.warning("[adaptive] orchestrator failed: %s", native_err)
             try:
                 db.rollback()
             except Exception:
                 pass
+            return _persist_and_return(
+                _cannot_answer_payload(
+                    clean_q,
+                    reason="adaptive analytics engine failed internally",
+                )
+            )
+
+    if turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}:
+        return _persist_and_return(clarification_payload(clean_q, turn.reason))
+
+    # Competing SAP analytics compilers (catalog, sales-order, domain, deep, period-compare,
+    # dashboard router, universal LLM) are no longer runtime authorities.
+    return _persist_and_return(
+        _cannot_answer_payload(
+            clean_q,
+            reason="investigation did not complete through the adaptive analytics engine",
+        )
+    )
+
+    # --- LEGACY COMPILER PATHS BELOW ARE UNREACHABLE ---
+    # Kept as source for test fixtures / evaluation, not executed.
 
     # Turn already classified above. Reuse that decision for compiler paths.
 
@@ -2933,15 +3159,23 @@ async def post_query_adaptive(
         if spec.route == "sales_order":
             so = try_sales_order_analysis(clean_q, spec, catalog_db, _execute_sql)
             if so:
-                meta = so.get("meta") if isinstance(so.get("meta"), dict) else {}
-                so["meta"] = {**routing_meta, **meta}
-                return _persist_and_return(so)
+                from ..services.plan_satisfaction import sql_satisfies_analytical_intent
+
+                if sql_satisfies_analytical_intent(str(so.get("sql") or ""), clean_q):
+                    meta = so.get("meta") if isinstance(so.get("meta"), dict) else {}
+                    so["meta"] = {**routing_meta, **meta}
+                    return _persist_and_return(so)
+                logger.info("[adaptive] sales_order_catalog rejected — does not satisfy analytical plan")
         if spec.route == "domain_overview":
             ov = try_domain_overview(clean_q, spec, catalog_db, _execute_sql)
             if ov:
-                meta = ov.get("meta") if isinstance(ov.get("meta"), dict) else {}
-                ov["meta"] = {**routing_meta, **meta}
-                return _persist_and_return(ov)
+                from ..services.plan_satisfaction import sql_satisfies_analytical_intent
+
+                if sql_satisfies_analytical_intent(str(ov.get("sql") or ""), clean_q):
+                    meta = ov.get("meta") if isinstance(ov.get("meta"), dict) else {}
+                    ov["meta"] = {**routing_meta, **meta}
+                    return _persist_and_return(ov)
+                logger.info("[adaptive] domain_overview rejected — does not satisfy analytical plan")
     except Exception as cat_err:
         logger.info("[adaptive] catalog source selection skipped: %s", cat_err)
 

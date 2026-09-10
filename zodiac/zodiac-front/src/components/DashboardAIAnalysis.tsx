@@ -77,12 +77,23 @@ const QUICK_QUESTIONS = [
 ];
 
 // ─── Pipeline progress steps ─────────────────────────────────────────────────
-const ANALYSIS_STEPS = [
-  { id: 'understand', label: 'Understanding your question', afterMs: 0 },
-  { id: 'check', label: 'Checking business data', afterMs: 400 },
-  { id: 'analyze', label: 'Analyzing the result', afterMs: 1200 },
-  { id: 'prepare', label: 'Preparing your answer', afterMs: 2500 },
-];
+const PIPELINE_STAGE_LABELS: Record<string, string> = {
+  UNDERSTANDING: 'Understanding your question',
+  RETRIEVING_SCHEMA: 'Finding relevant data',
+  SELECTING_TABLES: 'Selecting tables',
+  SELECTING_COLUMNS: 'Selecting columns',
+  BUILDING_PLAN: 'Building the analysis plan',
+  VALIDATING_PLAN: 'Validating the plan',
+  GENERATING_SQL: 'Generating the query',
+  VALIDATING_SQL: 'Validating the query',
+  EXECUTING: 'Running the query',
+  REPAIRING: 'Repairing the analysis',
+  VALIDATING_RESULT: 'Checking the result',
+  COMPLETED: 'Preparing your answer',
+  TIMEOUT: 'Stopping — time limit reached',
+  FAILED: 'Could not complete this analysis',
+  CANCELLED: 'Cancelled',
+};
 
 // ─── Number formatting ────────────────────────────────────────────────────────
 function fmt(v: any): string {
@@ -620,13 +631,13 @@ function MetaStrip({ meta, sqlStrategy: _sqlStrategy, rowCount, totalCount }: {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pipeline progress indicator
 // ═══════════════════════════════════════════════════════════════════════════════
-function AnalysisProgress({ elapsed }: { elapsed: number }) {
-  const current = [...ANALYSIS_STEPS].reverse().find((s) => elapsed >= s.afterMs) || ANALYSIS_STEPS[0];
+function AnalysisProgress({ elapsed, stage }: { elapsed: number; stage: string }) {
+  const label = PIPELINE_STAGE_LABELS[stage] || PIPELINE_STAGE_LABELS.UNDERSTANDING;
   return (
     <div className="space-y-2 py-1">
       <div className="flex items-center gap-3 text-sm font-medium text-indigo-700">
         <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
-        <span>{current.label}</span>
+        <span>{label}</span>
       </div>
       {elapsed > 5000 && (
         <p className="text-xs text-slate-500 pl-7">Still working — larger questions can take a few seconds.</p>
@@ -812,6 +823,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [input,      setInput]      = useState('');
   const [loading,    setLoading]    = useState(false);
   const [elapsed,    setElapsed]    = useState(0);
+  const [pipelineStage, setPipelineStage] = useState('UNDERSTANDING');
   const [error,      setError]      = useState<string | null>(null);
   const [isNewQuestion, setIsNewQuestion] = useState(false);
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
@@ -823,6 +835,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const initialSentRef = useRef<string | null>(null);
   const lastSuccessfulAnalyticalRef = useRef<LastSuccessfulAnalyticalContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const investigationIdRef = useRef<string>('');
   const [saved, setSaved] = useState<SavedAnalysis[]>([]);
 
   // Resolve / restore adaptive thread id once on mount
@@ -912,6 +925,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: q, ts: Date.now() };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
+    setPipelineStage('UNDERSTANDING');
 
     // Follow-up context is the last successful analytical state, not the latest
     // chat turn. Clarification / non-business replies do not update this ref.
@@ -932,6 +946,16 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    const investigationId =
+      (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID().replace(/-/g, '')
+        : `inv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    investigationIdRef.current = investigationId;
+    const poll = window.setInterval(() => {
+      dashboardApi.getInvestigationStatus(investigationId).then((st) => {
+        if (st?.pipeline_stage) setPipelineStage(st.pipeline_stage);
+      }).catch(() => undefined);
+    }, 800);
 
     try {
       const res = await dashboardApi.postAdaptiveQuery({
@@ -939,21 +963,25 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         // Explicit null (not omitted) so a dirty thread cannot leak prior SQL/filters.
         contextData: treatAsNew ? null : contextData,
         threadId: tid,
+        investigationId,
       }, { signal: ac.signal });
 
       const answerStatus = res.answer_status || res.answerStatus || '';
+      const isTimeout =
+        answerStatus === 'TIMEOUT' || res.status === 'timeout' || res.mode === 'timeout' || res.type === 'timeout';
       const isClarification =
         answerStatus === 'CLARIFICATION' || res.type === 'clarification';
       const isCannotAnswer =
+        !isTimeout && (
         answerStatus === 'CANNOT_ANSWER' ||
         res.type === 'cannot_answer' ||
-        !!res.degraded_fallback;
+        !!res.degraded_fallback);
 
       // Normalise response — backend may return old shape or new pipeline shape
       const result: QueryResult = {
-        sql:         res.sql || res.generatedSql,
-        data:        isCannotAnswer ? [] : (res.data || res.rows || []),
-        rowCount:    isCannotAnswer ? 0 : (res.rowCount ?? res.row_count ?? (res.data?.length ?? 0)),
+        sql:         isTimeout ? undefined : (res.sql || res.generatedSql),
+        data:        isCannotAnswer || isTimeout ? [] : (res.data || res.rows || []),
+        rowCount:    isCannotAnswer || isTimeout ? 0 : (res.rowCount ?? res.row_count ?? (res.data?.length ?? 0)),
         totalCount:  res.totalCount ?? res.total_count ?? -1,
         sqlStrategy: res.sqlStrategy || res.sql_strategy || 'full',
         summary:     humanizePublicSummary(
@@ -961,10 +989,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           String((res.query_plan || res.queryPlan || {}).analytical_context?.intent || res.intent || ''),
         ),
         keyFindings: res.keyFindings || res.key_findings || [],
-        kpis:        isCannotAnswer ? [] : (res.kpis || []),
-        charts:      isCannotAnswer ? [] : (res.charts || res.chart_configs || []),
+        kpis:        isCannotAnswer || isTimeout ? [] : (res.kpis || []),
+        charts:      isCannotAnswer || isTimeout ? [] : (res.charts || res.chart_configs || []),
         suggested_followups: res.suggested_followups || res.suggestedFollowups || [],
-        answer_status: isClarification
+        answer_status: isTimeout
+          ? 'TIMEOUT'
+          : isClarification
           ? 'CLARIFICATION'
           : (answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS')),
         mode:        res.mode || res.route || res.meta?.mode,
@@ -978,14 +1008,18 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         },
         ...( {
           query_plan: res.query_plan || res.queryPlan,
-          answer_status: isClarification
+          answer_status: isTimeout
+            ? 'TIMEOUT'
+            : isClarification
             ? 'CLARIFICATION'
             : (answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS')),
         } as any),
       };
 
-      // If it's a pure analysis reply (follow-up text answer)
-      const summaryContent = isCannotAnswer
+      const timeoutMessage = 'This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned.';
+      const summaryContent = isTimeout
+        ? (res.summary || res.answer || timeoutMessage)
+        : isCannotAnswer
         ? humanizeDataGapMessage(res.summary || res.answer || 'The available data does not support this question.')
         : res.type === 'analysis' || isClarification
         ? humanizePublicSummary(res.answer || res.summary || 'Done.')
@@ -1001,7 +1035,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         result: res.type === 'analysis' && !isCannotAnswer ? undefined : result,
         ts: Date.now(),
       };
-      if (!isClarification && !isCannotAnswer) {
+      if (!isClarification && !isCannotAnswer && !isTimeout) {
         lastSuccessfulAnalyticalRef.current = updateLastSuccessfulAnalyticalContext(
           lastSuccessfulAnalyticalRef.current,
           q,
@@ -1016,6 +1050,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       setError(publicApiError(err, 'Could not complete this analysis. Please try rephrasing.'));
       // Keep the user message visible so history does not silently lose questions
     } finally {
+      window.clearInterval(poll);
       setLoading(false);
     }
     // isNewQuestion MUST be a dep: without it the memoized closure keeps a stale
@@ -1267,10 +1302,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               <div className="text-xs font-semibold text-slate-500 mb-3 flex items-center gap-1.5">
                 Working on your question
               </div>
-              <AnalysisProgress elapsed={elapsed} />
+              <AnalysisProgress elapsed={elapsed} stage={pipelineStage} />
               <button
                 type="button"
                 onClick={() => {
+                  const id = investigationIdRef.current;
+                  if (id) dashboardApi.cancelInvestigation(id);
                   abortRef.current?.abort();
                   setLoading(false);
                 }}
@@ -1363,6 +1400,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <button
               type="button"
               onClick={() => {
+                const id = investigationIdRef.current;
+                if (id) dashboardApi.cancelInvestigation(id);
                 abortRef.current?.abort();
                 setLoading(false);
               }}

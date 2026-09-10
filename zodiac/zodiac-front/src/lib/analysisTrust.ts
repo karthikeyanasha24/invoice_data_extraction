@@ -262,6 +262,9 @@ export function humanizePublicSummary(text: string, intent?: string): string {
     out = out.replace(new RegExp(intent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), label);
   }
   out = out.replace(/\b(deep_multidim|dimensional_extend)\b/gi, '');
+  out = out.replace(/psycopg2\.[A-Za-z0-9_.]+/gi, '');
+  out = out.replace(/\b(GroupingError|UndefinedColumn|UndefinedTable|ProgrammingError)\b/g, '');
+  out = out.replace(/table [A-Za-z0-9_]+ not in verified selection[^.]*\.?/gi, '');
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return out;
 }

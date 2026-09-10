@@ -1,0 +1,1509 @@
+{
+  "PASS": 48,
+  "PARTIAL": 1,
+  "FAIL": 4,
+  "TIMEOUT": 1,
+  "wrong_success": [],
+  "results": [
+    {
+      "label": "A",
+      "question": "Which customers generated the highest billed sales?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=10 cols=['customer_id', 'customer_name', 'total_sales']",
+      "elapsed": 84.93,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789050853133",
+      "rowCount": 10,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(c.\"kunnr\"), TRIM(c.\"name1\")\nORDER BY \"",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000300286",
+          "customer_name": "Dynamic Industries",
+          "total_sales": 42518944.36
+        },
+        {
+          "customer_id": "0000001901",
+          "customer_name": "Motor Sports",
+          "total_sales": 24880230.22
+        }
+      ],
+      "summary": "Query returned 10 rows. Values are SUM of VBRK.netwr (USD) grouped by customer."
+    },
+    {
+      "label": "B",
+      "question": "Show sales order count by month.",
+      "kind": "month_count",
+      "verdict": "PASS",
+      "reason": "rows=280 cols=['month', 'sales_order_count']",
+      "elapsed": 92.26,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789050938059",
+      "rowCount": 280,
+      "sql": "SELECT SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 6) AS \"month\", COUNT(DISTINCT TRIM(CAST(\"VBAK\".\"vbeln\" AS TEXT))) AS \"sales_order_count\"\nFROM \"VBAK\"\nWHERE NULLIF(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), '') IS NOT NULL\nGROUP BY SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 6)\nORDER BY \"month\" ASC",
+      "cols": [
+        "month",
+        "sales_order_count"
+      ],
+      "sample": [
+        {
+          "month": "199411",
+          "sales_order_count": 1
+        },
+        {
+          "month": "199412",
+          "sales_order_count": 1
+        }
+      ],
+      "summary": "280 rows returned; sample shown"
+    },
+    {
+      "label": "C",
+      "question": "Which country generated the most billed sales?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=1 cols=['country', 'total_sales']",
+      "elapsed": 59.36,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051030321",
+      "rowCount": 1,
+      "sql": "SELECT TRIM(c.\"land1\") AS \"country\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(c.\"land1\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(c.\"land1\")\nORDER B",
+      "cols": [
+        "country",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "country": "US",
+          "total_sales": 143325570.43
+        }
+      ],
+      "summary": "Top country by sales is US with total_sales = 143325570.43"
+    },
+    {
+      "label": "D",
+      "question": "Which country, customer, and industry generated the highest billed sales?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=1 cols=['country', 'customer_id', 'customer_name', 'industry', 'total_sales']",
+      "elapsed": 97.28,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051089684",
+      "rowCount": 1,
+      "sql": "SELECT TRIM(\"KNA1\".\"land1\") AS \"country\", TRIM(\"KNA1\".\"kunnr\") AS \"customer_id\", TRIM(\"KNA1\".\"name1\") AS \"customer_name\", TRIM(\"T016T\".\"brtxt\") AS \"industry\", SUM(CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\"\nLEFT JOIN \"KNA1\" ON LPAD(TRIM(CAST(\"VBRK\".\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(\"KNA1\".\"kunnr\" AS TEXT)), 10, '0')\nLEFT JOIN \"T016T\" ON LPAD(TRIM(CAST(\"KNA1\".\"brsch\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(\"T016T\".\"brsch\" AS TEXT)), 10, '0",
+      "cols": [
+        "country",
+        "customer_id",
+        "customer_name",
+        "industry",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "country": "US",
+          "customer_id": "0000300286",
+          "customer_name": "Dynamic Industries",
+          "industry": null,
+          "total_sales": 42518944.36
+        }
+      ],
+      "summary": "The query returned one top record: US / 0000300286 (Dynamic Industries) with total billed sales of 42518944.36 USD. Industry is null in the result."
+    },
+    {
+      "label": "E",
+      "question": "Show the top 5 customers in each country by billed sales.",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=20 cols=['country', 'customer_id', 'customer_name', 'total_sales', 'rank_in_partition']",
+      "elapsed": 100.01,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051186964",
+      "rowCount": 20,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"country\" ORDER BY \"total_sales\" DESC) AS rank_in_partition\n  FROM (\nSELECT TRIM(c.\"land1\") AS \"country\", TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND",
+      "cols": [
+        "country",
+        "customer_id",
+        "customer_name",
+        "total_sales",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "country": "BR",
+          "customer_id": "0000301207",
+          "customer_name": "Brazil Technologies",
+          "total_sales": 100.0,
+          "rank_in_partition": 1
+        },
+        {
+          "country": "CA",
+          "customer_id": "0000004000",
+          "customer_name": "North Energy Ltd",
+          "total_sales": 42696.67,
+          "rank_in_partition": 1
+        }
+      ],
+      "summary": "Query returned 20 row(s)."
+    },
+    {
+      "label": "F",
+      "question": "Which suppliers have purchase orders but no invoices?",
+      "kind": "negation",
+      "verdict": "PASS",
+      "reason": "rows=200",
+      "elapsed": 85.52,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051286971",
+      "rowCount": 200,
+      "sql": "SELECT TRIM(CAST(h.\"lifnr\" AS TEXT)) AS \"vendor_id\", TRIM(v.\"name1\") AS \"vendor_name\", COUNT(DISTINCT TRIM(CAST(h.\"ebeln\" AS TEXT))) AS \"purchase_order_count\"\nFROM \"EKKO\" h\nLEFT JOIN \"LFA1\" v ON LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v.\"lifnr\" AS TEXT)), 10, '0')\nWHERE NULLIF(TRIM(CAST(h.\"lifnr\" AS TEXT)), '') IS NOT NULL\n  AND NOT EXISTS (\n    SELECT 1 FROM \"RBKP\" i\n    WHERE LPAD(TRIM(CAST(i.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0')\n  )\nG",
+      "cols": [
+        "vendor_id",
+        "vendor_name",
+        "purchase_order_count"
+      ],
+      "sample": [
+        {
+          "vendor_id": "FIO-VEND03",
+          "vendor_name": "Sunny Electronics GmbH",
+          "purchase_order_count": 146
+        },
+        {
+          "vendor_id": "SU212",
+          "vendor_name": "Supplier 211",
+          "purchase_order_count": 69
+        }
+      ],
+      "summary": "List of suppliers (vendor_id and vendor_name) with their purchase order counts where no invoice exists. Sample returned 12 suppliers (of up to 200)."
+    },
+    {
+      "label": "G",
+      "question": "Which customers increased their billed sales between 2004 and 2005?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "rows=7 cols=['customer_id', 'customer_name', 'period_a', 'period_b', 'change']",
+      "elapsed": 84.89,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051372495",
+      "rowCount": 7,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "period_a",
+        "period_b",
+        "change"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000001901",
+          "customer_name": "Motor Sports",
+          "period_a": 2736021.44,
+          "period_b": 6524688.52,
+          "change": 3788667.08
+        },
+        {
+          "customer_id": "A300015",
+          "customer_name": "IDES AG",
+          "period_a": 0.0,
+          "period_b": 85000.0,
+          "change": 85000.0
+        }
+      ],
+      "summary": "7 customers showed an increase in billed sales (USD) from 2004 to 2005. The largest increase was Motor Sports with a change of 3,788,667.08 USD."
+    },
+    {
+      "label": "H",
+      "question": "Which country had the largest decline in sales between 2004 and 2005?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "rows=2 cols=['country', 'period_a', 'period_b', 'change']",
+      "elapsed": 83.09,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051457390",
+      "rowCount": 2,
+      "sql": "SELECT TRIM(c.\"land1\") AS \"country\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0",
+      "cols": [
+        "country",
+        "period_a",
+        "period_b",
+        "change"
+      ],
+      "sample": [
+        {
+          "country": null,
+          "period_a": 17563781.25,
+          "period_b": 9797062.8,
+          "change": -7766718.45
+        },
+        {
+          "country": "US",
+          "period_a": 20543571.39,
+          "period_b": 16333869.22,
+          "change": -4209702.17
+        }
+      ],
+      "summary": "The country with a NULL/blank country code experienced the largest decline: -7,766,718.45 USD (2005 vs 2004)."
+    },
+    {
+      "label": "I",
+      "question": "Show the top 10 materials by billed quantity.",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=10 cols=['material_id', 'material_name', 'billed_quantity']",
+      "elapsed": 87.11,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051540487",
+      "rowCount": 10,
+      "sql": "SELECT TRIM(p.\"matnr\") AS \"material_id\", TRIM(m.\"maktx\") AS \"material_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"fkimg\" AS TEXT)), '') AS NUMERIC)) AS \"billed_quantity\"\nFROM \"vbrp\" p\nJOIN \"VBRK\" k ON LPAD(TRIM(CAST(p.\"vbeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(k.\"vbeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"MAKT\" m ON TRIM(p.\"matnr\") = TRIM(m.\"matnr\")\nWHERE NULLIF(TRIM(CAST(p.\"matnr\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(p.\"fkimg\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(p.\"matnr\"), TRIM(m.\"maktx",
+      "cols": [
+        "material_id",
+        "material_name",
+        "billed_quantity"
+      ],
+      "sample": [
+        {
+          "material_id": "R100032",
+          "material_name": "Fitdrink 2000 (Can)",
+          "billed_quantity": 31579344.0
+        },
+        {
+          "material_id": "R100000",
+          "material_name": "Yoghurt all natural",
+          "billed_quantity": 26251976.0
+        }
+      ],
+      "summary": "Query returned 10 rows. Top material by billed quantity is R100032 (Fitdrink 2000 (Can)) with 31,579,344.0 units billed."
+    },
+    {
+      "label": "J",
+      "question": "Show invoices from last month.",
+      "kind": "date_rel",
+      "verdict": "PASS",
+      "reason": "rows=0",
+      "elapsed": 107.71,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051627601",
+      "rowCount": 0,
+      "sql": "SELECT TRIM(CAST(\"VBRK\".\"vbeln\" AS TEXT)) AS \"invoice_id\", TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) AS \"invoice_date\", TRIM(CAST(\"VBRK\".\"kunag\" AS TEXT)) AS \"customer_id\", CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC) AS \"invoice_amount\", TRIM(CAST(\"VBRK\".\"waerk\" AS TEXT)) AS \"currency\"\nFROM \"VBRK\"\nWHERE TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) >= '20260801'\n  AND TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) < '20260901'\nORDER BY \"invoice_date\" DESC\nLIMIT 200",
+      "cols": [],
+      "sample": [],
+      "summary": "Query returned 0 row(s)."
+    },
+    {
+      "label": "K",
+      "question": "Which customers had billed sales above the average customer sales?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=22 cols=['customer_id', 'customer_name', 'total_sales', 'avg_sales']",
+      "elapsed": 80.2,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051735327",
+      "rowCount": 22,
+      "sql": "WITH cust AS (\n  SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\",\n         SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\n  FROM \"VBRK\" k\n  LEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\n  WHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  GROUP BY TRIM(c.\"kunnr\"), TRIM(c.\"name1\")\n), avg_v AS (\n  SELECT AVG(\"total_sa",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "total_sales",
+        "avg_sales"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000300286",
+          "customer_name": "Dynamic Industries",
+          "total_sales": 42518944.36,
+          "avg_sales": 1095945.1222543353
+        },
+        {
+          "customer_id": "0000001901",
+          "customer_name": "Motor Sports",
+          "total_sales": 24880230.22,
+          "avg_sales": 1095945.1222543353
+        }
+      ],
+      "summary": "These customers have total billed sales greater than the average customer sales (avg_sales = 1095945.1222543353)."
+    },
+    {
+      "label": "L",
+      "question": "Which country had the highest sales growth and which customers contributed most to that growth?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "clarification for ambiguous comparison periods",
+      "elapsed": 41.28,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789051815532",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "Which periods should I compare for growth (for example 2004 vs 2005, or the latest two calendar years)?"
+    },
+    {
+      "label": "R1",
+      "question": "Top 10 customers by revenue",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=10 cols=['customer_id', 'customer_name', 'total_sales']",
+      "elapsed": 61.82,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051856813",
+      "rowCount": 10,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(c.\"kunnr\"), TRIM(c.\"name1\")\nORDER BY \"",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000300286",
+          "customer_name": "Dynamic Industries",
+          "total_sales": 42518944.36
+        },
+        {
+          "customer_id": "0000001901",
+          "customer_name": "Motor Sports",
+          "total_sales": 24880230.22
+        }
+      ],
+      "summary": "Query returned 10 customers ordered by total USD sales."
+    },
+    {
+      "label": "R2",
+      "question": "Sales order count by month",
+      "kind": "month_count",
+      "verdict": "PASS",
+      "reason": "rows=280 cols=['month', 'sales_order_count']",
+      "elapsed": 55.1,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051918634",
+      "rowCount": 280,
+      "sql": "SELECT SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 6) AS \"month\", COUNT(DISTINCT TRIM(CAST(\"VBAK\".\"vbeln\" AS TEXT))) AS \"sales_order_count\"\nFROM \"VBAK\"\nWHERE NULLIF(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), '') IS NOT NULL\nGROUP BY SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 6)\nORDER BY \"month\" ASC",
+      "cols": [
+        "month",
+        "sales_order_count"
+      ],
+      "sample": [
+        {
+          "month": "199411",
+          "sales_order_count": 1
+        },
+        {
+          "month": "199412",
+          "sales_order_count": 1
+        }
+      ],
+      "summary": "The query groups sales orders by the first six characters of erdat (YYYYMM) and counts distinct sales order numbers (vbeln) per month. The provided sample shows monthly counts such as 199411:1, 199412:1, 199506:43, 199507:19, 199508:11, 199"
+    },
+    {
+      "label": "U1",
+      "question": "Which customers bought products in more than one country?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=8 cols=['customer_id', 'customer_name', 'distinct_country_count']",
+      "elapsed": 101.69,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789051973741",
+      "rowCount": 8,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\",\n       COUNT(DISTINCT TRIM(CAST(k.\"land1\" AS TEXT))) AS \"distinct_country_count\"\nFROM \"VBRK\" k\nJOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE NULLIF(TRIM(CAST(k.\"land1\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(c.\"kunnr\"), TRIM(c.\"name1\")\nHAVING COUNT(DISTINCT TRIM(CAST(k.\"land1\" AS TEXT))) > 1\nORDER BY \"distinct_country_count\" DESC\nLIMIT 200",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "distinct_country_count"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000009997",
+          "customer_name": "hybris One time Customer",
+          "distinct_country_count": 5
+        },
+        {
+          "customer_id": "0000006002",
+          "customer_name": "RIWA Regional Storage Trenton",
+          "distinct_country_count": 2
+        }
+      ],
+      "summary": "Query returned 8 row(s)."
+    },
+    {
+      "label": "U2",
+      "question": "Which materials generated high quantity but relatively low billed value?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "clarification",
+      "elapsed": 32.5,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789052075435",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "The query needs thresholds for \"high quantity\", \"low billed value\". What quantity and value thresholds should I use (numeric limits, percentiles, or relative-to-average rules)?"
+    },
+    {
+      "label": "U3",
+      "question": "Which suppliers had activity without corresponding billing?",
+      "kind": "negation",
+      "verdict": "PASS",
+      "reason": "rows=200",
+      "elapsed": 95.34,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052107937",
+      "rowCount": 200,
+      "sql": "SELECT TRIM(CAST(h.\"lifnr\" AS TEXT)) AS \"vendor_id\", TRIM(v.\"name1\") AS \"vendor_name\", COUNT(DISTINCT TRIM(CAST(h.\"ebeln\" AS TEXT))) AS \"purchase_order_count\"\nFROM \"EKKO\" h\nLEFT JOIN \"LFA1\" v ON LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v.\"lifnr\" AS TEXT)), 10, '0')\nWHERE NULLIF(TRIM(CAST(h.\"lifnr\" AS TEXT)), '') IS NOT NULL\n  AND NOT EXISTS (\n    SELECT 1 FROM \"RBKP\" i\n    WHERE LPAD(TRIM(CAST(i.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0')\n  )\nG",
+      "cols": [
+        "vendor_id",
+        "vendor_name",
+        "purchase_order_count"
+      ],
+      "sample": [
+        {
+          "vendor_id": "FIO-VEND03",
+          "vendor_name": "Sunny Electronics GmbH",
+          "purchase_order_count": 146
+        },
+        {
+          "vendor_id": "SU212",
+          "vendor_name": "Supplier 211",
+          "purchase_order_count": 69
+        }
+      ],
+      "summary": "The query found suppliers in EKKO without any matching RBKP entries. Results ordered by number of distinct purchase orders per supplier; limited to 200 rows."
+    },
+    {
+      "label": "U4",
+      "question": "Which customer segment contributed the largest share of sales?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=1 cols=['customer_id', 'customer_name', 'total_sales']",
+      "elapsed": 80.72,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052203284",
+      "rowCount": 1,
+      "sql": "SELECT TRIM(\"KNA1\".\"kunnr\") AS \"customer_id\", TRIM(\"KNA1\".\"name1\") AS \"customer_name\", SUM(CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\"\nLEFT JOIN \"KNA1\" ON LPAD(TRIM(CAST(\"VBRK\".\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(\"KNA1\".\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(\"VBRK\".\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(\"VBRK\".\"kunag\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(\"KNA1\".\"kunnr\"), TRIM(\"KNA1\".\"name1\")\nORDER BY \"total_sales\" DESC N",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000300286",
+          "customer_name": "Dynamic Industries",
+          "total_sales": 42518944.36
+        }
+      ],
+      "summary": "The query returned one top customer: Dynamic Industries (0000300286) with total sales of 42,518,944.36 USD."
+    },
+    {
+      "label": "U5",
+      "question": "Which products experienced the strongest year-over-year decline?",
+      "kind": "period",
+      "verdict": "PARTIAL",
+      "reason": "cannot_answer (no wrong-success): Unable to produce a verified query after bounded repair.",
+      "elapsed": 63.3,
+      "status": "CANNOT_ANSWER",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "EXECUTING",
+      "request_id": "cert1789052284004",
+      "rowCount": 0,
+      "sql": "SELECT \"vbrp\".\"matnr\" AS \"material\", \"MAKT\".\"maktx\" AS \"product_name\", \"vbrp\".\"erdat\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(\"vbrp\".\"erdat\" AS TEXT)), 1, 4) = '2017' THEN CAST(NULLIF(TRIM(CAST(\"vbrp\".\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(\"vbrp\".\"erdat\" AS TEXT)), 1, 4) = '2018' THEN CAST(NULLIF(TRIM(CAST(\"vbrp\".\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(\"vbrp\".\"erdat\" AS TEXT)), 1, 4) = '2",
+      "cols": [],
+      "sample": [],
+      "summary": "Unable to produce a verified query after bounded repair."
+    },
+    {
+      "label": "N1",
+      "question": "List the top 8 vendors by purchase order value.",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=8 cols=['vendor_id', 'vendor_name', 'purchase_order_value']",
+      "elapsed": 67.79,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052347310",
+      "rowCount": 8,
+      "sql": "SELECT TRIM(CAST(h.\"lifnr\" AS TEXT)) AS \"vendor_id\", TRIM(v.\"name1\") AS \"vendor_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"purchase_order_value\"\nFROM \"EKPO\" p\nJOIN \"EKKO\" h ON LPAD(TRIM(CAST(p.\"ebeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(h.\"ebeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"LFA1\" v ON LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v.\"lifnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(h.\"waers\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(h.\"lifnr\" AS TEXT)), ",
+      "cols": [
+        "vendor_id",
+        "vendor_name",
+        "purchase_order_value"
+      ],
+      "sample": [
+        {
+          "vendor_id": "0000005557",
+          "vendor_name": "VK  Enterprisises",
+          "purchase_order_value": 66963393566.0
+        },
+        {
+          "vendor_id": "0000003000",
+          "vendor_name": "C.E.B. New York",
+          "purchase_order_value": 798224367.24
+        }
+      ],
+      "summary": "The query returned 8 vendors ordered by descending purchase order value in USD."
+    },
+    {
+      "label": "N2",
+      "question": "How many billing documents were created each year?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=24 cols=['year', 'billing_document_count']",
+      "elapsed": 52.94,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052415102",
+      "rowCount": 24,
+      "sql": "SELECT SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 4) AS \"year\", COUNT(DISTINCT TRIM(CAST(\"VBRK\".\"vbeln\" AS TEXT))) AS \"billing_document_count\"\nFROM \"VBRK\"\nWHERE NULLIF(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), '') IS NOT NULL\nGROUP BY SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 4)\nORDER BY \"year\" ASC",
+      "cols": [
+        "year",
+        "billing_document_count"
+      ],
+      "sample": [
+        {
+          "year": "1995",
+          "billing_document_count": 13
+        },
+        {
+          "year": "1996",
+          "billing_document_count": 4
+        }
+      ],
+      "summary": "Counts of distinct billing document IDs grouped by year"
+    },
+    {
+      "label": "N3",
+      "question": "Which materials had the highest billed quantity in each plant?",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=223 cols=['plant', 'material_id', 'material_name', 'billed_quantity', 'rank_in_partition']",
+      "elapsed": 75.5,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052468040",
+      "rowCount": 223,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"plant\" ORDER BY \"billed_quantity\" DESC) AS rank_in_partition\n  FROM (\nSELECT TRIM(CAST(p.\"werks\" AS TEXT)) AS \"plant\", TRIM(CAST(p.\"matnr\" AS TEXT)) AS \"material_id\", TRIM(m.\"maktx\") AS \"material_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"fkimg\" AS TEXT)), '') AS NUMERIC)) AS \"billed_quantity\"\nFROM \"vbrp\" p\nJOIN \"VBRK\" k ON LPAD(TRIM(CAST(p.\"vbeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(k.\"vbeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"MAKT\" m O",
+      "cols": [
+        "plant",
+        "material_id",
+        "material_name",
+        "billed_quantity",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "plant": "0005",
+          "material_id": "000000000000002000",
+          "material_name": "Green Emission Calculator",
+          "billed_quantity": 16100.0,
+          "rank_in_partition": 1
+        },
+        {
+          "plant": "0005",
+          "material_id": "000000000000002000",
+          "material_name": "REA Printer with remote control",
+          "billed_quantity": 4800.0,
+          "rank_in_partition": 2
+        }
+      ],
+      "summary": "For each plant shown in the sample rows, the material with the highest billed quantity is listed with its billed_quantity."
+    },
+    {
+      "label": "N4",
+      "question": "Which customers declined in billed sales between 2003 and 2004?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "rows=20 cols=['customer_id', 'customer_name', 'period_a', 'period_b', 'change']",
+      "elapsed": 57.53,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052543538",
+      "rowCount": 20,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2003' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(k.\"",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "period_a",
+        "period_b",
+        "change"
+      ],
+      "sample": [
+        {
+          "customer_id": null,
+          "customer_name": null,
+          "period_a": 19992882.15,
+          "period_b": 17563781.25,
+          "change": -2429100.9
+        },
+        {
+          "customer_id": "0000300701",
+          "customer_name": "Clinton Industries",
+          "period_a": 2410241.7,
+          "period_b": 1639118.7,
+          "change": -771123.0
+        }
+      ],
+      "summary": "12 customers (sample rows) showed a decline between 2003 and 2004."
+    },
+    {
+      "label": "N5",
+      "question": "Show purchase orders from last quarter.",
+      "kind": "date_rel",
+      "verdict": "PASS",
+      "reason": "rows=0",
+      "elapsed": 44.44,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052601072",
+      "rowCount": 0,
+      "sql": "SELECT TRIM(CAST(\"EKKO\".\"ebeln\" AS TEXT)) AS \"purchase_order_id\", TRIM(CAST(\"EKKO\".\"bedat\" AS TEXT)) AS \"order_date\", TRIM(CAST(\"EKKO\".\"lifnr\" AS TEXT)) AS \"vendor_id\"\nFROM \"EKKO\"\nWHERE TRIM(CAST(\"EKKO\".\"bedat\" AS TEXT)) >= '20260401'\n  AND TRIM(CAST(\"EKKO\".\"bedat\" AS TEXT)) < '20260701'\nORDER BY \"order_date\" DESC\nLIMIT 200",
+      "cols": [],
+      "sample": [],
+      "summary": "The SQL ran without errors and applied the filter for order_date between 2026-04-01 (inclusive) and 2026-07-01 (exclusive). No purchase orders in table EKKO matched that date range."
+    },
+    {
+      "label": "N6",
+      "question": "Which customers have sales orders but no billing documents?",
+      "kind": "negation",
+      "verdict": "PASS",
+      "reason": "rows=200",
+      "elapsed": 64.22,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052645517",
+      "rowCount": 200,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", COUNT(DISTINCT TRIM(CAST(o.\"vbeln\" AS TEXT))) AS \"sales_order_count\"\nFROM \"VBAK\" o\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(o.\"kunnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE NULLIF(TRIM(CAST(o.\"kunnr\" AS TEXT)), '') IS NOT NULL\n  AND NOT EXISTS (\n    SELECT 1 FROM \"VBRK\" k\n    WHERE LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(o.\"kunnr\" AS TEXT)), 10, '0')\n  )\nGROUP BY TRIM(",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "sales_order_count"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000050002",
+          "customer_name": "The Potter Group Ely Bulk",
+          "sales_order_count": 29220
+        },
+        {
+          "customer_id": "0000500100",
+          "customer_name": "Kim Possible Inc. - East",
+          "sales_order_count": 293
+        }
+      ],
+      "summary": "Top customers (by sales order count) that have sales orders but no matching billing documents in VBRK. Counts are DISTINCT sales order numbers (VBAK.vbeln)."
+    },
+    {
+      "label": "N7",
+      "question": "What is total billed sales by currency?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=17 cols=['currency', 'total_billed_sales']",
+      "elapsed": 48.41,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052709735",
+      "rowCount": 17,
+      "sql": "SELECT \"VBRK\".\"waerk\" AS \"currency\", SUM(CAST(NULLIF(TRIM(CAST(VBRK.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_billed_sales\"\nFROM \"VBRK\"\nLEFT JOIN \"vbrp\" ON LPAD(TRIM(CAST(\"VBRK\".\"vbeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(\"vbrp\".\"vbeln\" AS TEXT)), 10, '0')\nGROUP BY \"VBRK\".\"waerk\"\nORDER BY \"total_billed_sales\" DESC",
+      "cols": [
+        "currency",
+        "total_billed_sales"
+      ],
+      "sample": [
+        {
+          "currency": "INR",
+          "total_billed_sales": 1044504373.0
+        },
+        {
+          "currency": "EUR",
+          "total_billed_sales": 862043216.12
+        }
+      ],
+      "summary": "{'currencies': ['INR', 'EUR', 'DEM', 'USD', 'KRW', 'PTE', 'RUB', 'MXN', 'NZD', 'ARS', 'FRF', 'CNY']}"
+    },
+    {
+      "label": "N8",
+      "question": "Which industries generated the most billed sales?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=10 cols=['industry', 'total_sales']",
+      "elapsed": 50.18,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052758149",
+      "rowCount": 10,
+      "sql": "SELECT TRIM(t.\"brtxt\") AS \"industry\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nLEFT JOIN \"T016T\" t ON LPAD(TRIM(CAST(c.\"brsch\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(t.\"brsch\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(t.\"brtxt\" AS ",
+      "cols": [
+        "industry",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "industry": "Trading & Distribution",
+          "total_sales": 30214960.51
+        },
+        {
+          "industry": "Consulting",
+          "total_sales": 8938206.2
+        }
+      ],
+      "summary": "The top 10 industries by total billed sales in USD are listed, led by Trading & Distribution with ~30.21M."
+    },
+    {
+      "label": "N9",
+      "question": "Show top 3 materials in each country by billed sales.",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=36 cols=['country', 'material_id', 'material_name', 'total_sales', 'rank_in_partition']",
+      "elapsed": 79.08,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052808334",
+      "rowCount": 36,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"country\" ORDER BY \"total_sales\" DESC) AS rank_in_partition\n  FROM (\nSELECT TRIM(c.\"land1\") AS \"country\", TRIM(p.\"matnr\") AS \"material_id\", TRIM(m.\"maktx\") AS \"material_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"vbrp\" p\nJOIN \"VBRK\" k ON LPAD(TRIM(CAST(p.\"vbeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(k.\"vbeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TE",
+      "cols": [
+        "country",
+        "material_id",
+        "material_name",
+        "total_sales",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "country": "BR",
+          "material_id": "RADAR-1",
+          "material_name": "Radar System",
+          "total_sales": 100.0,
+          "rank_in_partition": 1
+        },
+        {
+          "country": "BR",
+          "material_id": "RADAR-1",
+          "material_name": "Radar syst\u00e8me",
+          "total_sales": 100.0,
+          "rank_in_partition": 2
+        }
+      ],
+      "summary": "Provided SQL ranks materials by summed netwr (USD) per customer country and selects top 3 per country. Results shown are the top 3 for BR, CA, CH, CN from the sample."
+    },
+    {
+      "label": "N10",
+      "question": "Which customers grew billed sales the most between 2004 and 2005?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "rows=1 cols=['customer_id', 'customer_name', 'period_a', 'period_b', 'change']",
+      "elapsed": 56.0,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052887420",
+      "rowCount": 1,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "period_a",
+        "period_b",
+        "change"
+      ],
+      "sample": [
+        {
+          "customer_id": "0000001901",
+          "customer_name": "Motor Sports",
+          "period_a": 2736021.44,
+          "period_b": 6524688.52,
+          "change": 3788667.08
+        }
+      ],
+      "summary": "Motor Sports (customer_id 0000001901) increased billed sales from 2,736,021.44 in 2004 to 6,524,688.52 in 2005, an increase of 3,788,667.08 USD."
+    },
+    {
+      "label": "R3A",
+      "question": "Top 3 materials per country by billed quantity.",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=64 cols=['country', 'material_id', 'material_name', 'billed_quantity', 'rank_in_partition']",
+      "elapsed": 81.16,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789052943425",
+      "rowCount": 64,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"country\" ORDER BY \"billed_quantity\" DESC) AS rank_in_partition\n  FROM (\nSELECT TRIM(c.\"land1\") AS \"country\", TRIM(p.\"matnr\") AS \"material_id\", TRIM(m.\"maktx\") AS \"material_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"fkimg\" AS TEXT)), '') AS NUMERIC)) AS \"billed_quantity\"\nFROM \"vbrp\" p\nJOIN \"VBRK\" k ON LPAD(TRIM(CAST(p.\"vbeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(k.\"vbeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kuna",
+      "cols": [
+        "country",
+        "material_id",
+        "material_name",
+        "billed_quantity",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "country": "AE",
+          "material_id": "P-104",
+          "material_name": "Pump PRECISION 104",
+          "billed_quantity": 25128.0,
+          "rank_in_partition": 1
+        },
+        {
+          "country": "AE",
+          "material_id": "P-102",
+          "material_name": "Pump PRECISION 102",
+          "billed_quantity": 22184.0,
+          "rank_in_partition": 2
+        }
+      ],
+      "summary": "Query succeeded and returns the top 3 materials per country by billed quantity. The query groups billed quantities by country and material, sums them, ranks materials per country by billed quantity, and selects ranks 1\u20133."
+    },
+    {
+      "label": "R3B",
+      "question": "Bottom 5 customers per country by billed sales.",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=20 cols=['country', 'customer_id', 'customer_name', 'total_sales', 'rank_in_partition']",
+      "elapsed": 76.69,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053024582",
+      "rowCount": 20,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"country\" ORDER BY \"total_sales\" ASC) AS rank_in_partition\n  FROM (\nSELECT TRIM(c.\"land1\") AS \"country\", TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND ",
+      "cols": [
+        "country",
+        "customer_id",
+        "customer_name",
+        "total_sales",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "country": "BR",
+          "customer_id": "0000301207",
+          "customer_name": "Brazil Technologies",
+          "total_sales": 100.0,
+          "rank_in_partition": 1
+        },
+        {
+          "country": "CA",
+          "customer_id": "0000004000",
+          "customer_name": "North Energy Ltd",
+          "total_sales": 42696.67,
+          "rank_in_partition": 1
+        }
+      ],
+      "summary": "Bottom 5 customers by total billed sales per country (based on provided query output)."
+    },
+    {
+      "label": "R3C",
+      "question": "Show billing documents from this month.",
+      "kind": "date_rel",
+      "verdict": "PASS",
+      "reason": "rows=0",
+      "elapsed": 49.35,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053101278",
+      "rowCount": 0,
+      "sql": "SELECT TRIM(CAST(\"VBRK\".\"vbeln\" AS TEXT)) AS \"invoice_id\", TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) AS \"invoice_date\", TRIM(CAST(\"VBRK\".\"kunag\" AS TEXT)) AS \"customer_id\", CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC) AS \"invoice_amount\", TRIM(CAST(\"VBRK\".\"waerk\" AS TEXT)) AS \"currency\"\nFROM \"VBRK\"\nWHERE TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) >= '20260901'\n  AND TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) < '20261001'\nORDER BY \"invoice_date\" DESC\nLIMIT 200",
+      "cols": [],
+      "sample": [],
+      "summary": "No billing documents found for the given month/date range in the result set."
+    },
+    {
+      "label": "R3D",
+      "question": "Which vendors generated the highest purchase order value?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=10 cols=['vendor_id', 'vendor_name', 'purchase_order_value']",
+      "elapsed": 47.38,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053150627",
+      "rowCount": 10,
+      "sql": "SELECT TRIM(CAST(h.\"lifnr\" AS TEXT)) AS \"vendor_id\", TRIM(v.\"name1\") AS \"vendor_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"purchase_order_value\"\nFROM \"EKPO\" p\nJOIN \"EKKO\" h ON LPAD(TRIM(CAST(p.\"ebeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(h.\"ebeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"LFA1\" v ON LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v.\"lifnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(h.\"waers\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(h.\"lifnr\" AS TEXT)), ",
+      "cols": [
+        "vendor_id",
+        "vendor_name",
+        "purchase_order_value"
+      ],
+      "sample": [
+        {
+          "vendor_id": "0000005557",
+          "vendor_name": "VK  Enterprisises",
+          "purchase_order_value": 66963393566.0
+        },
+        {
+          "vendor_id": "0000003000",
+          "vendor_name": "C.E.B. New York",
+          "purchase_order_value": 798224367.24
+        }
+      ],
+      "summary": "Top 10 vendors by purchase order value in USD (ordered descending)."
+    },
+    {
+      "label": "R3E",
+      "question": "Count sales orders by year.",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=29 cols=['year', 'sales_order_count']",
+      "elapsed": 40.67,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053198007",
+      "rowCount": 29,
+      "sql": "SELECT SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 4) AS \"year\", COUNT(DISTINCT TRIM(CAST(\"VBAK\".\"vbeln\" AS TEXT))) AS \"sales_order_count\"\nFROM \"VBAK\"\nWHERE NULLIF(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), '') IS NOT NULL\nGROUP BY SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 4)\nORDER BY \"year\" ASC",
+      "cols": [
+        "year",
+        "sales_order_count"
+      ],
+      "sample": [
+        {
+          "year": "1994",
+          "sales_order_count": 2
+        },
+        {
+          "year": "1995",
+          "sales_order_count": 60
+        }
+      ],
+      "summary": "Count of distinct sales orders per year from VBAK. Years span 1994\u20132005."
+    },
+    {
+      "label": "R3F",
+      "question": "Which customers have invoices but no sales orders?",
+      "kind": "negation",
+      "verdict": "PASS",
+      "reason": "rows=17",
+      "elapsed": 63.67,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053238682",
+      "rowCount": 17,
+      "sql": "SELECT TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", COUNT(DISTINCT TRIM(CAST(k.\"vbeln\" AS TEXT))) AS \"invoice_count\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  AND NOT EXISTS (\n    SELECT 1 FROM \"VBAK\" o\n    WHERE LPAD(TRIM(CAST(o.\"kunnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0')\n  )\nGROUP BY TRIM(c.\"k",
+      "cols": [
+        "customer_id",
+        "customer_name",
+        "invoice_count"
+      ],
+      "sample": [
+        {
+          "customer_id": "R311",
+          "customer_name": "GM Store R311",
+          "invoice_count": 13584
+        },
+        {
+          "customer_id": "R310",
+          "customer_name": "GM Store R310",
+          "invoice_count": 5868
+        }
+      ],
+      "summary": "Query succeeded and returned matching records. Top customers by invoice_count are listed (sample of 12 shown; total row count: 17)."
+    },
+    {
+      "label": "R3G",
+      "question": "Which materials increased billed quantity between 2004 and 2005?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "rows=50 cols=['material_id', 'material_name', 'period_a', 'period_b', 'change']",
+      "elapsed": 95.15,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053302356",
+      "rowCount": 50,
+      "sql": "SELECT TRIM(p.\"matnr\") AS \"material_id\", TRIM(m.\"maktx\") AS \"material_name\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(p.\"",
+      "cols": [
+        "material_id",
+        "material_name",
+        "period_a",
+        "period_b",
+        "change"
+      ],
+      "sample": [
+        {
+          "material_id": "1400-300",
+          "material_name": "SunFun / 1200 cm3",
+          "period_a": 122311777.5,
+          "period_b": 147224591.25,
+          "change": 24912813.75
+        },
+        {
+          "material_id": "1400-310",
+          "material_name": "CrossFun / 350 cm3",
+          "period_a": 53021237.5,
+          "period_b": 63790619.2,
+          "change": 10769381.7
+        }
+      ],
+      "summary": "Query returned materials whose summed net value (netwr) in 2005 exceeded that in 2004. Below are the numeric values (period_a = 2004, period_b = 2005, change = period_b - period_a) for the sample rows."
+    },
+    {
+      "label": "R3H",
+      "question": "Show top customers by billed sales in USD only.",
+      "kind": "rank_revenue",
+      "verdict": "FAIL",
+      "reason": "client=timeout client timeout",
+      "elapsed": 135.01,
+      "status": null,
+      "pipeline": null,
+      "pipeline_stage": null,
+      "request_id": null,
+      "rowCount": null,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "client timeout"
+    },
+    {
+      "label": "R3I",
+      "question": "Which country and industry combination had the highest billed sales?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=1 cols=['country', 'total_sales']",
+      "elapsed": 108.64,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053532525",
+      "rowCount": 1,
+      "sql": "SELECT TRIM(c.\"land1\") AS \"country\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(c.\"land1\" AS TEXT)), '') IS NOT NULL\n  AND NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') IS NOT NULL\nGROUP BY TRIM(c.\"land1\")\nORDER B",
+      "cols": [
+        "country",
+        "total_sales"
+      ],
+      "sample": [
+        {
+          "country": "US",
+          "total_sales": 143325570.43
+        }
+      ],
+      "summary": "Top country by USD sales is US with total_sales = 143325570.43"
+    },
+    {
+      "label": "R3J",
+      "question": "List invoices from last week.",
+      "kind": "date_rel",
+      "verdict": "TIMEOUT",
+      "reason": "timeout",
+      "elapsed": 130.53,
+      "status": "TIMEOUT",
+      "pipeline": "investigation_budget",
+      "pipeline_stage": "TIMEOUT",
+      "request_id": "cert1789053641172",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned."
+    },
+    {
+      "label": "P1",
+      "question": "Which vendors generated the highest purchase order amounts?",
+      "kind": "rank_revenue",
+      "verdict": "PASS",
+      "reason": "rows=10 cols=['vendor_id', 'vendor_name', 'purchase_order_value']",
+      "elapsed": 73.28,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789053771702",
+      "rowCount": 10,
+      "sql": "SELECT TRIM(CAST(h.\"lifnr\" AS TEXT)) AS \"vendor_id\", TRIM(v.\"name1\") AS \"vendor_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"purchase_order_value\"\nFROM \"EKPO\" p\nJOIN \"EKKO\" h ON LPAD(TRIM(CAST(p.\"ebeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(h.\"ebeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"LFA1\" v ON LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v.\"lifnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(h.\"waers\" AS TEXT)) = 'USD' AND NULLIF(TRIM(CAST(h.\"lifnr\" AS TEXT)), ",
+      "cols": [
+        "vendor_id",
+        "vendor_name",
+        "purchase_order_value"
+      ],
+      "sample": [
+        {
+          "vendor_id": "0000005557",
+          "vendor_name": "VK  Enterprisises",
+          "purchase_order_value": 66963393566.0
+        },
+        {
+          "vendor_id": "0000003000",
+          "vendor_name": "C.E.B. New York",
+          "purchase_order_value": 798224367.24
+        }
+      ],
+      "summary": "Query returned the top 10 vendors by summed EKPO.netwr in USD. Values are the SUM of line-item netwr per vendor (grouped by EKKO.lifnr) and ordered descending."
+    },
+    {
+      "label": "P2",
+      "question": "Count billing documents by year.",
+      "kind": "any_success",
+      "verdict": "FAIL",
+      "reason": "client=timeout client timeout",
+      "elapsed": 135.07,
+      "status": null,
+      "pipeline": null,
+      "pipeline_stage": null,
+      "request_id": null,
+      "rowCount": null,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "client timeout"
+    },
+    {
+      "label": "P3",
+      "question": "Top materials by billed quantity in each plant.",
+      "kind": "partition",
+      "verdict": "FAIL",
+      "reason": "client=timeout client timeout",
+      "elapsed": 135.02,
+      "status": null,
+      "pipeline": null,
+      "pipeline_stage": null,
+      "request_id": null,
+      "rowCount": null,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "client timeout"
+    },
+    {
+      "label": "P4",
+      "question": "Customers with billed sales above the average.",
+      "kind": "any_success",
+      "verdict": "FAIL",
+      "reason": "client=timeout client timeout",
+      "elapsed": 135.01,
+      "status": null,
+      "pipeline": null,
+      "pipeline_stage": null,
+      "request_id": null,
+      "rowCount": null,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "client timeout"
+    },
+    {
+      "label": "P5",
+      "question": "Vendors that have purchase orders without invoices.",
+      "kind": "negation",
+      "verdict": "PASS",
+      "reason": "rows=200",
+      "elapsed": 104.76,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789054250143",
+      "rowCount": 200,
+      "sql": "SELECT TRIM(CAST(h.\"lifnr\" AS TEXT)) AS \"vendor_id\", TRIM(v.\"name1\") AS \"vendor_name\", COUNT(DISTINCT TRIM(CAST(h.\"ebeln\" AS TEXT))) AS \"purchase_order_count\"\nFROM \"EKKO\" h\nLEFT JOIN \"LFA1\" v ON LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(v.\"lifnr\" AS TEXT)), 10, '0')\nWHERE NULLIF(TRIM(CAST(h.\"lifnr\" AS TEXT)), '') IS NOT NULL\n  AND NOT EXISTS (\n    SELECT 1 FROM \"RBKP\" i\n    WHERE LPAD(TRIM(CAST(i.\"lifnr\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(h.\"lifnr\" AS TEXT)), 10, '0')\n  )\nG",
+      "cols": [
+        "vendor_id",
+        "vendor_name",
+        "purchase_order_count"
+      ],
+      "sample": [
+        {
+          "vendor_id": "FIO-VEND03",
+          "vendor_name": "Sunny Electronics GmbH",
+          "purchase_order_count": 146
+        },
+        {
+          "vendor_id": "SU212",
+          "vendor_name": "Supplier 211",
+          "purchase_order_count": 69
+        }
+      ],
+      "summary": "Query returned 200 row(s)."
+    },
+    {
+      "label": "P6",
+      "question": "Show invoices from this quarter.",
+      "kind": "date_rel",
+      "verdict": "PASS",
+      "reason": "rows=0",
+      "elapsed": 100.97,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789054354927",
+      "rowCount": 0,
+      "sql": "SELECT TRIM(CAST(\"VBRK\".\"vbeln\" AS TEXT)) AS \"invoice_id\", TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) AS \"invoice_date\", TRIM(CAST(\"VBRK\".\"kunag\" AS TEXT)) AS \"customer_id\", CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC) AS \"invoice_amount\", TRIM(CAST(\"VBRK\".\"waerk\" AS TEXT)) AS \"currency\"\nFROM \"VBRK\"\nWHERE TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) >= '20260701'\n  AND TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)) < '20261001'\nORDER BY \"invoice_date\" DESC\nLIMIT 200",
+      "cols": [],
+      "sample": [],
+      "summary": "No invoices found between 2026-07-01 (inclusive) and 2026-10-01 (exclusive)."
+    },
+    {
+      "label": "P7",
+      "question": "Which country declined the most in billed sales between 2004 and 2005?",
+      "kind": "period",
+      "verdict": "PASS",
+      "reason": "rows=2 cols=['country', 'period_a', 'period_b', 'change']",
+      "elapsed": 103.05,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789054456010",
+      "rowCount": 2,
+      "sql": "SELECT TRIM(c.\"land1\") AS \"country\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2004' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_a\", SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0 END) AS \"period_b\", (SUM(CASE WHEN SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 4) = '2005' THEN CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC) ELSE 0",
+      "cols": [
+        "country",
+        "period_a",
+        "period_b",
+        "change"
+      ],
+      "sample": [
+        {
+          "country": null,
+          "period_a": 17563781.25,
+          "period_b": 9797062.8,
+          "change": -7766718.45
+        },
+        {
+          "country": "US",
+          "period_a": 20543571.39,
+          "period_b": 16333869.22,
+          "change": -4209702.17
+        }
+      ],
+      "summary": "Query returned 2 row(s)."
+    },
+    {
+      "label": "P8",
+      "question": "Top 2 customers per country by billed sales.",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=14 cols=['country', 'customer_id', 'customer_name', 'total_sales', 'rank_in_partition']",
+      "elapsed": 77.77,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789054559066",
+      "rowCount": 14,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"country\" ORDER BY \"total_sales\" DESC) AS rank_in_partition\n  FROM (\nSELECT TRIM(c.\"land1\") AS \"country\", TRIM(c.\"kunnr\") AS \"customer_id\", TRIM(c.\"name1\") AS \"customer_name\", SUM(CAST(NULLIF(TRIM(CAST(k.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\" k\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(c.\"kunnr\" AS TEXT)), 10, '0')\nWHERE TRIM(CAST(k.\"waerk\" AS TEXT)) = 'USD' AND",
+      "cols": [
+        "country",
+        "customer_id",
+        "customer_name",
+        "total_sales",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "country": "BR",
+          "customer_id": "0000301207",
+          "customer_name": "Brazil Technologies",
+          "total_sales": 100.0,
+          "rank_in_partition": 1
+        },
+        {
+          "country": "CA",
+          "customer_id": "0000004000",
+          "customer_name": "North Energy Ltd",
+          "total_sales": 42696.67,
+          "rank_in_partition": 1
+        }
+      ],
+      "summary": "Query returned 13 rows (top <=2 per country). Countries with two customers: DE. All other listed countries have a single top customer."
+    },
+    {
+      "label": "P9",
+      "question": "How many sales orders were created each year?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "rows=29 cols=['year', 'sales_order_count']",
+      "elapsed": 53.66,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789054636942",
+      "rowCount": 29,
+      "sql": "SELECT SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 4) AS \"year\", COUNT(DISTINCT TRIM(CAST(\"VBAK\".\"vbeln\" AS TEXT))) AS \"sales_order_count\"\nFROM \"VBAK\"\nWHERE NULLIF(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), '') IS NOT NULL\nGROUP BY SUBSTRING(TRIM(CAST(\"VBAK\".\"erdat\" AS TEXT)), 1, 4)\nORDER BY \"year\" ASC",
+      "cols": [
+        "year",
+        "sales_order_count"
+      ],
+      "sample": [
+        {
+          "year": "1994",
+          "sales_order_count": 2
+        },
+        {
+          "year": "1995",
+          "sales_order_count": 60
+        }
+      ],
+      "summary": "Counts of distinct sales orders grouped by year based on VBAK.erdat."
+    },
+    {
+      "label": "P10",
+      "question": "List bottom 3 materials per country by billed quantity.",
+      "kind": "partition",
+      "verdict": "PASS",
+      "reason": "rows=64 cols=['country', 'material_id', 'material_name', 'billed_quantity', 'rank_in_partition']",
+      "elapsed": 67.38,
+      "status": "SUCCESS",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "COMPLETED",
+      "request_id": "cert1789054690605",
+      "rowCount": 64,
+      "sql": "SELECT * FROM (\n  SELECT inner_q.*, ROW_NUMBER() OVER (PARTITION BY \"country\" ORDER BY \"billed_quantity\" ASC) AS rank_in_partition\n  FROM (\nSELECT TRIM(c.\"land1\") AS \"country\", TRIM(p.\"matnr\") AS \"material_id\", TRIM(m.\"maktx\") AS \"material_name\", SUM(CAST(NULLIF(TRIM(CAST(p.\"fkimg\" AS TEXT)), '') AS NUMERIC)) AS \"billed_quantity\"\nFROM \"vbrp\" p\nJOIN \"VBRK\" k ON LPAD(TRIM(CAST(p.\"vbeln\" AS TEXT)), 10, '0') = LPAD(TRIM(CAST(k.\"vbeln\" AS TEXT)), 10, '0')\nLEFT JOIN \"KNA1\" c ON LPAD(TRIM(CAST(k.\"kunag",
+      "cols": [
+        "country",
+        "material_id",
+        "material_name",
+        "billed_quantity",
+        "rank_in_partition"
+      ],
+      "sample": [
+        {
+          "country": "AE",
+          "material_id": null,
+          "material_name": null,
+          "billed_quantity": 0.0,
+          "rank_in_partition": 1
+        },
+        {
+          "country": "AE",
+          "material_id": "P-102",
+          "material_name": "Pumpe PRECISION 102",
+          "billed_quantity": 2773.0,
+          "rank_in_partition": 2
+        }
+      ],
+      "summary": "The query groups billed quantities by country and material, sums billed_quantity, ranks materials within each country in ascending order of billed_quantity, and selects the lowest three per country. Result set contains 64 rows."
+    },
+    {
+      "label": "ADV1",
+      "question": "Show high value customers.",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "clarification",
+      "elapsed": 25.0,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789054758039",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "The query needs thresholds for \"high value\". What quantity and value thresholds should I use (numeric limits, percentiles, or relative-to-average rules)?"
+    },
+    {
+      "label": "ADV2",
+      "question": "Which materials have low quantity?",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "clarification",
+      "elapsed": 22.9,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789054783036",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "The query needs thresholds for \"low quantity\". What quantity and value thresholds should I use (numeric limits, percentiles, or relative-to-average rules)?"
+    },
+    {
+      "label": "ADV3",
+      "question": "List important suppliers.",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "clarification",
+      "elapsed": 33.18,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789054805945",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "The query needs thresholds for \"important suppliers\". What quantity and value thresholds should I use (numeric limits, percentiles, or relative-to-average rules)?"
+    },
+    {
+      "label": "ADV4",
+      "question": "Show recent orders.",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "clarification",
+      "elapsed": 21.73,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789054839123",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "The query needs thresholds for \"recent orders\". What quantity and value thresholds should I use (numeric limits, percentiles, or relative-to-average rules)?"
+    },
+    {
+      "label": "ADV5",
+      "question": "Large invoices with unusually high revenue.",
+      "kind": "any_success",
+      "verdict": "PASS",
+      "reason": "clarification",
+      "elapsed": 25.0,
+      "status": "CLARIFICATION",
+      "pipeline": "adaptive_orchestrator",
+      "pipeline_stage": "UNDERSTANDING",
+      "request_id": "cert1789054860860",
+      "rowCount": 0,
+      "sql": "",
+      "cols": [],
+      "sample": [],
+      "summary": "The query needs thresholds for \"large invoices\", \"unusually high revenue\". What quantity and value thresholds should I use (numeric limits, percentiles, or relative-to-average rules)?"
+    }
+  ]
+}

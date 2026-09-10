@@ -235,15 +235,7 @@ def _is_basic_engine_query(ql: str) -> bool:
             "products bought by",
             "customers buy",
             "customers buying",
-            # R4-1 time grain — never surrender to basic year-compare
-            "monthly",
-            "quarterly",
-            "by month",
-            "by quarter",
-            "each month",
-            "per month",
-            "per quarter",
-            "each quarter",
+            # R4-1 relative periods — deep owns these outright
             "month over month",
             "quarter over quarter",
             "this month",
@@ -267,9 +259,19 @@ def _is_basic_engine_query(ql: str) -> bool:
         return False
     if wants_product_change(ql):
         return False
-    if re.search(r"\b(months?|quarters?)\b", ql) and any(
-        x in ql for x in ("sales", "revenue", "profit", "margin", "cogs", "trend", "compare", "performance")
-    ):
+    # Period buckets belong to deep analysis only with cost/driver semantics;
+    # a plain "monthly sales" bucket is a basic aggregation.
+    period_bucket = (
+        "monthly", "quarterly", "by month", "by quarter",
+        "each month", "per month", "per quarter", "each quarter",
+    )
+    period_deep_signals = (
+        "profit", "margin", "cogs", "cost", "compare", "performance",
+        "driver", "why", "grew", "growth", "declin", "erosion",
+    )
+    if any(t in ql for t in period_bucket) and any(s in ql for s in period_deep_signals):
+        return False
+    if re.search(r"\b(months?|quarters?)\b", ql) and any(s in ql for s in period_deep_signals):
         return False
     # Classic sales / ranking / invoice count without cost/profit semantics
     basic_patterns = (
@@ -283,6 +285,9 @@ def _is_basic_engine_query(ql: str) -> bool:
         r"\bsales by industry\b",
         r"\bsales by country\b",
         r"\bcompare\s+20\d{2}\s+(vs|versus|and|with)\s+20\d{2}\b",
+        # Plain period buckets: "monthly sales for 2004", "sales trend by quarter"
+        r"\b(monthly|quarterly|by month|by quarter|per month|per quarter)\b[^.]*\b(sales|revenue|billing|billed)\b",
+        r"\b(sales|revenue|billing|billed)\b[^.]*\b(monthly|quarterly|by month|by quarter|per month|per quarter)\b",
     )
     if any(re.search(p, ql) for p in basic_patterns):
         return True
@@ -2612,6 +2617,26 @@ def try_deep_multidim_analysis(
             ],
             prior_analytical_context=prior_for_gap,
         )
+
+    # Generic company-wide profit margin — no single defensible number without scope
+    if re.search(r"\b(profit\s+margin|our\s+margin|overall\s+margin|company\s+margin)\b", ql):
+        if not re.search(r"\b(by|per|for each|top|bottom|lowest|highest)\b", ql) and not re.search(
+            r"\b(product|customer|industry|country|region|material|segment)\b", ql
+        ):
+            return data_gap_payload(
+                question,
+                (
+                    "True net profit margin requires operating costs not present in this dataset. "
+                    "Gross margin (NETWR − WAVWR) is available by product, customer, or industry — "
+                    "but not as a single company-wide figure without specifying scope and currency."
+                ),
+                can_answer=[
+                    "Gross margin % by product",
+                    "Gross profit by customer or industry",
+                    "Revenue and invoice COGS (WAVWR) by year",
+                ],
+                prior_analytical_context=prior_for_gap,
+            )
 
     queries, gaps = compile_queries(plan)
     plan_ms = int((time.perf_counter() - t0) * 1000)

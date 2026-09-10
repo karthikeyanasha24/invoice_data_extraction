@@ -217,6 +217,13 @@ def looks_like_followup_utterance(question: str) -> bool:
     q = (question or "").strip()
     if not q:
         return False
+    # Complete "top N X by Y" rankings are standalone questions, not follow-up fragments.
+    if re.search(
+        r"^\s*top\s+\d+\s+(materials?|products?|customers?)\s+by\s+",
+        q,
+        re.I,
+    ):
+        return False
     return bool(_FOLLOWUP_UTTERANCE.match(q))
 
 
@@ -236,6 +243,12 @@ def looks_like_standalone_analytical(question: str) -> bool:
     # highest sales in 2004?" → "top customers by sales in 2004").
     if re.search(
         r"\btop\s+(\d+\s+)?(customers?|countries|industries|products?)\s+by\s+(sales|revenue)\b",
+        q,
+        re.I,
+    ):
+        return True
+    if re.search(
+        r"^\s*top\s+\d+\s+(materials?|products?|customers?)\s+by\s+",
         q,
         re.I,
     ):

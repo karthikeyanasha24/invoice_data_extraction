@@ -33,23 +33,16 @@ _SAP_META = _ROOT / "sap_table_metadata.json"
 
 _TOKEN = re.compile(r"[a-z0-9_]{3,}")
 
-# Business concepts → actual table names in schema_full.json
-_CONCEPT_ALIASES: Dict[str, List[str]] = {
+# Operational / Zodiac tables only — SAP table discovery is AI-driven from catalog metadata.
+_OPERATIONAL_ALIASES: Dict[str, List[str]] = {
     "sat processing log": ["sat_processing_logs"],
     "sat processing step": ["sat_processing_logs"],
-    "sat processing steps": ["sat_processing_logs"],
     "sat log": ["sat_processing_logs"],
     "failed sat": ["sat_processing_logs"],
     "sat document": ["sat_documents", "sat_canonical_merged"],
     "edi failure": ["zodiac_invoice_failed_edi"],
     "failed edi": ["zodiac_invoice_failed_edi"],
     "supplier token": ["supplier_tokens"],
-    "billing revenue": ["VBRK", "vbrp"],
-    "billed quantity": ["vbrp"],
-    "billing item": ["vbrp"],
-    "customer revenue": ["VBRK", "vbrp", "KNA1"],
-    "sales order": ["VBAK", "VBAP"],
-    "purchase order": ["EKKO", "EKPO"],
 }
 
 _OPERATIONAL_PREFIXES = ("sat_", "zodiac_", "invoice_", "supplier_", "converted_", "customer_users")
@@ -144,7 +137,7 @@ class SchemaIntelligenceRegistry:
             for t in terms:
                 self._term_index.setdefault(t, set()).add(resolved)
 
-        for concept, tables in _CONCEPT_ALIASES.items():
+        for concept, tables in _OPERATIONAL_ALIASES.items():
             for tbl in tables:
                 if has_table(tbl):
                     self._term_index.setdefault(concept, set()).add(resolve_table_name(tbl) or tbl)
@@ -220,6 +213,38 @@ class SchemaIntelligenceRegistry:
             )
         return out
 
+    def compact_catalog_text(self, *, include_operational: bool = False, max_desc: int = 120) -> str:
+        """One line per table for Pipeline 1 — full catalog, no columns."""
+        lines: List[str] = []
+        for item in self.lightweight_table_catalog(include_operational=include_operational):
+            desc = str(item.get("description") or "").replace("\n", " ")[:max_desc]
+            domain = item.get("domain") or ""
+            lines.append(f"- {item['table']}: {desc} [{domain}]")
+        return "\n".join(lines)
+
+    def expand_join_neighbors(self, tables: List[str]) -> List[str]:
+        """Add relationship neighbors from schema metadata (not question keywords)."""
+        self.ensure_loaded()
+        selected_upper = {_normalize_registry_table(t).upper() for t in tables}
+        expanded: List[str] = [_normalize_registry_table(t) for t in tables]
+        seen = set(selected_upper)
+
+        def add(tbl: str) -> None:
+            key = _normalize_registry_table(tbl)
+            u = key.upper()
+            if u not in seen and has_table(key):
+                seen.add(u)
+                expanded.append(key)
+
+        for rel in RELATIONSHIPS:
+            src = _normalize_registry_table(str(rel.get("source_table") or ""))
+            tgt = _normalize_registry_table(str(rel.get("target_table") or ""))
+            if src.upper() in seen:
+                add(tgt)
+            if tgt.upper() in seen:
+                add(src)
+        return expanded
+
     def score_tables_for_question(self, question: str, *, include_operational: bool = False) -> List[Tuple[str, float, str]]:
         """Rule-based retrieval — top candidate tables before Pipeline 1 LLM."""
         self.ensure_loaded()
@@ -235,10 +260,10 @@ class SchemaIntelligenceRegistry:
             scores[key] = scores.get(key, 0.0) + score
             reasons.setdefault(key, reason)
 
-        for concept, tables in _CONCEPT_ALIASES.items():
+        for concept, tables in _OPERATIONAL_ALIASES.items():
             if concept in q:
                 for t in tables:
-                    bump(t, 8.0, f"concept match: {concept}")
+                    bump(t, 8.0, f"operational concept: {concept}")
 
         for name in self.all_table_names(include_operational=include_operational):
             meta = self._tables.get(name)
@@ -300,6 +325,75 @@ class SchemaIntelligenceRegistry:
                 lines.append(f"  sql_hints: {meta.sql_hints[:300]}")
         return "\n".join(lines)
 
+    def find_tables_for_concept(
+        self,
+        concept: str,
+        *,
+        include_operational: bool = False,
+        limit: int = 3,
+    ) -> List[Tuple[str, float, str]]:
+        """Rank tables from schema metadata for a business concept (no hardcoded SAP mappings)."""
+        self.ensure_loaded()
+        c = (concept or "").lower().strip()
+        if not c:
+            return []
+        tokens = set(_TOKEN.findall(c))
+        scores: Dict[str, float] = {}
+        reasons: Dict[str, str] = {}
+
+        def bump(table: str, score: float, reason: str) -> None:
+            if not has_table(table):
+                return
+            key = resolve_table_name(table) or table
+            scores[key] = scores.get(key, 0.0) + score
+            reasons.setdefault(key, reason)
+
+        for tok in tokens:
+            for tbl in self._term_index.get(tok, set()):
+                bump(tbl, 3.0, f"term index: {tok}")
+
+        for name in self.all_table_names(include_operational=include_operational):
+            meta = self._tables.get(name)
+            if not meta:
+                continue
+            blob = (
+                f"{meta.table} {meta.description} {meta.domain} {meta.grain} "
+                f"{meta.business_purpose} {' '.join(meta.important_columns)}"
+            ).lower()
+            if c in blob:
+                bump(name, 5.0, f"description match: {concept}")
+            overlap = len(tokens.intersection(set(meta.business_terms)))
+            if overlap:
+                bump(name, overlap * 2.0, f"{overlap} business-term overlap")
+
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        return [(t, s, reasons.get(t, "")) for t, s in ranked[:limit]]
+
+    def table_covers_concept(self, table: str, concept: str) -> bool:
+        meta = self.get_table(table)
+        if not meta:
+            return False
+        c = (concept or "").lower().strip()
+        if not c:
+            return False
+        blob = (
+            f"{meta.table} {meta.description} {meta.domain} {meta.grain} "
+            f"{' '.join(meta.important_columns)} {' '.join(meta.business_terms)}"
+        ).lower()
+        if c in blob or any(c in t for t in meta.business_terms):
+            return True
+        # Underscored concepts ("sales_order") match spaced metadata ("sales order").
+        spaced = c.replace("_", " ")
+        if spaced != c and (spaced in blob or all(tok in blob for tok in spaced.split() if len(tok) > 2)):
+            return True
+        # Document-count concepts are covered by transactional header tables.
+        if c in {"sales_order", "sales_orders", "order", "orders", "count"}:
+            if any(tok in blob for tok in ("sales order", "sales document", "order header")):
+                return True
+            if meta.table.upper() in {"VBAK", "VBAP", "LIKP", "EKKO", "VBRK"} and c.startswith("sales"):
+                return True
+        return False
+
     def resolve_data_limitation(self, question: str, selected_tables: List[str]) -> Optional[str]:
         """Return user-facing limitation message when concept cannot be mapped."""
         q = (question or "").lower()
@@ -335,6 +429,10 @@ class SchemaIntelligenceRegistry:
                     }
                 )
         return joins
+
+
+def _normalize_registry_table(table: str) -> str:
+    return resolve_table_name(table) or table
 
 
 @lru_cache(maxsize=1)

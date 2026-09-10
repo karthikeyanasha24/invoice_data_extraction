@@ -155,6 +155,10 @@ def ensure_default_ranking_limit(question: str) -> str:
 def resolve_topn_choice(question: str, prior_question: str = "") -> Optional[str]:
     """Map a bare number after a ranking question to 'top N customers by sales'."""
     n = _parse_topn(question)
+    if n is None:
+        m = re.search(r"\btop\s+(\d{1,3})\b", (question or ""), re.I)
+        if m:
+            n = int(m.group(1))
     if n is None or not _prior_is_sales_ranking(prior_question):
         return None
     years = re.findall(r"\b((?:19|20)\d{2})\b", prior_question or "")
@@ -403,11 +407,33 @@ def _run_four_stage_or_legacy_sql(
             prior_sql=(prior_sql or state.last_sql or "").strip(),
         )
     except Exception as exc:
-        logger.warning("[adaptive-orch] four_stage failed (%s); using legacy pipeline2", exc)
-        return _pipeline2_sql(
-            resolved, original, analysis, state, db, execute_sql,
-            use_sap=use_sap, get_sap_session=get_sap_session,
-        )
+        from ..investigation_budget import InvestigationTimeout
+
+        if isinstance(exc, InvestigationTimeout):
+            raise
+        # Legacy free-form NL→SQL is not an analytics authority. Fail closed so
+        # four-stage remains the only SAP analytics path.
+        logger.warning("[adaptive-orch] four_stage failed (%s); refusing legacy pipeline2 bypass", exc)
+        return {
+            "mode": "error",
+            "status": "completed",
+            "answer_status": "CANNOT_ANSWER",
+            "error": "four_stage_failed",
+            "error_kind": "pipeline_error",
+            "error_class": "TECHNICAL_ERROR",
+            "sql": "",
+            "rows": [],
+            "data": [],
+            "rowCount": 0,
+            "summary": (
+                "The adaptive analytics engine encountered an internal failure and did not "
+                "fall back to an unverified SQL path. Please retry the question."
+            ),
+            "answer": "The investigation could not be completed due to a technical failure.",
+            "pipeline": "four_stage_failed_no_legacy",
+            "query_plan": {"investigation_state": state.to_dict()},
+            "meta": {"investigation_status": "failed", "legacy_bypass": False},
+        }
     finally:
         if sap is not None:
             try:
@@ -780,11 +806,32 @@ def run_adaptive_orchestrator(
         state.last_sql = str(gov.get("sql") or "")
         state.last_user_question = q
         state.last_resolved_question = resolved
-        gov["mode"] = gov.get("mode") or "database_analysis"
+        if (
+            str(gov.get("answer_status") or "").upper() == "CANNOT_ANSWER"
+            or gov.get("type") == "cannot_answer"
+            or (isinstance(gov.get("meta"), dict) and gov["meta"].get("data_gap"))
+        ):
+            gov["mode"] = "data_limitation"
+        else:
+            gov["mode"] = gov.get("mode") or "database_analysis"
         gov["route"] = "database"
         gov["query_plan"] = {**qp, "investigation_state": state.to_dict(), "pipeline1": p1}
         gov.setdefault("pipeline", gov.get("pipeline") or "governed_under_orchestrator")
         return gov
+
+    from ..result_first_followup import try_answer_from_prior_rows, is_result_scoped_followup
+
+    if prior_rows or is_result_scoped_followup(q, has_prior_rows=bool(prior_rows)):
+        reused = try_answer_from_prior_rows(
+            q, prior_rows, prior_sql=prior_sql, prior_plan=prior_plan
+        )
+        if reused and not reused.get("needs_plan_expansion"):
+            reused["query_plan"] = {
+                **(reused.get("query_plan") or {}),
+                "investigation_state": state.to_dict(),
+                "pipeline1": p1,
+            }
+            return reused
 
     p2 = _run_four_stage_or_legacy_sql(
         resolved, q, p1, state, db, execute_sql,
@@ -818,25 +865,91 @@ def run_adaptive_orchestrator(
         }
     if p2.get("error"):
         missing = p2.get("missing") or []
-        if any(str(m).upper() == "VBED" for m in missing) or "vbed" in q.lower():
+        err_kind = str(p2.get("error_kind") or "")
+        if p2.get("error") == "clarification_required" or err_kind == "clarification":
+            msg = str(
+                p2.get("user_message")
+                or (p2.get("clarification") or {}).get("message")
+                or "Please clarify the missing analytical parameters."
+            )
+            clar_type = str((p2.get("clarification") or {}).get("type") or "clarification")
+            return {
+                "mode": "clarification",
+                "route": "clarification",
+                "status": "clarification",
+                "answer_status": "CLARIFICATION",
+                "type": "clarification",
+                "sql": "",
+                "data": [],
+                "rowCount": 0,
+                "summary": msg,
+                "answer": msg,
+                "keyFindings": [],
+                "pipeline": "adaptive_orchestrator",
+                "sql_generation_method": f"{clar_type}_clarification",
+                "llm_calls": 2,
+                "query_plan": {
+                    "investigation_state": state.to_dict(),
+                    "pipeline1": p1,
+                    "clarification": p2.get("clarification"),
+                },
+                "suggested_followups": [],
+            }
+        is_timeout = (
+            err_kind == "timeout"
+            or p2.get("error") == "timeout"
+            or p2.get("timeout")
+            or str(p2.get("error_class") or "").lower() == "timeout"
+        )
+        if is_timeout:
+            from ..investigation_budget import TIMEOUT_USER_MESSAGE, timeout_response
+
+            payload = timeout_response(
+                str((p2.get("pipeline_log") or {}).get("timeout_stage") or "database"),
+                float((p2.get("pipeline_log") or {}).get("elapsed_s") or 0),
+                question=q,
+            )
+            payload["query_plan"] = {
+                "investigation_state": state.to_dict(),
+                "pipeline1": p1,
+                "pipeline_log": p2.get("pipeline_log"),
+            }
+            return payload
+        is_data_limitation = (
+            err_kind == "data_limitation"
+            or p2.get("error") == "data_limitation"
+        )
+        if p2.get("error") == "semantic_mismatch":
+            from ..investigation_budget import user_safe_pipeline_message as _safe
+
+            msg = str(p2.get("user_message") or _safe("semantic_mismatch"))
+            status = "CANNOT_ANSWER"
+            is_data_limitation = False
+        elif any(str(m).upper() == "VBED" for m in missing) or "vbed" in q.lower():
             msg = (
                 "VBED is not available in the imported dataset. "
                 "Schedule-line data in this extract is in VBEP. Would you like me to use VBEP?"
             )
             status = "CANNOT_ANSWER"
-        else:
-            msg = (
-                "I understood this as a database question, but I could not build a valid query "
-                "for the requested tables and columns. I did not invent a row-count fallback. "
-                f"{p2.get('detail') or p2.get('error')}"
-            )
+        elif is_data_limitation:
+            msg = str(p2.get("data_limitation") or "The available dataset does not contain the data required to answer this question.")
             status = "CANNOT_ANSWER"
+        else:
+            from ..investigation_budget import user_safe_pipeline_message
+
+            msg = user_safe_pipeline_message("repair_failed")
+            status = "CANNOT_ANSWER"
+            logger.warning(
+                "[adaptive-orch] pipeline error hidden from user: %s %s",
+                p2.get("error"),
+                p2.get("detail"),
+            )
         return {
-            "mode": "error",
+            "mode": "error" if not is_data_limitation else "data_limitation",
             "route": "database",
-            "status": "error",
+            "status": "error" if not is_data_limitation else "cannot_answer",
             "answer_status": status,
-            "type": "cannot_answer",
+            "type": "cannot_answer" if is_data_limitation else "pipeline_error",
             "sql": p2.get("sql") or "",
             "data": [],
             "rowCount": 0,
@@ -857,24 +970,35 @@ def run_adaptive_orchestrator(
     if isinstance(requested_dims, str):
         requested_dims = [requested_dims]
     missing_dims = missing_result_dimensions(rows, [str(d) for d in requested_dims])
-    if missing_dims and rows:
-        extra = dict(p1)
-        extra["dimensions"] = list(requested_dims) + missing_dims
-        extra["_complete_missing"] = missing_dims
-        p2b = _pipeline2_sql(
-            resolved + f" Also include these missing fields: {', '.join(missing_dims)}.",
-            q,
-            extra,
-            state,
-            db,
-            execute_sql,
-            use_sap=use_sap,
-            get_sap_session=get_sap_session,
+    four_stage_ok = bool(p2.get("verified_context")) and not p2.get("error")
+    if missing_dims and rows and not four_stage_ok:
+        # Do not bypass four-stage with legacy pipeline2. Treat as semantic gap.
+        logger.warning(
+            "[adaptive-orch] missing dimensions %s after non-four-stage path; refusing legacy repair",
+            missing_dims,
         )
-        if not p2b.get("error") and p2b.get("rows"):
-            sql, rows, tables = p2b["sql"], p2b["rows"], p2b["tables"]
-            p2 = p2b
-            missing_dims = missing_result_dimensions(rows, [str(d) for d in requested_dims])
+        msg = (
+            "The result is missing required dimensions "
+            f"({', '.join(missing_dims)}) and was not returned as a verified answer."
+        )
+        return {
+            "mode": "error",
+            "route": "database",
+            "status": "cannot_answer",
+            "answer_status": "CANNOT_ANSWER",
+            "type": "cannot_answer",
+            "sql": sql or "",
+            "data": [],
+            "rowCount": 0,
+            "summary": msg,
+            "answer": msg,
+            "keyFindings": [],
+            "pipeline": "adaptive_orchestrator",
+            "sql_generation_method": "dimension_gap_no_legacy",
+            "degraded_fallback": False,
+            "llm_calls": 3,
+            "query_plan": {"investigation_state": state.to_dict(), "pipeline1": p1, "missing_dims": missing_dims},
+        }
     p3 = p2.get("narrative") if isinstance(p2.get("narrative"), dict) else None
     if not p3:
         p3 = _pipeline3_interpret(q, resolved, sql, rows, tables, p1)
@@ -913,16 +1037,59 @@ def run_adaptive_orchestrator(
     if empty and not summary:
         summary = f"No records matched “{resolved}”."
 
+    # HARD GATE: SQL success ≠ investigation success. Wrong results must never be SUCCESS.
+    from ..plan_satisfaction import answer_consistent_with_rows, result_matches_analytical_intent
+
+    semantic = (
+        (p2.get("verified_context") or {}).get("semantic_requirements")
+        if isinstance(p2.get("verified_context"), dict)
+        else None
+    ) or p1
+    final_warnings = result_matches_analytical_intent(rows, resolved or q, semantic, sql=sql)
+    answer_text = str(p3.get("answer") or summary)
+    final_warnings.extend(answer_consistent_with_rows(answer_text, rows, resolved or q))
+    if final_warnings:
+        msg = (
+            "The investigation could not be validated against the analytical requirements: "
+            + "; ".join(final_warnings[:4])
+        )
+        return {
+            "mode": "error",
+            "route": "database",
+            "status": "cannot_answer",
+            "answer_status": "CANNOT_ANSWER",
+            "type": "semantic_mismatch",
+            "sql": sql or "",
+            "data": [],
+            "rowCount": 0,
+            "summary": msg,
+            "answer": msg,
+            "keyFindings": [],
+            "pipeline": "adaptive_orchestrator",
+            "sql_generation_method": "pipeline2_sql",
+            "degraded_fallback": False,
+            "llm_calls": 4,
+            "tables_used": tables,
+            "resolved_question": resolved,
+            "meta": {"investigation_status": "semantic_mismatch", "validation_warnings": final_warnings},
+            "query_plan": {
+                "investigation_state": state.to_dict(),
+                "verified_db_context": p2.get("verified_context"),
+                "pipeline_log": p2.get("pipeline_log"),
+                "validation_warnings": final_warnings,
+            },
+        }
+
     return {
         "mode": "database_analysis",
         "route": "database",
-        "status": "empty" if empty else "success",
+        "status": "empty" if empty else "completed",
         "answer_status": "SUCCESS",
         "sql": sql,
         "data": rows,
         "rowCount": len(rows),
         "summary": summary,
-        "answer": str(p3.get("answer") or summary),
+        "answer": answer_text,
         "keyFindings": findings,
         "charts": charts,
         "pipeline": "adaptive_orchestrator",
@@ -930,6 +1097,7 @@ def run_adaptive_orchestrator(
         "llm_calls": 4,
         "tables_used": tables,
         "resolved_question": resolved,
+        "meta": {"investigation_status": "completed"},
         "suggested_followups": p3.get("follow_up_suggestions") or [
             "Which country?",
             "And industry?",

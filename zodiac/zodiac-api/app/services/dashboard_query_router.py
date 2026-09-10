@@ -149,49 +149,55 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     return _serialize_rows(rows_raw)
 
 
+def _cell(row: Dict[str, Any], *keys: str) -> Any:
+    for k in keys:
+        v = row.get(k)
+        if v not in (None, ""):
+            return v
+    return None
+
+
 def _summarize_operational_rows(query: str, op_type: str, rows: List[Dict[str, Any]]) -> str:
-    """
-    Real natural-language summary of operational query results, instead of a
-    generic row-count template. This is what made the Real-time AI box look
-    "broken" — every operational fast-path hit used to return the literal
-    string "Found N row(s) from the Zodiac operational database" no matter
-    what was actually asked or returned. Falls back to that same safe default
-    if the LLM call fails for any reason.
-    """
+    """Instant summary from SQL rows — no LLM round-trip (keeps SAT/EDI chips under ~1s)."""
     if not rows:
-        return "No rows matched in the operational database for this question."
+        return "Query ran successfully. No matching rows in this environment."
 
-    try:
-        import json as _json
+    n = len(rows)
+    r0 = rows[0]
+    name = _cell(r0, "supplier_name", "supplier", "customer", "account", "label", "doc_type")
 
-        from .multi_llm_client import smart_chat_completion
+    if op_type == "sat_documents_by_received_date":
+        newest = _cell(r0, "received_at", "fecha")
+        who = _cell(r0, "supplier_name", "supplier_rfc")
+        extra = f" Latest: {who or 'unknown'}" + (f" at {newest}." if newest else ".")
+        return f"Showing {n} inbound SAT document(s), newest first.{extra}"
+    if op_type == "top_sat_suppliers":
+        cnt = _cell(r0, "sat_document_count", "document_count")
+        return f"Top SAT suppliers by document count ({n} shown). Leader: {name or 'unknown'} with {cnt} documents."
+    if op_type == "sat_documents_this_week":
+        return f"{n} SAT document(s) received this calendar week, newest first."
+    if op_type == "sat_documents_this_week_count":
+        total = _cell(r0, "sat_document_count", "document_count", "count")
+        return f"{total if total is not None else n} SAT document(s) were received this calendar week."
+    if op_type == "sat_document_count_by_type":
+        parts = [f"{_cell(r, 'doc_type') or 'unknown'}: {_cell(r, 'document_count')}" for r in rows[:8]]
+        return f"SAT document counts by type: {'; '.join(str(p) for p in parts)}."
+    if op_type == "sat_missing_cfdi_uuid":
+        return f"{n} SAT document(s) have a missing or empty CFDI UUID."
+    if op_type == "top_invoice_supplier_amount":
+        amt = _cell(r0, "total_invoice_amount", "total_amount")
+        return f"Highest invoice amount is {name or 'unknown'} ({amt}). Showing top {n} supplier(s)."
+    if op_type == "failed_invoices_summary":
+        reason = _cell(r0, "failure_reason", "error_reason")
+        cnt = _cell(r0, "invoice_count", "count")
+        return f"Top EDI/invoice failure: {reason or 'unspecified'} ({cnt} invoices). {n} reason group(s) shown."
+    if op_type == "inbound_sat_merge":
+        return f"Inbound SAT merge snapshot — {n} row(s) covering merge status and top suppliers."
+    if op_type == "inbound_vs_outbound_comparison":
+        return f"Inbound SAT vs outbound comparison — {n} row(s)."
 
-        preview = rows[:25]
-        prompt = (
-            "You are a business analyst summarizing a SQL query result for a non-technical user.\n"
-            f"User's question: {query}\n"
-            f"Matched query pattern: {op_type}\n"
-            f"Result rows as JSON (showing {len(preview)} of {len(rows)} total rows):\n"
-            f"{_json.dumps(preview, default=str)[:6000]}\n\n"
-            "Write a concise 2-4 sentence answer that directly addresses the question using the real "
-            "names/numbers/amounts from the rows above (e.g. specific suppliers, countries, products, "
-            "counts, totals, currencies) — do not just restate the row count. If the rows don't fully "
-            "cover every dimension the user asked about, say so plainly instead of guessing or inventing "
-            "numbers."
-        )
-        text, _model = smart_chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=400,
-            require_premium=False,
-        )
-        text = (text or "").strip()
-        if text:
-            return text
-    except Exception as exc:
-        logger.warning("operational row summary generation failed, using fallback text: %s", exc)
-
-    return f"Found **{len(rows)}** row(s) from the Zodiac operational database."
+    hint = f" First row: {name}." if name else ""
+    return f"Returned {n} row(s) from the operational database.{hint}"
 
 
 def _try_operational(
@@ -236,6 +242,15 @@ def _try_operational(
 
 
 def _try_sql_catalog(db: Session, query: str) -> Optional[Tuple[str, List[Dict[str, Any]], List[str]]]:
+    """Legacy catalog lookup — disabled as a runtime SAP analytics authority."""
+    try:
+        from .analytics_authority import CATALOG_IS_RUNTIME_AUTHORITY
+
+        if not CATALOG_IS_RUNTIME_AUTHORITY:
+            return None
+    except Exception:
+        return None
+
     from .sap_sql_agent import _lookup_sql_catalog, _quote_catalog_sql_tables
     from .adaptive_nl_sql_hardening import apply_ranking_discipline
 
@@ -255,6 +270,13 @@ def _try_sql_catalog(db: Session, query: str) -> Optional[Tuple[str, List[Dict[s
 
 
 def _try_intent(db: Session, query: str, *, days: int, time_scope: str) -> Optional[Dict[str, Any]]:
+    try:
+        from .analytics_authority import INTENT_FAST_PATH_IS_RUNTIME_AUTHORITY
+
+        if not INTENT_FAST_PATH_IS_RUNTIME_AUTHORITY:
+            return None
+    except Exception:
+        return None
     from .intent_dashboard_fast_path import try_intent_dashboard_fast_path
 
     fast = try_intent_dashboard_fast_path(db, query or "", days=days, time_scope=time_scope)

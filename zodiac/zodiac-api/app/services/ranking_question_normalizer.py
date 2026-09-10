@@ -28,6 +28,19 @@ _EXCLUDE = re.compile(
     re.I,
 )
 
+# Advanced analytical shapes must NEVER be rewritten into a plain ranking —
+# doing so strips period comparison / partition / negation / relative-date semantics
+# and can cause wrong SUCCESS answers.
+_ADVANCED_SEMANTICS = re.compile(
+    r"\b(growth|increase[sd]?|decrease[sd]?|decline[sd]?|change|difference|delta|"
+    r"year[- ]over[- ]year|yoy|between\s+(?:19|20)\d{2}|"
+    r"in each|per country|per customer|for each|within each|"
+    r"without|with no|no invoices?|not exist|never|"
+    r"last month|last week|last quarter|last year|this month|this week|ytd|mtd|"
+    r"above average|below average|share|percent(?:age)? of)\b",
+    re.I,
+)
+
 # Interrogative / indirect-question markers.
 _INTERROGATIVE = re.compile(
     r"(^|\b)(which|what|who|whom)\b|\b(show me which|can you show me which|"
@@ -86,6 +99,8 @@ def is_sales_ranking_question(q: str) -> bool:
         return False
     if _EXCLUDE.search(q):
         return False
+    if _ADVANCED_SEMANTICS.search(q):
+        return False
     if not _RANK.search(q):
         return False
     if not _INTERROGATIVE.search(q):
@@ -117,8 +132,45 @@ def normalize_ranking_question(question: str) -> str:
         return question
     extras = [d for d in dims if d != primary]
 
-    metric = "revenue" if re.search(r"\brevenue\b", q, re.I) else "sales"
     limit = _extract_limit(q)
+    # Singular superlative ("which country generated the most…") must stay top-1.
+    # Rewriting to plural "top countries" invents a default top-10 and fails the
+    # original-question hard gate ("ranking limit was not applied").
+    singular_superlative = bool(
+        not limit
+        and re.search(r"\b(which|what|who)\b", q, re.I)
+        and re.search(r"\b(highest|most|largest|biggest|greatest|best|lowest|least|worst|smallest)\b", q, re.I)
+        and not re.search(r"\btop\s+\d+\b", q, re.I)
+        and (
+            re.search(r"\b(country|customer|client|buyer|product|material|industry|nation|market)\b", q, re.I)
+            or who_only
+        )
+    )
+    # Multi-dimensional superlative (country + customer + industry) — keep original
+    # phrasing so the multidim template can return LIMIT 1 with all dimensions.
+    if (
+        not limit
+        and re.search(r"\b(highest|most|best|largest|biggest|lowest|worst)\b", q, re.I)
+        and {"countries", "industries"}.issubset(set(extras))
+    ):
+        return question
+    if singular_superlative:
+        # Canonical singular form preserves LIMIT 1 via extract_ranking_limit / ops.
+        singular_map = {
+            "customers": "customer",
+            "countries": "country",
+            "products": "product",
+            "industries": "industry",
+        }
+        dim_s = singular_map.get(primary, primary.rstrip("s"))
+        metric = "revenue" if re.search(r"\brevenue\b", q, re.I) else "sales"
+        years = _extract_years(q)
+        parts = [f"top {dim_s} by {metric}"]
+        if years:
+            parts.append("in " + " and ".join(sorted(set(years))))
+        return " ".join(parts)
+
+    metric = "revenue" if re.search(r"\brevenue\b", q, re.I) else "sales"
     years = _extract_years(q)
 
     parts = ["top"]

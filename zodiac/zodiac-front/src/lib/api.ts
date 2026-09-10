@@ -1826,9 +1826,10 @@ export const dashboardApi = {
         } | null;
         overrideSql?: string | null;
         threadId?: string | null;
+        investigationId?: string | null;
     }, config?: { signal?: AbortSignal }) => {
         try {
-            const response = await api.post('/api/query/adaptive', body, { timeout: 600000, signal: config?.signal });
+            const response = await api.post('/api/query/adaptive', body, { timeout: 0, signal: config?.signal });
             return response.data;
         } catch (error: any) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') {
@@ -1842,6 +1843,31 @@ export const dashboardApi = {
             }
             console.error('Adaptive query failed:', error);
             throw new Error(publicApiError(error, 'Could not complete this analysis. Please try again.'));
+        }
+    },
+
+    getInvestigationStatus: async (requestId: string) => {
+        try {
+            const response = await api.get(`/api/query/adaptive/investigations/${encodeURIComponent(requestId)}`);
+            return response.data as {
+                request_id?: string;
+                pipeline_stage?: string;
+                elapsed_s?: number;
+                remaining_s?: number;
+                cancelled?: boolean;
+                timeout?: boolean;
+                status?: string;
+            };
+        } catch {
+            return { pipeline_stage: 'UNDERSTANDING', status: 'unknown' };
+        }
+    },
+
+    cancelInvestigation: async (requestId: string) => {
+        try {
+            await api.post(`/api/query/adaptive/investigations/${encodeURIComponent(requestId)}/cancel`, {});
+        } catch {
+            /* client abort still proceeds */
         }
     },
 

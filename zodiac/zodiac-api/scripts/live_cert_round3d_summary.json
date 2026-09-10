@@ -1,0 +1,21 @@
+{
+  "round": "3d",
+  "timestamp": "2026-09-09T20:30:00Z",
+  "summary": {"PASS": 27, "PARTIAL": 11, "FAIL": 1, "TIMEOUT": 0, "total": 39, "wrong_success": 0},
+  "p0": {
+    "partitioned_topn": "PASS (E, N9, R3A, R3B)",
+    "last_month": "PASS (J, N5, R3C, R3J)",
+    "country_ranking": "PASS (C)"
+  },
+  "p1": {
+    "month_count": "PASS (B, R2)",
+    "growth_without_years": "PASS as CLARIFICATION (L)"
+  },
+  "decision": "CONDITIONALLY READY",
+  "notes": [
+    "wrong_success remains 0 — hard result gate intact",
+    "N1 FAIL is safe CANNOT_ANSWER (vendor PO ranking), not wrong success",
+    "Follow-up still weak; cancel API timing flaky but post-cancel recovery works",
+    "Period compare mostly PASS with some PARTIAL safe rejects (H, N4, N10, U5)"
+  ]
+}

@@ -615,6 +615,50 @@ ORDER BY document_count DESC
 """.strip()
 
 
+def build_sat_documents_this_week_count_sql() -> str:
+    """How many SAT documents arrived this calendar week."""
+    return """
+SELECT COUNT(*) AS sat_document_count
+FROM sat_documents
+WHERE received_at >= DATE_TRUNC('week', CURRENT_TIMESTAMP)
+""".strip()
+
+
+def build_sat_missing_cfdi_uuid_sql(limit: int = 100) -> str:
+    """SAT documents with missing or empty CFDI UUID."""
+    lim = max(1, min(500, int(limit)))
+    return f"""
+SELECT
+    id,
+    supplier_rfc,
+    supplier_name,
+    doc_type,
+    cfdi_uuid,
+    folio,
+    fecha,
+    received_at
+FROM sat_documents
+WHERE cfdi_uuid IS NULL OR TRIM(cfdi_uuid) = ''
+ORDER BY received_at DESC NULLS LAST
+LIMIT {lim}
+""".strip()
+
+
+def build_top_invoice_supplier_amount_sql(limit: int = 10) -> str:
+    """Supplier with the highest summed invoice amount (Zodiac extracted invoices)."""
+    lim = max(1, min(50, int(limit)))
+    return f"""
+SELECT
+    COALESCE(NULLIF(TRIM(supplier_name), ''), NULLIF(TRIM(supplier_id), ''), 'Unknown') AS supplier,
+    COUNT(*) AS invoice_count,
+    ROUND(SUM(COALESCE(total_amount, 0)), 2) AS total_invoice_amount
+FROM invoice_v2_business_data
+GROUP BY 1
+ORDER BY total_invoice_amount DESC NULLS LAST
+LIMIT {lim}
+""".strip()
+
+
 def build_inbound_sat_merge_sql() -> str:
     """
     Inbound SAT document merge status breakdown + top 5 suppliers by volume.
@@ -1166,15 +1210,42 @@ def resolve_operational_query(
 
     # --- Fast-path 6b2: SAT documents received this week ---
     if "sat" in q and re.search(r"\b(this|current)\s+week\b", q):
+        if "how many" in q or ("count" in q and "type" not in q):
+            sql = build_sat_documents_this_week_count_sql()
+            logger.info("operational_resolver: fast-path sat_documents_this_week_count")
+            return sql, "sat_documents_this_week_count"
         sql = build_sat_documents_this_week_sql()
         logger.info("operational_resolver: fast-path sat_documents_this_week")
         return sql, "sat_documents_this_week"
 
     # --- Fast-path 6b3: SAT document count by type ---
-    if "sat" in q and "count" in q and "type" in q:
+    if "sat" in q and (
+        ("count" in q and "type" in q)
+        or ("credit note" in q and "payment" in q)
+    ):
         sql = build_sat_document_count_by_type_sql()
         logger.info("operational_resolver: fast-path sat_document_count_by_type")
         return sql, "sat_document_count_by_type"
+
+    # --- Fast-path 6b4: Missing / empty CFDI UUID ---
+    if "sat" in q and "uuid" in q and any(w in q for w in ("missing", "empty", "blank", "null")):
+        sql = build_sat_missing_cfdi_uuid_sql()
+        logger.info("operational_resolver: fast-path sat_missing_cfdi_uuid")
+        return sql, "sat_missing_cfdi_uuid"
+
+    # --- Fast-path 6b5: Supplier with highest invoice amount (operational invoices) ---
+    if any(
+        p in q
+        for p in (
+            "highest total invoice",
+            "highest invoice amount",
+            "supplier with highest",
+            "highest total invoice amount",
+        )
+    ) and "sat" not in q:
+        sql = build_top_invoice_supplier_amount_sql()
+        logger.info("operational_resolver: fast-path top_invoice_supplier_amount")
+        return sql, "top_invoice_supplier_amount"
 
     # --- AI-driven path: for any other operational question ---
     user_q = _extract_user_question(question)

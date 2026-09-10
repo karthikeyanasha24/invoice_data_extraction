@@ -1,0 +1,151 @@
+{
+  "passed": 12,
+  "failed": 0,
+  "total_seconds": 1412.1,
+  "results": [
+    {
+      "id": "multidim_highest",
+      "question": "Which country, customer, and industry has the highest sales?",
+      "pass": true,
+      "note": "1 rows",
+      "seconds": 146.0,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 1,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(\"KNA1\".\"land1\") AS \"country\", TRIM(\"KNA1\".\"kunnr\") AS \"customer_id\", TRIM(\"KNA1\".\"name1\") AS \"customer_name\", TRIM(\"T016T\".\"brtxt\") AS \"industry\", SUM(CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" "
+    },
+    {
+      "id": "top5_customers",
+      "question": "Top 5 customers by billed sales",
+      "pass": true,
+      "note": "5 rows",
+      "seconds": 143.5,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 5,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(k.\"kunag\") AS customer_id, TRIM(c.\"name1\") AS customer_name, SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_billed\" FROM \"vbrp\" p JOIN \"VBRK\" k ON LPAD(TRIM(p.\"v"
+    },
+    {
+      "id": "top20_materials",
+      "question": "Top 20 materials by billed quantity",
+      "pass": true,
+      "note": "20 rows",
+      "seconds": 148.8,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 20,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(\"vbrp\".\"matnr\") AS \"material_id\", TRIM(\"MAKT\".\"maktx\") AS \"material_name\", SUM(CAST(NULLIF(TRIM(CAST(\"vbrp\".\"fkimg\" AS TEXT)), '') AS NUMERIC)) AS \"billed_quantity\"\nFROM \"vbrp\"\nLEFT JOIN \""
+    },
+    {
+      "id": "sales_by_year",
+      "question": "Show sales by year",
+      "pass": true,
+      "note": "22 rows",
+      "seconds": 136.3,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 22,
+      "source": "",
+      "sql_prefix": "SELECT SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 4) AS \"year\", SUM(CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\"\nWHERE TRIM(CAST(\"VBRK\".\"waerk\" A"
+    },
+    {
+      "id": "customers_industries",
+      "question": "Customers and industries with billed revenue",
+      "pass": true,
+      "note": "174 rows",
+      "seconds": 146.0,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 174,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(c.\"kunnr\") AS customer_id, TRIM(c.\"name1\") AS customer_name, TRIM(t.\"brtxt\") AS industry, SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS billed_revenue FROM \"vbrp\" p JO"
+    },
+    {
+      "id": "negative_sales",
+      "question": "show me negatives sales for the year 2000",
+      "pass": true,
+      "note": "13 rows",
+      "seconds": 152.2,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 13,
+      "source": "",
+      "sql_prefix": "SELECT \"VBRK\".\"vbeln\", \"VBRK\".\"kunag\", CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC) AS \"net_value\", \"VBRK\".\"fkdat\", \"VBRK\".\"waerk\" AS \"currency\", SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" "
+    },
+    {
+      "id": "customer_names",
+      "question": "Show customer names only",
+      "pass": true,
+      "note": "200 rows",
+      "seconds": 124.1,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 200,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(\"KNA1\".\"name1\") AS \"customer_name\" FROM \"KNA1\" WHERE NULLIF(TRIM(\"KNA1\".\"name1\"), '') IS NOT NULL ORDER BY \"customer_name\" ASC LIMIT 200"
+    },
+    {
+      "id": "sat_logs",
+      "question": "Show SAT processing logs",
+      "pass": true,
+      "note": "54 rows",
+      "seconds": 135.1,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 54,
+      "source": "",
+      "sql_prefix": "SELECT step_name, step_status, message, error_details, created_at FROM \"sat_processing_logs\" ORDER BY created_at DESC LIMIT 100"
+    },
+    {
+      "id": "profit_margin",
+      "question": "What is our profit margin?",
+      "pass": true,
+      "note": "honest data limitation expected",
+      "seconds": 0.0,
+      "error": null,
+      "mode": "data_limitation",
+      "rows": 0,
+      "source": "",
+      "sql_prefix": ""
+    },
+    {
+      "id": "general_chat",
+      "question": "ahi hello",
+      "pass": true,
+      "note": "general_chat mode expected",
+      "seconds": 0.0,
+      "error": null,
+      "mode": "general_chat",
+      "rows": 0,
+      "source": "",
+      "sql_prefix": ""
+    },
+    {
+      "id": "top10_then_top3_a",
+      "question": "Top 10 customers by sales",
+      "pass": true,
+      "note": "10 rows",
+      "seconds": 140.9,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 10,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(k.\"kunag\") AS customer_id, TRIM(c.\"name1\") AS customer_name, SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\" FROM \"vbrp\" p JOIN \"VBRK\" k ON LPAD(TRIM(p.\"vb"
+    },
+    {
+      "id": "top10_then_top3_b",
+      "question": "Make it top 3",
+      "pass": true,
+      "note": "3 rows",
+      "seconds": 139.2,
+      "error": null,
+      "mode": "database_analysis",
+      "rows": 3,
+      "source": "",
+      "sql_prefix": "SELECT TRIM(k.\"kunag\") AS customer_id, TRIM(c.\"name1\") AS customer_name, SUM(CAST(NULLIF(TRIM(CAST(p.\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\" FROM \"vbrp\" p JOIN \"VBRK\" k ON LPAD(TRIM(p.\"vb"
+    }
+  ]
+}

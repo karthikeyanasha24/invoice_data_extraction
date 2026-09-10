@@ -101,13 +101,40 @@ _SQL_KEYWORDS: Set[str] = {
 }
 
 
+def _strip_exists_subqueries(sql: str) -> str:
+    """Remove EXISTS / NOT EXISTS (...) blocks so anti-join targets are not join-graph nodes."""
+    if not sql:
+        return sql
+    out = sql
+    pattern = re.compile(r"\b(?:NOT\s+)?EXISTS\s*\(", re.I)
+    while True:
+        m = pattern.search(out)
+        if not m:
+            break
+        start = m.start()
+        i = m.end()  # position after '('
+        depth = 1
+        while i < len(out) and depth:
+            ch = out[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        out = out[:start] + " TRUE " + out[i:]
+    return out
+
+
 def _extract_alias_map(sql: str) -> Dict[str, str]:
     """
     Build a map of {alias_upper -> table_name} from all FROM/JOIN clauses.
     Correctly rejects SQL keywords (INNER, LEFT, ON, etc.) as aliases so that
     patterns like 'FROM VBRK\\nINNER JOIN VBRP' do not register INNER as an alias.
     """
+    from .adaptive_nl_sql_hardening import local_sql_relation_names
+
     alias_map: Dict[str, str] = {}
+    local_rels = {n.upper() for n in local_sql_relation_names(sql)}
     pattern = re.compile(
         r"\b(?:FROM|JOIN)\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"?)"
         r"(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?"
@@ -122,6 +149,10 @@ def _extract_alias_map(sql: str) -> Dict[str, str]:
             raw_alias = ""
         alias = raw_alias or table_name
         if not table_name:
+            continue
+        # CTE / subquery aliases are local relations, not schema tables.
+        if table_name.upper() in local_rels:
+            alias_map[alias.upper()] = table_name
             continue
         alias_map[alias.upper()] = table_name
         alias_map[table_name.upper()] = table_name
@@ -348,9 +379,28 @@ def validate_sql_precision(
             errors=["Empty SQL"],
         )
 
+    from .adaptive_nl_sql_hardening import local_sql_relation_names
+
     schema_upper = {table.upper(): {col.upper() for col in cols} for table, cols in (schema or {}).items()}
+    local_rels = {n.upper() for n in local_sql_relation_names(normalized_sql)}
     alias_map = _extract_alias_map(normalized_sql)
-    tables = sorted({table.upper() for table in alias_map.values()})
+    # Connectivity / join-graph checks ignore EXISTS/NOT EXISTS targets (anti-joins).
+    outer_sql = _strip_exists_subqueries(normalized_sql)
+    outer_alias_map = _extract_alias_map(outer_sql)
+    tables = sorted(
+        {
+            table.upper()
+            for table in alias_map.values()
+            if table.upper() not in local_rels
+        }
+    )
+    outer_tables = sorted(
+        {
+            table.upper()
+            for table in outer_alias_map.values()
+            if table.upper() not in local_rels
+        }
+    )
 
     for table_name in tables:
         if table_name not in schema_upper:
@@ -358,14 +408,14 @@ def validate_sql_precision(
 
     for qualifier, column in _extract_column_refs(normalized_sql):
         table_name = alias_map.get(qualifier.upper())
-        if not table_name:
+        if not table_name or table_name.upper() in local_rels:
             continue
         columns = schema_upper.get(table_name.upper())
         if columns is not None and column.upper() not in columns:
             errors.append(f"Column '{table_name}.{column}' is not available in the SAP schema.")
 
-    used_join_pairs = _extract_join_column_pairs(normalized_sql, alias_map)
-    join_pairs_from_clauses = _extract_join_table_pairs_from_clauses(normalized_sql, alias_map)
+    used_join_pairs = _extract_join_column_pairs(outer_sql, outer_alias_map)
+    join_pairs_from_clauses = _extract_join_table_pairs_from_clauses(outer_sql, outer_alias_map)
     allowed_join_pairs = _allowed_join_pairs()
     allowed_edges = allowed_table_edges()
     for table_pair, used_columns in used_join_pairs.items():
@@ -388,8 +438,9 @@ def validate_sql_precision(
             )
 
     # Ensure multi-table queries are connected by approved join edges (no accidental cross joins).
-    if len(tables) > 1:
-        neighbor: Dict[str, Set[str]] = {t: set() for t in tables}
+    # Only outer-query tables participate — EXISTS anti-join targets are intentionally unjoined.
+    if len(outer_tables) > 1:
+        neighbor: Dict[str, Set[str]] = {t: set() for t in outer_tables}
         all_pairs_for_connectivity = set(used_join_pairs.keys()) | set(join_pairs_from_clauses)
         for pair in all_pairs_for_connectivity:
             tlist = sorted(pair)
@@ -397,15 +448,15 @@ def validate_sql_precision(
                 neighbor[tlist[0]].add(tlist[1])
                 neighbor[tlist[1]].add(tlist[0])
         seen: Set[str] = set()
-        stack: List[str] = [tables[0]]
+        stack: List[str] = [outer_tables[0]]
         while stack:
             node = stack.pop()
             if node in seen:
                 continue
             seen.add(node)
             stack.extend(list(neighbor.get(node, set()) - seen))
-        if len(seen) != len(tables):
-            missing = [t for t in tables if t not in seen]
+        if len(seen) != len(outer_tables):
+            missing = [t for t in outer_tables if t not in seen]
             errors.append(
                 f"Query tables are not fully connected by approved joins. Unconnected tables: {', '.join(missing)}."
             )
@@ -465,7 +516,15 @@ def validate_sql_precision(
                 )
 
         # Month intent guard: "by month/monthly/per month" requires month bucket aggregation.
-        month_intent = bool(re.search(r"\b(month|monthly|per month|by month)\b", question_l))
+        # Do NOT treat relative calendar phrases ("last month", "this month") as month-grain intent.
+        relative_month_only = bool(
+            re.search(r"\b(last|this|previous|next|current)\s+month\b", question_l)
+            and not re.search(r"\b(by month|per month|monthly|each month|month by month)\b", question_l)
+        )
+        month_intent = bool(
+            not relative_month_only
+            and re.search(r"\b(monthly|per month|by month|each month|month by month)\b", question_l)
+        )
         if month_intent and touches_billing_tables:
             has_month_bucket_expr = bool(
                 re.search(r"to_char\s*\([^)]*fkdat[^)]*'yyyy[-]?mm'\)", sql_l, re.IGNORECASE)

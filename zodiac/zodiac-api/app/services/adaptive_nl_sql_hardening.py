@@ -55,15 +55,19 @@ _BUSINESS_TOKENS = (
     "cogs", "margin", "margins", "profit", "profits", "cost", "goods", "region",
     "regions", "country", "countries", "component", "components", "breakdown",
     "decline", "process", "delivery", "logistics", "freight", "expiry", "expir",
-    "history", "buying", "selling", "purchase", "supplier", "inventory",
+    "history", "buying", "selling", "purchase", "supplier", "suppliers", "inventory",
     "concentration", "vendor", "vendors", "purchasing", "percent", "percentage",
     "production", "produced", "finance", "posting", "ledger",
+    # Zodiac operational / SAT inbound
+    "sat", "cfdi", "inbound", "document", "documents", "uuid", "rfc", "folio",
+    "received", "credit", "payment",
 )
 
 _SEMANTIC_BUSINESS = re.compile(
     r"\b(sales|revenue|invoice|billing|customer|product|industry|country|order|"
     r"profit|margin|cogs|inventory|supplier|vendor|purchase|production|material|"
-    r"highest|lowest|top|compare|vbak|vbap|vbep|vbrk|ekko|afko)\b",
+    r"highest|lowest|top|compare|vbak|vbap|vbep|vbrk|ekko|afko|"
+    r"sat|cfdi|inbound|document|edi)\b",
     re.I,
 )
 

@@ -540,23 +540,25 @@ def sanitize_sap_amount_columns_sql(sql: str) -> str:
         if _already_cast(arg):
             return m.group(0)  # already handled
 
-        # Match patterns: alias."col", alias.col, "col", col (bare)
-        # Pattern: optional alias + optional dot + optional quote + col + optional quote
+        # Match: "TBL"."col", alias."col", alias.col, "col", col
         col_match = re.fullmatch(
-            r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"?([a-zA-Z_][a-zA-Z0-9_]*)"?'  # alias.col
-            r'|"([a-zA-Z_][a-zA-Z0-9_]*)"'   # "col"
-            r'|([a-zA-Z_][a-zA-Z0-9_]*)',     # bare col
+            r'"([A-Za-z_][A-Za-z0-9_]*)"\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'  # "TBL".col
+            r'|([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'  # alias.col
+            r'|"([A-Za-z_][A-Za-z0-9_]*)"'   # "col"
+            r'|([A-Za-z_][A-Za-z0-9_]*)',     # bare col
             arg,
         )
         if not col_match:
             return m.group(0)
 
         if col_match.group(1) and col_match.group(2):
-            alias_name, col_name = col_match.group(1), col_match.group(2)
-        elif col_match.group(3):
-            alias_name, col_name = '', col_match.group(3)
-        elif col_match.group(4):
-            alias_name, col_name = '', col_match.group(4)
+            alias_name, col_name = f'"{col_match.group(1)}"', col_match.group(2)
+        elif col_match.group(3) and col_match.group(4):
+            alias_name, col_name = col_match.group(3), col_match.group(4)
+        elif col_match.group(5):
+            alias_name, col_name = '', col_match.group(5)
+        elif col_match.group(6):
+            alias_name, col_name = '', col_match.group(6)
         else:
             return m.group(0)
 
@@ -617,9 +619,10 @@ def sanitize_sap_amount_columns_sql(sql: str) -> str:
             continue
 
         col_match = re.fullmatch(
-            r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"?([a-zA-Z_][a-zA-Z0-9_]*)"?'
-            r'|"([a-zA-Z_][a-zA-Z0-9_]*)"'
-            r'|([a-zA-Z_][a-zA-Z0-9_]*)',
+            r'"([A-Za-z_][A-Za-z0-9_]*)"\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'
+            r'|([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'
+            r'|"([A-Za-z_][A-Za-z0-9_]*)"'
+            r'|([A-Za-z_][A-Za-z0-9_]*)',
             arg,
         )
         if not col_match:
@@ -628,11 +631,13 @@ def sanitize_sap_amount_columns_sql(sql: str) -> str:
             continue
 
         if col_match.group(1) and col_match.group(2):
-            alias_name, col_name = col_match.group(1), col_match.group(2)
-        elif col_match.group(3):
-            alias_name, col_name = '', col_match.group(3)
-        elif col_match.group(4):
-            alias_name, col_name = '', col_match.group(4)
+            alias_name, col_name = f'"{col_match.group(1)}"', col_match.group(2)
+        elif col_match.group(3) and col_match.group(4):
+            alias_name, col_name = col_match.group(3), col_match.group(4)
+        elif col_match.group(5):
+            alias_name, col_name = '', col_match.group(5)
+        elif col_match.group(6):
+            alias_name, col_name = '', col_match.group(6)
         else:
             result_parts.append(sql[last_end:end_of_call])
             last_end = end_of_call
@@ -655,7 +660,13 @@ def sanitize_sap_amount_columns_sql(sql: str) -> str:
     # slip through the parser when formatting is unusual.
     col_alt = "|".join(sorted((re.escape(c) for c in _SAP_NUMERIC_TEXT_COLUMNS), key=len, reverse=True))
     strict_agg = re.compile(
-        rf'\b(?P<func>SUM|AVG|MIN|MAX)\s*\(\s*(?:(?P<alias>[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*)?"?(?P<col>{col_alt})"?\s*\)',
+        rf'\b(?P<func>SUM|AVG|MIN|MAX)\s*\(\s*'
+        rf'(?:'
+        rf'"(?P<qtbl>[A-Za-z_][A-Za-z0-9_]*)"\s*\.\s*'
+        rf'|(?P<alias>[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*'
+        rf')?'
+        rf'"?(?P<col>{col_alt})"?'
+        rf'\s*\)',
         re.IGNORECASE,
     )
 
@@ -664,9 +675,11 @@ def sanitize_sap_amount_columns_sql(sql: str) -> str:
         if _already_cast(whole):
             return whole
         func = m.group("func") or "SUM"
+        qtbl = (m.group("qtbl") or "").strip()
         alias = (m.group("alias") or "").strip()
         col = (m.group("col") or "").strip()
-        return _wrap_text_column_in_cast(alias, col, func)
+        qual = f'"{qtbl}"' if qtbl else alias
+        return _wrap_text_column_in_cast(qual, col, func)
 
     normalized = strict_agg.sub(_strict_replace, normalized)
     return normalized

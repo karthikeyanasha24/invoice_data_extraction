@@ -140,9 +140,13 @@ def columns_guide(tables: List[str]) -> str:
 def _openai_chat(system: str, user: str, *, json_mode: bool = False) -> str:
     from openai import OpenAI
     from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
+    from .investigation_budget import current_budget
+
+    budget = current_budget()
+    timeout_s = budget.llm_timeout_s(default=90.0) if budget is not None else 90.0
 
     model = _openai_model()
-    client = OpenAI(api_key=_openai_key())
+    client = OpenAI(api_key=_openai_key(), timeout=timeout_s)
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [
@@ -176,7 +180,11 @@ def _gemini_chat(system: str, user: str) -> str:
     )
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        from .investigation_budget import current_budget
+
+        budget = current_budget()
+        timeout_s = budget.llm_timeout_s(default=90.0) if budget is not None else 90.0
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             payload = json.load(resp)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:400]
@@ -196,11 +204,24 @@ _SKIP_OPENAI = False
 def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, str]:
     """Return (text, provider). OpenAI first, Gemini on quota/error if keyed."""
     global _SKIP_OPENAI
+    from .investigation_budget import current_budget
+
+    budget = current_budget()
+    if budget is not None:
+        if not budget.allow_llm():
+            from .investigation_budget import InvestigationTimeout
+
+            raise InvestigationTimeout("llm_call", budget.elapsed_s())
+        budget.checkpoint("llm_call")
     last_err: Optional[BaseException] = None
     if _openai_key() and not _SKIP_OPENAI:
         try:
             return _openai_chat(system, user, json_mode=json_mode), "openai"
         except Exception as exc:
+            from .investigation_budget import InvestigationTimeout
+
+            if isinstance(exc, InvestigationTimeout):
+                raise
             last_err = exc
             if _is_openai_quota(exc):
                 _SKIP_OPENAI = True
@@ -241,16 +262,61 @@ def _safe_select(sql: str) -> Optional[str]:
     return s
 
 
+_SQL_TABLE_STOPWORDS = frozenset({
+    "SELECT", "WHERE", "LATERAL", "CAST", "NULLIF", "TRIM", "SUBSTRING", "EXTRACT",
+    "COALESCE", "CASE", "WHEN", "THEN", "ELSE", "END", "UNNEST", "VALUES", "GENERATE",
+    "JSON", "TO", "DATE", "TIMESTAMP", "INTERVAL", "LEFT", "RIGHT", "INNER", "OUTER",
+    "FULL", "CROSS", "NATURAL", "ON", "AS", "AND", "OR", "NOT", "GROUP", "ORDER", "BY",
+    "LIMIT", "OFFSET", "HAVING", "UNION", "EXCEPT", "INTERSECT", "WITH", "RECURSIVE",
+    "DISTINCT", "ALL", "TRUE", "FALSE", "NULL", "IS", "IN", "BETWEEN", "LIKE", "ILIKE",
+    "OVER", "PARTITION", "WINDOW", "ARRAY", "ROW", "ROWS", "RANGE", "LPAD", "RPAD",
+    "UPPER", "LOWER", "ROUND", "ABS", "GREATEST", "LEAST", "SUM", "COUNT", "AVG",
+    "MAX", "MIN", "DATE_PART", "TO_CHAR", "TO_DATE", "EXISTS", "ANY", "SOME",
+})
+
+
+def _extract_sql_table_refs(sql: str) -> List[str]:
+    """Extract table names from FROM/JOIN — ignore SQL functions like CAST."""
+    refs: List[str] = []
+    seen: set[str] = set()
+    s = sql or ""
+
+    def add(name: str) -> None:
+        key = name.upper()
+        if key in seen or key in _SQL_TABLE_STOPWORDS:
+            return
+        seen.add(key)
+        refs.append(name)
+
+    for m in re.finditer(r'(?:FROM|JOIN)\s+"([A-Za-z0-9_]+)"', s, re.I):
+        add(m.group(1))
+
+    for m in re.finditer(r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)', s, re.I):
+        name = m.group(1)
+        if name.upper() in _SQL_TABLE_STOPWORDS:
+            continue
+        # Function call or subquery, not a table reference
+        tail = s[m.end() : m.end() + 3].lstrip()
+        if tail.startswith("("):
+            continue
+        add(name)
+
+    return refs
+
+
 def _schema_violations(sql: str) -> List[str]:
-    found = re.findall(r'FROM\s+"?([A-Za-z0-9_]+)"?|JOIN\s+"?([A-Za-z0-9_]+)"?', sql, re.I)
-    tables = [a or b for a, b in found]
-    bad = []
-    for t in tables:
-        if t.upper() in {"SELECT", "WHERE", "LATERAL"}:
+    from .adaptive_nl_sql_hardening import local_sql_relation_names
+
+    local_rels = {n.upper() for n in local_sql_relation_names(sql)}
+    bad: List[str] = []
+    for t in _extract_sql_table_refs(sql):
+        if t.upper() in local_rels:
             continue
         if not has_table(t):
             bad.append(f"unknown table {t}")
     for table, col in re.findall(r'"([A-Za-z0-9_]+)"\s*\.\s*"([A-Za-z0-9_]+)"', sql):
+        if table.upper() in local_rels:
+            continue
         if has_table(table) and not has_column(table, col):
             bad.append(f"unknown column {table}.{col}")
     return bad[:12]

@@ -992,7 +992,7 @@
       "EKPO",
       "LFA1"
     ],
-    "sql": "SELECT k.\"lifnr\" AS vendor_id,\n       l.\"name1\" AS vendor_name,\n       COUNT(DISTINCT k.\"ebeln\") AS open_po_count,\n       COUNT(*) AS open_line_count\nFROM \"EKKO\" k\nINNER JOIN \"EKPO\" p ON k.\"ebeln\" = p.\"ebeln\"\nLEFT JOIN \"LFA1\" l ON k.\"lifnr\" = l.\"lifnr\"\nWHERE TRIM(COALESCE(p.\"elikz\", '')) = ''\n  AND TRIM(COALESCE(p.\"loekz\", '')) = ''\n  AND TRIM(COALESCE(k.\"loekz\", '')) = ''\nGROUP BY k.\"lifnr\", l.\"name1\"\nORDER BY open_po_count DESC\nLIMIT 50",
+    "sql": "SELECT k.\"lifnr\" AS vendor_id,\n       l.\"name1\" AS vendor_name,\n       COUNT(DISTINCT k.\"ebeln\") AS open_po_count,\n       COUNT(*) AS open_line_count\nFROM \"EKKO\" k\nINNER JOIN \"EKPO\" p ON k.\"ebeln\" = p.\"ebeln\"\nLEFT JOIN \"LFA1\" l ON k.\"lifnr\" = l.\"lifnr\"\nWHERE COALESCE(p.\"elikz\", '') = ''\n  AND COALESCE(p.\"loekz\", '') = ''\n  AND COALESCE(k.\"loekz\", '') = ''\nGROUP BY k.\"lifnr\", l.\"name1\"\nORDER BY open_po_count DESC\nLIMIT 50",
     "priority": 12
   },
   {
@@ -2923,6 +2923,34 @@
     "priority": 0
   },
   {
+    "id": "sales_order_count_by_month",
+    "description": "Sales order count grouped by year-month (VBAK.AUDAT)",
+    "question_patterns": [
+      "show sales order count by month",
+      "sales order count by month",
+      "sales orders by month",
+      "order count by month"
+    ],
+    "keywords": [
+      "sales",
+      "order",
+      "count",
+      "month",
+      "vbak",
+      "monthly"
+    ],
+    "neg_keywords": [
+      "purchase",
+      "delivery",
+      "billing"
+    ],
+    "tables": [
+      "VBAK"
+    ],
+    "sql": "SELECT SUBSTRING(TRIM(va.\"audat\"), 1, 6) AS year_month,\n       COUNT(DISTINCT va.\"vbeln\") AS sales_order_count\nFROM \"VBAK\" va\nWHERE TRIM(COALESCE(va.\"audat\", '')) <> ''\n  AND LENGTH(TRIM(va.\"audat\")) >= 6\nGROUP BY SUBSTRING(TRIM(va.\"audat\"), 1, 6)\nORDER BY year_month DESC\nLIMIT 24",
+    "priority": 12
+  },
+  {
     "id": "warehouse_transfers_by_material",
     "description": "Top 20 materials by warehouse transfer quantity (LSEG)",
     "question_patterns": [
@@ -3376,7 +3404,9 @@
       "list all invoices",
       "show all billing documents",
       "recent billing documents",
-      "latest invoices"
+      "latest invoices",
+      "show billing documents with amounts and currency",
+      "billing documents with amounts and currency"
     ],
     "keywords": [
       "recent invoices",
