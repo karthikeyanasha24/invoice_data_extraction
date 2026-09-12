@@ -182,11 +182,25 @@ function aggregationFor(intent?: string, ac: Record<string, unknown> = {}, isGap
   return 'Billing item, then grouped by the selected dimension';
 }
 
-function isDataGapResult(result: any): boolean {
+export function isDataGapResult(result: any): boolean {
   const qp = result?.query_plan || result?.queryPlan || {};
   const meta = result?.meta || {};
   const status = String(result?.answer_status || result?.answerStatus || '').toUpperCase();
-  return Boolean(qp.data_gap || meta.data_gap || status === 'CANNOT_ANSWER');
+  const failure = String(result?.failure_class || meta.failure_class || meta.investigation_status || '').toUpperCase();
+  const mode = String(result?.mode || meta.mode || '').toLowerCase();
+  if (qp.data_gap || meta.data_gap) return true;
+  if (mode === 'data_limitation' || failure === 'DATA_NOT_AVAILABLE') return true;
+  if (status === 'CANNOT_ANSWER' && (qp.data_gap || meta.data_gap || failure === 'DATA_NOT_AVAILABLE')) {
+    return true;
+  }
+  return false;
+}
+
+export function isInvestigationFailure(result: any): boolean {
+  const status = String(result?.answer_status || result?.answerStatus || '').toUpperCase();
+  if (status !== 'CANNOT_ANSWER' && status !== 'ERROR') return false;
+  if (isDataGapResult(result)) return false;
+  return true;
 }
 
 export function analysisTrustFromResult(result: any): AnalysisTrust {

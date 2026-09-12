@@ -22,6 +22,8 @@ import {
   dataGapTryInstead,
   humanizePublicSummary,
   humanizeDataGapMessage,
+  isDataGapResult,
+  isInvestigationFailure,
 } from '@/lib/analysisTrust';
 import { loadSavedAnalyses, saveAnalysis, removeSavedAnalysis, type SavedAnalysis } from '@/lib/savedAnalyses';
 import {
@@ -145,6 +147,7 @@ type QueryResult = {
   charts?: Chart[];
   suggested_followups?: string[];
   answer_status?: string;
+  failure_class?: string;
   query_plan?: any;
   column_semantics?: Record<string, { semantic_type?: string; precision?: number; format?: string }>;
   mode?: string;
@@ -649,6 +652,28 @@ function AnalysisProgress({ elapsed, stage }: { elapsed: number; stage: string }
   );
 }
 
+function StatusOutcomeCard({
+  heading,
+  message,
+  tone,
+}: {
+  heading: string;
+  message: string;
+  tone: 'amber' | 'slate' | 'rose';
+}) {
+  const tones = {
+    amber: 'border-amber-200 bg-amber-50 text-amber-800',
+    slate: 'border-slate-200 bg-slate-50 text-slate-800',
+    rose: 'border-rose-200 bg-rose-50 text-rose-800',
+  };
+  return (
+    <div className={`rounded-xl border p-4 space-y-2 ${tones[tone]}`} role="status">
+      <p className="text-[11px] font-semibold uppercase tracking-wide">{heading}</p>
+      <p className="text-sm text-slate-800 leading-relaxed">{message}</p>
+    </div>
+  );
+}
+
 function DataGapCard({
   message,
   followups,
@@ -754,19 +779,21 @@ function ResultDashboard({
   const isGeneral = mode === 'general_chat' || mode === 'general' || (
     status === 'SUCCESS' && !(result.sql || '').trim() && !hasData
   );
-  const isGap = status === 'CANNOT_ANSWER';
+  const isEmptySuccess = status === 'SUCCESS_EMPTY';
+  const isGap = isDataGapResult(result);
+  const isTechFailure = isInvestigationFailure(result);
   const isClarification = status === 'CLARIFICATION' || status === 'NEEDS_CLARIFICATION';
   const trust = analysisTrustFromResult(result);
   const heading = trust.analysisLabel;
 
-  if (isGeneral && !isClarification && !isGap) {
+  if (isGeneral && !isClarification && !isGap && !isTechFailure) {
     return <ConversationCard message={summary || 'Hello! How can I help you today?'} />;
   }
 
   if (isClarification) {
     return (
       <ClarificationCard
-        message={summary || 'I need a little more detail to answer that.'}
+        message={summary || 'I need one more detail to answer this accurately.'}
         onAskFollowup={onAskFollowup}
       />
     );
@@ -775,10 +802,35 @@ function ResultDashboard({
   if (isGap) {
     return (
       <DataGapCard
-        message={summary || 'The required data for this analysis is not available.'}
+        message={summary || 'The available data does not contain the information required to answer this.'}
         followups={suggested_followups}
         onAskFollowup={onAskFollowup}
       />
+    );
+  }
+
+  if (isTechFailure) {
+    return (
+      <StatusOutcomeCard
+        heading="Investigation incomplete"
+        message={summary || "I couldn't verify the requested analysis from the available database evidence."}
+        tone="rose"
+      />
+    );
+  }
+
+  if (isEmptySuccess && !hasData) {
+    return (
+      <div className="space-y-3">
+        <StatusOutcomeCard
+          heading="No matching records"
+          message={summary || 'No matching records were found for the requested period and condition.'}
+          tone="slate"
+        />
+        {hasSummary && summary && !/no matching records/i.test(summary) && (
+          <SummaryCard summary={summary} intent={trust.intent} />
+        )}
+      </div>
     );
   }
 

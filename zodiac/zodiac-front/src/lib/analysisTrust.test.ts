@@ -112,6 +112,17 @@ describe('analysisTrustFromResult', () => {
     assert.ok(/VBAP\.NETWR/i.test(trust.calculation || ''));
   });
 
+  it('CANNOT_ANSWER without a data-gap flag is not labeled as missing extract data', () => {
+    const trust = analysisTrustFromResult({
+      answer_status: 'CANNOT_ANSWER',
+      failure_class: 'RESULT_VALIDATION_FAILED',
+      summary: 'I could not verify the requested analysis.',
+      meta: { investigation_status: 'RESULT_VALIDATION_FAILED' },
+    });
+    assert.notEqual(trust.analysisLabel, 'Data limitation');
+    assert.ok(!/not in this extract/i.test(trust.calculation || ''));
+  });
+
   it('DATA GAP trust does not claim a P&L or invent a metric', () => {
     const trust = analysisTrustFromResult({
       answer_status: 'CANNOT_ANSWER',

@@ -1,0 +1,28 @@
+---
+description: Adaptive AI Analyst — generic capabilities, never question-specific handlers
+alwaysApply: true
+---
+
+# Adaptive Analyst
+
+Success is not “answer every conceivable question.” Success is: for any question answerable from the live schema/data and supported analytical semantics, dynamically discover evidence and return a validated answer. Otherwise `CLARIFICATION` or `CANNOT_ANSWER`. Never invent. Invariant: `wrong_success = 0`.
+
+## When a question fails
+
+Identify the missing **generic** capability (measure, entity, operation, filter, date, grouping, ranking, comparison, currency, join). Fix that layer. Add the failed question as a regression of semantic properties, not expected SQL. Run broad tests.
+
+Do **not** add `if "negative sales" in question`, hardcoded SQL, catalog IDs, or question-shaped compilers.
+
+```text
+Question → semantic requirements → schema intelligence → structured plan
+→ plan validation → SQL → SQL validation → execute → result validation → answer
+```
+
+The same machinery must compose new ENTITY × MEASURE × OPERATION × FILTER × DATE × GROUPING × RANKING × COMPARISON combinations.
+
+## Outcomes
+
+- Data + supported semantics → `SUCCESS` or `SUCCESS_EMPTY`
+- Incomplete meaning → `CLARIFICATION`
+- Cannot establish evidence, or data/model absent (e.g. forecasts) → `CANNOT_ANSWER` with the real `failure_class`
+- Do not label planner/SQL/validation failures as “data not in this extract”

@@ -924,6 +924,7 @@ def run_adaptive_orchestrator(
 
             msg = str(p2.get("user_message") or _safe("semantic_mismatch"))
             status = "CANNOT_ANSWER"
+            failure_class = str(p2.get("failure_class") or "RESULT_VALIDATION_FAILED")
             is_data_limitation = False
         elif any(str(m).upper() == "VBED" for m in missing) or "vbed" in q.lower():
             msg = (
@@ -931,13 +932,28 @@ def run_adaptive_orchestrator(
                 "Schedule-line data in this extract is in VBEP. Would you like me to use VBEP?"
             )
             status = "CANNOT_ANSWER"
+            failure_class = "DATA_NOT_AVAILABLE"
         elif is_data_limitation:
-            msg = str(p2.get("data_limitation") or "The available dataset does not contain the data required to answer this question.")
+            from ..investigation_budget import user_safe_pipeline_message as _safe
+
+            msg = str(p2.get("data_limitation") or _safe("data_limitation"))
             status = "CANNOT_ANSWER"
+            failure_class = "DATA_NOT_AVAILABLE"
         else:
             from ..investigation_budget import user_safe_pipeline_message
 
-            msg = user_safe_pipeline_message("repair_failed")
+            err_u = str(p2.get("error") or "").upper()
+            if "SQL_VALIDATION" in err_u or p2.get("error") == "sql_validation_failed":
+                failure_class = "SQL_VALIDATION_FAILED"
+            elif p2.get("error") == "sql_execution_failed":
+                failure_class = "EXECUTION_FAILED"
+            elif "SCHEMA" in err_u:
+                failure_class = "SCHEMA_UNRESOLVED"
+            elif "PLAN" in err_u:
+                failure_class = "PLAN_INCOMPLETE"
+            else:
+                failure_class = "TECHNICAL_ERROR"
+            msg = user_safe_pipeline_message("technical" if failure_class == "TECHNICAL_ERROR" else "repair_failed")
             status = "CANNOT_ANSWER"
             logger.warning(
                 "[adaptive-orch] pipeline error hidden from user: %s %s",
@@ -949,6 +965,7 @@ def run_adaptive_orchestrator(
             "route": "database",
             "status": "error" if not is_data_limitation else "cannot_answer",
             "answer_status": status,
+            "failure_class": failure_class,
             "type": "cannot_answer" if is_data_limitation else "pipeline_error",
             "sql": p2.get("sql") or "",
             "data": [],
@@ -960,7 +977,11 @@ def run_adaptive_orchestrator(
             "sql_generation_method": "pipeline2_failed",
             "degraded_fallback": False,
             "llm_calls": 3,
-            "query_plan": {"investigation_state": state.to_dict(), "pipeline1": p1, "pipeline2": {k: p2.get(k) for k in ("error", "tables", "missing")}},
+            "meta": {
+                "investigation_status": failure_class,
+                "failure_class": failure_class,
+            },
+            "query_plan": {"investigation_state": state.to_dict(), "pipeline1": p1, "pipeline2": {k: p2.get(k) for k in ("error", "tables", "missing", "failure_class")}},
         }
 
     sql = p2["sql"]
@@ -1034,8 +1055,14 @@ def run_adaptive_orchestrator(
 
     empty = len(rows) == 0
     summary = str(p3.get("summary") or p3.get("answer") or "").strip()
-    if empty and not summary:
-        summary = f"No records matched “{resolved}”."
+    if empty:
+        from ..investigation_budget import user_safe_pipeline_message as _empty_msg
+
+        grounded = _empty_msg("empty_success")
+        if (not summary) or re.search(r"returned 0 row", summary, re.I):
+            summary = grounded
+        elif re.search(r"does not (exist|contain)|not in this extract|data limitation", summary, re.I):
+            summary = grounded
 
     # HARD GATE: SQL success ≠ investigation success. Wrong results must never be SUCCESS.
     from ..plan_satisfaction import answer_consistent_with_rows, result_matches_analytical_intent
@@ -1058,6 +1085,7 @@ def run_adaptive_orchestrator(
             "route": "database",
             "status": "cannot_answer",
             "answer_status": "CANNOT_ANSWER",
+            "failure_class": "RESULT_VALIDATION_FAILED",
             "type": "semantic_mismatch",
             "sql": sql or "",
             "data": [],
@@ -1071,7 +1099,7 @@ def run_adaptive_orchestrator(
             "llm_calls": 4,
             "tables_used": tables,
             "resolved_question": resolved,
-            "meta": {"investigation_status": "semantic_mismatch", "validation_warnings": final_warnings},
+            "meta": {"investigation_status": "RESULT_VALIDATION_FAILED", "failure_class": "RESULT_VALIDATION_FAILED", "validation_warnings": final_warnings},
             "query_plan": {
                 "investigation_state": state.to_dict(),
                 "verified_db_context": p2.get("verified_context"),
@@ -1080,11 +1108,14 @@ def run_adaptive_orchestrator(
             },
         }
 
+    if empty:
+        answer_text = summary
     return {
         "mode": "database_analysis",
         "route": "database",
         "status": "empty" if empty else "completed",
-        "answer_status": "SUCCESS",
+        "answer_status": "SUCCESS_EMPTY" if empty else "SUCCESS",
+        "failure_class": "SUCCESS_EMPTY" if empty else "SUCCESS",
         "sql": sql,
         "data": rows,
         "rowCount": len(rows),
@@ -1097,7 +1128,7 @@ def run_adaptive_orchestrator(
         "llm_calls": 4,
         "tables_used": tables,
         "resolved_question": resolved,
-        "meta": {"investigation_status": "completed"},
+        "meta": {"investigation_status": "SUCCESS_EMPTY" if empty else "completed", "failure_class": "SUCCESS_EMPTY" if empty else "SUCCESS"},
         "suggested_followups": p3.get("follow_up_suggestions") or [
             "Which country?",
             "And industry?",

@@ -213,6 +213,27 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
             "start_yyyymmdd": start.strftime("%Y%m%d"),
             "end_yyyymmdd": end.strftime("%Y%m%d"),
         }
+    elif ops.get("years") and not period and len(ops.get("years") or []) == 1:
+        years = [str(y) for y in (ops.get("years") or [])]
+        date_filter = {
+            "type": "calendar_year",
+            "grain": "year",
+            "operator": "equals",
+            "value": years[0],
+            "years": years,
+            "field": None,
+        }
+
+    comparison = (
+        sem.get("comparison")
+        if isinstance(sem.get("comparison"), dict)
+        else ops.get("comparison")
+    )
+    if isinstance(comparison, dict) and comparison.get("operator") is None:
+        comparison = None
+    if comparison and str(ops.get("aggregation") or "").lower() == "none":
+        agg = "none"
+        ranking = None
 
     having_distinct = (
         sem.get("having_distinct")
@@ -233,6 +254,7 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         "period_compare": period,
         "negation": negation,
         "date_filter": date_filter,
+        "comparison": comparison,
         "clarification": clarification,
         "having_distinct": having_distinct,
         "growth": bool(ops.get("growth") or period),
@@ -313,17 +335,34 @@ def enrich_semantic_with_requirements(
     if req.get("negation"):
         sem["negation"] = dict(req["negation"])
     if req.get("date_filter"):
-        # Always overwrite invented absolute bounds with deterministic calendar resolution.
-        sem["time_filter"] = {
-            "relative": req["date_filter"].get("period"),
-            "start": req["date_filter"].get("start"),
-            "end": req["date_filter"].get("end"),
-            "start_yyyymmdd": req["date_filter"].get("start_yyyymmdd"),
-            "end_yyyymmdd": req["date_filter"].get("end_yyyymmdd"),
-            "type": "relative_period",
-            "concept": "relative_period",
-            "value": req["date_filter"].get("period"),
-        }
+        df = req["date_filter"]
+        if str(df.get("type") or "") == "calendar_year":
+            sem["time_filter"] = {
+                "type": "calendar_year",
+                "concept": "year",
+                "grain": "year",
+                "operator": df.get("operator") or "equals",
+                "value": df.get("value"),
+                "years": df.get("years") or ([df.get("value")] if df.get("value") else []),
+            }
+        else:
+            # Always overwrite invented absolute bounds with deterministic calendar resolution.
+            sem["time_filter"] = {
+                "relative": df.get("period"),
+                "start": df.get("start"),
+                "end": df.get("end"),
+                "start_yyyymmdd": df.get("start_yyyymmdd"),
+                "end_yyyymmdd": df.get("end_yyyymmdd"),
+                "type": "relative_period",
+                "concept": "relative_period",
+                "value": df.get("period"),
+            }
+    if req.get("comparison"):
+        sem["comparison"] = dict(req["comparison"])
+        condition = sem.get("condition") if isinstance(sem.get("condition"), dict) else {}
+        condition.setdefault("measure_operator", req["comparison"].get("operator"))
+        condition.setdefault("measure_value", req["comparison"].get("value"))
+        sem["condition"] = condition
     measure = sem.get("measure") if isinstance(sem.get("measure"), dict) else {}
     measure["concept"] = req["measure"]["concept"] or measure.get("concept") or ""
     measure["aggregation"] = req["measure"]["aggregation"] or measure.get("aggregation") or ""
@@ -375,8 +414,21 @@ def plan_missing_requirements(plan: Dict[str, Any], requirements: Dict[str, Any]
 
     if date_filter:
         tf = sem.get("time_filter") if isinstance(sem.get("time_filter"), dict) else {}
-        if not (tf.get("relative") or tf.get("start_yyyymmdd") or date_filter.get("start_yyyymmdd")):
+        if str(date_filter.get("type") or "") == "calendar_year":
+            if not (tf.get("value") or date_filter.get("value") or tf.get("years")):
+                missing.append("calendar year filter missing from plan")
+        elif not (tf.get("relative") or tf.get("start_yyyymmdd") or date_filter.get("start_yyyymmdd")):
             missing.append("relative date filter missing from plan")
+
+    comparison = requirements.get("comparison")
+    if isinstance(comparison, dict) and comparison.get("operator") is not None:
+        cond = sem.get("condition") if isinstance(sem.get("condition"), dict) else {}
+        if cond.get("measure_operator") is None and not any(
+            str(f.get("operator") or "") in {"<", ">", "<=", ">=", "=", "!="}
+            for f in (plan.get("filters") or [])
+            if isinstance(f, dict)
+        ):
+            missing.append("measure comparison predicate missing from plan")
 
     return missing
 

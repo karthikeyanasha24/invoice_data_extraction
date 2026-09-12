@@ -90,6 +90,39 @@ def sql_has_negation(sql: str) -> bool:
     if re.search(r"\bEXCEPT\b", s, re.I):
         return True
     return False
+def sql_has_calendar_year(sql: str, year: str) -> bool:
+    """True when SQL constrains a calendar year (literal, EXTRACT, or YYYY text prefix)."""
+    y = str(year or "").strip()
+    if not y or not re.fullmatch(r"\d{4}", y):
+        return False
+    s = sql or ""
+    if re.search(rf"['\"]{re.escape(y)}['\"]", s):
+        return True
+    if y in s and re.search(r"SUBSTRING\s*\([\s\S]{0,80}?,\s*1\s*,\s*4\s*\)", s, re.I):
+        return True
+    if y in s and re.search(r"EXTRACT\s*\(\s*YEAR", s, re.I):
+        return True
+    return False
+
+
+def sql_has_measure_predicate(sql: str, comparison: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(comparison, dict) or comparison.get("operator") is None:
+        return True
+    op = str(comparison.get("operator") or "").strip()
+    raw = comparison.get("value", 0)
+    try:
+        num = float(raw)
+        val = str(int(num)) if num == int(num) else str(num)
+    except (TypeError, ValueError):
+        val = str(raw)
+    s = sql or ""
+    if re.search(rf"{re.escape(op)}\s*{re.escape(val)}\b", s):
+        return True
+    if op in {"<", "<=", ">", ">=", "=", "!="} and re.search(rf"{re.escape(op)}\s*{re.escape(val)}(?:\.0+)?\b", s):
+        return True
+    return False
+
+
 def sql_has_relative_date_bound(sql: str, start_yyyymmdd: str = "", end_yyyymmdd: str = "") -> bool:
     s = sql or ""
     if start_yyyymmdd and start_yyyymmdd in s:
@@ -176,10 +209,17 @@ def sql_satisfies_analytical_intent(
     ):
         negation = None
     date_filter = req.get("date_filter")
-    if isinstance(date_filter, dict) and not (
-        date_filter.get("start_yyyymmdd") or date_filter.get("period")
-    ):
+    if isinstance(date_filter, dict):
+        df_type = str(date_filter.get("type") or "")
+        if df_type == "calendar_year":
+            pass
+        elif not (date_filter.get("start_yyyymmdd") or date_filter.get("period")):
+            date_filter = None
+    else:
         date_filter = None
+    comparison = req.get("comparison") if isinstance(req.get("comparison"), dict) else ops.get("comparison")
+    if isinstance(comparison, dict) and comparison.get("operator") is None:
+        comparison = None
     monetary = (
         agg != "COUNT"
         and (
@@ -232,12 +272,18 @@ def sql_satisfies_analytical_intent(
             if not re.search(r"\bIS\s+NULL\b|\bNOT\s+EXISTS\b", sql, re.I):
                 return False
     if date_filter:
-        if not sql_has_relative_date_bound(
+        if str(date_filter.get("type") or "") == "calendar_year":
+            year = str(date_filter.get("value") or (date_filter.get("years") or [""])[0] or "")
+            if year and not sql_has_calendar_year(sql, year):
+                return False
+        elif not sql_has_relative_date_bound(
             sql,
             str(date_filter.get("start_yyyymmdd") or ""),
             str(date_filter.get("end_yyyymmdd") or ""),
         ):
             return False
+    if comparison and not sql_has_measure_predicate(sql, comparison):
+        return False
     having_distinct = (
         req.get("having_distinct")
         or sem.get("having_distinct")

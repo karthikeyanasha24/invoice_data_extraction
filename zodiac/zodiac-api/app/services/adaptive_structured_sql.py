@@ -287,27 +287,35 @@ def _is_filter_list_question(semantic: Dict[str, Any], question: str = "") -> bo
 
 
 def detect_filter_list_intent(question: str, semantic: Optional[Dict[str, Any]] = None) -> bool:
-    """Detect show/list/filter row-level questions from semantics or natural language."""
-    sem = semantic or {}
-    condition = sem.get("condition") if isinstance(sem.get("condition"), dict) else {}
-    ranking = sem.get("ranking")
-    measure = sem.get("measure") if isinstance(sem.get("measure"), dict) else {}
-    agg = str(measure.get("aggregation") or "").lower()
-    if isinstance(condition, dict) and condition.get("measure_operator") is not None:
-        if not isinstance(ranking, dict) and agg in {"", "none", "null"}:
-            return True
+    """Detect show/list/filter row-level questions from comparison semantics."""
+    from .analytical_operations import extract_analytical_operations, merge_semantic_requirements
 
+    sem = merge_semantic_requirements(question, semantic or {})
+    ops = sem.get("analytical_operations") or extract_analytical_operations(question)
+    comparison = (
+        sem.get("comparison")
+        if isinstance(sem.get("comparison"), dict)
+        else ops.get("comparison")
+    )
+    condition = sem.get("condition") if isinstance(sem.get("condition"), dict) else {}
+    ranking = sem.get("ranking") if isinstance(sem.get("ranking"), dict) else ops.get("ranking")
+    measure = sem.get("measure") if isinstance(sem.get("measure"), dict) else {}
+    agg = str(measure.get("aggregation") or ops.get("aggregation") or "").lower()
     q = (question or "").lower()
-    if re.search(r"\b(top|highest|lowest|best|worst|rank|most)\b", q):
+    if re.search(r"\b(top|highest|lowest|best|worst|rank|most)\b", q) and not (
+        isinstance(comparison, dict) and comparison.get("operator") and agg in {"", "none", "null"}
+    ):
         return False
     if re.search(r"\b(total|sum of|aggregate|combined)\b", q):
         return False
-    if re.search(r"\b(show|list|display|give me|get me|find|which)\b", q):
-        if re.search(r"\b(negative|negatives|below zero|less than zero|loss.?making)\b", q):
-            return True
-        if re.search(r"\bnegative\w*\s+(sales|billing|invoice|amount|revenue)\b", q):
-            return True
-    if re.search(r"\bnegative\w*\s+(sales|billing|invoice|amount|revenue)\b", q):
+    has_pred = (
+        (isinstance(comparison, dict) and comparison.get("operator") is not None)
+        or (isinstance(condition, dict) and condition.get("measure_operator") is not None)
+        or bool(ops.get("negative_measure"))
+    )
+    if has_pred and not isinstance(ranking, dict) and agg in {"", "none", "null"}:
+        return True
+    if has_pred and str(ops.get("aggregation") or "").lower() == "none":
         return True
     return False
 
@@ -327,16 +335,35 @@ def build_filter_list_sql(
         return None
 
     sem = semantic or {}
+    from .analytical_operations import extract_analytical_operations, merge_semantic_requirements
+
+    sem = merge_semantic_requirements(question, sem)
+    ops = sem.get("analytical_operations") or extract_analytical_operations(question)
     condition = sem.get("condition") if isinstance(sem.get("condition"), dict) else {}
-    op = str(condition.get("measure_operator") or "<").strip()
-    val = condition.get("measure_value", 0)
-    if re.search(r"\bnegative\w*\b", (question or "").lower()) and val in (None, "", 0):
-        op, val = "<", 0
+    comparison = (
+        sem.get("comparison")
+        if isinstance(sem.get("comparison"), dict)
+        else ops.get("comparison")
+    )
+    op = str(
+        (comparison or {}).get("operator")
+        or condition.get("measure_operator")
+        or "<"
+    ).strip()
+    val = (
+        (comparison or {}).get("value")
+        if comparison and comparison.get("value") is not None
+        else condition.get("measure_value", 0)
+    )
+    if val is None:
+        val = 0
 
     year: Optional[str] = None
     tf = sem.get("time_filter")
     if isinstance(tf, dict) and tf.get("value") is not None:
         year = str(tf["value"])
+    if not year and ops.get("years"):
+        year = str(ops["years"][0])
     if not year:
         ym = re.search(r"\b((?:19|20)\d{2})\b", question or "")
         if ym:
@@ -349,15 +376,20 @@ def build_filter_list_sql(
     if has_table("vbrp") and "vbrp" not in tables_lower:
         search_tables.append(resolve_table_name("vbrp") or "vbrp")
     q_lower = (question or "").lower()
-    want_line = any(w in q_lower for w in ("material", "line item", "item level", "product"))
+    concept = str(ops.get("measure_concept") or "").lower()
+    qty_measure = concept in {"quantity"} or any(k in concept for k in ("quant", "qty"))
+    amount_cols = ("fkimg", "menge") if qty_measure else ("netwr", "dmbtr", "wrbtr", "rmwwr")
+    want_line = qty_measure or any(w in q_lower for w in ("material", "line item", "item level", "product"))
 
     def pick_measure_date() -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-        """Prefer billing header (VBRK) for row-level billing filters unless line items requested."""
+        """Prefer billing header amounts; quantity lives on the billing item."""
         mt, mc, dt, dc = None, None, None, None
         header_tbl = resolve_table_name("VBRK") if has_table("VBRK") else None
         if header_tbl and not want_line:
-            if has_column(header_tbl, "netwr"):
-                mt, mc = header_tbl, "netwr"
+            for cand in amount_cols:
+                if has_column(header_tbl, cand):
+                    mt, mc = header_tbl, cand
+                    break
             if has_column(header_tbl, "fkdat"):
                 dt, dc = header_tbl, "fkdat"
             if mt and dt:
@@ -367,13 +399,16 @@ def build_filter_list_sql(
             rt = resolve_table_name(t) or t
             for c in column_names(rt):
                 cl = c.lower()
-                if cl in {"netwr", "dmbtr", "wrbtr"} and mc is None:
+                if cl in amount_cols and mc is None:
                     mt, mc = rt, c
                 if cl in _SAP_TEXT_DATE_COLUMNS and dc is None:
                     dt, dc = rt, c
         if header_tbl:
-            if mc is None and has_column(header_tbl, "netwr"):
-                mt, mc = header_tbl, "netwr"
+            if mc is None:
+                for cand in amount_cols:
+                    if has_column(header_tbl, cand):
+                        mt, mc = header_tbl, cand
+                        break
             if dc is None and has_column(header_tbl, "fkdat"):
                 dt, dc = header_tbl, "fkdat"
         return mt, mc, dt, dc
@@ -384,17 +419,27 @@ def build_filter_list_sql(
 
     net_expr = numeric_cast_expr(measure_tbl, measure_col)
     where_parts = [f"{net_expr} {op} {val if isinstance(val, (int, float)) else 0}"]
+    relative = ops.get("relative_period")
     if year and date_tbl and date_col:
         year_expr = year_filter_expression(date_tbl, date_col)
         where_parts.append(f"{year_expr} = '{year}'")
+    elif relative and date_tbl and date_col:
+        where_parts.append(relative_period_predicate(date_tbl, date_col, str(relative)))
 
     if want_line and "vbrp" in tables_lower and has_table("vbrp"):
         hdr = resolve_table_name("VBRK") or "VBRK"
         line = resolve_table_name("vbrp") or "vbrp"
-        line_net = numeric_cast_expr(line, "netwr")
+        line_col = measure_col if (measure_tbl or "").lower() == line.lower() else (
+            "fkimg" if qty_measure and has_column(line, "fkimg") else "netwr"
+        )
+        if not has_column(line, line_col):
+            line_col = "netwr" if has_column(line, "netwr") else measure_col
+        line_net = numeric_cast_expr(line, line_col)
         line_where = [f"{line_net} {op} {val if isinstance(val, (int, float)) else 0}"]
         if year and has_column(hdr, "fkdat"):
             line_where.append(f"{year_filter_expression(hdr, 'fkdat')} = '{year}'")
+        elif relative and has_column(hdr, "fkdat"):
+            line_where.append(relative_period_predicate(hdr, "fkdat", str(relative)))
         sel = [
             f'"{line}"."vbeln"',
             f'"{line}"."posnr"',

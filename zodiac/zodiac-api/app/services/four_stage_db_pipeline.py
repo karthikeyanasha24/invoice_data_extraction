@@ -1074,6 +1074,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         ("multi_entity_having_template", lambda: build_multi_entity_having_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("partitioned_topn_template", lambda: build_partitioned_topn_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("above_average_template", lambda: build_above_average_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("filter_list_template", lambda: build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("document_count_period_template", lambda: build_document_count_by_period_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1574,6 +1575,8 @@ def _run_four_stage_body(
             build_negation_anti_join_sql,
             build_partitioned_topn_sql,
             build_period_compare_sql,
+            build_filter_list_sql,
+            detect_filter_list_intent,
         )
 
         req = required_semantics(question, ctx.semantic_requirements)
@@ -1618,7 +1621,11 @@ def _run_four_stage_body(
             rebuilt = build_multi_entity_having_sql(question, ctx.tables, ctx.semantic_requirements)
             if rebuilt:
                 retry_sql = rebuilt
-        if "year" in warn_blob or "month" in warn_blob or "yearly grouping" in warn_blob:
+        if req.get("comparison") or detect_filter_list_intent(question, ctx.semantic_requirements):
+            rebuilt = build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)
+            if rebuilt:
+                retry_sql = rebuilt
+        elif "year" in warn_blob or "month" in warn_blob or "yearly grouping" in warn_blob:
             rebuilt = build_document_count_by_period_sql(question, ctx.tables, ctx.semantic_requirements)
             if rebuilt:
                 retry_sql = rebuilt
@@ -1652,7 +1659,8 @@ def _run_four_stage_body(
         return {
             "error": "semantic_mismatch",
             "error_kind": "pipeline_error",
-            "error_class": "SEMANTIC_MISMATCH",
+            "error_class": "RESULT_VALIDATION_FAILED",
+            "failure_class": "RESULT_VALIDATION_FAILED",
             "detail": plan_warnings,
             "tables": ctx.tables,
             "sql": sql,

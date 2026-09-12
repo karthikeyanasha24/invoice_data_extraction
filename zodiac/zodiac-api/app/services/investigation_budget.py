@@ -414,9 +414,15 @@ def user_safe_pipeline_message(kind: str = "repair_failed") -> str:
     if kind == "cancelled":
         return CANCELLED_USER_MESSAGE
     if kind == "data_limitation":
-        return "The available dataset does not contain the data required to answer this question."
+        return "The available data does not contain the information required to answer this."
     if kind == "repair_failed":
-        return "Unable to produce a verified query after bounded repair."
+        return "I couldn't verify the requested analysis from the available database evidence."
     if kind == "semantic_mismatch":
-        return "The generated result did not answer the question. The analysis was not returned as a success."
+        return "I couldn't verify the requested analysis from the available database evidence."
+    if kind == "empty_success":
+        return "No matching records were found for the requested period and condition."
+    if kind == "clarification":
+        return "I need one more detail to answer this accurately."
+    if kind == "technical":
+        return "The analysis could not be completed due to a technical problem."
     return "This analysis could not be completed from the verified schema."

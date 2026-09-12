@@ -145,6 +145,65 @@ def table_has_measure_columns(table: str, concept: str = "sales") -> bool:
     return bool(names & {"netwr", "dmbtr", "wrbtr", "rmwwr", "kwert"})
 
 
+_NUM_MAG = r"(?:₹|rs\.?\s*)?(\d+(?:\.\d+)?)\s*(k|thousand|lakh|lakhs|crore|crores|million)?"
+_MAGNITUDE = {
+    "k": 1_000.0,
+    "thousand": 1_000.0,
+    "lakh": 100_000.0,
+    "lakhs": 100_000.0,
+    "crore": 10_000_000.0,
+    "crores": 10_000_000.0,
+    "million": 1_000_000.0,
+}
+
+
+def _threshold_value(match: re.Match[str]) -> float:
+    n = float(match.group(1))
+    mag = (match.group(2) or "").lower()
+    return n * _MAGNITUDE.get(mag, 1.0)
+
+
+def _extract_measure_comparison(ql: str) -> Optional[Dict[str, Any]]:
+    """Language → comparison predicate on the selected numeric measure.
+
+    Operators are generic (NEGATIVE/POSITIVE/ZERO/thresholds). Not a question map.
+    """
+    if re.search(r"\b(negative|negatives|below zero|less than zero|loss-making)\b", ql):
+        return {"kind": "NEGATIVE", "operator": "<", "value": 0}
+    if re.search(r"\b(positive|above zero|greater than zero)\b", ql):
+        return {"kind": "POSITIVE", "operator": ">", "value": 0}
+    if re.search(r"\b(zero[- ]value|equal to zero|amounts? of zero|zero amounts?)\b", ql):
+        return {"kind": "ZERO", "operator": "=", "value": 0}
+    if re.search(r"\bnon[- ]zero\b", ql):
+        return {"kind": "NON_ZERO", "operator": "!=", "value": 0}
+    # Distinct-entity language is not a measure threshold ("more than 1 country").
+    if re.search(
+        r"\bmore than\s+(?:one|1|two|2|three|3|\d+)\s+"
+        r"(?:countr|customer|client|vendor|supplier|plant|material|product|different)",
+        ql,
+    ):
+        return None
+    m = re.search(
+        rf"\b(?:greater than or equal to|at least|no less than)\s+{_NUM_MAG}\b",
+        ql,
+    )
+    if m:
+        return {"kind": "GREATER_OR_EQUAL", "operator": ">=", "value": _threshold_value(m)}
+    m = re.search(
+        rf"\b(?:less than or equal to|at most|no more than)\s+{_NUM_MAG}\b",
+        ql,
+    )
+    if m:
+        return {"kind": "LESS_OR_EQUAL", "operator": "<=", "value": _threshold_value(m)}
+    m = re.search(rf"\b(?:below|under|less than|fewer than)\s+{_NUM_MAG}\b", ql)
+    if m:
+        return {"kind": "LESS_THAN", "operator": "<", "value": _threshold_value(m)}
+    m = re.search(rf"\b(?:above|over|greater than|more than)\s+{_NUM_MAG}\b", ql)
+    if m:
+        return {"kind": "GREATER_THAN", "operator": ">", "value": _threshold_value(m)}
+    return None
+
+
 def extract_analytical_operations(question: str) -> Dict[str, Any]:
     """Language → structured operations. Independent of any specific question string."""
     q = (question or "").strip()
@@ -200,7 +259,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
 
     if re.search(r"\b(revenue|turnover|billed amount|billing amount|billed value|invoice value|billed sales)\b", ql):
         ops["measure_concept"] = "revenue"
-    elif re.search(r"\b(quantity|qty|billed quantity)\b", ql):
+    elif re.search(r"\b(quantit(?:y|ies)|qty|billed quantity)\b", ql):
         ops["measure_concept"] = "quantity"
     elif re.search(r"\b(sales order|sales document)\b", ql) and ops["aggregation"] == "COUNT":
         ops["measure_concept"] = "sales_order"
@@ -303,9 +362,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
                 ops["group_by"] = group_by
     if re.search(r"\b(compare|versus|vs\.?)\b", ql):
         ops["compare"] = True
-    if re.search(r"\b(negative|below zero|less than zero|loss-making)\b", ql):
-        ops["negative_measure"] = True
-        ops["aggregation"] = ops["aggregation"] or "none"
+    # Polarity/threshold predicates are applied below as generic comparisons.
 
     years = _YEAR.findall(q)
     if years:
@@ -363,6 +420,25 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         ops["comparison_filter"] = {"type": "above_average"}
     elif re.search(r"\b(below|under|less than)\s+(?:the\s+)?average\b", ql):
         ops["comparison_filter"] = {"type": "below_average"}
+    else:
+        cmp = _extract_measure_comparison(ql)
+        if cmp:
+            ops["comparison"] = cmp
+            ops["comparison_filter"] = {
+                "type": "measure_predicate",
+                "kind": cmp["kind"],
+                "operator": cmp["operator"],
+                "value": cmp["value"],
+            }
+            if cmp["operator"] == "<" and cmp["value"] == 0:
+                ops["negative_measure"] = True
+            # Row-level predicates are filters, not aggregations, unless ranked/totalled.
+            if not re.search(r"\b(total|sum of|aggregate|combined|how many)\b", ql):
+                if not re.search(r"\b(top|highest|lowest|best|worst|rank|most)\b", ql):
+                    ops["aggregation"] = "none"
+                    ops["ranking"] = None
+                    ops["limit"] = None
+                    ops["order"] = None
 
     # Generic multi-entity DISTINCT dimension filter (e.g. customers in >1 country).
     _having_m = re.search(
@@ -497,6 +573,16 @@ def merge_semantic_requirements(
         req["threshold_definitions"] = list(ops["threshold_definitions"])
     if ops.get("comparison_filter"):
         req["comparison_filter"] = dict(ops["comparison_filter"])
+    if ops.get("comparison"):
+        req["comparison"] = dict(ops["comparison"])
+        condition = req.get("condition") if isinstance(req.get("condition"), dict) else {}
+        condition.setdefault("measure_operator", ops["comparison"]["operator"])
+        condition.setdefault("measure_value", ops["comparison"]["value"])
+        req["condition"] = condition
+        if str(ops.get("aggregation") or "").lower() == "none":
+            req["measure"]["aggregation"] = "none"
+            if not ops.get("ranking"):
+                req.pop("ranking", None)
     if ops.get("relative_period"):
         tf = req.get("time_filter") if isinstance(req.get("time_filter"), dict) else {}
         tf["relative"] = ops["relative_period"]
@@ -512,8 +598,15 @@ def merge_semantic_requirements(
         req["condition"] = condition
         req["measure"]["aggregation"] = req["measure"].get("aggregation") or "none"
 
-    if ops.get("years") and not req.get("time_filter"):
-        req["time_filter"] = {"concept": "year", "value": ops["years"][0]}
+    if ops.get("years") and not ops.get("period_compare") and len(ops.get("years") or []) == 1:
+        req["time_filter"] = {
+            "type": "calendar_year",
+            "concept": "year",
+            "grain": "year",
+            "operator": "equals",
+            "value": ops["years"][0],
+            "years": list(ops["years"]),
+        }
 
     if ops.get("time_grain") and not req.get("time_filter"):
         req["time_grain"] = ops["time_grain"]
