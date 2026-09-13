@@ -50,7 +50,8 @@ _BUSINESS_TOKENS = (
     "vbrk", "vbrp", "vbak", "vbap", "vbep", "vbed", "kna1", "t016t", "makt",
     "ekko", "ekpo", "afko", "afpo", "mara", "lfa1", "edi", "failed", "count", "total",
     "bought", "buyer", "sold", "order", "orders", "currency", "eur", "usd",
-    "trading", "motomarkt", "rank", "reflected", "generated",
+    "trading", "motomarkt", "rank", "reflected", "generated", "money", "brought",
+    "business", "contributed", "contribution", "faster", "grew", "moved",
     # Deep analytical metrics / dimensions
     "cogs", "margin", "margins", "profit", "profits", "cost", "goods", "region",
     "regions", "country", "countries", "component", "components", "breakdown",
@@ -121,6 +122,98 @@ def is_greeting_or_chitchat(question: str) -> bool:
         if len(non_greeting) <= 1:
             return True
     return False
+
+
+# Capability / meta questions: "what can I ask?" class — not exact-phrase handlers.
+_CAPABILITY_META = re.compile(
+    r"(?xi)"
+    r"^\s*("
+    r"what\s+can\s+(i|you|we)\s+(ask|do|query|analyze|analyse|see|know|help|use)"
+    r"|what\s+(questions?|kinds?\s+of\s+questions?|types?\s+of\s+questions?)\s+can\s+(i|you|we)"
+    r"|how\s+(do|can|should)\s+(i|you|we)\s+(use|ask|query|help|start|begin)"
+    r"|what\s+(are\s+)?(your|the)\s+(capabilities|features|skills|limits?|limitations)"
+    r"|help(\s+me)?(\s+(get\s+started|with\s+(this|the)\s+(tool|analyst|ai)))?"
+    r"|what\s+do\s+you\s+(do|support|cover|know|analyze|analyse)"
+    r"|examples?\s+of\s+(questions?|queries|things\s+(i|we)\s+can\s+ask)"
+    r"|how\s+does\s+(this|the)\s+(work|analyst|ai|tool)"
+    r"|what\s+(is|are)\s+(this|bridgeedi)\s+(for|good\s+for)"
+    r")\b"
+)
+
+# Fact-request markers: if present with a definition cue, still need the database.
+_FACT_REQUEST = re.compile(
+    r"(?xi)"
+    r"\b("
+    r"how\s+much|how\s+many|top\s+\d+|show\s+me|list\s+(all|the)|"
+    r"in\s+(19|20)\d{2}|for\s+(the\s+)?year|last\s+(year|month|quarter)|"
+    r"highest|lowest|total|sum\s+of|count\s+of|by\s+customer|by\s+product|"
+    r"our\s+(revenue|sales|invoices)|company('s)?\s+(revenue|sales)|"
+    r"did\s+we\s+(make|sell|bill)|we\s+(make|made|sell|sold|bill|billed)"
+    r")\b"
+)
+
+_DEFINITION_CUE = re.compile(
+    r"(?xi)^\s*("
+    r"what\s+is|what'?s|whats|what\s+are|what\s+does|what\s+do|"
+    r"explain|define|tell\s+me\s+about|describe"
+    r")\b"
+)
+
+
+def is_capability_or_help_question(question: str) -> bool:
+    """Meta questions about analyst capabilities — no DB investigation."""
+    q = (question or "").strip()
+    if not q:
+        return False
+    return bool(_CAPABILITY_META.search(q))
+
+
+def is_general_knowledge_question(question: str) -> bool:
+    """Concept / world-knowledge questions that must not force SQL.
+
+    'What is SAP?' / 'Explain revenue.' → general.
+    'What is our revenue in 2025?' → analytical (fact request).
+    'Why did revenue fall?' → analytical (investigation).
+    """
+    q = (question or "").strip()
+    if not q:
+        return False
+    if is_greeting_or_chitchat(q) or is_capability_or_help_question(q):
+        return True
+    ql = q.lower()
+    if _FACT_REQUEST.search(q):
+        return False
+    # Investigation / company-data cues must stay on the analytical path.
+    if re.search(r"\b(why|caused|contribut|decline|fell|dropped|grew|increased|decreased)\b", ql):
+        if re.search(
+            r"\b(revenue|sales|invoice|billing|customer|product|vendor|purchase|order)\b",
+            ql,
+        ):
+            return False
+    if re.search(r"\b(our|my|company|workspace)\b", ql) and re.search(
+        r"\b(customer|revenue|sales|invoice|product|vendor|billing|purchase)\b",
+        ql,
+    ):
+        return False
+    if not _DEFINITION_CUE.search(q):
+        if re.search(r"\b(who is|who was|chief minister|prime minister|president of|capital of)\b", ql):
+            return True
+        if "meaning of life" in ql or "tell me a joke" in ql:
+            return True
+        return False
+    return True
+
+
+def question_requires_database(question: str) -> bool:
+    """Generic gate: does answering need BridgeEDI/SAP fact rows?"""
+    if is_greeting_or_chitchat(question):
+        return False
+    if is_capability_or_help_question(question):
+        return False
+    if is_general_knowledge_question(question):
+        return False
+    allowed, _reason = is_supported_business_question(question)
+    return bool(allowed)
 
 _SHORT_FOLLOWUP_TOKENS = {
     "trading", "top", "bottom", "count", "sales", "remove", "filter",
@@ -675,7 +768,11 @@ def is_supported_business_question(
         return False, "empty_question"
     if is_greeting_or_chitchat(q):
         return False, "greeting"
+    if is_capability_or_help_question(q):
+        return False, "capability_meta"
     ql = q.lower()
+    if is_general_knowledge_question(q) and not _FACT_REQUEST.search(q):
+        return False, "general_knowledge"
     if any(h in ql for h in _NONSENSE_HINTS):
         return False, "non_business"
     if re.search(r"\b(drop|truncate|delete from|alter table)\b", ql) and "invoice" not in ql:
@@ -727,6 +824,36 @@ def greeting_welcome_payload(question: str) -> Dict[str, Any]:
 def clarification_payload(question: str, reason: str) -> Dict[str, Any]:
     if reason == "greeting" or is_greeting_or_chitchat(question):
         return greeting_welcome_payload(question)
+    if reason in {"capability_meta"} or is_capability_or_help_question(question):
+        try:
+            from ..data_catalog.capability import capability_summary
+
+            summary = capability_summary()
+        except Exception:
+            summary = (
+                "Ask about sales, billing, purchasing, customers, products, or inventory "
+                "in this workspace. For example: top customers by billed sales, invoice counts by year."
+            )
+        return {
+            "type": "analysis",
+            "mode": "general_chat",
+            "route": "general",
+            "answer_status": "SUCCESS",
+            "sql": "",
+            "rowCount": 0,
+            "data": [],
+            "charts": [],
+            "summary": summary,
+            "answer": summary,
+            "keyFindings": [],
+            "question": (question or "")[:500],
+            "meta": {"mode": "general_chat", "failure_class": "SUCCESS", "reason": "capability_meta"},
+            "suggested_followups": [
+                "Show the top customers by billed sales.",
+                "How many sales orders are there?",
+                "Show negative sales for the year 2000",
+            ],
+        }
     try:
         from ..data_catalog.capability import capability_summary
         from ..data_catalog.source_selector import select_source
@@ -738,6 +865,11 @@ def clarification_payload(question: str, reason: str) -> Dict[str, Any]:
             summary = (
                 "That's outside what I can analyze here. Ask a business question about sales, "
                 "billing, purchasing, customers, inventory, or EDI operations."
+            )
+        elif reason == "general_knowledge":
+            summary = (
+                "I can explain business terms and answer general questions, or run governed "
+                "analysis on your SAP extract. Ask a concept question, or a metric with a dimension."
             )
         elif reason == "no_business_signal":
             summary = (

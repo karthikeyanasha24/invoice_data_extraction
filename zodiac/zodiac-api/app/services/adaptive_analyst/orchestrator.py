@@ -265,31 +265,39 @@ def _log_stage(name: str, payload: Dict[str, Any]) -> None:
 
 
 def _force_general_chat(question: str) -> bool:
-    """Safety net: never send obvious non-data chat to SQL. LLM still classifies first."""
-    ql = re.sub(r"[?!.,]+$", "", (question or "").strip().lower())
-    if ql in {
-        "hi", "hello", "hey", "hai", "hii", "heya", "hola", "yo", "sup",
-        "how are you", "how are you doing", "thanks", "thank you", "good morning",
-    }:
+    """Safety net: never send non-database turns to SQL."""
+    from ..adaptive_nl_sql_hardening import (
+        is_capability_or_help_question,
+        is_general_knowledge_question,
+        is_greeting_or_chitchat,
+    )
+
+    if is_greeting_or_chitchat(question):
         return True
+    if is_capability_or_help_question(question):
+        return True
+    if is_general_knowledge_question(question):
+        return True
+    ql = re.sub(r"[?!.,]+$", "", (question or "").strip().lower())
     if re.fullmatch(r"(as of|since when|when|how about that)\??", ql):
         return True
-    if re.search(r"\b(who is|chief minister|cm of|prime minister|president of)\b", ql):
-        return True
-    try:
-        from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
-
-        if is_greeting_or_chitchat(question):
-            return True
-    except Exception:
-        pass
-    if "meaning of life" in ql:
-        return True
-    if ql.startswith("explain ") and not any(
-        t in ql for t in ("sales", "invoice", "customer", "vbak", "revenue", "purchase")
-    ):
-        return True
     return False
+
+
+def _capability_reply(question: str) -> Optional[str]:
+    from ..adaptive_nl_sql_hardening import is_capability_or_help_question
+
+    if not is_capability_or_help_question(question):
+        return None
+    try:
+        from ...data_catalog.capability import capability_summary
+
+        return capability_summary()
+    except Exception:
+        return (
+            "I can answer governed questions about sales, billing, purchasing, customers, "
+            "products, and inventory in this workspace. Ask a metric with a dimension or period."
+        )
 
 
 def _general_chat_prompt(question: str, state: "InvestigationState") -> str:
@@ -691,20 +699,26 @@ def run_adaptive_orchestrator(
     qtype = str(p1.get("question_type") or "").lower()
     route = str(p1.get("route") or "").lower()
     requires_db = bool(p1.get("requires_database"))
-    if _force_general_chat(q) or qtype in {
-        "greeting", "general_conversation", "general_knowledge",
+    if _force_general_chat(q) or adapted.action == "chat" or qtype in {
+        "greeting", "general_conversation", "general_knowledge", "capability_meta",
     }:
         requires_db = False
         route = "general"
     elif route == "general" or (p1.get("requires_database") is False and route != "clarification"):
         requires_db = False
-    if route in {"database", "mixed"} and not _force_general_chat(q):
+    if route in {"database", "mixed"} and not _force_general_chat(q) and adapted.action != "chat":
         requires_db = True
     if qtype in {"business_question", "database_question", "follow_up_question", "comparison", "calculation"}:
-        if not _force_general_chat(q):
+        if not _force_general_chat(q) and adapted.action != "chat":
             requires_db = True
 
-    skip_clarify = skip_p1_clarify and adapted.action != "chat"
+    # Force DB only for clearly analytical turns. Never force DB for chat/capability.
+    skip_clarify = (
+        skip_p1_clarify
+        and adapted.action != "chat"
+        and not _force_general_chat(q)
+        and requires_db
+    )
     if skip_clarify:
         requires_db = True
         route = "database"
@@ -750,15 +764,19 @@ def run_adaptive_orchestrator(
             }
 
     if not requires_db:
-        reply = _deterministic_greeting_reply(q) or ""
+        capability = _capability_reply(q)
+        greeting = _deterministic_greeting_reply(q)
+        reply = capability or greeting or ""
         if not reply:
             reply = str(p1.get("reply") or "").strip()
+        llm_calls = 0
         if not reply:
             text, _ = complete_text(
                 _GENERAL_CHAT_SYSTEM,
                 _general_chat_prompt(q, state),
             )
             reply = text
+            llm_calls = 1
         state.last_user_question = q
         state.last_summary = reply[:2000]
         return {
@@ -766,6 +784,7 @@ def run_adaptive_orchestrator(
             "route": "general",
             "status": "success",
             "answer_status": "SUCCESS",
+            "failure_class": "SUCCESS",
             "sql": "",
             "data": [],
             "rowCount": 0,
@@ -775,13 +794,18 @@ def run_adaptive_orchestrator(
             "charts": [],
             "pipeline": "adaptive_orchestrator",
             "sql_generation_method": "pipeline1_general",
-            "llm_calls": 1,
+            "llm_calls": llm_calls,
             "query_plan": {
                 "investigation_state": {**state.to_dict(), "mode": "general_chat"},
                 "pipeline1": p1,
                 "last_mode": "general_chat",
             },
-            "meta": {"mode": "general_chat", "intent": p1.get("intent")},
+            "meta": {"mode": "general_chat", "intent": p1.get("intent"), "failure_class": "SUCCESS"},
+            "suggested_followups": [
+                "Show the top customers by billed sales.",
+                "How many sales orders are there?",
+                "What was revenue in 2004?",
+            ],
         }
 
     resolved = str(p1.get("rewritten_question") or q).strip() or q
@@ -832,6 +856,15 @@ def run_adaptive_orchestrator(
                 "pipeline1": p1,
             }
             return reused
+        if reused and reused.get("needs_plan_expansion") and reused.get("expanded_question"):
+            # Adaptive replan: growth follow-up cannot invent deltas from levels —
+            # continue with a scoped rewritten question grounded in prior entities.
+            expanded = str(reused["expanded_question"]).strip()
+            if expanded:
+                resolved = expanded
+                q = expanded
+                p1 = {**(p1 or {}), "rewritten_question": expanded, "is_follow_up": True}
+                _log_stage("FOLLOWUP_PLAN_EXPANSION", {"expanded": expanded[:200]})
 
     p2 = _run_four_stage_or_legacy_sql(
         resolved, q, p1, state, db, execute_sql,
@@ -946,14 +979,22 @@ def run_adaptive_orchestrator(
             if "SQL_VALIDATION" in err_u or p2.get("error") == "sql_validation_failed":
                 failure_class = "SQL_VALIDATION_FAILED"
             elif p2.get("error") == "sql_execution_failed":
-                failure_class = "EXECUTION_FAILED"
+                failure_class = "TOOL_FAILURE"
             elif "SCHEMA" in err_u:
                 failure_class = "SCHEMA_UNRESOLVED"
             elif "PLAN" in err_u:
                 failure_class = "PLAN_INCOMPLETE"
+            elif "GENERATION" in err_u or p2.get("error") == "sql_generation_failed":
+                failure_class = "MODEL_FAILURE"
             else:
-                failure_class = "TECHNICAL_ERROR"
-            msg = user_safe_pipeline_message("technical" if failure_class == "TECHNICAL_ERROR" else "repair_failed")
+                failure_class = "SYSTEM_FAILURE"
+            msg = user_safe_pipeline_message(
+                "technical" if failure_class in {"TECHNICAL_ERROR", "SYSTEM_FAILURE", "TOOL_FAILURE", "MODEL_FAILURE"} else "repair_failed"
+            )
+            if failure_class == "TOOL_FAILURE":
+                msg = "I couldn't complete the database analysis because the data service is temporarily unavailable."
+            elif failure_class == "MODEL_FAILURE":
+                msg = "I couldn't plan a verified query for that question. Try rephrasing with a metric and period."
             status = "CANNOT_ANSWER"
             logger.warning(
                 "[adaptive-orch] pipeline error hidden from user: %s %s",
@@ -1029,6 +1070,13 @@ def run_adaptive_orchestrator(
             charts = chart_fn(resolved, sql, rows) or []
         except Exception as exc:
             logger.warning("[adaptive-orch] charts failed: %s", exc)
+    if not charts and rows:
+        try:
+            from ..chart_decision_engine import build_chart_specs_for_rows
+
+            charts = build_chart_specs_for_rows(rows, resolved or q, sql) or []
+        except Exception as exc:
+            logger.warning("[adaptive-orch] row-grounded charts failed: %s", exc)
 
     dims = p1.get("dimensions") or state.dimensions
     if isinstance(dims, str):
@@ -1110,12 +1158,13 @@ def run_adaptive_orchestrator(
 
     if empty:
         answer_text = summary
-    return {
+    out = {
         "mode": "database_analysis",
         "route": "database",
         "status": "empty" if empty else "completed",
-        "answer_status": "SUCCESS_EMPTY" if empty else "SUCCESS",
-        "failure_class": "SUCCESS_EMPTY" if empty else "SUCCESS",
+        # NO_DATA = validated empty result; SUCCESS_EMPTY kept as alias for older clients.
+        "answer_status": "NO_DATA" if empty else "SUCCESS",
+        "failure_class": "NO_DATA" if empty else "SUCCESS",
         "sql": sql,
         "data": rows,
         "rowCount": len(rows),
@@ -1128,7 +1177,6 @@ def run_adaptive_orchestrator(
         "llm_calls": 4,
         "tables_used": tables,
         "resolved_question": resolved,
-        "meta": {"investigation_status": "SUCCESS_EMPTY" if empty else "completed", "failure_class": "SUCCESS_EMPTY" if empty else "SUCCESS"},
         "suggested_followups": p3.get("follow_up_suggestions") or [
             "Which country?",
             "And industry?",
@@ -1161,9 +1209,55 @@ def run_adaptive_orchestrator(
             "incomplete": bool(p3.get("incomplete")),
             "warnings": limitations,
             "providers": [p1.get("_provider")],
+            "investigation_status": "NO_DATA" if empty else "completed",
+            "failure_class": "NO_DATA" if empty else "SUCCESS",
+            "legacy_status_alias": "SUCCESS_EMPTY" if empty else None,
         },
         "presentation": {
             "type": p3.get("presentation_type") or ("kpi" if len(rows) == 1 else "table"),
             "title": resolved[:120],
         },
     }
+    try:
+        from .presentation import plan_presentation
+
+        presentation = plan_presentation(
+            resolved or q,
+            rows,
+            semantic=semantic if isinstance(semantic, dict) else None,
+            charts=charts,
+        )
+        out["presentation"] = presentation
+        out.setdefault("meta", {})["presentation"] = presentation
+    except Exception:
+        pass
+    try:
+        from .diagnostics import build_analytical_diagnostics
+
+        diag = build_analytical_diagnostics(
+            question=resolved or q,
+            route="database",
+            semantic=semantic if isinstance(semantic, dict) else None,
+            sql=sql,
+            row_count=len(rows),
+            result_validation=final_warnings,
+            pipeline_log=p2.get("pipeline_log") if isinstance(p2.get("pipeline_log"), dict) else None,
+            presentation=out.get("presentation") if isinstance(out.get("presentation"), dict) else None,
+            answer_status=str(out.get("answer_status") or ""),
+            failure_class=str(out.get("failure_class") or ""),
+        )
+        out["diagnostics"] = diag
+        out.setdefault("meta", {})["diagnostics"] = diag
+        out.setdefault("query_plan", {})["diagnostics"] = {
+            k: diag.get(k)
+            for k in (
+                "semantic_plan",
+                "replanning",
+                "presentation",
+                "final_status",
+                "execution",
+            )
+        }
+    except Exception:
+        pass
+    return out

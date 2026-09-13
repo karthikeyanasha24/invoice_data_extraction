@@ -779,7 +779,7 @@ function ResultDashboard({
   const isGeneral = mode === 'general_chat' || mode === 'general' || (
     status === 'SUCCESS' && !(result.sql || '').trim() && !hasData
   );
-  const isEmptySuccess = status === 'SUCCESS_EMPTY';
+  const isEmptySuccess = status === 'SUCCESS_EMPTY' || status === 'NO_DATA';
   const isGap = isDataGapResult(result);
   const isTechFailure = isInvestigationFailure(result);
   const isClarification = status === 'CLARIFICATION' || status === 'NEEDS_CLARIFICATION';
@@ -810,10 +810,23 @@ function ResultDashboard({
   }
 
   if (isTechFailure) {
+    const failure = String(
+      (result as any).failure_class || result.meta?.investigation_status || ''
+    ).toUpperCase();
+    const heading =
+      failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
+        ? 'Data service unavailable'
+        : failure === 'MODEL_FAILURE' || failure === 'SQL_GENERATION_FAILED'
+          ? 'Analysis could not be planned'
+          : 'Investigation incomplete';
+    const fallback =
+      failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
+        ? "I couldn't complete the database analysis because the data service is temporarily unavailable."
+        : "I couldn't verify the requested analysis from the available database evidence.";
     return (
       <StatusOutcomeCard
-        heading="Investigation incomplete"
-        message={summary || "I couldn't verify the requested analysis from the available database evidence."}
+        heading={heading}
+        message={summary || fallback}
         tone="rose"
       />
     );

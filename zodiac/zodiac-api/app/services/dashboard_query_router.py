@@ -141,11 +141,14 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         sanitize_generated_sap_sql as _sanitize,
     )
     from .adaptive_nl_sql_hardening import apply_statement_timeout
+    from .adaptive_trusted_scope import enforce_trusted_user_scope
 
     safe = _sanitize(sql, question or None)
+    bind: Dict[str, Any] = {}
+    safe, bind = enforce_trusted_user_scope(safe)
     safe = _prep(safe)
     apply_statement_timeout(db)
-    rows_raw = db.execute(text(safe)).mappings().all()
+    rows_raw = db.execute(text(safe), bind or {}).mappings().all()
     return _serialize_rows(rows_raw)
 
 

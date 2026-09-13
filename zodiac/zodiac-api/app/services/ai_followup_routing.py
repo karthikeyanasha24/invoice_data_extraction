@@ -64,6 +64,9 @@ _FOLLOWUP_UTTERANCE = re.compile(
     r"|remove\s+trading"
     r"|(19|20)\d{2}"
     r"|filter\s+(to|by)\b.*"
+    r"|which\s+one\b.*"
+    r"|which\s+of\s+(them|these|those)\b.*"
+    r"|grew\s+(the\s+)?(fastest|most)\b.*"
     r")\s*\??\s*$",
     re.IGNORECASE,
 )
@@ -353,13 +356,32 @@ def should_route_to_general_chat(
     previous_sql: str = "",
 ) -> bool:
     """Route to orchestrator Pipeline 1 general path (Gemini-style chat), not SQL compilers."""
+    from .adaptive_nl_sql_hardening import (
+        is_capability_or_help_question,
+        is_general_knowledge_question,
+        is_greeting_or_chitchat,
+        question_requires_database,
+    )
+
     if is_prior_general_chat(previous_plan, previous_status, previous_sql):
         return True
     if is_greeting_or_chitchat(question):
         return True
+    if is_capability_or_help_question(question) or is_general_knowledge_question(question):
+        return True
+    if not question_requires_database(question) and turn.intent in {
+        TurnIntent.NON_BUSINESS,
+        TurnIntent.CLARIFICATION_REQUIRED,
+    }:
+        return True
     if turn.intent == TurnIntent.NON_BUSINESS and turn.reason != "unsafe_or_non_business":
         return True
-    if turn.intent == TurnIntent.CLARIFICATION_REQUIRED and turn.reason == "no_business_signal":
+    if turn.intent == TurnIntent.CLARIFICATION_REQUIRED and turn.reason in {
+        "no_business_signal",
+        "capability_meta",
+        "general_knowledge",
+        "greeting",
+    }:
         return True
     return False
 
@@ -375,11 +397,20 @@ def classify_turn(
 
     Previous context informs the decision; it never forces FOLLOWUP_DELTA by itself.
     """
+    from .adaptive_nl_sql_hardening import (
+        is_capability_or_help_question,
+        is_general_knowledge_question,
+    )
+
     q = (question or "").strip()
     ql = q.lower()
     has_active = has_active_analysis_state(previous_sql, previous_plan, previous_status)
     has_deep = has_preserved_deep_context(previous_plan, previous_status)
 
+    if is_capability_or_help_question(q):
+        return TurnClassification(TurnIntent.NON_BUSINESS, "capability_meta")
+    if is_general_knowledge_question(q) and not has_active:
+        return TurnClassification(TurnIntent.NON_BUSINESS, "general_knowledge")
     if _NON_ANALYTICAL_TOPIC.search(ql):
         return TurnClassification(TurnIntent.NON_BUSINESS, "non_analytical_topic")
 
@@ -387,7 +418,13 @@ def classify_turn(
         q, has_active_analysis=has_active or has_deep, previous_plan=previous_plan
     )
     if not allowed:
-        if gate_reason in {"non_business", "unsafe_or_non_business", "greeting"}:
+        if gate_reason in {
+            "non_business",
+            "unsafe_or_non_business",
+            "greeting",
+            "capability_meta",
+            "general_knowledge",
+        }:
             return TurnClassification(TurnIntent.NON_BUSINESS, gate_reason)
         if _AMBIGUOUS_TURN.match(q):
             return TurnClassification(TurnIntent.CLARIFICATION_REQUIRED, "ambiguous")

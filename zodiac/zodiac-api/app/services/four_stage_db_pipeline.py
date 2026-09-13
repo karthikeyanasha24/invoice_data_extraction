@@ -18,7 +18,7 @@ import logging
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -658,6 +658,13 @@ def _resolve_relative_period_years(
             if re.search(r"\b(decline|decrease|drop)\b", (question or ""), re.I)
             else "increased",
         }
+    # Anchor year from "why … in 2025" — pair with prior year when present in data.
+    anchor = None
+    if isinstance(period, dict):
+        anchor = period.get("anchor_year")
+        cp = period.get("comparison_period")
+        if not anchor and isinstance(cp, dict) and cp.get("year") and not period.get("base_period"):
+            anchor = str(cp.get("year"))
     date_tbl = date_col = None
     for tbl in ctx.tables:
         if not has_table(tbl):
@@ -682,21 +689,32 @@ def _resolve_relative_period_years(
         )
         rows = db.execute(__import__("sqlalchemy").text(sql)).fetchall()
         years = [str(r[0]) for r in rows if r and r[0]]
-        if len(years) >= 2:
-            y_b, y_a = years[0], years[1]
-            period = {
-                **period,
-                "base_period": {"year": y_a, "start": y_a, "end": y_a},
-                "comparison_period": {"year": y_b, "start": y_b, "end": y_b},
-                "requires_two_periods": False,
-                "resolved_from": "latest_two_years",
-            }
-            sem["period_compare"] = period
-            # Clear clarification once years are resolved from data.
-            if isinstance(sem.get("clarification"), dict) and sem["clarification"].get("type") == "comparison_period":
-                sem.pop("clarification", None)
-            ctx.semantic_requirements = sem
-            _log_stage(ctx, "PERIOD_YEARS_RESOLVED", {"base": y_a, "comparison": y_b})
+        y_a = y_b = None
+        if anchor and re.fullmatch(r"\d{4}", str(anchor)):
+            y_b = str(anchor)
+            prior = [y for y in years if y < y_b]
+            if prior:
+                y_a = prior[0]  # years sorted DESC → first prior is nearest earlier year
+            else:
+                y_a = str(int(y_b) - 1)
+        if not y_a or not y_b:
+            if len(years) >= 2:
+                y_b, y_a = years[0], years[1]
+            else:
+                return
+        period = {
+            **period,
+            "base_period": {"year": y_a, "start": y_a, "end": y_a},
+            "comparison_period": {"year": y_b, "start": y_b, "end": y_b},
+            "requires_two_periods": False,
+            "resolved_from": "anchor_prior_year" if anchor else "latest_two_years",
+        }
+        sem["period_compare"] = period
+        # Clear clarification once years are resolved from data.
+        if isinstance(sem.get("clarification"), dict) and sem["clarification"].get("type") == "comparison_period":
+            sem.pop("clarification", None)
+        ctx.semantic_requirements = sem
+        _log_stage(ctx, "PERIOD_YEARS_RESOLVED", {"base": y_a, "comparison": y_b})
     except Exception as exc:
         logger.warning("[four_stage] period year resolve failed: %s", exc)
         try:
@@ -1670,7 +1688,153 @@ def _run_four_stage_body(
             "user_message": user_safe_pipeline_message("semantic_mismatch"),
         }
 
+    # Adaptive investigation: confirm period direction, then try schema-supported driver grains.
+    try:
+        from .adaptive_analyst.investigation import (
+            MAX_INVESTIGATION_QUERIES,
+            evaluate_direction_gate,
+            evidence_based_summary,
+            is_investigation_request,
+            plan_investigation_steps,
+            result_has_driver_grain,
+            sufficiency_for_investigation,
+        )
+        from .adaptive_structured_sql import build_period_compare_sql as _build_pc
+
+        if is_investigation_request(question, ctx.semantic_requirements):
+            steps = plan_investigation_steps(
+                question, ctx.semantic_requirements, tables=ctx.tables
+            )
+            confirm_meta: Dict[str, Any] = {}
+            inv_queries = 0
+            gate = next((s for s in steps if s.get("kind") == "confirm_direction"), None)
+            if gate and budget is not None and not budget.allow_repair(0):
+                gate = None
+            if gate:
+                confirm_sql = _build_pc(
+                    question, ctx.tables, ctx.semantic_requirements, aggregate_only=True
+                )
+                if confirm_sql:
+                    try:
+                        confirm_rows = execute_sql(db, confirm_sql, question) or []
+                        inv_queries += 1
+                        verdict, evidence = evaluate_direction_gate(
+                            confirm_rows,
+                            expected_direction=str(gate.get("expected_direction") or "decline"),
+                        )
+                        confirm_meta = {"verdict": verdict, **evidence, "sql": confirm_sql[:400]}
+                        ctx.pipeline_log["investigation_confirm"] = confirm_meta
+                        _log_stage(ctx, "INVESTIGATION_CONFIRM", confirm_meta)
+                        if verdict in {"opposite", "no_change"}:
+                            rows = confirm_rows
+                            sql = confirm_sql
+                            ctx.pipeline_log["investigation_answer_mode"] = "direction_only"
+                        elif verdict == "proceed":
+                            driver_steps = [s for s in steps if s.get("kind") == "drivers"]
+                            best: Optional[Tuple[str, str, List[Dict[str, Any]]]] = None
+                            if result_has_driver_grain(rows):
+                                best = ("prior", sql, rows)
+                            for dstep in driver_steps:
+                                if inv_queries >= MAX_INVESTIGATION_QUERIES:
+                                    break
+                                if budget is not None and not budget.allow_repair(inv_queries):
+                                    break
+                                grain = (dstep.get("group_by") or ["customer"])[0]
+                                # Mutate semantic group_by for this grain attempt.
+                                sem = dict(ctx.semantic_requirements or {})
+                                sem["group_by"] = [grain]
+                                sem["dimensions"] = [grain]
+                                if isinstance(sem.get("period_compare"), dict):
+                                    sem["period_compare"] = {
+                                        **sem["period_compare"],
+                                        "contribution": True,
+                                    }
+                                driver_sql = _build_pc(
+                                    question,
+                                    ctx.tables,
+                                    sem,
+                                    aggregate_only=False,
+                                    force_dims=[grain],
+                                )
+                                if not driver_sql:
+                                    continue
+                                try:
+                                    driver_rows = execute_sql(db, driver_sql, question) or []
+                                    inv_queries += 1
+                                    _log_stage(
+                                        ctx,
+                                        "INVESTIGATION_DRIVERS",
+                                        {
+                                            "grain": grain,
+                                            "row_count": len(driver_rows),
+                                            "sql": driver_sql[:400],
+                                        },
+                                    )
+                                    if driver_rows and result_has_driver_grain(driver_rows):
+                                        best = (grain, driver_sql, driver_rows)
+                                        # Prefer first grain with clear contribution_pct.
+                                        if any(
+                                            r.get("contribution_pct") is not None for r in driver_rows[:3]
+                                        ):
+                                            break
+                                except Exception:
+                                    try:
+                                        db.rollback()
+                                    except Exception:
+                                        pass
+                            if best:
+                                grain, sql, rows = best
+                                ctx.pipeline_log["investigation_answer_mode"] = "drivers"
+                                ctx.pipeline_log["investigation_grain"] = grain
+                                ctx.pipeline_log["investigation_queries"] = inv_queries
+                    except Exception as inv_exc:
+                        ctx.pipeline_log["investigation_confirm_error"] = str(inv_exc)[:300]
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+            suff = sufficiency_for_investigation(
+                question,
+                rows,
+                semantic=ctx.semantic_requirements,
+                confirm_evidence=confirm_meta or None,
+            )
+            ctx.pipeline_log["investigation_sufficiency"] = suff
+            if confirm_meta or result_has_driver_grain(rows):
+                ctx.pipeline_log["investigation_evidence_summary"] = evidence_based_summary(
+                    confirm=confirm_meta or None,
+                    driver_rows=rows if result_has_driver_grain(rows) else [],
+                    grain=str(ctx.pipeline_log.get("investigation_grain") or "customer"),
+                )
+    except Exception as inv_outer:
+        ctx.pipeline_log["investigation_error"] = str(inv_outer)[:300]
+
     narrative = pipeline4_result_analysis(question, sql, rows, ctx, exec_ms=exec_ms)
+    if ctx.pipeline_log.get("investigation_evidence_summary") and isinstance(narrative, dict):
+        evid = str(ctx.pipeline_log["investigation_evidence_summary"])
+        if evid:
+            narrative["summary"] = evid
+            narrative["answer"] = evid
+            findings = narrative.get("findings") if isinstance(narrative.get("findings"), list) else []
+            findings = [evid] + [f for f in findings if f != evid]
+            narrative["findings"] = findings[:8]
+    if ctx.pipeline_log.get("investigation_answer_mode") == "direction_only":
+        conf = ctx.pipeline_log.get("investigation_confirm") or {}
+        verdict = conf.get("verdict")
+        change = conf.get("change")
+        if isinstance(narrative, dict):
+            if verdict == "opposite":
+                narrative["summary"] = (
+                    f"Revenue did not decrease over the compared periods "
+                    f"(change={change}). Driver contribution analysis was not applicable."
+                )
+                narrative["answer"] = narrative["summary"]
+            elif verdict == "no_change":
+                narrative["summary"] = (
+                    f"Revenue was essentially unchanged over the compared periods "
+                    f"(change={change}). There is no decline to attribute to drivers."
+                )
+                narrative["answer"] = narrative["summary"]
     if ctx.pipeline_log.get("currency_note"):
         note = str(ctx.pipeline_log["currency_note"])
         if isinstance(narrative, dict):

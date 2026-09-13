@@ -42,6 +42,20 @@ BENCH_QUESTIONS = [
 def _post_adaptive(question: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import urllib.request
     import json
+    import sys
+    from pathlib import Path
+
+    # Authenticate via shared live helper (LIVE_API_TOKEN or LIVE_API_EMAIL/PASSWORD).
+    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from live_http import adaptive_headers  # type: ignore
+
+    headers = adaptive_headers()
+    if "Authorization" not in headers:
+        raise RuntimeError(
+            "LIVE_GA_BENCH requires LIVE_API_TOKEN or LIVE_API_EMAIL+LIVE_API_PASSWORD"
+        )
 
     body: Dict[str, Any] = {"question": question}
     if context:
@@ -49,7 +63,7 @@ def _post_adaptive(question: str, context: Dict[str, Any] | None = None) -> Dict
     req = urllib.request.Request(
         f"{LIVE_API}/api/query/adaptive",
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=120) as resp:

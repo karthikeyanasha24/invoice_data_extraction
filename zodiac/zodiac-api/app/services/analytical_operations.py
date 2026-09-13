@@ -259,11 +259,17 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
 
     if re.search(r"\b(revenue|turnover|billed amount|billing amount|billed value|invoice value|billed sales)\b", ql):
         ops["measure_concept"] = "revenue"
+    elif re.search(
+        r"\b((money|cash)\s+(generated|made|earned|brought in)|"
+        r"brought in|business\s+generat\w+|generat\w+\s+during)\b",
+        ql,
+    ):
+        ops["measure_concept"] = "revenue"
     elif re.search(r"\b(quantit(?:y|ies)|qty|billed quantity)\b", ql):
         ops["measure_concept"] = "quantity"
     elif re.search(r"\b(sales order|sales document)\b", ql) and ops["aggregation"] == "COUNT":
         ops["measure_concept"] = "sales_order"
-    elif re.search(r"\bsales\b", ql):
+    elif re.search(r"\b(sales|sold|sell|selling)\b", ql):
         ops["measure_concept"] = "sales"
     elif ops["aggregation"] == "COUNT":
         ops["measure_concept"] = "count"
@@ -308,59 +314,115 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         ops["order"] = direction
         if not ops["aggregation"]:
             ops["aggregation"] = "SUM"
-    elif not ops.get("ranking") and re.search(r"\b(highest|most|best|largest|top)\b", ql) and not re.search(r"\b(show|list|display)\b.{0,40}\b(with|and)\b", ql):
-        # Singular "which X … most/highest" or "top country/customer" ⇒ top-1.
-        # Plural entities ("which customers…highest") keep a short default list.
-        singular = bool(
-            re.search(
-                r"\bwhich\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
-                ql,
-            )
-        ) or bool(
-            re.search(
-                r"\btop\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
-                ql,
-            )
+    elif not ops.get("ranking"):
+        # Paraphrases: "five customers … most revenue", "biggest customers by sales"
+        _WORD_N = {
+            "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+            "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        }
+        wm = re.search(
+            r"\b(two|three|four|five|six|seven|eight|nine|ten|\d{1,3})\s+"
+            r"(?:(?:biggest|largest|top|best|highest)\s+)?"
+            r"(customers?|clients?|buyers?|vendors?|suppliers?|products?|materials?|countries)\b",
+            ql,
         )
-        plural_list = bool(
-            re.search(
-                r"\b(customers|clients|buyers|countries|materials|products|suppliers|vendors|industries)\b",
-                ql,
+        if wm and re.search(
+            r"\b(most|biggest|largest|highest|brought in|revenue|sales|top)\b",
+            ql,
+        ):
+            raw = wm.group(1)
+            n = int(_WORD_N.get(raw, raw if str(raw).isdigit() else 5))
+            ent = _ENTITY_WORDS.get(wm.group(2).lower(), wm.group(2).lower().rstrip("s"))
+            if ent.endswith("ie"):  # countries → countr already mapped
+                pass
+            ops["ranking"] = {"direction": "DESC", "limit": n}
+            ops["limit"] = n
+            ops["order"] = "DESC"
+            if ent in _ENTITY_WORDS.values() and ent not in group_by:
+                group_by.append(ent)
+                ops["group_by"] = group_by
+            if not ops["aggregation"]:
+                ops["aggregation"] = "SUM"
+            if not ops.get("measure_concept"):
+                ops["measure_concept"] = "sales"
+        elif re.search(r"\b(biggest|largest)\s+(customers?|clients?|vendors?)\b", ql) and re.search(
+            r"\b(sales|revenue|by)\b", ql
+        ):
+            ops["ranking"] = {"direction": "DESC", "limit": 10}
+            ops["limit"] = 10
+            ops["order"] = "DESC"
+            if "customer" not in group_by and re.search(r"\b(customers?|clients?)\b", ql):
+                group_by.append("customer")
+                ops["group_by"] = group_by
+            if not ops["aggregation"]:
+                ops["aggregation"] = "SUM"
+            if not ops.get("measure_concept"):
+                ops["measure_concept"] = "sales"
+        elif re.search(r"\b(highest|most|best|largest|top)\b", ql) and not re.search(
+            r"\b(show|list|display)\b.{0,40}\b(with|and)\b", ql
+        ):
+            # Singular "which X … most/highest" or "top country/customer" ⇒ top-1.
+            singular = bool(
+                re.search(
+                    r"\bwhich\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
+                    ql,
+                )
+            ) or bool(
+                re.search(
+                    r"\btop\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
+                    ql,
+                )
             )
-        )
-        lim = 10 if plural_list and not singular else (1 if singular else 10)
-        ops["ranking"] = {"direction": "DESC", "limit": lim}
-        ops["limit"] = lim
-        ops["order"] = "DESC"
-        if not ops["aggregation"]:
-            ops["aggregation"] = "SUM"
-    elif not ops.get("ranking") and re.search(r"\b(lowest|least|smallest|worst|bottom)\b", ql):
-        singular = bool(
-            re.search(
-                r"\bwhich\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
-                ql,
+            plural_list = bool(
+                re.search(
+                    r"\b(customers|clients|buyers|countries|materials|products|suppliers|vendors|industries)\b",
+                    ql,
+                )
             )
-        )
-        lim = 1 if singular else 10
-        ops["ranking"] = {"direction": "ASC", "limit": lim}
-        ops["limit"] = lim
-        ops["order"] = "ASC"
+            lim = 10 if plural_list and not singular else (1 if singular else 10)
+            ops["ranking"] = {"direction": "DESC", "limit": lim}
+            ops["limit"] = lim
+            ops["order"] = "DESC"
+            if not ops["aggregation"]:
+                ops["aggregation"] = "SUM"
+        elif re.search(r"\b(lowest|least|smallest|worst|bottom)\b", ql):
+            singular = bool(
+                re.search(
+                    r"\bwhich\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
+                    ql,
+                )
+            )
+            lim = 1 if singular else 10
+            ops["ranking"] = {"direction": "ASC", "limit": lim}
+            ops["limit"] = lim
+            ops["order"] = "ASC"
 
     if ops.get("group_by") and ops.get("measure_concept") and not ops.get("aggregation"):
         ops["aggregation"] = "SUM"
 
     if re.search(r"\b(share|percentage of total|percent of total|% of)\b", ql):
         ops["share"] = True
+    if re.search(
+        r"\b(share of (the )?(revenue |sales )?(decline|decrease|drop|change)|"
+        r"largest share|accounted for .{0,40}(decline|decrease|drop))\b",
+        ql,
+    ):
+        ops["share"] = True
+        ops["contribution"] = True
+        ops["growth"] = True
     if re.search(r"\b(growth|increase|decrease|decline|change|difference|delta)\b", ql):
         ops["growth"] = True
-    if re.search(r"\btrend\b", ql):
+    if re.search(
+        r"\b(trend|month by month|monthly|how .{0,60} (moved|changed|evolved)|over (the )?years?|over time)\b",
+        ql,
+    ):
         ops["trend"] = True
         if not ops["time_grain"]:
             ops["time_grain"] = "month"
             if "month" not in group_by:
                 group_by.append("month")
                 ops["group_by"] = group_by
-    if re.search(r"\b(compare|versus|vs\.?)\b", ql):
+    if re.search(r"\b(compare|versus|vs\.?|better than|worse than)\b", ql):
         ops["compare"] = True
     # Polarity/threshold predicates are applied below as generic comparisons.
 
@@ -368,39 +430,140 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     if years:
         ops["years"] = sorted(set(years))
 
-    _decline_cue = r"\b(declin\w*|decreas\w*|drop(?:ped|s)?|reduc\w*)\b"
-    if years and len(set(years)) >= 2 and re.search(
-        r"\b(growth|increas\w*|decreas\w*|declin\w*|between|versus|vs\.?|compared|difference|change|yoy|year[- ]over[- ]year)\b",
-        ql,
+    _decline_cue = r"\b(declin\w*|decreas\w*|drop(?:ped|s)?|reduc\w*|fell|falling|falls?|fallen|worse)\b"
+    _growth_cue = r"\b(growth|increas\w*|grew|better)\b"
+    _contribution_cue = bool(
+        re.search(
+            r"\b(contribut\w*|drove|driving|accounted for|responsible for|"
+            r"why\s+did|what\s+caused|what\s+changed|that\s+caused|"
+            r"drivers?\s+of|caused\s+the\s+(drop|decline|decrease))\b",
+            ql,
+        )
+    )
+    if _contribution_cue and (
+        re.search(r"\b(revenue|sales|billing|invoice)\b", ql)
+        or re.search(_decline_cue + r"|" + _growth_cue, ql)
+        or re.search(r"\b(drop|decline|decrease|change)\b", ql)
+    ):
+        ops["contribution"] = True
+        ops["growth"] = True
+        if not group_by:
+            # Default driver grain: customers unless another entity is named.
+            if re.search(r"\b(materials?|products?)\b", ql):
+                group_by.append("material")
+            elif re.search(r"\bcountr", ql):
+                group_by.append("country")
+            else:
+                group_by.append("customer")
+            ops["group_by"] = group_by
+        if not ops.get("measure_concept"):
+            ops["measure_concept"] = "sales"
+        if not ops.get("aggregation"):
+            ops["aggregation"] = "SUM"
+
+    if years and len(set(years)) >= 2 and (
+        re.search(
+            r"\b(growth|increas\w*|decreas\w*|declin\w*|between|versus|vs\.?|compared|"
+            r"difference|change|yoy|year[- ]over[- ]year|better|worse|contribut)\b",
+            ql,
+        )
+        or ops.get("contribution")
     ):
         ordered = sorted(set(years))
+        decline = bool(re.search(_decline_cue, ql)) and not re.search(
+            r"\b(increas\w*|grew|growth)\b", ql
+        )
         ops["period_compare"] = {
             "type": "period_change",
             "base_period": {"year": ordered[0], "start": ordered[0], "end": ordered[0]},
             "comparison_period": {"year": ordered[-1], "start": ordered[-1], "end": ordered[-1]},
-            "op": "decline" if re.search(_decline_cue, ql) else "growth",
-            "condition": "decreased" if re.search(_decline_cue, ql) else "increased",
+            "op": "decline" if decline else "growth",
+            "condition": "decreased" if decline else "increased",
             "calculation": "percentage_change" if re.search(r"\b(percent|percentage|%|pct)\b", ql) else "difference",
+            "contribution": bool(ops.get("contribution")),
         }
         ops["compare"] = True
         ops["growth"] = True
-        # Dimension for period compare is the entity, not year as a group grain of the output.
         if "year" in group_by and which:
             group_by = [g for g in group_by if g != "year"]
             ops["group_by"] = group_by
+        if ops.get("contribution") and not ops.get("ranking"):
+            ops["ranking"] = {
+                "direction": "ASC" if decline else "DESC",
+                "limit": int(ops.get("limit") or 10),
+            }
+        elif ops.get("contribution") and isinstance(ops.get("ranking"), dict):
+            # Keep explicit top-N (e.g. three customers) but align sort to decline/growth.
+            ops["ranking"]["direction"] = "ASC" if decline else "DESC"
 
-    elif not years and re.search(r"\b(year[- ]over[- ]year|yoy)\b", ql):
-        # Explicit YoY without years → resolve latest two calendar years at planning time.
+    elif len(set(years)) == 1 and (
+        ops.get("contribution")
+        or re.search(r"\b(why\s+did|what\s+caused)\b", ql)
+    ) and re.search(r"\b(revenue|sales)\b", ql) and re.search(
+        _decline_cue + r"|" + _growth_cue, ql
+    ):
+        # "Why did revenue decrease in 2025?" → resolve prior year at plan time.
+        decline = bool(re.search(_decline_cue, ql))
+        y = sorted(set(years))[0]
         ops["period_compare"] = {
             "type": "period_change",
             "requires_two_periods": True,
-            "op": "decline" if re.search(_decline_cue, ql) else "growth",
-            "condition": "decreased" if re.search(_decline_cue, ql) else "increased",
+            "comparison_period": {"year": y, "start": y, "end": y},
+            "op": "decline" if decline else "growth",
+            "condition": "decreased" if decline else "increased",
             "calculation": "difference",
+            "contribution": True,
+            "investigation": True,
+            "anchor_year": y,
         }
         ops["compare"] = True
         ops["growth"] = True
-    elif ops.get("growth") and not years and re.search(
+        ops["contribution"] = True
+        ops.pop("clarification", None)
+        if not group_by:
+            group_by.append("customer")
+            ops["group_by"] = group_by
+        if not ops.get("ranking"):
+            ops["ranking"] = {"direction": "ASC" if decline else "DESC", "limit": 10}
+        if not ops.get("measure_concept"):
+            ops["measure_concept"] = "sales"
+        if not ops.get("aggregation"):
+            ops["aggregation"] = "SUM"
+
+    elif not years and (
+        re.search(r"\b(year[- ]over[- ]year|yoy)\b", ql)
+        or (
+            ops.get("contribution")
+            or re.search(r"\b(why\s+did|what\s+caused)\b", ql)
+        )
+        and re.search(r"\b(revenue|sales)\b", ql)
+        and re.search(_decline_cue + r"|" + _growth_cue, ql)
+    ):
+        # Explicit YoY OR clear investigation without years → resolve latest two years at plan time.
+        decline = bool(re.search(_decline_cue, ql))
+        ops["period_compare"] = {
+            "type": "period_change",
+            "requires_two_periods": True,
+            "op": "decline" if decline else "growth",
+            "condition": "decreased" if decline else "increased",
+            "calculation": "difference",
+            "contribution": bool(ops.get("contribution") or re.search(r"\b(why|caused|contribut)\b", ql)),
+            "investigation": True,
+        }
+        ops["compare"] = True
+        ops["growth"] = True
+        ops["contribution"] = True
+        ops.pop("clarification", None)
+        if not group_by:
+            group_by.append("customer")
+            ops["group_by"] = group_by
+        if not ops.get("ranking"):
+            ops["ranking"] = {"direction": "ASC" if decline else "DESC", "limit": 10}
+        if not ops.get("measure_concept"):
+            ops["measure_concept"] = "sales"
+        if not ops.get("aggregation"):
+            ops["aggregation"] = "SUM"
+    elif ops.get("growth") and not years and not ops.get("contribution") and re.search(
         r"\b(sales growth|revenue growth|highest sales growth|grew|growth)\b",
         ql,
     ):
@@ -413,8 +576,17 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             ),
         }
         ops["compare"] = True
-        # Keep growth flag for validators, but do not fabricate period_compare years.
         ops["period_compare"] = None
+    elif ops.get("compare") and years and len(set(years)) >= 2 and not ops.get("period_compare"):
+        ordered = sorted(set(years))
+        ops["period_compare"] = {
+            "type": "period_change",
+            "base_period": {"year": ordered[0]},
+            "comparison_period": {"year": ordered[-1]},
+            "op": "growth",
+            "condition": "increased",
+            "calculation": "difference",
+        }
 
     if re.search(r"\b(above|over|greater than|higher than)\s+(?:the\s+)?average\b", ql):
         ops["comparison_filter"] = {"type": "above_average"}
@@ -565,6 +737,10 @@ def merge_semantic_requirements(
         req["negation"] = dict(ops["negation"])
     if ops.get("period_compare"):
         req["period_compare"] = dict(ops["period_compare"])
+    if ops.get("contribution"):
+        req["contribution"] = True
+        if isinstance(req.get("period_compare"), dict):
+            req["period_compare"]["contribution"] = True
     if ops.get("clarification"):
         req["clarification"] = dict(ops["clarification"])
     if ops.get("having_distinct"):

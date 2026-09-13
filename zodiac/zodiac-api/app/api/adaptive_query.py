@@ -1200,6 +1200,7 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         prepare_sql_for_sqlalchemy_text_execution,
     )
     from ..services.sap_sql_agent import _quote_catalog_sql_tables
+    from ..services.adaptive_trusted_scope import enforce_trusted_user_scope
 
     sanitized = sanitize_generated_sap_sql(sql, question or None)
     # PostgreSQL stores uppercase SAP tables as quoted identifiers ("VBRK");
@@ -1208,6 +1209,12 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         sanitized = _quote_catalog_sql_tables(sanitized)
     except Exception:
         pass
+    # Trusted identity binding for user-scoped app tables (never LLM-chosen).
+    bind_params: Dict[str, Any] = {}
+    try:
+        sanitized, bind_params = enforce_trusted_user_scope(sanitized)
+    except PermissionError as denied:
+        raise HTTPException(status_code=403, detail=str(denied)) from denied
     safe = prepare_sql_for_sqlalchemy_text_execution(sanitized)
     try:
         db.rollback()
@@ -1220,7 +1227,7 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     if budget is not None:
         apply_statement_timeout(db, timeout_ms=budget.statement_timeout_ms())
         budget.checkpoint("db_execute")
-    result = db.execute(text(safe))
+    result = db.execute(text(safe), bind_params or {})
     rows = result.fetchall()
     keys = list(result.keys())
 
@@ -2485,7 +2492,21 @@ def _followup_analysis(question: str, prev_q: str, prev_sql: str,
 @router.get("/api/query/health")
 async def adaptive_query_health() -> Dict[str, Any]:
     s = _load_schema()
-    return {"status": "ok", "tables": len(s), "columns": sum(len(v) for v in s.values())}
+    # Deployment identity: prefer Vercel/git env; fallback to static marker bumped with AI releases.
+    build_id = (
+        os.getenv("VERCEL_GIT_COMMIT_SHA")
+        or os.getenv("GIT_COMMIT")
+        or os.getenv("COMMIT_SHA")
+        or ""
+    ).strip()
+    return {
+        "status": "ok",
+        "tables": len(s),
+        "columns": sum(len(v) for v in s.values()),
+        "build_id": build_id[:40] if build_id else None,
+        "ai_release": "adaptive-trusted-scope-v1",
+        "trusted_scope": True,
+    }
 
 
 @router.get("/api/query/schema-diagnostics")
@@ -2672,6 +2693,29 @@ def post_query_adaptive(
     if len(q) > 4000:
         raise HTTPException(status_code=400, detail="question_too_long (max 4000)")
 
+    # Bind trusted execution scope for this request (never LLM-chosen).
+    from ..services.adaptive_trusted_scope import (
+        TrustedAiExecutionScope,
+        classify_cross_user_attempt,
+        reset_trusted_scope,
+        set_trusted_scope,
+    )
+    from ..core.workspace.context import list_assigned_customer_ids
+
+    _scope_token = None
+    try:
+        uid = int(getattr(current_user, "id", 0) or 0)
+        allowed: List[str] = []
+        try:
+            allowed = list_assigned_customer_ids(db, current_user) if current_user is not None else []
+        except Exception:
+            allowed = []
+        _scope_token = set_trusted_scope(
+            TrustedAiExecutionScope(user_id=uid, allowed_customer_ids=allowed)
+        )
+    except Exception as scope_exc:
+        logger.warning("[adaptive] trusted scope bind failed: %s", scope_exc)
+
     # Normalize interrogative sales/revenue ranking phrasings ("which customer had
     # the highest sales?") to the governed canonical form before routing. The
     # user's original wording is preserved for display/history.
@@ -2685,6 +2729,39 @@ def post_query_adaptive(
         logger.warning("[adaptive] ranking normalizer failed: %s", _norm_err)
         q = _original_question
 
+    try:
+        return _post_query_adaptive_body(
+            q=q,
+            original_question=_original_question,
+            tableHint=tableHint,
+            contextData=contextData,
+            overrideSql=overrideSql,
+            threadId=threadId,
+            investigationId=investigationId,
+            db=db,
+            current_user=current_user,
+        )
+    finally:
+        if _scope_token is not None:
+            try:
+                reset_trusted_scope(_scope_token)
+            except Exception:
+                pass
+
+
+def _post_query_adaptive_body(
+    *,
+    q: str,
+    original_question: str,
+    tableHint: Optional[str],
+    contextData: Optional[Dict[str, Any]],
+    overrideSql: Optional[str],
+    threadId: Optional[str],
+    investigationId: Optional[str],
+    db: Session,
+    current_user: ZodiacUser,
+) -> Dict[str, Any]:
+    _original_question = original_question
     openai_key = (
         os.getenv("OPENAI_API_KEY") or os.getenv("OPEN_AI_KEY") or OPENAI_API_KEY or ""
     ).strip()
@@ -2857,20 +2934,53 @@ def post_query_adaptive(
 
     # ── Path 1: Execute user-provided SQL directly ──────────────────────────
     if overrideSql and overrideSql.strip():
+        # Public AI Analyst must not accept client SQL. Admin-only escape hatch
+        # still runs under TrustedAiExecutionScope (never unscoped).
+        if not bool(getattr(current_user, "is_admin", False)):
+            raise HTTPException(
+                status_code=403,
+                detail="overrideSql is not available on the public adaptive endpoint",
+            )
         sql_up = overrideSql.upper().strip()
         if not sql_up.startswith("SELECT"):
             raise HTTPException(status_code=400, detail="overrideSql must be SELECT")
         for d in ["DELETE","UPDATE","DROP","ALTER","TRUNCATE","INSERT","CREATE","EXEC","GRANT","REVOKE"]:
             if re.search(r'\b' + d + r'\b', sql_up):
                 raise HTTPException(status_code=400, detail=f"Forbidden keyword: {d}")
+        from ..services.adaptive_trusted_scope import (
+            classify_cross_user_attempt,
+            get_trusted_scope,
+            touches_user_scoped_table,
+        )
+
+        scope = get_trusted_scope()
+        if scope is None or int(getattr(scope, "user_id", 0) or 0) <= 0:
+            raise HTTPException(
+                status_code=403,
+                detail="DENIED: overrideSql requires authenticated trusted scope",
+            )
+        cross_attempt = classify_cross_user_attempt(overrideSql, scope)
+        if cross_attempt:
+            logger.warning(
+                "[adaptive] cross-user override attempt classified=%s user_id=%s",
+                cross_attempt,
+                getattr(scope, "user_id", None),
+            )
+        # User-scoped app tables must run on the app DB with trusted scope.
+        use_app_db = touches_user_scoped_table(overrideSql) or not USE_SAP_DB_FOR_AI
         sess = None
         try:
-            sess = get_sap_session() if USE_SAP_DB_FOR_AI else db
-            data = _execute_sql(sess if USE_SAP_DB_FOR_AI else db, overrideSql, q)
+            if use_app_db:
+                data = _execute_sql(db, overrideSql, q)
+            else:
+                sess = get_sap_session()
+                data = _execute_sql(sess if sess is not None else db, overrideSql, q)
         finally:
-            if USE_SAP_DB_FOR_AI and sess is not None:
-                try: sess.close()
-                except Exception: pass
+            if sess is not None:
+                try:
+                    sess.close()
+                except Exception:
+                    pass
         summary = f"Custom SQL executed. {len(data)} row(s) returned."
         try:
             from openai import OpenAI
@@ -2885,11 +2995,21 @@ def post_query_adaptive(
                 **openai_completion_limit_kwargs(fast_model, 200),
             )
             summary = r.choices[0].message.content.strip() or summary
-        except Exception: pass
+        except Exception:
+            pass
         charts = _ensure_charts(q, overrideSql, data, [])
         return _persist_and_return({
-            "sql": overrideSql, "rowCount": len(data), "data": data,
-            "summary": summary, "tableHint": tableHint, "charts": charts,
+            "sql": overrideSql,
+            "rowCount": len(data),
+            "data": data,
+            "summary": summary,
+            "tableHint": tableHint,
+            "charts": charts,
+            "meta": {
+                "trusted_scope": scope.to_public_dict(),
+                "cross_user_attempt": cross_attempt,
+            },
+            "answer_status": "SUCCESS",
         })
 
     from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
@@ -3079,6 +3199,25 @@ def post_query_adaptive(
                             orch_status,
                         )
                         return _persist_and_return(orch)
+                    # Guard: never surface a DB investigation failure for a
+                    # non-database turn (capability / general knowledge).
+                    from ..services.adaptive_nl_sql_hardening import (
+                        clarification_payload,
+                        question_requires_database,
+                    )
+
+                    if not question_requires_database(clean_q) and orch_status in {
+                        "CANNOT_ANSWER",
+                        "ERROR",
+                        "TIMEOUT",
+                    }:
+                        logger.warning(
+                            "[adaptive] recovering general turn from orch status=%s",
+                            orch_status,
+                        )
+                        return _persist_and_return(
+                            clarification_payload(clean_q, turn.reason or "capability_meta")
+                        )
                     return _persist_and_return(orch)
                 logger.info(
                     "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s status=%s",

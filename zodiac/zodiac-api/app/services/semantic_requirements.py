@@ -259,6 +259,7 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         "having_distinct": having_distinct,
         "growth": bool(ops.get("growth") or period),
         "share": bool(ops.get("share") or sem.get("share")),
+        "contribution": bool(ops.get("contribution") or (isinstance(period, dict) and period.get("contribution"))),
         "question": question,
         "semantic": sem,
     }

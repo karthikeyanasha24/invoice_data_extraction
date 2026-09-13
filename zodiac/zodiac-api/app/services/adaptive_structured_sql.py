@@ -639,6 +639,16 @@ def extract_ranking_limit(question: str, default: int = 10) -> int:
     )
     if m:
         return _NUMBER_WORDS[m.group(1)]
+    # "five customers … most revenue" / "which five biggest customers"
+    m = re.search(
+        rf"\b({words}|\d{{1,3}})\s+"
+        rf"(?:(?:biggest|largest|top|best|highest|leading)\s+)?"
+        rf"(?:customers?|clients?|buyers?|vendors?|suppliers?|products?|materials?|countries)\b",
+        q,
+    )
+    if m and re.search(r"\b(most|biggest|largest|highest|top|revenue|sales|brought)\b", q):
+        raw = m.group(1)
+        return max(1, min(int(_NUMBER_WORDS.get(raw, raw)), 500))
     # Singular "top country/customer/…" without an explicit N ⇒ top-1.
     if re.search(
         r"\btop\s+(country|customer|client|buyer|material|product|supplier|vendor|industry)\b",
@@ -1086,7 +1096,12 @@ def build_period_sales_sql(
         return None
 
     years = extract_question_years(question)
-    wants_month = bool(re.search(r"\b(month|monthly|per month|by month|each month)\b", q))
+    wants_month = bool(
+        re.search(
+            r"\b(month|monthly|per month|by month|each month|month by month)\b",
+            q,
+        )
+    )
     wants_quarter = bool(re.search(r"\b(quarter|quarterly|per quarter|by quarter|each quarter)\b", q))
     wants_year = bool(re.search(r"\b(year|yearly|annual|annually|by year|per year)\b", q))
     wants_compare = bool(re.search(r"\b(compare|comparison|versus|vs\.?|trend|over time)\b", q))
@@ -1127,8 +1142,16 @@ def build_period_compare_sql(
     question: str,
     tables: List[str],
     semantic: Optional[Dict[str, Any]] = None,
+    *,
+    aggregate_only: bool = False,
+    force_dims: Optional[List[str]] = None,
 ) -> Optional[str]:
-    """Generic period-change SQL from semantic period_compare (any year pair)."""
+    """Generic period-change SQL from semantic period_compare (any year pair).
+
+    When aggregate_only=True, emit a single totals row (confirm-direction gate)
+    with no entity GROUP BY — used by investigation re-planning.
+    When force_dims is set, use those dimensions (investigation grain switch).
+    """
     from .semantic_requirements import required_semantics
 
     req = required_semantics(question, semantic)
@@ -1161,11 +1184,26 @@ def build_period_compare_sql(
     hdr = resolve_table_name("VBRK") or "VBRK"
     net = f'CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC)'
     yexpr = 'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4)'
-    dims = [
-        d
-        for d in (req.get("group_by") or req.get("dimensions") or [])
-        if d not in {"year", "month", "quarter"}
-    ]
+    if aggregate_only:
+        period_a = f"SUM(CASE WHEN {yexpr} = '{y_a}' THEN {net} ELSE 0 END)"
+        period_b = f"SUM(CASE WHEN {yexpr} = '{y_b}' THEN {net} ELSE 0 END)"
+        change = f"({period_b} - {period_a})"
+        return (
+            f'SELECT {period_a} AS "period_a", {period_b} AS "period_b", '
+            f'{change} AS "change"\n'
+            f'FROM "{hdr}" k\n'
+            f"WHERE NULLIF(TRIM(CAST(k.\"fkdat\" AS TEXT)), '') IS NOT NULL\n"
+            f"  AND {yexpr} IN ('{y_a}', '{y_b}')"
+        )
+
+    if force_dims is not None:
+        dims = [d for d in force_dims if d not in {"year", "month", "quarter"}]
+    else:
+        dims = [
+            d
+            for d in (req.get("group_by") or req.get("dimensions") or [])
+            if d not in {"year", "month", "quarter"}
+        ]
     if not dims:
         if re.search(r"\bcustomers?\b", question or "", re.I):
             dims = ["customer"]
@@ -1173,6 +1211,19 @@ def build_period_compare_sql(
             dims = ["country"]
         elif re.search(r"\b(materials?|products?)\b", question or "", re.I):
             dims = ["material"]
+        elif period.get("contribution") or req.get("contribution") or re.search(
+            r"\b(why\s+did|contribut\w*|accounted for)\b", question or "", re.I
+        ):
+            dims = ["customer"]
+        elif re.search(
+            r"\b(how much|what (was|were) the (change|difference)|did .+ (increase|decrease)|better than|worse than)\b",
+            question or "",
+            re.I,
+        ):
+            # Scalar period change — no entity grain.
+            return build_period_compare_sql(
+                question, tables, semantic, aggregate_only=True
+            )
         else:
             dims = ["customer"]
 
@@ -1248,12 +1299,25 @@ def build_period_compare_sql(
         order_dir = "DESC"
     else:
         order_dir = "DESC"
-    # "Largest decline" / "grew the most" → top-1 by |change| with matching sign.
+    # "Largest decline" / "grew the most" / contribution ranking → top-N by change.
     lim = 50
-    if re.search(r"\b(largest|biggest|strongest|most)\b", ql) and re.search(
-        r"\b(declin|decreas|growth|grew|increase)\b", ql
+    ranking = req.get("ranking") if isinstance(req.get("ranking"), dict) else None
+    if ranking and ranking.get("limit"):
+        lim = int(ranking["limit"])
+    elif re.search(r"\b(largest|biggest|strongest|most)\b", ql) and re.search(
+        r"\b(declin|decreas|growth|grew|increase|contribut)\b", ql
     ):
         lim = extract_ranking_limit(question, default=1)
+    want_contribution = bool(
+        period.get("contribution")
+        or (req.get("contribution") if isinstance(req, dict) else False)
+        or re.search(r"\b(contribut\w*|why\s+did|what\s+caused)\b", ql)
+    )
+    if want_contribution:
+        sel.append(
+            f'ROUND(100.0 * {change} / NULLIF(SUM({change}) OVER (), 0), 2) AS "contribution_pct"'
+        )
+        lim = min(max(int(lim), 5), 50)
     sql = (
         f"SELECT {', '.join(sel)}\n"
         + "\n".join(joins) + "\n"
@@ -1867,17 +1931,27 @@ def build_total_measure_sql(
 ) -> Optional[str]:
     """Single-number totals such as 'what were total billed sales in 2003'."""
     q = (question or "").lower()
-    if not re.search(r"\b(total|sum of|how much|overall|altogether|combined)\b", q):
+    scalar_cue = bool(
+        re.search(
+            r"\b(total|sum of|how much|overall|altogether|combined|"
+            r"what (was|were)|how much money|generate[d]? during)\b",
+            q,
+        )
+    )
+    if not scalar_cue:
         return None
     if _SUPERLATIVE.search(q) or re.search(r"\btop\s+\d+\b", q):
         return None
+    # Reject dimensional / trend questions (keep totals scalar).
     if re.search(
         r"\b(by |per |each |customer|customers|country|countries|industr|material|product|"
-        r"year|month|quarter|vendor)\b",
+        r"month|monthly|quarter|vendor|trend)\b",
         q,
     ):
         return None
-    if not re.search(r"\b(sales|revenue|billing|billed|turnover)\b", q):
+    if re.search(r"\bby year\b|\bper year\b|\beach year\b", q):
+        return None
+    if not re.search(r"\b(sales|revenue|billing|billed|turnover|money|generat)\b", q):
         return None
     if not has_table("VBRK") or not has_column("VBRK", "netwr"):
         return None
