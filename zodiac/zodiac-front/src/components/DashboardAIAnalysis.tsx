@@ -168,6 +168,9 @@ type QueryResult = {
     warnings?: string[];
     deep_analysis?: boolean;
     mode?: string;
+    investigation_status?: string;
+    failure_class?: string;
+    data_gap?: boolean;
   };
 };
 type Message = {
