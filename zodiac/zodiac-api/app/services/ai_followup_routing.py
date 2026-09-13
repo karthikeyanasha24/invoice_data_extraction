@@ -363,6 +363,15 @@ def should_route_to_general_chat(
         question_requires_database,
     )
 
+    try:
+        from .adaptive_analyst.database_metadata import is_database_metadata_question
+
+        # Metadata has its own path; do not send to free-form chat or metric clarification.
+        if is_database_metadata_question(question) or turn.reason == "database_metadata":
+            return False
+    except Exception:
+        pass
+
     if is_prior_general_chat(previous_plan, previous_status, previous_sql):
         return True
     if is_greeting_or_chitchat(question):
@@ -373,8 +382,13 @@ def should_route_to_general_chat(
         TurnIntent.NON_BUSINESS,
         TurnIntent.CLARIFICATION_REQUIRED,
     }:
+        if turn.reason == "database_metadata":
+            return False
         return True
-    if turn.intent == TurnIntent.NON_BUSINESS and turn.reason != "unsafe_or_non_business":
+    if turn.intent == TurnIntent.NON_BUSINESS and turn.reason not in {
+        "unsafe_or_non_business",
+        "database_metadata",
+    }:
         return True
     if turn.intent == TurnIntent.CLARIFICATION_REQUIRED and turn.reason in {
         "no_business_signal",
@@ -411,6 +425,13 @@ def classify_turn(
         return TurnClassification(TurnIntent.NON_BUSINESS, "capability_meta")
     if is_general_knowledge_question(q) and not has_active:
         return TurnClassification(TurnIntent.NON_BUSINESS, "general_knowledge")
+    try:
+        from .adaptive_analyst.database_metadata import is_database_metadata_question
+
+        if is_database_metadata_question(q):
+            return TurnClassification(TurnIntent.NON_BUSINESS, "database_metadata")
+    except Exception:
+        pass
     if _NON_ANALYTICAL_TOPIC.search(ql):
         return TurnClassification(TurnIntent.NON_BUSINESS, "non_analytical_topic")
 
@@ -424,6 +445,7 @@ def classify_turn(
             "greeting",
             "capability_meta",
             "general_knowledge",
+            "database_metadata",
         }:
             return TurnClassification(TurnIntent.NON_BUSINESS, gate_reason)
         if _AMBIGUOUS_TURN.match(q):

@@ -212,6 +212,14 @@ def question_requires_database(question: str) -> bool:
         return False
     if is_general_knowledge_question(question):
         return False
+    try:
+        from .adaptive_analyst.database_metadata import is_database_metadata_question
+
+        # Metadata is answered from the schema catalog, not fact-table SQL.
+        if is_database_metadata_question(question):
+            return False
+    except Exception:
+        pass
     allowed, _reason = is_supported_business_question(question)
     return bool(allowed)
 
@@ -777,7 +785,15 @@ def is_supported_business_question(
         return False, "non_business"
     if re.search(r"\b(drop|truncate|delete from|alter table)\b", ql) and "invoice" not in ql:
         return False, "unsafe_or_non_business"
-    # Schema questions are business-adjacent and allowed (answered without SAP fact SQL).
+    # Schema/catalog introspection is its own capability (not business-metric SQL).
+    try:
+        from .adaptive_analyst.database_metadata import is_database_metadata_question
+
+        if is_database_metadata_question(q):
+            return False, "database_metadata"
+    except Exception:
+        pass
+    # Legacy schema-structure cues still allowed for the dedicated schema path.
     if re.search(r"\b(which tables?|what columns?|data type|schema|shared columns)\b", ql):
         return True, "schema"
     # Governed deep-analytical follow-ups bypass the generic NL length gate.
@@ -824,6 +840,25 @@ def greeting_welcome_payload(question: str) -> Dict[str, Any]:
 def clarification_payload(question: str, reason: str) -> Dict[str, Any]:
     if reason == "greeting" or is_greeting_or_chitchat(question):
         return greeting_welcome_payload(question)
+    try:
+        from .adaptive_analyst.database_metadata import (
+            answer_database_metadata,
+            is_database_metadata_question,
+        )
+
+        if reason == "database_metadata" or is_database_metadata_question(question):
+            schema: Dict[str, Any] = {}
+            try:
+                from ..data_catalog.physical import load_physical_schema
+
+                schema = load_physical_schema() or {}
+            except Exception:
+                schema = {}
+            payload = answer_database_metadata(question, schema=schema)
+            if payload is not None:
+                return payload
+    except Exception:
+        pass
     if reason in {"capability_meta"} or is_capability_or_help_question(question):
         try:
             from ..data_catalog.capability import capability_summary
