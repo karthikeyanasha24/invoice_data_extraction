@@ -2504,8 +2504,9 @@ async def adaptive_query_health() -> Dict[str, Any]:
         "tables": len(s),
         "columns": sum(len(v) for v in s.values()),
         "build_id": build_id[:40] if build_id else None,
-        "ai_release": "adaptive-trusted-scope-v1",
+        "ai_release": "adaptive-metadata-v1",
         "trusted_scope": True,
+        "database_metadata": True,
     }
 
 
@@ -3015,6 +3016,20 @@ def _post_query_adaptive_body(
     from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
+
+    # DATABASE_METADATA: schema/catalog introspection (not business analytics).
+    try:
+        from ..services.adaptive_analyst.database_metadata import (
+            answer_database_metadata,
+            is_database_metadata_question,
+        )
+
+        if is_database_metadata_question(clean_q):
+            meta_payload = answer_database_metadata(clean_q, schema=_load_schema())
+            if meta_payload is not None:
+                return _persist_and_return(meta_payload)
+    except Exception as meta_err:
+        logger.warning("[adaptive] database_metadata path failed: %s", meta_err)
 
     if _looks_like_schema_structure_question(clean_q):
         return _persist_and_return(_build_schema_structure_payload(clean_q))
