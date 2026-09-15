@@ -118,3 +118,66 @@ def test_orchestrator_force_general_overrides_query_action(monkeypatch) -> None:
     assert out["answer_status"] == "SUCCESS"
     assert not out.get("sql")
     assert "didn't catch a business metric" not in (out.get("summary") or "").lower()
+
+
+def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -> None:
+    """Regression: nested import must not UnboundLocalError on GENERAL_CHAT / clarification.
+
+    Production HTTP 500 on hai / capability / 'Show me the growth.' was caused by a
+    local ``from ... import clarification_payload, question_requires_database`` inside
+    ``_post_query_adaptive_body`` that shadowed the module-level names for the whole
+    function before that import ran.
+    """
+    from unittest.mock import MagicMock
+
+    import app.api.adaptive_query as aq
+
+    class _User:
+        id = 1
+        is_admin = True
+
+    monkeypatch.setenv("OPEN_AI_KEY", "sk-test")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test")
+    monkeypatch.setattr(aq, "USE_SAP_DB_FOR_AI", False, raising=False)
+    monkeypatch.setattr(aq, "_load_schema", lambda: {})
+    monkeypatch.setattr(aq, "_looks_like_schema_structure_question", lambda _q: False)
+    monkeypatch.setattr(
+        "app.services.operational_query_resolver.resolve_operational_query",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "app.services.adaptive_analyst.orchestrator_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ai_native_pipeline.ai_native_enabled",
+        lambda: False,
+    )
+
+    cases = [
+        ("hai", {"SUCCESS", "CLARIFICATION"}),
+        ("What can I ask?", {"SUCCESS"}),
+        ("What can you answer?", {"SUCCESS"}),
+        ("Can you answer anything?", {"SUCCESS"}),
+        ("you can answer anything?", {"SUCCESS"}),
+        ("What are your capabilities?", {"SUCCESS"}),
+        ("What are you able to answer?", {"SUCCESS"}),
+        ("What is SAP?", {"SUCCESS", "CLARIFICATION"}),
+        ("Show me the growth.", {"CLARIFICATION"}),
+        ("How much?", {"CLARIFICATION"}),
+    ]
+    for q, allowed in cases:
+        out = aq._post_query_adaptive_body(
+            q=q,
+            original_question=q,
+            tableHint=None,
+            contextData=None,
+            overrideSql=None,
+            threadId=None,
+            investigationId="reg-unbound",
+            db=MagicMock(),
+            current_user=_User(),
+        )
+        status = str(out.get("answer_status") or "").upper()
+        assert status in allowed, (q, status, out.get("summary"))
+        assert status != "ERROR", q

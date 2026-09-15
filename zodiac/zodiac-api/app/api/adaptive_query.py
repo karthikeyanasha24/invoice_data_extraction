@@ -3266,11 +3266,10 @@ def _post_query_adaptive_body(
                         return _persist_and_return(orch)
                     # Guard: never surface a DB investigation failure for a
                     # non-database turn (capability / general knowledge).
-                    from ..services.adaptive_nl_sql_hardening import (
-                        clarification_payload,
-                        question_requires_database,
-                    )
-
+                    # Use module-level imports — a local import here would make
+                    # clarification_payload / question_requires_database local
+                    # to the whole function and raise UnboundLocalError on the
+                    # authoritative GENERAL_CHAT / clarification early paths.
                     if not question_requires_database(clean_q) and orch_status in {
                         "CANNOT_ANSWER",
                         "ERROR",
