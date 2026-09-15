@@ -104,9 +104,31 @@ def test_business_analytics_not_capability() -> None:
 
 def test_orchestrator_force_general_overrides_query_action(monkeypatch) -> None:
     """force_general_chat must win over adapt_user_turn action=query."""
+    import app.services.adaptive_analyst.understanding as und
+
+    def fake_json(system: str, user: str):
+        return {
+            "intent": "capability",
+            "goal": "capabilities",
+            "requires_database": False,
+            "requires_metadata": False,
+            "requires_conversation_context": False,
+            "entities": [],
+            "metric": None,
+            "dimension": None,
+            "time_scope": None,
+            "operation": None,
+            "clarification_needed": False,
+            "clarification_question": None,
+        }, "mock"
+
+    def fake_text(system: str, user: str, **_k):
+        return ("I can help with governed analytics, metadata, and general questions.", "mock")
+
+    monkeypatch.setattr(und, "analyze_json", fake_json)
+    monkeypatch.setattr(und, "complete_text", fake_text)
+
     q = "you can answer anything?"
-    # Without force, older path treated this as query before capability expansion;
-    # with expansion adapt_user_turn is already chat — force still must be honored.
     out = run_adaptive_orchestrator(
         q,
         object(),
@@ -118,6 +140,7 @@ def test_orchestrator_force_general_overrides_query_action(monkeypatch) -> None:
     assert out["answer_status"] == "SUCCESS"
     assert not out.get("sql")
     assert "didn't catch a business metric" not in (out.get("summary") or "").lower()
+    assert out["meta"]["understanding_model_called"] is True
 
 
 def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -> None:
@@ -131,15 +154,62 @@ def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -
     from unittest.mock import MagicMock
 
     import app.api.adaptive_query as aq
+    import app.services.adaptive_analyst.understanding as und
 
     class _User:
         id = 1
         is_admin = True
 
+    def fake_json(system: str, user: str):
+        cur = user.rsplit("Current user message:\n", 1)[-1].strip().lower()
+        if "growth" in cur or cur in {"how much?", "how much"}:
+            intent = "clarification"
+            clar = True
+            cq = "Which metric and time period should I use?"
+        elif "sap" in cur:
+            intent = "knowledge"
+            clar = False
+            cq = None
+        elif "table" in cur:
+            intent = "metadata"
+            clar = False
+            cq = None
+        elif "customer" in cur or "billing" in cur:
+            intent = "analytics"
+            clar = False
+            cq = None
+        elif "answer" in cur or "capabilities" in cur or "able to" in cur:
+            intent = "capability"
+            clar = False
+            cq = None
+        else:
+            intent = "conversation"
+            clar = False
+            cq = None
+        return {
+            "intent": intent,
+            "goal": cur[:80],
+            "requires_database": intent in {"analytics", "clarification"},
+            "requires_metadata": intent == "metadata",
+            "requires_conversation_context": False,
+            "entities": [],
+            "metric": None,
+            "dimension": None,
+            "time_scope": None,
+            "operation": "count_tables" if intent == "metadata" else None,
+            "clarification_needed": clar,
+            "clarification_question": cq,
+        }, "mock"
+
+    def fake_text(system: str, user: str, **_k):
+        return ("Natural LLM reply grounded in capability facts where provided.", "mock")
+
+    monkeypatch.setattr(und, "analyze_json", fake_json)
+    monkeypatch.setattr(und, "complete_text", fake_text)
     monkeypatch.setenv("OPEN_AI_KEY", "sk-test")
     monkeypatch.setenv("GOOGLE_API_KEY", "test")
     monkeypatch.setattr(aq, "USE_SAP_DB_FOR_AI", False, raising=False)
-    monkeypatch.setattr(aq, "_load_schema", lambda: {})
+    monkeypatch.setattr(aq, "_load_schema", lambda: {"VBAK": [{"col": "VBELN"}]})
     monkeypatch.setattr(aq, "_looks_like_schema_structure_question", lambda _q: False)
     monkeypatch.setattr(
         "app.services.operational_query_resolver.resolve_operational_query",
@@ -153,6 +223,20 @@ def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -
         "app.services.ai_native_pipeline.ai_native_enabled",
         lambda: False,
     )
+    monkeypatch.setattr(
+        "app.services.adaptive_analyst.database_metadata.answer_database_metadata",
+        lambda q, schema=None: {
+            "answer_status": "SUCCESS",
+            "mode": "database_metadata",
+            "route": "database_metadata",
+            "sql": "",
+            "data": [{"n": 1}],
+            "rowCount": 1,
+            "summary": "There are tables available.",
+            "answer": "There are tables available.",
+            "meta": {"operation": "COUNT_TABLES"},
+        },
+    )
 
     cases = [
         ("hai", {"SUCCESS", "CLARIFICATION"}),
@@ -165,6 +249,8 @@ def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -
         ("What is SAP?", {"SUCCESS", "CLARIFICATION"}),
         ("Show me the growth.", {"CLARIFICATION"}),
         ("How much?", {"CLARIFICATION"}),
+        ("How many tables are there?", {"SUCCESS"}),
+        ("Show top 5 customers by billing revenue.", {"SUCCESS", "CANNOT_ANSWER", "CLARIFICATION"}),
     ]
     for q, allowed in cases:
         out = aq._post_query_adaptive_body(

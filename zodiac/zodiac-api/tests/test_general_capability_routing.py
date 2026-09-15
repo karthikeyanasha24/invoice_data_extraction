@@ -88,7 +88,31 @@ def test_investigation_why_still_needs_database():
 
 def test_orchestrator_what_can_i_ask_skips_sql(monkeypatch):
     """Capability turns must not enter SQL / four-stage."""
+    import app.services.adaptive_analyst.understanding as und
+
     called = {"db": False}
+
+    def fake_json(system: str, user: str):
+        return {
+            "intent": "capability",
+            "goal": "capabilities",
+            "requires_database": False,
+            "requires_metadata": False,
+            "requires_conversation_context": False,
+            "entities": [],
+            "metric": None,
+            "dimension": None,
+            "time_scope": None,
+            "operation": None,
+            "clarification_needed": False,
+            "clarification_question": None,
+        }, "mock"
+
+    def fake_text(system: str, user: str, **_k):
+        return ("I can help with governed SAP analytics and schema metadata.", "mock")
+
+    monkeypatch.setattr(und, "analyze_json", fake_json)
+    monkeypatch.setattr(und, "complete_text", fake_text)
 
     def _boom(*_a, **_k):
         called["db"] = True
@@ -99,7 +123,6 @@ def test_orchestrator_what_can_i_ask_skips_sql(monkeypatch):
         _boom,
         raising=False,
     )
-    # Patch the import site used inside run_adaptive_orchestrator
     import app.services.adaptive_analyst.governed as gov
 
     monkeypatch.setattr(gov, "try_governed_database", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no db")))
@@ -117,3 +140,4 @@ def test_orchestrator_what_can_i_ask_skips_sql(monkeypatch):
     assert out["answer_status"] == "SUCCESS"
     assert not out.get("sql")
     assert called["db"] is False
+    assert out["meta"]["understanding_model_called"] is True

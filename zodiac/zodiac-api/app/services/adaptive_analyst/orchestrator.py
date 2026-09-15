@@ -284,20 +284,26 @@ def _force_general_chat(question: str) -> bool:
     return False
 
 
-def _capability_reply(question: str) -> Optional[str]:
-    from ..adaptive_nl_sql_hardening import is_capability_or_help_question
+def _prior_summary_from_state(state: "InvestigationState", prior_plan: Optional[Dict[str, Any]]) -> str:
+    if (state.last_summary or "").strip():
+        return state.last_summary.strip()
+    plan = prior_plan if isinstance(prior_plan, dict) else {}
+    inv = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
+    return str(inv.get("last_summary") or "").strip()
 
-    if not is_capability_or_help_question(question):
-        return None
-    try:
-        from ...data_catalog.capability import capability_summary
 
-        return capability_summary()
-    except Exception:
-        return (
-            "I can answer governed questions about sales, billing, purchasing, customers, "
-            "products, and inventory in this workspace. Ask a metric with a dimension or period."
-        )
+def _attach_understanding_meta(payload: Dict[str, Any], understanding: Any) -> Dict[str, Any]:
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    public = understanding.to_public_dict() if hasattr(understanding, "to_public_dict") else {}
+    payload["meta"] = {
+        **meta,
+        "understanding_model_called": bool(getattr(understanding, "understanding_model_called", False)),
+        "understanding_result": public,
+        "selected_capability": str(getattr(understanding, "intent", "") or meta.get("selected_capability") or ""),
+    }
+    qp = payload.get("query_plan") if isinstance(payload.get("query_plan"), dict) else {}
+    payload["query_plan"] = {**qp, "understanding": public}
+    return payload
 
 
 def _general_chat_prompt(question: str, state: "InvestigationState") -> str:
@@ -622,7 +628,17 @@ def run_adaptive_orchestrator(
     thread_id: str = "",
     prior_status: str = "",
     force_general_chat: bool = False,
+    schema_for_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    from .understanding import (
+        analytics_clarification_payload,
+        capability_facts,
+        generate_grounded_response,
+        technical_understanding_failure,
+        understand_turn,
+    )
+    from ..ai_followup_routing import is_prior_general_chat
+
     q = (question or "").strip()
     adapted = adapt_user_turn(
         q,
@@ -630,29 +646,54 @@ def run_adaptive_orchestrator(
         prior_plan=prior_plan,
         prior_status=prior_status,
     )
-    # Authoritative general-chat route from the API classifier must not be
-    # overridden by adapt_user_turn() returning action=query.
-    if force_general_chat or _force_general_chat(q):
-        adapted = AdaptedTurn("chat", q, drop_prior=adapted.drop_prior)
-    q = adapted.question
-    if adapted.drop_prior:
-        prior_question = ""
-        prior_sql = ""
-        prior_plan = None
-        prior_rows = []
-    state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
-    if thread_id:
-        state.conversation_id = thread_id
+    # Fast greeting path only (latency). Everything else uses LLM understanding.
+    greeting_fast = _deterministic_greeting_reply(q)
+    if greeting_fast and not force_general_chat and not is_prior_general_chat(
+        prior_plan, prior_status, prior_sql
+    ):
+        state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
+        if thread_id:
+            state.conversation_id = thread_id
+        state.last_user_question = q
+        state.last_summary = greeting_fast[:2000]
+        return {
+            "mode": "general_chat",
+            "route": "general",
+            "status": "success",
+            "answer_status": "SUCCESS",
+            "failure_class": "SUCCESS",
+            "sql": "",
+            "data": [],
+            "rowCount": 0,
+            "summary": greeting_fast,
+            "answer": greeting_fast,
+            "keyFindings": [],
+            "charts": [],
+            "pipeline": "adaptive_orchestrator",
+            "sql_generation_method": "greeting_fast",
+            "llm_calls": 0,
+            "query_plan": {
+                "investigation_state": {**state.to_dict(), "mode": "general_chat"},
+                "last_mode": "general_chat",
+            },
+            "meta": {
+                "mode": "general_chat",
+                "selected_capability": "greeting",
+                "understanding_model_called": False,
+                "failure_class": "SUCCESS",
+            },
+            "suggested_followups": [
+                "What can you answer?",
+                "How many tables are there?",
+                "Show the top customers by billed sales.",
+            ],
+        }
 
-    from ...data_catalog.source_selector import (
-        _ambiguous_sales,
-        _explicit_invoice,
-        _explicit_sales_order,
-        _ql,
-        select_source,
-    )
-
+    # Sales-order vs billed choice remains a governed clarify (not LLM authorization).
     if adapted.action == "clarify":
+        state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
+        if thread_id:
+            state.conversation_id = thread_id
         return {
             "mode": "clarification",
             "route": "clarification",
@@ -676,115 +717,64 @@ def run_adaptive_orchestrator(
                 "How many sales orders are there?",
                 "Show the top customers by billed sales.",
             ],
+            "meta": {"selected_capability": "clarification", "understanding_model_called": False},
         }
 
-    if adapted.action == "chat":
-        skip_p1_clarify = True
-        p1 = {
-            "question_type": "general_conversation",
-            "route": "general",
-            "requires_database": False,
-            "clarification_needed": False,
-            "rewritten_question": q,
-            "reply": "",
-        }
-    else:
-        skip_p1_clarify = not adapted.is_fragment
-        if skip_p1_clarify:
-            p1 = {
-                "question_type": "database_question",
-                "route": "database",
-                "requires_database": True,
-                "clarification_needed": False,
-                "rewritten_question": q,
-                "intent": "turn_adapter",
-            }
-        else:
-            p1 = _pipeline1_understand(q, state, prior_rows or [])
-    qtype = str(p1.get("question_type") or "").lower()
-    route = str(p1.get("route") or "").lower()
-    requires_db = bool(p1.get("requires_database"))
-    if _force_general_chat(q) or adapted.action == "chat" or qtype in {
-        "greeting", "general_conversation", "general_knowledge", "capability_meta",
-    }:
-        requires_db = False
-        route = "general"
-    elif route == "general" or (p1.get("requires_database") is False and route != "clarification"):
-        requires_db = False
-    if route in {"database", "mixed"} and not _force_general_chat(q) and adapted.action != "chat":
-        requires_db = True
-    if qtype in {"business_question", "database_question", "follow_up_question", "comparison", "calculation"}:
-        if not _force_general_chat(q) and adapted.action != "chat":
-            requires_db = True
+    q = adapted.question
+    # Preserve conversation context for understanding — do not drop prior on
+    # standalone-looking chat follow-ups after general_chat.
+    prior_was_chat = is_prior_general_chat(prior_plan, prior_status, prior_sql)
+    if adapted.drop_prior and not prior_was_chat and not force_general_chat:
+        prior_question = ""
+        prior_sql = ""
+        prior_plan = None
+        prior_rows = []
+    state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
+    if thread_id:
+        state.conversation_id = thread_id
+    prior_summary = _prior_summary_from_state(state, prior_plan)
 
-    # Force DB only for clearly analytical turns. Never force DB for chat/capability.
-    skip_clarify = (
-        skip_p1_clarify
-        and adapted.action != "chat"
-        and not _force_general_chat(q)
-        and requires_db
+    from ...data_catalog.source_selector import (
+        _ambiguous_sales,
+        _explicit_invoice,
+        _explicit_sales_order,
+        _ql,
+        select_source,
     )
-    if skip_clarify:
-        requires_db = True
-        route = "database"
-    if (
-        (route == "clarification" or p1.get("clarification_needed"))
-        and not _force_general_chat(q)
-        and not skip_clarify
-    ):
-        msg = _short_clarification(
-            str(p1.get("clarification_question") or p1.get("reply") or "").strip()
-        )
-        if (
-            (_is_sales_vs_billing_clarify(msg) and not _ambiguous_sales(_ql(q)))
-            or _is_limit_clarify(msg)
-        ):
-            requires_db = True
-            route = "database"
-        else:
-            return {
-                "mode": "clarification",
-                "route": "clarification",
-                "status": "clarification",
-                "answer_status": "CLARIFICATION",
-                "type": "clarification",
-                "sql": "",
-                "data": [],
-                "rowCount": 0,
-                "summary": msg,
-                "answer": msg,
-                "keyFindings": [],
-                "pipeline": "adaptive_orchestrator",
-                "sql_generation_method": "pipeline1_clarification",
-                "llm_calls": 1,
-                "query_plan": {
-                    "investigation_state": state.to_dict(),
-                    "pipeline1": p1,
-                    "awaiting_sales_choice": _is_sales_vs_billing_clarify(msg),
-                },
-                "suggested_followups": [
-                    "Show the top customers by billed sales.",
-                    "How many sales orders are there?",
-                ],
-            }
 
-    if not requires_db:
-        capability = _capability_reply(q)
-        greeting = _deterministic_greeting_reply(q)
-        reply = capability or greeting or ""
-        if not reply:
-            reply = str(p1.get("reply") or "").strip()
-        llm_calls = 0
-        if not reply:
-            text, _ = complete_text(
-                _GENERAL_CHAT_SYSTEM,
-                _general_chat_prompt(q, state),
+    # ── LLM-first understanding (structured intent; not authorization) ──
+    try:
+        understanding = understand_turn(
+            q,
+            prior_question=prior_question,
+            prior_summary=prior_summary,
+            prior_plan=prior_plan if isinstance(prior_plan, dict) else None,
+            prior_status=prior_status,
+            capability_context=capability_facts(),
+        )
+    except Exception as understand_err:
+        return technical_understanding_failure(q, understand_err)
+
+    intent = understanding.intent
+    # Application capability selection (governed): map intent → safe path.
+    if intent in {"conversation", "knowledge", "capability"} or (
+        force_general_chat and intent not in {"analytics", "investigation", "metadata"}
+    ):
+        try:
+            # Capability intent always receives structured capability facts.
+            resp_evidence = capability_facts() if intent == "capability" else None
+            reply, provider = generate_grounded_response(
+                q,
+                understanding,
+                prior_question=prior_question,
+                prior_summary=prior_summary,
+                evidence=resp_evidence,
             )
-            reply = text
-            llm_calls = 1
+        except Exception as resp_err:
+            return technical_understanding_failure(q, resp_err)
         state.last_user_question = q
         state.last_summary = reply[:2000]
-        return {
+        out = {
             "mode": "general_chat",
             "route": "general",
             "status": "success",
@@ -798,20 +788,127 @@ def run_adaptive_orchestrator(
             "keyFindings": [],
             "charts": [],
             "pipeline": "adaptive_orchestrator",
-            "sql_generation_method": "pipeline1_general",
-            "llm_calls": llm_calls,
+            "sql_generation_method": "llm_understanding_response",
+            "llm_calls": 2,
             "query_plan": {
-                "investigation_state": {**state.to_dict(), "mode": "general_chat"},
-                "pipeline1": p1,
+                "investigation_state": {
+                    **state.to_dict(),
+                    "mode": "general_chat",
+                    "last_summary": reply[:2000],
+                    "last_user_question": q,
+                },
                 "last_mode": "general_chat",
+                "understanding": understanding.to_public_dict(),
             },
-            "meta": {"mode": "general_chat", "intent": p1.get("intent"), "failure_class": "SUCCESS"},
+            "meta": {
+                "mode": "general_chat",
+                "failure_class": "SUCCESS",
+                "understanding_model_called": True,
+                "response_model_called": True,
+                "selected_capability": intent,
+                "provider": provider,
+            },
             "suggested_followups": [
+                "How many tables are there?",
                 "Show the top customers by billed sales.",
-                "How many sales orders are there?",
-                "What was revenue in 2004?",
+                "What is SAP?",
             ],
         }
+        return _attach_understanding_meta(out, understanding)
+
+    if intent == "metadata" or understanding.requires_metadata:
+        from .database_metadata import answer_database_metadata
+
+        schema = schema_for_metadata if isinstance(schema_for_metadata, dict) else {}
+        if not schema:
+            try:
+                from ...data_catalog.physical import load_physical_schema
+
+                schema = load_physical_schema() or {}
+            except Exception:
+                schema = {}
+        meta_payload = answer_database_metadata(q, schema=schema)
+        if meta_payload is None:
+            # Understanding said metadata but tool could not map — clarify schema ask.
+            msg = (
+                "I can inspect the connected schema (table counts, columns, table search). "
+                "Try: \"How many tables are there?\" or \"Which tables contain customer data?\""
+            )
+            out = {
+                "mode": "clarification",
+                "route": "database_metadata",
+                "answer_status": "CLARIFICATION",
+                "type": "clarification",
+                "sql": "",
+                "data": [],
+                "rowCount": 0,
+                "summary": msg,
+                "answer": msg,
+                "keyFindings": [],
+                "pipeline": "adaptive_orchestrator",
+                "sql_generation_method": "metadata_clarify",
+                "llm_calls": 1,
+                "query_plan": {"last_mode": "clarification", "understanding": understanding.to_public_dict()},
+                "meta": {"selected_capability": "metadata", "understanding_model_called": True},
+            }
+            return _attach_understanding_meta(out, understanding)
+        meta_payload = dict(meta_payload)
+        meta_payload["llm_calls"] = int(meta_payload.get("llm_calls") or 0) + 1
+        meta_payload["pipeline"] = meta_payload.get("pipeline") or "adaptive_orchestrator"
+        logger.info("[adaptive-orch] tool_called=database_metadata op=%s", (meta_payload.get("meta") or {}).get("operation"))
+        return _attach_understanding_meta(meta_payload, understanding)
+
+    if intent == "clarification" or (
+        understanding.clarification_needed and intent in {"analytics", "investigation", "clarification"}
+    ):
+        # Only after understanding established an analytical ask with gaps.
+        return _attach_understanding_meta(
+            analytics_clarification_payload(q, understanding),
+            understanding,
+        )
+
+    if intent == "cannot_answer":
+        msg = understanding.goal or "I cannot answer that with the available governed capabilities."
+        out = {
+            "mode": "error",
+            "route": "understanding",
+            "answer_status": "CANNOT_ANSWER",
+            "type": "cannot_answer",
+            "sql": "",
+            "data": [],
+            "rowCount": 0,
+            "summary": msg,
+            "answer": msg,
+            "keyFindings": [],
+            "pipeline": "adaptive_orchestrator",
+            "sql_generation_method": "understanding_cannot_answer",
+            "llm_calls": 1,
+            "meta": {"selected_capability": "cannot_answer", "understanding_model_called": True},
+            "query_plan": {"understanding": understanding.to_public_dict()},
+        }
+        return _attach_understanding_meta(out, understanding)
+
+    # analytics / investigation → existing governed SQL pipeline
+    adapted = AdaptedTurn("query", q, drop_prior=adapted.drop_prior, is_fragment=adapted.is_fragment)
+    skip_p1_clarify = not adapted.is_fragment
+    if skip_p1_clarify:
+        p1 = {
+            "question_type": "database_question",
+            "route": "database",
+            "requires_database": True,
+            "clarification_needed": False,
+            "rewritten_question": q,
+            "intent": "understanding_analytics",
+        }
+    else:
+        p1 = _pipeline1_understand(q, state, prior_rows or [])
+    requires_db = True
+    route = "database"
+    skip_clarify = True
+    logger.info(
+        "[adaptive-orch] selected_capability=analytics understanding_intent=%s",
+        intent,
+    )
 
     resolved = str(p1.get("rewritten_question") or q).strip() or q
     from .governed import try_governed_database
@@ -846,7 +943,7 @@ def run_adaptive_orchestrator(
         gov["route"] = "database"
         gov["query_plan"] = {**qp, "investigation_state": state.to_dict(), "pipeline1": p1}
         gov.setdefault("pipeline", gov.get("pipeline") or "governed_under_orchestrator")
-        return gov
+        return _attach_understanding_meta(gov, understanding)
 
     from ..result_first_followup import try_answer_from_prior_rows, is_result_scoped_followup
 
