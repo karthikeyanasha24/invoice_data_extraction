@@ -48,9 +48,13 @@ from ..services.adaptive_nl_sql_hardening import (
     deterministic_summary,
     extract_named_customer,
     inject_customer_name_predicate,
+    is_capability_or_help_question,
+    is_general_knowledge_question,
+    is_greeting_or_chitchat,
     local_sql_relation_names,
     public_chart_title,
     question_asks_date_filter,
+    question_requires_database,
     repair_generated_sql,
     sanitize_chart_payloads,
     sql_has_customer_name_filter,
@@ -2504,7 +2508,7 @@ async def adaptive_query_health() -> Dict[str, Any]:
         "tables": len(s),
         "columns": sum(len(v) for v in s.values()),
         "build_id": build_id[:40] if build_id else None,
-        "ai_release": "adaptive-metadata-v1",
+        "ai_release": "adaptive-capability-route-v1",
         "trusted_scope": True,
         "database_metadata": True,
     }
@@ -3177,6 +3181,52 @@ def _post_query_adaptive_body(
         previous_status=prev_status,
         previous_sql=prev_sql,
     )
+
+    # Authoritative GENERAL_CHAT / capability: never fall through to
+    # no_business_signal clarification or SQL planning.
+    _authoritative_general = (
+        turn.reason in {"capability_meta", "general_knowledge", "greeting"}
+        or is_capability_or_help_question(clean_q)
+        or is_greeting_or_chitchat(clean_q)
+        or (is_general_knowledge_question(clean_q) and not question_requires_database(clean_q))
+    )
+    if _authoritative_general and not question_requires_database(clean_q):
+        if _orch_enabled:
+            try:
+                orch = run_adaptive_orchestrator(
+                    clean_q,
+                    db,
+                    _execute_sql,
+                    use_sap=bool(USE_SAP_DB_FOR_AI),
+                    chart_fn=lambda qq, sql, rows: _ensure_charts(qq, sql or "", rows or [], []),
+                    prior_question=prev_q,
+                    prior_sql=prev_sql,
+                    prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+                    prior_rows=rows_list,
+                    get_sap_session=get_sap_session,
+                    thread_id=thread_id or "",
+                    prior_status=prev_status,
+                    force_general_chat=True,
+                )
+                if orch:
+                    orch["tableHint"] = tableHint
+                    orch_mode = str(orch.get("mode") or "")
+                    orch_status = str(orch.get("answer_status") or "").upper()
+                    if orch_mode == "general_chat" or (
+                        orch_status in {"SUCCESS", "CLARIFICATION"}
+                        and not str(orch.get("sql") or "").strip()
+                    ):
+                        return _persist_and_return(orch)
+            except Exception as gen_err:
+                logger.warning("[adaptive] authoritative general_chat orch failed: %s", gen_err)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+        return _persist_and_return(
+            clarification_payload(clean_q, turn.reason or "capability_meta")
+        )
+
     if _orch_enabled and (_business_turn or _general_turn):
         try:
             orch = run_adaptive_orchestrator(
