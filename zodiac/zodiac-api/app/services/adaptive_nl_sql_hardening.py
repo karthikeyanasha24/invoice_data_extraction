@@ -124,11 +124,12 @@ def is_greeting_or_chitchat(question: str) -> bool:
     return False
 
 
-# Capability / meta questions: "what can I ask?" class — not exact-phrase handlers.
+# Capability / help intent: assistant scope, not exact-phrase handlers.
+# Anchored forms cover "What can I ask?" and similar openers.
 _CAPABILITY_META = re.compile(
     r"(?xi)"
     r"^\s*("
-    r"what\s+can\s+(i|you|we)\s+(ask|do|query|analyze|analyse|see|know|help|use)"
+    r"what\s+can\s+(i|you|we)\s+(ask|do|query|analyze|analyse|see|know|help|use|answer|handle|cover)"
     r"|what\s+(questions?|kinds?\s+of\s+questions?|types?\s+of\s+questions?)\s+can\s+(i|you|we)"
     r"|how\s+(do|can|should)\s+(i|you|we)\s+(use|ask|query|help|start|begin)"
     r"|what\s+(are\s+)?(your|the)\s+(capabilities|features|skills|limits?|limitations)"
@@ -137,6 +138,43 @@ _CAPABILITY_META = re.compile(
     r"|examples?\s+of\s+(questions?|queries|things\s+(i|we)\s+can\s+ask)"
     r"|how\s+does\s+(this|the)\s+(work|analyst|ai|tool)"
     r"|what\s+(is|are)\s+(this|bridgeedi)\s+(for|good\s+for)"
+    r")\b"
+)
+
+# Semantic capability signals: asking what the assistant can do / answer / help with.
+# Must not match underspecified analytics ("Show me the growth.", "How much?").
+_CAPABILITY_ABILITY_VERB = re.compile(
+    r"(?xi)\b("
+    r"answer|ask|help|do|handle|support|cover|analyze|analyse|query|"
+    r"provide|tell|explain|assist|understand|know|see|use"
+    r")\b"
+)
+_CAPABILITY_SCOPE_NOUN = re.compile(
+    r"(?xi)\b("
+    r"anything|everything|questions?|queries|data|analysis|analyses|"
+    r"capabilities|capability|features?|information|insights?|"
+    r"kinds?\s+of\s+questions?|types?\s+of\s+questions?|"
+    r"ai\s+analyst|analyst|this\s+(tool|ai|assistant)|bridgeedi"
+    r")\b"
+)
+_CAPABILITY_ASSISTANT_REF = re.compile(
+    r"(?xi)\b("
+    r"you|your|this\s+(ai|tool|analyst|assistant)|the\s+(ai|analyst|assistant)|bridgeedi"
+    r")\b"
+)
+_CAPABILITY_MODAL = re.compile(
+    r"(?xi)\b("
+    r"can|could|able\s+to|capable\s+of|what\s+kind|what\s+kinds|"
+    r"what\s+type|what\s+types|are\s+you\s+able|do\s+you\s+support|"
+    r"what\s+are\s+you\s+able|what\s+does\s+this"
+    r")\b"
+)
+# Underspecified analytics must stay CLARIFICATION, not capability.
+_CAPABILITY_ANALYTICAL_FRAGMENT = re.compile(
+    r"(?xi)\b("
+    r"growth|revenue|sales|billing|invoice|customer|customers|product|products|"
+    r"margin|profit|vendor|purchase|order|orders|top\s+\d+|how\s+much|how\s+many|"
+    r"compare|trend|declin|increase|decrease|month|year\s+20\d{2}"
     r")\b"
 )
 
@@ -161,11 +199,45 @@ _DEFINITION_CUE = re.compile(
 
 
 def is_capability_or_help_question(question: str) -> bool:
-    """Meta questions about analyst capabilities — no DB investigation."""
+    """True when the user asks what the assistant can do / answer / help with.
+
+    Semantic capability intent — not an exact-phrase list. Distinguishes
+    capability/help from underspecified analytics ("Show me the growth.").
+    """
     q = (question or "").strip()
     if not q:
         return False
-    return bool(_CAPABILITY_META.search(q))
+    if _CAPABILITY_META.search(q):
+        return True
+    ql = q.lower().strip()
+    # Short analytical fragments are never capability.
+    if _CAPABILITY_ANALYTICAL_FRAGMENT.search(ql) and not _CAPABILITY_ASSISTANT_REF.search(ql):
+        return False
+    if _FACT_REQUEST.search(q) and not _CAPABILITY_ASSISTANT_REF.search(ql):
+        return False
+    # Require assistant reference + ability modal + scope (what/how much of
+    # answering/helping). Avoid classifying bare "how much?" as capability.
+    has_assistant = bool(_CAPABILITY_ASSISTANT_REF.search(ql))
+    has_modal = bool(_CAPABILITY_MODAL.search(ql))
+    has_ability = bool(_CAPABILITY_ABILITY_VERB.search(ql))
+    has_scope = bool(_CAPABILITY_SCOPE_NOUN.search(ql))
+    if has_assistant and has_modal and has_ability and has_scope:
+        return True
+    # "What are your capabilities?" / "What kind of analysis can you do?"
+    if has_assistant and has_scope and (
+        has_modal or re.search(r"(?xi)\b(capabilities|capability|features|skills)\b", ql)
+    ):
+        return True
+    # "Can you answer anything?" / "Are you able to answer questions about my data?"
+    # "What are you able to answer?" — ability-of-assistant without a business metric.
+    if has_assistant and has_modal and has_ability:
+        if has_scope or re.search(
+            r"(?xi)\b(anything|everything|my\s+data|questions?|analysis|"
+            r"able\s+to|capable\s+of)\b",
+            ql,
+        ):
+            return True
+    return False
 
 
 def is_general_knowledge_question(question: str) -> bool:

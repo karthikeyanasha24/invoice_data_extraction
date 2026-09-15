@@ -355,7 +355,12 @@ def should_route_to_general_chat(
     previous_status: str = "",
     previous_sql: str = "",
 ) -> bool:
-    """Route to orchestrator Pipeline 1 general path (Gemini-style chat), not SQL compilers."""
+    """Route to orchestrator Pipeline 1 general path (Gemini-style chat), not SQL compilers.
+
+    Capability / general-knowledge / greeting are authoritative GENERAL_CHAT.
+    ``no_business_signal`` alone is NOT general chat — that is clarification for
+    underspecified analytics, unless capability intent was already detected.
+    """
     from .adaptive_nl_sql_hardening import (
         is_capability_or_help_question,
         is_general_knowledge_question,
@@ -372,26 +377,32 @@ def should_route_to_general_chat(
     except Exception:
         pass
 
+    # Authoritative general-chat classes — never demote to query/SQL.
+    if is_capability_or_help_question(question) or turn.reason == "capability_meta":
+        return True
+    if is_greeting_or_chitchat(question) or turn.reason == "greeting":
+        return True
+    if is_general_knowledge_question(question) or turn.reason == "general_knowledge":
+        return True
     if is_prior_general_chat(previous_plan, previous_status, previous_sql):
-        return True
-    if is_greeting_or_chitchat(question):
-        return True
-    if is_capability_or_help_question(question) or is_general_knowledge_question(question):
-        return True
-    if not question_requires_database(question) and turn.intent in {
-        TurnIntent.NON_BUSINESS,
-        TurnIntent.CLARIFICATION_REQUIRED,
-    }:
-        if turn.reason == "database_metadata":
+        # Follow-ups after general chat stay in chat unless this turn is clearly analytical.
+        if question_requires_database(question):
             return False
         return True
+
+    # Underspecified analytics: clarify — do NOT treat as general chat.
+    if turn.intent == TurnIntent.CLARIFICATION_REQUIRED and turn.reason in {
+        "no_business_signal",
+        "ambiguous",
+    }:
+        return False
+
     if turn.intent == TurnIntent.NON_BUSINESS and turn.reason not in {
         "unsafe_or_non_business",
         "database_metadata",
     }:
         return True
     if turn.intent == TurnIntent.CLARIFICATION_REQUIRED and turn.reason in {
-        "no_business_signal",
         "capability_meta",
         "general_knowledge",
         "greeting",

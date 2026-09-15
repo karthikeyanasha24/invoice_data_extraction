@@ -621,6 +621,7 @@ def run_adaptive_orchestrator(
     get_sap_session: Optional[Callable[[], Any]] = None,
     thread_id: str = "",
     prior_status: str = "",
+    force_general_chat: bool = False,
 ) -> Dict[str, Any]:
     q = (question or "").strip()
     adapted = adapt_user_turn(
@@ -629,6 +630,10 @@ def run_adaptive_orchestrator(
         prior_plan=prior_plan,
         prior_status=prior_status,
     )
+    # Authoritative general-chat route from the API classifier must not be
+    # overridden by adapt_user_turn() returning action=query.
+    if force_general_chat or _force_general_chat(q):
+        adapted = AdaptedTurn("chat", q, drop_prior=adapted.drop_prior)
     q = adapted.question
     if adapted.drop_prior:
         prior_question = ""
