@@ -25,7 +25,6 @@ import {
   isDataGapResult,
   isInvestigationFailure,
 } from '@/lib/analysisTrust';
-import { loadSavedAnalyses, saveAnalysis, removeSavedAnalysis, type SavedAnalysis } from '@/lib/savedAnalyses';
 import {
   analystPathWithoutQuery,
   investigationLaunch,
@@ -33,7 +32,6 @@ import {
 import {
   ADAPTIVE_CONTEXT_POLICY,
   followupContextForSend,
-  lastSuccessfulAnalyticalContext,
   updateLastSuccessfulAnalyticalContext,
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
@@ -180,13 +178,6 @@ type Message = {
   result?: QueryResult;
   ts: number;
 };
-
-function lastUserQuestion(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return messages[i].content;
-  }
-  return '';
-}
 
 // ─── Copy hook ────────────────────────────────────────────────────────────────
 function useCopy() {
@@ -893,7 +884,6 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [elapsed,    setElapsed]    = useState(0);
   const [pipelineStage, setPipelineStage] = useState('UNDERSTANDING');
   const [error,      setError]      = useState<string | null>(null);
-  const [isNewQuestion, setIsNewQuestion] = useState(false);
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -904,12 +894,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const lastSuccessfulAnalyticalRef = useRef<LastSuccessfulAnalyticalContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const investigationIdRef = useRef<string>('');
-  const [saved, setSaved] = useState<SavedAnalysis[]>([]);
 
   // Resolve / restore adaptive thread id once on mount
   useEffect(() => {
     setThreadId(ensureAdaptiveThreadId());
-    setSaved(loadSavedAnalyses());
   }, []);
 
   // Load persisted turns from chat_thread_store (ada_* via adaptive history API)
@@ -995,21 +983,23 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setLoading(true);
     setPipelineStage('UNDERSTANDING');
 
-    // Follow-up context is the last successful analytical state, not the latest
-    // chat turn. Clarification / non-business replies do not update this ref.
-    // Overview / ?q= deep-links are standalone investigations.
-    const treatAsNew = Boolean(opts?.asNew) || isNewQuestion;
+    // Continuous chat (ChatGPT-style): typed messages always carry the latest
+    // turn context. Only Overview / saved deep-links start an isolated ask.
+    const treatAsNew = Boolean(opts?.asNew) && (
+      opts?.source === 'overview-url'
+      || opts?.source === 'overview-chip'
+      || opts?.source === 'saved-restore'
+    );
     const contextData = followupContextForSend(
       messages,
       lastSuccessfulAnalyticalRef.current,
       treatAsNew,
     );
-    const dirty = lastSuccessfulAnalyticalRef.current != null;
+    const dirty = lastSuccessfulAnalyticalRef.current != null || messages.length > 0;
     const source = opts?.source
-      || (opts?.asNew ? 'overview-url' : isNewQuestion ? 'explicit-new' : dirty ? 'typed-continue' : 'typed-continue');
+      || (opts?.asNew ? 'overview-url' : dirty ? 'typed-continue' : 'typed-continue');
     const launch = investigationLaunch(source, dirty);
     if (launch.banner) setLaunchBanner(launch.banner);
-    setIsNewQuestion(false); // reset after each send
 
     abortRef.current?.abort();
     const ac = new AbortController();
@@ -1121,9 +1111,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       window.clearInterval(poll);
       setLoading(false);
     }
-    // isNewQuestion MUST be a dep: without it the memoized closure keeps a stale
-    // value and the "New question" button silently never takes effect.
-  }, [messages, loading, isNewQuestion, threadId]);
+    // Continuous chat: keep latest turn in the dependency list so follow-ups
+    // always see the newest assistant context.
+  }, [messages, loading, threadId]);
 
   // Auto-run a question handed over from another view (e.g. "What can you ask?"
   // sidebar on the Real-time tab). Guarded so the same question only fires once.
@@ -1186,10 +1176,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
-              <p className="text-xs text-slate-500">Question → verified analysis → next investigation</p>
+              <p className="text-xs text-slate-500">Ask anything — conversation, schema, or business data</p>
               {investigation?.analysisLabel && (
                 <p className="text-[11px] text-slate-600 mt-0.5">
-                  Current investigation: {investigation.analysisLabel}
+                  Working on: {investigation.analysisLabel}
                   {selectedN > 0 ? ` · ${selectedN} product${selectedN === 1 ? '' : 's'} selected` : ''}
                 </p>
               )}
@@ -1204,8 +1194,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             {messages.length > 0 && (
               <button onClick={clearAll}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-                title="Start a new investigation"
-                aria-label="Start a new investigation">
+                title="Clear chat"
+                aria-label="Clear chat">
                 <RotateCcw className="h-4 w-4" />
               </button>
             )}
@@ -1222,16 +1212,16 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               <Sparkles className="h-8 w-8 text-indigo-500" />
             </div>
             <h3 className="text-xl font-semibold text-slate-900 mb-2">
-              Ask a governed business question
+              How can I help?
             </h3>
             <p className="text-sm text-slate-500 mb-6">
-              Follow-ups keep the current products and metrics. Inventory aging is not available in this extract.
+              Ask a question, follow up naturally, or explore your SAP data — same continuous chat.
             </p>
             {/* Quick questions */}
             <div className="grid grid-cols-2 gap-2 text-left">
               {QUICK_QUESTIONS.map(({ label, q }, qi) => (
                 <button key={label}
-                  onClick={() => sendQuestion(q, { asNew: true, source: 'explicit-new' })}
+                  onClick={() => sendQuestion(q, { source: 'typed-continue' })}
                   className="flex items-start gap-2.5 p-3 bg-white rounded-xl border border-slate-200 hover:shadow-md transition-all text-left group"
                   style={{ borderLeft: `3px solid ${PALETTE[qi % PALETTE.length]}` }}>
                   <ArrowRight className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 group-hover:translate-x-0.5 transition-transform"
@@ -1243,38 +1233,6 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                 </button>
               ))}
             </div>
-            {saved.length > 0 && (
-              <div className="mt-8 text-left">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">This browser only</p>
-                <p className="text-xs text-slate-500 mb-2">
-                  Stored in this browser only, not in cloud history. Opening a saved investigation starts a new question so previous filters are not applied.
-                </p>
-                <div className="space-y-1">
-                  {saved.slice(0, 8).map((s) => (
-                    <div key={s.id} className="flex items-stretch gap-1">
-                      <button
-                        type="button"
-                        onClick={() => sendQuestion(s.question, { asNew: true, source: 'saved-restore' })}
-                        className="flex-1 text-left text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
-                      >
-                        <span className="block font-medium text-slate-800">{s.title || s.question}</span>
-                        {s.title && s.title !== s.question && (
-                          <span className="block text-xs text-slate-500 mt-0.5">{s.question}</span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Remove saved investigation: ${s.title || s.question}`}
-                        onClick={() => setSaved(removeSavedAnalysis(s.id))}
-                        className="px-2 rounded-lg border border-slate-200 text-slate-400 hover:text-red-700 hover:bg-red-50"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1304,7 +1262,6 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                     <ResultDashboard
                       result={msg.result}
                       onAskFollowup={(fq) => {
-                        setIsNewQuestion(false);
                         void sendQuestion(fq, { source: 'followup-chip' });
                       }}
                     />
@@ -1321,29 +1278,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                         <ResultDashboard
                           result={msg.result}
                           onAskFollowup={(fq) => {
-                            setIsNewQuestion(false);
                             void sendQuestion(fq, { source: 'followup-chip' });
                           }}
                         />
-                      )}
-                      {msg.result && msg.result.answer_status !== 'CANNOT_ANSWER' && (
-                        <button
-                          type="button"
-                          className="text-xs text-slate-500 hover:text-slate-800"
-                          onClick={() => {
-                            const trust = analysisTrustFromResult(msg.result);
-                            const next = saveAnalysis({
-                              question: lastUserQuestion(messages) || msg.content,
-                              summary: humanizePublicSummary(msg.result?.summary || msg.content, trust.intent),
-                              title: trust.analysisLabel,
-                              intent: trust.intent,
-                              rowCount: msg.result?.rowCount,
-                            });
-                            setSaved(next);
-                          }}
-                        >
-                          Save in this browser only
-                        </button>
                       )}
                       {!msg.result && msg.content && (
                         <div className="text-sm text-slate-700 leading-relaxed">
@@ -1394,7 +1331,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <div>
               <div className="font-semibold mb-0.5">We could not complete this analysis</div>
               <div className="text-red-700">{error}</div>
-              <p className="mt-1 text-xs text-red-600">Try again, rephrase, or start a new question. Previous context is still available.</p>
+              <p className="mt-1 text-xs text-red-600">Try again or rephrase — your chat history is still here.</p>
             </div>
             <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600" aria-label="Dismiss error">
               <X className="h-4 w-4" />
@@ -1407,38 +1344,6 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
       {/* ── Input bar ── */}
       <div className="flex-none bg-white border-t border-slate-200 px-4 py-3">
-        {/* Follow-up / New question toggle — only shown when there is a previous result */}
-        {messages.some(m => m.role === 'assistant' && m.result) && (
-          <div className="flex items-center gap-2 mb-2.5">
-            <button
-              onClick={() => setIsNewQuestion(false)}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all border",
-                !isNewQuestion
-                  ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                  : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"
-              )}>
-              <ArrowRight className="h-3 w-3" />
-              Continue this investigation
-            </button>
-            <button
-              onClick={() => { setIsNewQuestion(true); setInput(''); }}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all border",
-                isNewQuestion
-                  ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
-                  : "bg-white text-slate-500 border-slate-200 hover:border-emerald-400 hover:text-emerald-600"
-              )}>
-              <Sparkles className="h-3 w-3" />
-              Start a new investigation
-            </button>
-            {isNewQuestion && (
-              <span className="text-xs text-emerald-600 font-medium ml-1">
-                The next question will not use previous filters
-              </span>
-            )}
-          </div>
-        )}
         <div className="flex items-end gap-2.5">
           <div className="flex-1 relative">
             <textarea
@@ -1448,7 +1353,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKey}
               disabled={loading}
-              placeholder='Ask a business question — e.g. "Which products drove revenue growth?"'
+              placeholder='Ask anything — e.g. "Hi", "How many tables?", "Top customers by sales"'
               className={cn(
                 "w-full resize-none rounded-xl border border-slate-200 bg-slate-50",
                 "px-4 py-3 pr-12 text-sm text-slate-800 placeholder:text-slate-400",
