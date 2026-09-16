@@ -30,11 +30,17 @@ describe('investigationLaunch isolation', () => {
     assert.equal(url.keepHistory, chip.keepHistory);
   });
 
-  it('compatible follow-up chip continues the dirty investigation', () => {
+  it('compatible follow-up chip continues without investigation banner', () => {
     const r = investigationLaunch('followup-chip', true);
     assert.equal(r.asNew, false);
     assert.equal(r.keepHistory, true);
-    assert.match(r.banner || '', /continuing/i);
+    assert.equal(r.banner, null);
+  });
+
+  it('typed continue has no investigation banner', () => {
+    const r = investigationLaunch('typed-continue', true);
+    assert.equal(r.asNew, false);
+    assert.equal(r.banner, null);
   });
 
   it('incompatible Overview question from a dirty session is still isolated', () => {

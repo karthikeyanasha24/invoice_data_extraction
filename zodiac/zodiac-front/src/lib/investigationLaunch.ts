@@ -53,11 +53,8 @@ export function investigationLaunch(
     banner = sessionDirty
       ? 'Opening a saved investigation as a new question. Previous filters were not applied.'
       : 'Opening a saved investigation.';
-  } else if (source === 'followup-chip' && sessionDirty) {
-    banner = 'Continuing this investigation.';
-  } else if (source === 'typed-continue' && sessionDirty) {
-    banner = 'Continuing this investigation.';
   }
+  // typed-continue / followup-chip: no banner — continuous chat like ChatGPT
 
   return { asNew, keepHistory, sendQuestion, banner };
 }
