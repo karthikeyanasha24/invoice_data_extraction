@@ -86,6 +86,8 @@ _GREETING_EXACT = frozenset({
     "thanks", "thank you", "thankyou", "ok", "okay", "bye", "goodbye",
     "good morning", "good evening", "good afternoon", "good night",
     "how are you", "how are you doing", "what's up", "whats up",
+    "hai how are you", "hi how are you", "hello how are you", "hey how are you",
+    "hai how are you doing", "hi how are you doing",
 })
 
 _GREETING_SUBSTRINGS = (
@@ -95,6 +97,7 @@ _GREETING_SUBSTRINGS = (
 
 _CHITCHAT_FILLER_WORDS = frozenset({
     "i", "said", "just", "saying", "only", "simply", "well", "um", "uh",
+    "how", "are", "you", "doing", "there", "today", "now", "buddy", "friend",
 })
 
 _DATA_KEYWORDS_IN_GREETING = frozenset({

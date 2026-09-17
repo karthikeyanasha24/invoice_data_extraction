@@ -148,6 +148,7 @@ class MetadataPlan:
     table_name: Optional[str] = None
     search_terms: List[str] = field(default_factory=list)
     confidence: float = 0.8
+    list_all: bool = False
 
 
 @dataclass
@@ -268,6 +269,15 @@ def is_database_metadata_question(question: str) -> bool:
     )
 
     if not has_entity and not describe_shaped:
+        # Follow-ups like "list all 121" / "I want all listed" after a table preview.
+        if re.search(
+            r"(?i)\b(list|show|give|want|need)\b.+\b(all|entire|full|complete)\b"
+            r"|\ball\s+\d+\b"
+            r"|\b(all|every)\s+(of\s+them|tables?)\b"
+            r"|\b\d+\s+to\s+be\s+listed\b",
+            ql,
+        ):
+            return True
         return False
 
     # "How many sales orders" — count of business facts, not tables/columns.
@@ -351,10 +361,20 @@ def classify_metadata_operation(
             return MetadataPlan(operation=LIST_COLUMNS, table_name=table, confidence=0.9)
         return MetadataPlan(operation=COUNT_COLUMNS, confidence=0.75)
 
-    if re.search(r"\btables?|entities\b", ql) or _LIST_CUE.search(ql):
-        if _LIST_CUE.search(ql) or re.search(r"\bwhat\b|\bwhich\b|\bavailable\b|\bexist", ql):
-            return MetadataPlan(operation=LIST_TABLES, confidence=0.9)
-        return MetadataPlan(operation=LIST_TABLES, confidence=0.8)
+    wants_all = bool(
+        re.search(
+            r"(?i)\b(all|entire|full|complete)\b|\ball\s+\d+\b|\b\d+\s+to\s+be\s+listed\b",
+            ql,
+        )
+    )
+    if (
+        re.search(r"\btables?|entities\b", ql)
+        or _LIST_CUE.search(ql)
+        or wants_all
+    ):
+        if wants_all or _LIST_CUE.search(ql) or re.search(r"\bwhat\b|\bwhich\b|\bavailable\b|\bexist", ql):
+            return MetadataPlan(operation=LIST_TABLES, confidence=0.92, list_all=wants_all)
+        return MetadataPlan(operation=LIST_TABLES, confidence=0.8, list_all=wants_all)
 
     # Fallback for schema-entity questions
     if re.search(r"\btables?\b", ql):
@@ -399,14 +419,25 @@ def execute_metadata_plan(
 
     if op == LIST_TABLES:
         rows = [{"table": t, "column_count": len(schema_n[t])} for t in tables_sorted]
-        preview = ", ".join(tables_sorted[:20])
-        more = "" if table_count <= 20 else f" (showing 20 of {table_count})"
+        list_all = bool(getattr(plan, "list_all", False))
+        if list_all or table_count <= 40:
+            # Full list when asked ("all 121") or small schemas.
+            listing = ", ".join(tables_sorted)
+            summary = f"There are {table_count} tables available: {listing}."
+        else:
+            preview = ", ".join(tables_sorted[:20])
+            more = f" (showing 20 of {table_count}; ask to list all {table_count} tables to see every name)"
+            summary = f"There are {table_count} tables available{more}: {preview}."
         return MetadataResult(
             operation=op,
             value=tables_sorted,
             rows=rows,
-            summary=f"There are {table_count} tables available{more}: {preview}.",
-            evidence={"source": "schema_catalog", "table_count": table_count},
+            summary=summary,
+            evidence={
+                "source": "schema_catalog",
+                "table_count": table_count,
+                "listed_all": bool(list_all or table_count <= 40),
+            },
         )
 
     if op == DESCRIBE_SCHEMA:
@@ -567,18 +598,19 @@ def build_metadata_payload(
     rows = result.rows or []
     presentation = "table" if len(rows) > 1 else "none"
     return {
-        "type": "analysis",
+        "type": "database_metadata",
         "mode": "database_metadata",
         "route": "database_metadata",
         "answer_status": "SUCCESS",
         "failure_class": "SUCCESS",
         "sql": "",
         "rowCount": len(rows),
-        "data": rows[:200],
+        "data": rows[:500],
         "charts": [],
         "summary": result.summary,
         "answer": result.summary,
-        "keyFindings": [result.summary] if result.summary else [],
+        # Do not echo summary into keyFindings — frontend would render it twice.
+        "keyFindings": [],
         "question": (question or "")[:500],
         "presentation": presentation,
         "meta": {
@@ -588,6 +620,7 @@ def build_metadata_payload(
             "confidence": plan.confidence,
             "evidence": result.evidence,
             "presentation": presentation,
+            "list_all": bool(getattr(plan, "list_all", False)),
         },
         "pipeline": "database_metadata",
         "sql_generation_method": "schema_catalog",

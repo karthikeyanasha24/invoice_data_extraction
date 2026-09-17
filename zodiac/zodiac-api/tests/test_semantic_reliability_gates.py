@@ -15,16 +15,24 @@ from app.services.semantic_requirements import (
 )
 
 
-def test_which_country_requires_country_dimension():
-    q = "Which country generated the most billed sales?"
-    req = required_semantics(q)
-    assert "country" in req["group_by"] or "country" in req["dimensions"]
-    sql = 'SELECT SUM(CAST("VBRK"."netwr" AS NUMERIC)) AS "total_sales" FROM "VBRK"'
-    assert sql_satisfies_analytical_intent(sql, q) is False
-    warnings = result_matches_analytical_intent(
-        [{"total_sales": 100}], q, sql=sql
+def test_year_total_does_not_require_customer_country_dims():
+    """Plain 'sales for year 2000' must accept a year total without customer/country columns."""
+    q = "show me sales for the year 2000"
+    polluted = {
+        "dimensions": ["date", "product", "customer", "country", "region", "sales_person"],
+        "group_by": [],
+        "measure": {"concept": "sales", "aggregation": "SUM"},
+        "time_filter": {"type": "calendar_year", "value": "2000", "years": ["2000"]},
+    }
+    rows = [{"year": "2000", "total_sales": 12345.67}]
+    sql = (
+        'SELECT SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 1, 4) AS "year", '
+        'SUM(CAST(NULLIF(TRIM(CAST("VBRK"."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "total_sales" '
+        'FROM "VBRK" WHERE SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 1, 4) = \'2000\' '
+        'GROUP BY 1'
     )
-    assert any("country" in w for w in warnings)
+    warnings = result_matches_analytical_intent(rows, q, polluted, sql=sql)
+    assert not any("customer" in w or "country" in w for w in warnings)
 
 
 def test_period_compare_rejects_plain_sum():

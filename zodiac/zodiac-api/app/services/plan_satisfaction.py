@@ -354,12 +354,13 @@ def result_matches_analytical_intent(
         if not any("year" in k or re.fullmatch(r"(yyyy|gjahr|fiscal_year)", k) for k in keys):
             if not period:
                 warnings.append("yearly grouping missing from result columns")
-    # Dimensions required by ranking / which-X questions must appear even if group_by was incomplete.
-    check_dims = set(group_by) | {
-        d for d in dims
-        if d in {"country", "customer", "material", "vendor", "industry", "currency", "supplier"}
-        and (ranking or period or agg in {"SUM", "COUNT", "AVG", "MAX", "MIN"})
-    }
+    # Dimensions required by ranking / which-X / explicit group_by must appear.
+    # Do NOT require every LLM-listed "available" dimension on a plain SUM total
+    # (e.g. "sales for year 2000" must not fail for missing customer/country).
+    _entity_dims = {"country", "customer", "material", "vendor", "industry", "currency", "supplier"}
+    check_dims = set(g for g in group_by if g in _entity_dims or g in {"month", "year", "quarter"})
+    if ranking or period:
+        check_dims |= {d for d in dims if d in _entity_dims}
     # Normalize supplier → vendor for result column checks.
     if "supplier" in check_dims:
         check_dims.discard("supplier")

@@ -56,6 +56,10 @@ _UNDERSTAND_SYSTEM = (
     "- Why did X fall / drivers → investigation.\n"
     "- Underspecified analytics like 'show growth' without metric → "
     "clarification with clarification_needed=true.\n"
+    "- If the user already gives metric + dimension + top-N "
+    "(e.g. 'top 5 customers by billed sales'), intent=analytics and "
+    "clarification_needed=false; default time scope to all available data "
+    "unless they asked for a period.\n"
     "- Never invent database numbers. Never claim tenant authorization."
 )
 
@@ -65,7 +69,15 @@ _RESPONSE_SYSTEM = (
     "Do not invent database numbers, table counts, or query results. "
     "Do not mention internal pipelines, classifiers, or prompts. "
     "If capability facts are provided, ground your answer in them and do not "
-    "claim capabilities that are not listed."
+    "claim capabilities that are not listed. "
+    "For table counts: prefer connected_schema_table_count (all connected tables). "
+    "sap_business_table_count is only the SAP business subset — do not present it "
+    "as the total number of tables. "
+    "Keep greetings to 1-2 short sentences. Keep capability answers concise "
+    "(under ~12 bullets) unless the user asks for detail. "
+    "When the user asks what you previously said about tables/schema, "
+    "answer from the recent conversation turns that discuss tables — "
+    "not from a later sales clarification."
 )
 
 
@@ -114,10 +126,12 @@ def capability_facts() -> Dict[str, Any]:
             "Answers use governed SQL over the migrated SAP extract when data is required.",
             "Unqualified 'sales' ranking uses billed invoices unless sales orders are requested.",
             "The assistant does not invent row counts or revenue figures.",
+            "When stating how many tables exist, use connected_schema_table_count (live schema), "
+            "not sap_business_table_count alone.",
         ],
     }
     try:
-        from ...data_catalog.physical import has_table, sap_business_tables
+        from ...data_catalog.physical import has_table, load_physical_schema, sap_business_tables
 
         bits = []
         if has_table("VBAK"):
@@ -134,10 +148,13 @@ def capability_facts() -> Dict[str, Any]:
             bits.append("products/materials (MARA/MAKT)")
         if has_table("BKPF"):
             bits.append("finance postings (BKPF/BSEG)")
+        physical = load_physical_schema() or {}
+        facts["connected_schema_table_count"] = len(physical)
         facts["sap_business_table_count"] = len(sap_business_tables())
         facts["domains_present"] = bits
     except Exception as exc:
         logger.warning("[understanding] capability_facts catalog read failed: %s", exc)
+        facts["connected_schema_table_count"] = None
         facts["sap_business_table_count"] = None
         facts["domains_present"] = []
     return facts
@@ -151,13 +168,27 @@ def _context_block(
     prior_status: str = "",
 ) -> str:
     parts: List[str] = []
+    plan = prior_plan if isinstance(prior_plan, dict) else {}
+    inv = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
+    recent = inv.get("recent_turns") or plan.get("recent_turns") or []
+    if isinstance(recent, list) and recent:
+        lines: List[str] = []
+        for item in recent[-10:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "")
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            label = "User" if role == "user" else "Assistant"
+            lines.append(f"{label}: {content[:700]}")
+        if lines:
+            parts.append("Recent conversation:\n" + "\n".join(lines))
     if prior_question:
         parts.append(f"Previous user message: {prior_question[:500]}")
     if prior_summary:
         parts.append(f"Previous assistant answer: {prior_summary[:1200]}")
-    plan = prior_plan if isinstance(prior_plan, dict) else {}
     last_mode = str(plan.get("last_mode") or "")
-    inv = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
     if not last_mode and inv:
         last_mode = str(inv.get("mode") or "")
     if last_mode:
@@ -169,6 +200,17 @@ def _context_block(
     if inv.get("time_period"):
         parts.append(f"Active time_period: {inv.get('time_period')}")
     return "\n".join(parts) if parts else "(no prior conversation context)"
+
+
+def is_sufficiently_specified_ranking(question: str) -> bool:
+    """True when metric + customer + top-N (or billed) is already present."""
+    ql = (question or "").strip().lower()
+    has_top = bool(re.search(r"\btop\s+\d+\b", ql)) or bool(re.search(r"\b\d+\s+customers?\b", ql))
+    has_customer = "customer" in ql
+    has_metric = bool(
+        re.search(r"\b(billed|billing|invoice|revenue|sales)\b", ql)
+    )
+    return has_top and has_customer and has_metric
 
 
 def _normalize_intent(raw: str) -> str:
@@ -299,6 +341,10 @@ def generate_grounded_response(
         "conversation_context": {
             "previous_user": (prior_question or "")[:500],
             "previous_assistant": (prior_summary or "")[:1200],
+            "recent_turns": (
+                ((evidence or {}).get("recent_turns") if isinstance(evidence, dict) else None)
+                or []
+            ),
         },
         "current_user_message": (question or "")[:1500],
     }
@@ -324,7 +370,11 @@ def technical_understanding_failure(question: str, err: BaseException) -> Dict[s
         "I couldn't complete understanding of your message due to a temporary "
         "model/service failure. Please try again in a moment."
     )
-    logger.warning("[understanding] technical failure: %s", type(err).__name__)
+    logger.warning(
+        "[understanding] technical failure: %s: %s",
+        type(err).__name__,
+        str(err)[:300],
+    )
     return {
         "mode": "error",
         "route": "understanding",

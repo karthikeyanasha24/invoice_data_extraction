@@ -198,12 +198,26 @@ def _is_openai_quota(exc: BaseException) -> bool:
     return "insufficient_quota" in t or "credit_balance_exhausted" in t
 
 
+def _is_gemini_quota(exc: BaseException) -> bool:
+    t = str(exc).lower()
+    return (
+        "gemini http 429" in t
+        or "resource_exhausted" in t
+        or "exceeded your current quota" in t
+        or "rate limit" in t
+        or "quota exceeded" in t
+    )
+
+
 _SKIP_OPENAI = False
+_SKIP_GEMINI = False
 
 
 def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, str]:
-    """Return (text, provider). OpenAI first, Gemini on quota/error if keyed."""
-    global _SKIP_OPENAI
+    """Return (text, provider). Prefer Gemini for chat speed when configured;
+    always fall back to the other provider on quota/rate-limit failures.
+    """
+    global _SKIP_OPENAI, _SKIP_GEMINI
     from .investigation_budget import current_budget
 
     budget = current_budget()
@@ -213,8 +227,36 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
 
             raise InvestigationTimeout("llm_call", budget.elapsed_s())
         budget.checkpoint("llm_call")
+
+    prefer = (os.getenv("AI_CHAT_PROVIDER") or os.getenv("AI_LLM_PROVIDER") or "").strip().lower()
+    prefer_gemini = prefer in {"gemini", "google"} or (
+        os.getenv("AI_PREFER_GEMINI", "").strip().lower() in {"1", "true", "yes"}
+    )
     last_err: Optional[BaseException] = None
-    if _openai_key() and not _SKIP_OPENAI:
+
+    def _try_gemini() -> Optional[Tuple[str, str]]:
+        global _SKIP_GEMINI
+        nonlocal last_err
+        if not _google_key() or _SKIP_GEMINI:
+            return None
+        try:
+            return _gemini_chat(system, user), "gemini"
+        except Exception as exc:
+            from .investigation_budget import InvestigationTimeout
+
+            if isinstance(exc, InvestigationTimeout):
+                raise
+            last_err = exc
+            if _is_gemini_quota(exc):
+                _SKIP_GEMINI = True
+            logger.warning("[ai-native] Gemini failed (%s); trying OpenAI", type(exc).__name__)
+            return None
+
+    def _try_openai() -> Optional[Tuple[str, str]]:
+        global _SKIP_OPENAI
+        nonlocal last_err
+        if not _openai_key() or _SKIP_OPENAI:
+            return None
         try:
             return _openai_chat(system, user, json_mode=json_mode), "openai"
         except Exception as exc:
@@ -225,11 +267,24 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
             last_err = exc
             if _is_openai_quota(exc):
                 _SKIP_OPENAI = True
-            if not _is_openai_quota(exc) and not _google_key():
-                raise
             logger.warning("[ai-native] OpenAI failed (%s); trying Gemini", type(exc).__name__)
-    if _google_key():
-        return _gemini_chat(system, user), "gemini"
+            return None
+
+    if prefer_gemini:
+        result = _try_gemini()
+        if result is not None:
+            return result
+        result = _try_openai()
+        if result is not None:
+            return result
+    else:
+        result = _try_openai()
+        if result is not None:
+            return result
+        result = _try_gemini()
+        if result is not None:
+            return result
+
     if last_err:
         raise last_err
     raise RuntimeError("No OpenAI or Gemini API key configured")

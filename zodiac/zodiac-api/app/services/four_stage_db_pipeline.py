@@ -140,7 +140,7 @@ def extract_semantic_requirements(question: str) -> Dict[str, Any]:
             (
                 f"Question: {question}\n\n"
                 "Return JSON: {\n"
-                '  "dimensions": ["country","customer","month",...],\n'
+                '  "dimensions": ["month"],  // ONLY dimensions needed in the answer rows — not every related entity\n'
                 '  "group_by": ["month"],\n'
                 '  "measure": {"concept":"sales|revenue|quantity|count|sales_order|...","aggregation":"SUM|COUNT|none|..."},\n'
                 '  "condition": {"measure_operator":"<|>|=|<=|>=","measure_value":0},\n'
@@ -163,7 +163,9 @@ def extract_semantic_requirements(question: str) -> Dict[str, Any]:
                 "Interpret 'for the year 2000', 'in 2000', 'FY2000' as time_filter concept year value 2000. "
                 "Unqualified 'sales' means billed invoice amounts when schema supports billing tables. "
                 "For show/list invoices (no ranking): measure.aggregation = none. "
-                "List every dimension explicitly mentioned or implied."
+                "dimensions/group_by: only entities the answer must break down by "
+                "(explicit 'by X' / 'which X' / ranking grain). "
+                "A year filter alone is time_filter — do NOT put customer/country/product in dimensions."
             ),
         )
     req = merge_semantic_requirements(question, req if isinstance(req, dict) else {})

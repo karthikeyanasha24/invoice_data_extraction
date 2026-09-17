@@ -11,6 +11,7 @@ from app.services.adaptive_analyst.orchestrator import run_adaptive_orchestrator
 from app.services.adaptive_analyst.understanding import (
     TurnUnderstanding,
     capability_facts,
+    is_sufficiently_specified_ranking,
     technical_understanding_failure,
 )
 
@@ -176,10 +177,28 @@ def mock_llm(monkeypatch):
     return calls
 
 
+def test_greeting_uses_llm_not_canned(mock_llm, monkeypatch):
+    from app.services.adaptive_analyst import llm_provider as lp
+
+    monkeypatch.setattr(lp, "complete_text", und.complete_text)
+    out = run_adaptive_orchestrator(
+        "hai how are you",
+        MagicMock(),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no sql")),
+        use_sap=False,
+    )
+    assert mock_llm["respond"] >= 1
+    assert out["mode"] == "general_chat"
+    assert out.get("sql_generation_method") == "llm_greeting_fast"
+    assert out["meta"].get("fast_path") == "greeting_single_llm"
+    assert "Hi there! How can I help you today?" != (out.get("summary") or "")
+
+
 def test_capability_facts_are_structured_not_paragraph():
     facts = capability_facts()
     assert "available_capabilities" in facts
     assert facts["available_capabilities"]["business_analytics"] is True
+    assert "connected_schema_table_count" in facts
     assert "I can answer governed questions across" not in str(facts)
 
 
@@ -301,6 +320,13 @@ def test_understanding_failure_is_not_metric_clarification():
     assert payload["answer_status"] == "CANNOT_ANSWER"
     assert payload["failure_class"] == "UNDERSTANDING_MODEL_FAILED"
     assert "business metric" not in (payload.get("summary") or "").lower()
+
+
+def test_ranking_specifier_is_exported_for_orchestrator():
+    """Live ImportError: orchestrator imported a name that was never on GitHub."""
+    assert callable(is_sufficiently_specified_ranking)
+    assert is_sufficiently_specified_ranking("top 5 customers by billed sales")
+    assert not is_sufficiently_specified_ranking("hai")
 
 
 def test_metadata_path_uses_understanding_then_tool(mock_llm, monkeypatch):

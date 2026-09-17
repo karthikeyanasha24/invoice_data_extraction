@@ -22,9 +22,22 @@ class InvestigationState:
     last_user_question: str = ""
     last_resolved_question: str = ""
     entities: List[str] = field(default_factory=list)
+    # Rolling chat turns for ChatGPT-style continuity (user/assistant pairs).
+    recent_turns: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def remember_turn(self, user: str, assistant: str, *, mode: str = "") -> None:
+        turns = list(self.recent_turns or [])
+        turns.append({"role": "user", "content": (user or "")[:500]})
+        asst: Dict[str, str] = {"role": "assistant", "content": (assistant or "")[:900]}
+        if mode:
+            asst["mode"] = str(mode)[:40]
+        turns.append(asst)
+        self.recent_turns = turns[-12:]
+        self.last_user_question = (user or "")[:500]
+        self.last_summary = (assistant or "")[:2000]
 
     @classmethod
     def from_context(
@@ -42,6 +55,20 @@ class InvestigationState:
             dims = [dims]
         tables = raw.get("tables") or raw.get("selected_tables") or []
         cols = raw.get("columns") or raw.get("selected_columns") or []
+        recent = raw.get("recent_turns") or plan.get("recent_turns") or []
+        if not isinstance(recent, list):
+            recent = []
+        cleaned_recent: List[Dict[str, str]] = []
+        for item in recent[-12:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "")
+            content = str(item.get("content") or "")
+            if role and content:
+                row = {"role": role, "content": content[:900]}
+                if item.get("mode"):
+                    row["mode"] = str(item.get("mode"))[:40]
+                cleaned_recent.append(row)
         return cls(
             conversation_id=str(raw.get("conversation_id") or ""),
             metric=str(raw.get("metric") or raw.get("selected_metric") or ""),
@@ -58,4 +85,5 @@ class InvestigationState:
             last_user_question=str(previous_question or raw.get("last_user_question") or ""),
             last_resolved_question=str(raw.get("last_resolved_question") or ""),
             entities=[str(e) for e in (raw.get("entities") or []) if e],
+            recent_turns=cleaned_recent,
         )

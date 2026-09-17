@@ -630,14 +630,10 @@ def run_adaptive_orchestrator(
     force_general_chat: bool = False,
     schema_for_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    from .understanding import (
-        analytics_clarification_payload,
-        capability_facts,
-        generate_grounded_response,
-        is_sufficiently_specified_ranking,
-        technical_understanding_failure,
-        understand_turn,
-    )
+    # Greeting must not depend on analytics helpers. Live previously failed
+    # every turn (including "hai") with ImportError because the orchestrator
+    # imported is_sufficiently_specified_ranking before that symbol existed.
+    from .understanding import technical_understanding_failure
     from ..ai_followup_routing import is_prior_general_chat
 
     q = (question or "").strip()
@@ -775,6 +771,14 @@ def run_adaptive_orchestrator(
             ],
         }
         return out
+
+    from .understanding import (
+        analytics_clarification_payload,
+        capability_facts,
+        generate_grounded_response,
+        is_sufficiently_specified_ranking,
+        understand_turn,
+    )
 
     # ── LLM-first understanding (structured intent; not authorization) ──
     try:

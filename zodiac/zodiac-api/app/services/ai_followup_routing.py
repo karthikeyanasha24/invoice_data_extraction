@@ -1,4 +1,4 @@
-﻿"""
+"""
 Heuristics for when a user message should run fresh SQL instead of a no-SQL follow-up.
 
 Used by adaptive_query (Dashboard adaptive panel) and ai_analysis_orchestrator (thread follow-up).

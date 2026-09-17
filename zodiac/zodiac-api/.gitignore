@@ -24,3 +24,5 @@ r4_4_independent_sql.json
 r3_post_deploy_live_results.json
 full_chat_excellence_live.json
 app/data_catalog/generated_inventory.json
+.vercel
+.env*.local
