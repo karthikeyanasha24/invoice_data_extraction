@@ -151,6 +151,7 @@ type QueryResult = {
   column_semantics?: Record<string, { semantic_type?: string; precision?: number; format?: string }>;
   mode?: string;
   route?: string;
+  type?: string;
   calculation?: {
     source?: string;
     definition?: string;
