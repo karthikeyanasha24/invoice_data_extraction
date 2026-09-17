@@ -32,6 +32,7 @@ import {
 import {
   ADAPTIVE_CONTEXT_POLICY,
   followupContextForSend,
+  lastSuccessfulAnalyticalContext,
   updateLastSuccessfulAnalyticalContext,
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
@@ -770,9 +771,10 @@ function ResultDashboard({
   const followups = humanizeFollowups(suggested_followups);
   const status = String(result.answer_status || '').toUpperCase();
   const mode = String(result.mode || result.meta?.mode || result.route || '').toLowerCase();
-  const isGeneral = mode === 'general_chat' || mode === 'general' || (
-    status === 'SUCCESS' && !(result.sql || '').trim() && !hasData
+  const isGeneral = mode === 'general_chat' || mode === 'general' || mode === 'database_metadata' || (
+    status === 'SUCCESS' && !(result.sql || '').trim() && !hasData && mode !== 'clarification'
   );
+  const isTimeout = status === 'TIMEOUT' || mode === 'timeout' || String(result.type || '').toLowerCase() === 'timeout';
   const isEmptySuccess = status === 'SUCCESS_EMPTY' || status === 'NO_DATA';
   const isGap = isDataGapResult(result);
   const isTechFailure = isInvestigationFailure(result);
@@ -780,7 +782,32 @@ function ResultDashboard({
   const trust = analysisTrustFromResult(result);
   const heading = trust.analysisLabel;
 
+  if (isTimeout) {
+    return (
+      <StatusOutcomeCard
+        heading="Timed out"
+        message={summary || 'This analysis exceeded the allowed processing time and was stopped.'}
+        tone="amber"
+      />
+    );
+  }
+
   if (isGeneral && !isClarification && !isGap && !isTechFailure) {
+    // Metadata list-all: show the text once + optional table of names (no Key Findings echo).
+    if (mode === 'database_metadata' && hasData && (data?.length ?? 0) > 1) {
+      return (
+        <div className="space-y-3">
+          <ConversationCard message={summary || ''} />
+          <DataTable
+            data={data || []}
+            totalCount={totalCount}
+            sql={undefined}
+            heading="Tables"
+            columnSemantics={result.column_semantics}
+          />
+        </div>
+      );
+    }
     return <ConversationCard message={summary || 'Hello! How can I help you today?'} />;
   }
 
@@ -1267,27 +1294,22 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                     />
                   ) : (
                     <>
-                      {msg.content && msg.content !== msg.result?.summary && (
-                        <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {humanizePublicSummary(msg.content, msg.result ? analysisTrustFromResult(msg.result).intent : undefined)}
-                          </ReactMarkdown>
-                        </div>
-                      )}
-                      {msg.result && (
+                      {/* Prefer ResultDashboard when present — avoid duplicating summary text */}
+                      {msg.result ? (
                         <ResultDashboard
                           result={msg.result}
                           onAskFollowup={(fq) => {
                             void sendQuestion(fq, { source: 'followup-chip' });
                           }}
                         />
-                      )}
-                      {!msg.result && msg.content && (
-                        <div className="text-sm text-slate-700 leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {humanizePublicSummary(msg.content, msg.result ? analysisTrustFromResult(msg.result).intent : undefined)}
-                          </ReactMarkdown>
-                        </div>
+                      ) : (
+                        msg.content && (
+                          <div className="text-sm text-slate-700 leading-relaxed">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {humanizePublicSummary(msg.content, undefined)}
+                            </ReactMarkdown>
+                          </div>
+                        )
                       )}
                     </>
                   )}
@@ -1400,7 +1422,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         </div>
         <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-400 px-1">
           <Zap className="h-3 w-3 text-amber-400" />
-          <span>Ask a follow-up or start a new question. Context is kept until you start a new question.</span>
+          <span>Same continuous chat — follow-ups keep context. Use Clear chat (top right) to reset.</span>
         </div>
       </div>
 

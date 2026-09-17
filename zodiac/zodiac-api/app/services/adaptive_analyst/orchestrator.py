@@ -634,6 +634,7 @@ def run_adaptive_orchestrator(
         analytics_clarification_payload,
         capability_facts,
         generate_grounded_response,
+        is_sufficiently_specified_ranking,
         technical_understanding_failure,
         understand_turn,
     )
@@ -646,48 +647,8 @@ def run_adaptive_orchestrator(
         prior_plan=prior_plan,
         prior_status=prior_status,
     )
-    # Fast greeting path only (latency). Everything else uses LLM understanding.
-    greeting_fast = _deterministic_greeting_reply(q)
-    if greeting_fast and not force_general_chat and not is_prior_general_chat(
-        prior_plan, prior_status, prior_sql
-    ):
-        state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
-        if thread_id:
-            state.conversation_id = thread_id
-        state.last_user_question = q
-        state.last_summary = greeting_fast[:2000]
-        return {
-            "mode": "general_chat",
-            "route": "general",
-            "status": "success",
-            "answer_status": "SUCCESS",
-            "failure_class": "SUCCESS",
-            "sql": "",
-            "data": [],
-            "rowCount": 0,
-            "summary": greeting_fast,
-            "answer": greeting_fast,
-            "keyFindings": [],
-            "charts": [],
-            "pipeline": "adaptive_orchestrator",
-            "sql_generation_method": "greeting_fast",
-            "llm_calls": 0,
-            "query_plan": {
-                "investigation_state": {**state.to_dict(), "mode": "general_chat"},
-                "last_mode": "general_chat",
-            },
-            "meta": {
-                "mode": "general_chat",
-                "selected_capability": "greeting",
-                "understanding_model_called": False,
-                "failure_class": "SUCCESS",
-            },
-            "suggested_followups": [
-                "What can you answer?",
-                "How many tables are there?",
-                "Show the top customers by billed sales.",
-            ],
-        }
+    # No canned greeting/capability text — every turn uses LLM understanding
+    # (ChatGPT-style). Safety gates stay after understanding.
 
     # Sales-order vs billed choice remains a governed clarify (not LLM authorization).
     if adapted.action == "clarify":
@@ -724,12 +685,29 @@ def run_adaptive_orchestrator(
     # Preserve conversation context for understanding — do not drop prior on
     # standalone-looking chat follow-ups after general_chat.
     prior_was_chat = is_prior_general_chat(prior_plan, prior_status, prior_sql)
+    preserved_turns: List[Dict[str, Any]] = []
+    if isinstance(prior_plan, dict):
+        inv_prior = prior_plan.get("investigation_state")
+        if isinstance(inv_prior, dict) and isinstance(inv_prior.get("recent_turns"), list):
+            preserved_turns = list(inv_prior.get("recent_turns") or [])
+        elif isinstance(prior_plan.get("recent_turns"), list):
+            preserved_turns = list(prior_plan.get("recent_turns") or [])
     if adapted.drop_prior and not prior_was_chat and not force_general_chat:
+        # Drop analytical SQL/plan — but keep rolling chat turns (ChatGPT memory).
         prior_question = ""
         prior_sql = ""
         prior_plan = None
         prior_rows = []
     state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
+    if preserved_turns and not state.recent_turns:
+        state.recent_turns = preserved_turns[-12:]
+    elif preserved_turns and adapted.drop_prior:
+        # Merge: keep preserved history even if a thin plan was rebuilt.
+        merged = list(preserved_turns)
+        for t in state.recent_turns:
+            if t not in merged:
+                merged.append(t)
+        state.recent_turns = merged[-12:]
     if thread_id:
         state.conversation_id = thread_id
     prior_summary = _prior_summary_from_state(state, prior_plan)
@@ -741,6 +719,62 @@ def run_adaptive_orchestrator(
         _ql,
         select_source,
     )
+    from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
+
+    # Fast path: short greetings = ONE LLM reply (not understand JSON + respond).
+    # Still model-generated — not a canned template — ChatGPT-like latency.
+    if is_greeting_or_chitchat(q):
+        try:
+            from .llm_provider import complete_text
+
+            prior_bit = ""
+            if prior_summary:
+                prior_bit = f"Prior assistant reply (context only): {prior_summary[:400]}\n"
+            reply, provider = complete_text(
+                "You are BridgeEDI AI Analyst. Reply naturally in 1-2 short sentences. "
+                "Do not invent database numbers. Do not list capabilities unless asked.",
+                f"{prior_bit}User: {q}\nAssistant:",
+            )
+            reply = (reply or "").strip() or "Hi — how can I help you today?"
+        except Exception as greet_err:
+            return technical_understanding_failure(q, greet_err)
+        state.remember_turn(q, reply, mode="general_chat")
+        out = {
+            "mode": "general_chat",
+            "route": "general",
+            "status": "success",
+            "answer_status": "SUCCESS",
+            "failure_class": "SUCCESS",
+            "sql": "",
+            "data": [],
+            "rowCount": 0,
+            "summary": reply,
+            "answer": reply,
+            "keyFindings": [],
+            "charts": [],
+            "pipeline": "adaptive_orchestrator",
+            "sql_generation_method": "llm_greeting_fast",
+            "llm_calls": 1,
+            "query_plan": {
+                "investigation_state": {**state.to_dict(), "mode": "general_chat"},
+                "last_mode": "general_chat",
+            },
+            "meta": {
+                "mode": "general_chat",
+                "failure_class": "SUCCESS",
+                "understanding_model_called": False,
+                "response_model_called": True,
+                "selected_capability": "greeting",
+                "provider": provider,
+                "fast_path": "greeting_single_llm",
+            },
+            "suggested_followups": [
+                "What can you help with?",
+                "How many tables are there?",
+                "Show top customers by billed sales.",
+            ],
+        }
+        return out
 
     # ── LLM-first understanding (structured intent; not authorization) ──
     try:
@@ -756,13 +790,55 @@ def run_adaptive_orchestrator(
         return technical_understanding_failure(q, understand_err)
 
     intent = understanding.intent
+    # Do not over-clarify when the user already gave metric + top-N + dimension.
+    if is_sufficiently_specified_ranking(q) and intent in {
+        "analytics",
+        "investigation",
+        "clarification",
+    }:
+        understanding.intent = "analytics"
+        understanding.clarification_needed = False
+        understanding.clarification_question = None
+        intent = "analytics"
+
     # Application capability selection (governed): map intent → safe path.
-    if intent in {"conversation", "knowledge", "capability"} or (
+    # greeting uses the same grounded LLM reply path (no canned strings).
+    if intent in {"conversation", "knowledge", "capability", "greeting"} or (
         force_general_chat and intent not in {"analytics", "investigation", "metadata"}
     ):
         try:
-            # Capability intent always receives structured capability facts.
             resp_evidence = capability_facts() if intent == "capability" else None
+            table_turns: List[Dict[str, Any]] = []
+            if state.recent_turns:
+                # Prefer true metadata tool answers over chat that merely says "tables".
+                table_turns = [
+                    t
+                    for t in state.recent_turns
+                    if str(t.get("mode") or "") == "database_metadata"
+                    and str(t.get("role") or "") == "assistant"
+                ]
+                if not table_turns:
+                    table_turns = [
+                        t
+                        for t in state.recent_turns
+                        if str(t.get("role") or "") == "assistant"
+                        and re.search(
+                            r"\b\d+\s+tables?\b|table\(s\) may relate|available in the connected database",
+                            str(t.get("content") or ""),
+                            re.I,
+                        )
+                    ]
+                base = {"recent_turns": state.recent_turns}
+                if table_turns and re.search(r"\btables?\b", q, re.I):
+                    base["relevant_prior_about_tables"] = table_turns[-6:]
+                    base["instruction"] = (
+                        "The user is asking about prior table/schema answers. "
+                        "Summarize those prior assistant messages; do not pivot to sales."
+                    )
+                if resp_evidence is None:
+                    resp_evidence = base
+                elif isinstance(resp_evidence, dict):
+                    resp_evidence = {**resp_evidence, **base}
             reply, provider = generate_grounded_response(
                 q,
                 understanding,
@@ -770,10 +846,43 @@ def run_adaptive_orchestrator(
                 prior_summary=prior_summary,
                 evidence=resp_evidence,
             )
+            # If user asks what we said about tables and we have prior metadata
+            # turns, ground the reply on those turns (ChatGPT-style recall).
+            if (
+                table_turns
+                and re.search(r"\btables?\b", q, re.I)
+                and re.search(r"\b(tell|told|say|said|mention|about)\b", q, re.I)
+            ):
+                grounded_bits = []
+                for t in table_turns:
+                    if str(t.get("role")) != "assistant":
+                        continue
+                    c = str(t.get("content") or "").strip()
+                    if c:
+                        grounded_bits.append(c[:500])
+                if grounded_bits:
+                    recall_user = (
+                        "The user asked what you previously said about tables/schema.\n"
+                        "Prior assistant answers about tables (authoritative):\n- "
+                        + "\n- ".join(grounded_bits[-4:])
+                        + "\n\nWrite a short natural reply that recalls those facts. "
+                        "Do not deny them. Do not switch to sales clarification."
+                    )
+                    try:
+                        from .llm_provider import complete_text as _complete
+
+                        recall, provider2 = _complete(
+                            "You are BridgeEDI AI Analyst. Recall prior answers accurately.",
+                            recall_user,
+                        )
+                        if (recall or "").strip():
+                            reply = recall.strip()
+                            provider = provider2 or provider
+                    except Exception:
+                        reply = "Earlier about tables I said:\n- " + "\n- ".join(grounded_bits[-3:])
         except Exception as resp_err:
             return technical_understanding_failure(q, resp_err)
-        state.last_user_question = q
-        state.last_summary = reply[:2000]
+        state.remember_turn(q, reply, mode="general_chat")
         out = {
             "mode": "general_chat",
             "route": "general",
@@ -794,8 +903,6 @@ def run_adaptive_orchestrator(
                 "investigation_state": {
                     **state.to_dict(),
                     "mode": "general_chat",
-                    "last_summary": reply[:2000],
-                    "last_user_question": q,
                 },
                 "last_mode": "general_chat",
                 "understanding": understanding.to_public_dict(),
@@ -828,11 +935,25 @@ def run_adaptive_orchestrator(
             except Exception:
                 schema = {}
         meta_payload = answer_database_metadata(q, schema=schema)
+        if meta_payload is None and re.search(
+            r"(?i)\b(all|entire|full|complete)\b|\blist\b|\b\d+\s+to\s+be\s+listed\b",
+            q,
+        ):
+            # Follow-up "list all 121" may omit the word "tables" — still list them.
+            from .database_metadata import (
+                LIST_TABLES,
+                MetadataPlan,
+                build_metadata_payload,
+                execute_metadata_plan,
+            )
+
+            forced = MetadataPlan(operation=LIST_TABLES, confidence=0.85, list_all=True)
+            meta_payload = build_metadata_payload(q, forced, execute_metadata_plan(forced, schema))
         if meta_payload is None:
             # Understanding said metadata but tool could not map — clarify schema ask.
             msg = (
                 "I can inspect the connected schema (table counts, columns, table search). "
-                "Try: \"How many tables are there?\" or \"Which tables contain customer data?\""
+                "Try: \"How many tables are there?\" or \"List all tables.\""
             )
             out = {
                 "mode": "clarification",
@@ -855,6 +976,15 @@ def run_adaptive_orchestrator(
         meta_payload = dict(meta_payload)
         meta_payload["llm_calls"] = int(meta_payload.get("llm_calls") or 0) + 1
         meta_payload["pipeline"] = meta_payload.get("pipeline") or "adaptive_orchestrator"
+        summary = str(meta_payload.get("summary") or meta_payload.get("answer") or "")
+        state.remember_turn(q, summary, mode="database_metadata")
+        qp = meta_payload.get("query_plan") if isinstance(meta_payload.get("query_plan"), dict) else {}
+        meta_payload["query_plan"] = {
+            **qp,
+            "last_mode": "database_metadata",
+            "investigation_state": {**state.to_dict(), "mode": "database_metadata"},
+            "understanding": understanding.to_public_dict(),
+        }
         logger.info("[adaptive-orch] tool_called=database_metadata op=%s", (meta_payload.get("meta") or {}).get("operation"))
         return _attach_understanding_meta(meta_payload, understanding)
 
@@ -862,10 +992,15 @@ def run_adaptive_orchestrator(
         understanding.clarification_needed and intent in {"analytics", "investigation", "clarification"}
     ):
         # Only after understanding established an analytical ask with gaps.
-        return _attach_understanding_meta(
-            analytics_clarification_payload(q, understanding),
-            understanding,
-        )
+        clar = analytics_clarification_payload(q, understanding)
+        state.remember_turn(q, str(clar.get("summary") or ""), mode="clarification")
+        qp = clar.get("query_plan") if isinstance(clar.get("query_plan"), dict) else {}
+        clar["query_plan"] = {
+            **qp,
+            "investigation_state": {**state.to_dict(), "mode": "clarification"},
+            "last_mode": "clarification",
+        }
+        return _attach_understanding_meta(clar, understanding)
 
     if intent == "cannot_answer":
         msg = understanding.goal or "I cannot answer that with the available governed capabilities."
@@ -968,12 +1103,47 @@ def run_adaptive_orchestrator(
                 p1 = {**(p1 or {}), "rewritten_question": expanded, "is_follow_up": True}
                 _log_stage("FOLLOWUP_PLAN_EXPANSION", {"expanded": expanded[:200]})
 
-    p2 = _run_four_stage_or_legacy_sql(
-        resolved, q, p1, state, db, execute_sql,
-        use_sap=use_sap, get_sap_session=get_sap_session,
-        prior_plan=prior_plan,
-        prior_sql=prior_sql,
-    )
+    # ── Reliability: regenerate on a plan-check miss instead of dead-ending ──
+    # SQL is generated fresh by the LLM each turn, so an answerable question can
+    # fail the validation gate on one run and pass on the next. Give it a few
+    # attempts to reach a plan-compliant result before falling through to the
+    # existing gate. This only adds tries to runs that would otherwise fail; the
+    # authoritative gate below is unchanged, so it never lowers the correctness bar.
+    _MAX_SQL_ATTEMPTS = 3
+    p2 = {}
+    for _sql_attempt in range(_MAX_SQL_ATTEMPTS):
+        p2 = _run_four_stage_or_legacy_sql(
+            resolved, q, p1, state, db, execute_sql,
+            use_sap=use_sap, get_sap_session=get_sap_session,
+            prior_plan=prior_plan,
+            prior_sql=prior_sql,
+        )
+        # Only retry the one failure we can improve: a completed query whose
+        # result would be rejected by the plan gate. Errors, clarifications,
+        # data limitations and empty results are handled by the logic below.
+        if p2.get("error") or p2.get("data_limitation"):
+            break
+        _try_rows = p2.get("rows") or []
+        if not _try_rows:
+            break
+        try:
+            from ..plan_satisfaction import result_matches_analytical_intent as _rmai
+            _try_sem = (
+                (p2.get("verified_context") or {}).get("semantic_requirements")
+                if isinstance(p2.get("verified_context"), dict)
+                else None
+            ) or p1
+            _try_warnings = _rmai(
+                _try_rows, resolved or q, _try_sem, sql=str(p2.get("sql") or "")
+            )
+        except Exception:
+            _try_warnings = []
+        if not _try_warnings:
+            break
+        _log_stage(
+            "SQL_REGENERATE",
+            {"attempt": _sql_attempt + 1, "warnings": _try_warnings[:4]},
+        )
     if p2.get("data_limitation"):
         msg = str(p2["data_limitation"])
         return {
@@ -1362,4 +1532,9 @@ def run_adaptive_orchestrator(
         }
     except Exception:
         pass
-    return out
+    state.remember_turn(q, str(out.get("summary") or ""), mode="database_analysis")
+    out.setdefault("query_plan", {})["investigation_state"] = {
+        **state.to_dict(),
+        "mode": "database_analysis",
+    }
+    return _attach_understanding_meta(out, understanding)
