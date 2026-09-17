@@ -2508,11 +2508,53 @@ async def adaptive_query_health() -> Dict[str, Any]:
         "tables": len(s),
         "columns": sum(len(v) for v in s.values()),
         "build_id": build_id[:40] if build_id else None,
-        "ai_release": "adaptive-llm-first-understand-v1",
+        "ai_release": "adaptive-chatgpt-style-v2",
         "trusted_scope": True,
         "database_metadata": True,
         "llm_first_understanding": True,
+        "no_phrase_primary": True,
     }
+
+
+@router.get("/api/query/llm-diagnostics")
+async def adaptive_query_llm_diagnostics() -> Dict[str, Any]:
+    """TEMP diagnostic: reports whether LLM keys are present in the running
+    process (lengths only, never values) and the result of one live LLM call.
+    Safe to remove after debugging. No secrets are returned."""
+    import os as _os
+
+    def _present(*names: str) -> Dict[str, Any]:
+        for n in names:
+            v = (_os.getenv(n) or "").strip()
+            if v:
+                return {"set": True, "length": len(v), "source": n}
+        return {"set": False, "length": 0, "source": None}
+
+    out: Dict[str, Any] = {
+        "openai_key": _present("OPENAI_API_KEY", "OPEN_AI_KEY"),
+        "google_key": _present("GOOGLE_API_KEY", "GOOGLE_GEMINI_API_KEY"),
+        "anthropic_key": _present("ANTHROPIC_API_KEY"),
+        "openrouter_key": _present("OPENROUTER_API_KEY"),
+        "ai_chat_provider": _os.getenv("AI_CHAT_PROVIDER"),
+        "ai_prefer_gemini": _os.getenv("AI_PREFER_GEMINI"),
+        "openai_model": _os.getenv("OPENAI_MODEL"),
+        "gemini_model": _os.getenv("AI_NATIVE_GEMINI_MODEL")
+        or _os.getenv("GEMINI_CHAT_MODEL")
+        or "gemini-2.5-flash (default)",
+        "build_id": (_os.getenv("VERCEL_GIT_COMMIT_SHA") or "")[:12],
+    }
+    try:
+        from ..services.ai_native_pipeline import llm_text as _llm_text
+
+        text, provider = _llm_text("You are a health check.", "reply with the single word ok")
+        out["llm_call"] = {"ok": True, "provider": provider, "sample": (text or "")[:80]}
+    except Exception as exc:  # noqa: BLE001
+        out["llm_call"] = {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        }
+    return out
 
 
 @router.get("/api/query/schema-diagnostics")
@@ -3172,7 +3214,9 @@ def _post_query_adaptive_body(
             logger.info("[adaptive] result-first follow-up rows=%s", reused.get("rowCount"))
             return _persist_and_return(reused)
 
-    # Generative AI page: orchestrator for business SQL and for general chat (greetings, world knowledge).
+    # ChatGPT-style: every turn goes through LLM understanding first.
+    # Phrase classifiers are soft hints only — never return canned clarification
+    # before the orchestrator has run.
     _orch_enabled = (orchestrator_enabled() or ai_native_enabled()) and not (overrideSql and overrideSql.strip())
     from ..services.ai_followup_routing import is_prior_general_chat
 
@@ -3181,28 +3225,6 @@ def _post_query_adaptive_body(
         prev_status,
         prev_sql,
     )
-    _business_turn = turn.intent not in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}
-    _general_turn = should_route_to_general_chat(
-        clean_q,
-        turn,
-        previous_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
-        previous_status=prev_status,
-        previous_sql=prev_sql,
-    )
-    # LLM-first: prior general chat and underspecified turns go through understanding
-    # before any no_business_signal clarification shortcut.
-    _needs_understanding = (
-        _prior_general
-        or _general_turn
-        or turn.reason in {"capability_meta", "general_knowledge", "greeting", "no_business_signal", "ambiguous"}
-        or is_capability_or_help_question(clean_q)
-        or is_greeting_or_chitchat(clean_q)
-        or (is_general_knowledge_question(clean_q) and not question_requires_database(clean_q))
-        or turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}
-    )
-
-    # Authoritative GENERAL_CHAT / capability / conversation follow-ups:
-    # never fall through to static no_business_signal clarification.
     _authoritative_general = (
         turn.reason in {"capability_meta", "general_knowledge", "greeting"}
         or is_capability_or_help_question(clean_q)
@@ -3210,58 +3232,8 @@ def _post_query_adaptive_body(
         or (is_general_knowledge_question(clean_q) and not question_requires_database(clean_q))
         or _prior_general
     )
-    if (_authoritative_general or _needs_understanding) and not question_requires_database(clean_q):
-        if _orch_enabled:
-            try:
-                orch = run_adaptive_orchestrator(
-                    clean_q,
-                    db,
-                    _execute_sql,
-                    use_sap=bool(USE_SAP_DB_FOR_AI),
-                    chart_fn=lambda qq, sql, rows: _ensure_charts(qq, sql or "", rows or [], []),
-                    prior_question=prev_q,
-                    prior_sql=prev_sql,
-                    prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
-                    prior_rows=rows_list,
-                    get_sap_session=get_sap_session,
-                    thread_id=thread_id or "",
-                    prior_status=prev_status,
-                    force_general_chat=_authoritative_general and not _prior_general,
-                    schema_for_metadata=_load_schema(),
-                )
-                if orch:
-                    orch["tableHint"] = tableHint
-                    orch_mode = str(orch.get("mode") or "")
-                    orch_status = str(orch.get("answer_status") or "").upper()
-                    orch_fail = str(
-                        (orch.get("meta") or {}).get("failure_class")
-                        or orch.get("failure_class")
-                        or ""
-                    ).upper()
-                    # Understanding/model failures must not become metric clarification.
-                    if orch_fail == "UNDERSTANDING_MODEL_FAILED" or orch_mode == "error":
-                        return _persist_and_return(orch)
-                    # Understanding selected a capability — return whatever governed
-                    # path produced (chat, metadata, clarification, or analytics).
-                    return _persist_and_return(orch)
-            except Exception as gen_err:
-                logger.warning("[adaptive] understanding/general orch failed: %s", gen_err)
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-                from ..services.adaptive_analyst.understanding import technical_understanding_failure
 
-                return _persist_and_return(technical_understanding_failure(clean_q, gen_err))
-        # Orchestrator disabled: technical limitation, not business-metric clarification.
-        return _persist_and_return(
-            _cannot_answer_payload(
-                clean_q,
-                reason="adaptive understanding path unavailable",
-            )
-        )
-
-    if _orch_enabled and (_business_turn or _general_turn or _needs_understanding):
+    if _orch_enabled:
         try:
             orch = run_adaptive_orchestrator(
                 clean_q,
@@ -3276,6 +3248,7 @@ def _post_query_adaptive_body(
                 get_sap_session=get_sap_session,
                 thread_id=thread_id or "",
                 prior_status=prev_status,
+                force_general_chat=_authoritative_general and not _prior_general and not question_requires_database(clean_q),
                 schema_for_metadata=_load_schema(),
             )
             if orch:
@@ -3288,44 +3261,21 @@ def _post_query_adaptive_body(
                         float((orch.get("pipeline_log") or {}).get("elapsed_s") or 0),
                         question=clean_q,
                     ))
-                if _general_turn or _prior_general or _needs_understanding:
-                    if orch_mode == "general_chat" or (
-                        orch_status in {"SUCCESS", "CLARIFICATION"}
-                        and not str(orch.get("sql") or "").strip()
-                    ):
-                        logger.info(
-                            "[adaptive] general_chat mode=%s status=%s",
-                            orch_mode,
-                            orch_status,
-                        )
-                        return _persist_and_return(orch)
-                    orch_fail = str(
-                        (orch.get("meta") or {}).get("failure_class")
-                        or orch.get("failure_class")
-                        or ""
-                    ).upper()
-                    if orch_fail == "UNDERSTANDING_MODEL_FAILED":
-                        return _persist_and_return(orch)
-                    # Guard: never surface a DB investigation failure for a
-                    # non-database turn. Do NOT convert to metric clarification.
-                    if not question_requires_database(clean_q) and orch_status in {
-                        "CANNOT_ANSWER",
-                        "ERROR",
-                        "TIMEOUT",
-                    }:
-                        logger.warning(
-                            "[adaptive] non-database turn orch status=%s — preserving failure",
-                            orch_status,
-                        )
-                        return _persist_and_return(orch)
+                orch_fail = str(
+                    (orch.get("meta") or {}).get("failure_class")
+                    or orch.get("failure_class")
+                    or ""
+                ).upper()
+                if orch_fail == "UNDERSTANDING_MODEL_FAILED" or orch_mode == "error":
                     return _persist_and_return(orch)
                 logger.info(
-                    "[adaptive] orchestrator mode=%s route=%s llm_calls=%s rows=%s status=%s",
+                    "[adaptive] orch mode=%s route=%s llm_calls=%s rows=%s status=%s understanding=%s",
                     orch.get("mode"),
                     orch.get("route"),
                     orch.get("llm_calls"),
                     orch.get("rowCount"),
                     orch_status,
+                    bool((orch.get("meta") or {}).get("understanding_model_called")),
                 )
                 return _persist_and_return(orch)
         except InvestigationTimeout as te:
@@ -3340,6 +3290,11 @@ def _post_query_adaptive_body(
                 db.rollback()
             except Exception:
                 pass
+            from ..services.adaptive_analyst.understanding import technical_understanding_failure
+
+            # Prefer understanding failure framing over metric clarification.
+            if not question_requires_database(clean_q):
+                return _persist_and_return(technical_understanding_failure(clean_q, native_err))
             return _persist_and_return(
                 _cannot_answer_payload(
                     clean_q,
@@ -3347,12 +3302,15 @@ def _post_query_adaptive_body(
                 )
             )
 
+    # Orchestrator unavailable: never use static no_business_signal canned text.
     if turn.intent in {TurnIntent.NON_BUSINESS, TurnIntent.CLARIFICATION_REQUIRED}:
-        # Last resort only if orchestrator path was unavailable above.
-        return _persist_and_return(clarification_payload(clean_q, turn.reason))
+        return _persist_and_return(
+            _cannot_answer_payload(
+                clean_q,
+                reason="adaptive understanding path unavailable",
+            )
+        )
 
-    # Competing SAP analytics compilers (catalog, sales-order, domain, deep, period-compare,
-    # dashboard router, universal LLM) are no longer runtime authorities.
     return _persist_and_return(
         _cannot_answer_payload(
             clean_q,
@@ -3362,6 +3320,9 @@ def _post_query_adaptive_body(
 
     # --- LEGACY COMPILER PATHS BELOW ARE UNREACHABLE ---
     # Kept as source for test fixtures / evaluation, not executed.
+    _orch_enabled_legacy = False
+    if _orch_enabled_legacy:
+        pass
 
     # Turn already classified above. Reuse that decision for compiler paths.
 
