@@ -2518,10 +2518,11 @@ async def adaptive_query_health() -> Dict[str, Any]:
 
 @router.get("/api/query/llm-diagnostics")
 async def adaptive_query_llm_diagnostics() -> Dict[str, Any]:
-    """TEMP diagnostic: reports whether LLM keys are present in the running
-    process (lengths only, never values) and the result of one live LLM call.
-    Safe to remove after debugging. No secrets are returned."""
+    """TEMP diagnostic: key presence (lengths only, never values) and a direct
+    probe of each provider (Gemini, OpenAI plain, OpenAI json-mode) with the
+    exact error. Safe to remove after debugging. Returns no secret values."""
     import os as _os
+    from ..services import ai_native_pipeline as _p
 
     def _present(*names: str) -> Dict[str, Any]:
         for n in names:
@@ -2533,27 +2534,29 @@ async def adaptive_query_llm_diagnostics() -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "openai_key": _present("OPENAI_API_KEY", "OPEN_AI_KEY"),
         "google_key": _present("GOOGLE_API_KEY", "GOOGLE_GEMINI_API_KEY"),
-        "anthropic_key": _present("ANTHROPIC_API_KEY"),
-        "openrouter_key": _present("OPENROUTER_API_KEY"),
         "ai_chat_provider": _os.getenv("AI_CHAT_PROVIDER"),
         "ai_prefer_gemini": _os.getenv("AI_PREFER_GEMINI"),
-        "openai_model": _os.getenv("OPENAI_MODEL"),
-        "gemini_model": _os.getenv("AI_NATIVE_GEMINI_MODEL")
-        or _os.getenv("GEMINI_CHAT_MODEL")
-        or "gemini-2.5-flash (default)",
+        "openai_model": _p._openai_model(),
+        "gemini_model": _p._gemini_model(),
         "build_id": (_os.getenv("VERCEL_GIT_COMMIT_SHA") or "")[:12],
     }
-    try:
-        from ..services.ai_native_pipeline import llm_text as _llm_text
 
-        text, provider = _llm_text("You are a health check.", "reply with the single word ok")
-        out["llm_call"] = {"ok": True, "provider": provider, "sample": (text or "")[:80]}
+    # Direct Gemini probe — reveals WHY gemini fails in prod (egress/SSL/HTTP code)
+    try:
+        t = _p._gemini_chat("You are a health check.", "reply with the single word ok")
+        out["gemini_direct"] = {"ok": True, "sample": (t or "")[:80]}
     except Exception as exc:  # noqa: BLE001
-        out["llm_call"] = {
-            "ok": False,
-            "error_type": type(exc).__name__,
-            "error": str(exc)[:500],
-        }
+        out["gemini_direct"] = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)[:600]}
+
+    # Direct OpenAI probe, plain and json-mode — reveals if gpt-5 returns empty
+    for jm in (False, True):
+        try:
+            prompt = 'return ONLY a JSON object: {"x": 1}' if jm else "reply with the single word ok"
+            t = _p._openai_chat("You are a health check.", prompt, json_mode=jm)
+            out["openai_jsonmode_%s" % jm] = {"ok": True, "length": len(t or ""), "sample": (t or "")[:120]}
+        except Exception as exc:  # noqa: BLE001
+            out["openai_jsonmode_%s" % jm] = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)[:400]}
+
     return out
 
 
