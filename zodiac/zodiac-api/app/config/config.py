@@ -96,6 +96,7 @@ FORCE_NEW_ACTION_FOR_DATA_QUERIES = os.getenv("FORCE_NEW_ACTION_FOR_DATA_QUERIES
 
 def initialize_storage():
     """Initialize storage system (blob or local)."""
+    global UPLOAD_DIR, EDI_DIR
     logger.info("=" * 60)
     logger.info("🗂️ FILE STORAGE CONFIGURATION")
     logger.info("=" * 60)
@@ -122,8 +123,29 @@ def initialize_storage():
                 raise RuntimeError(f"Failed to initialize mandatory Vercel Blob API: {str(e)}")
     else:
         logger.info("📁 STORAGE MODE: LOCAL FILE STORAGE")
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        EDI_DIR.mkdir(parents=True, exist_ok=True)
+        # On a read-only serverless filesystem (e.g. Vercel), the bundle dir is
+        # not writable, so creating relative dirs raises OSError at import time.
+        # Fall back to the platform temp dir so the module imports cleanly and
+        # local file writes still work. Blob storage remains the production path.
+        try:
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            EDI_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            import tempfile
+            logger.warning(
+                f"⚠️ Local storage dirs not writable ({e}); using temp dir fallback"
+            )
+            tmp_root = Path(tempfile.gettempdir())
+            UPLOAD_DIR = tmp_root / "uploads"
+            EDI_DIR = tmp_root / "converted"
+            try:
+                UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                EDI_DIR.mkdir(parents=True, exist_ok=True)
+            except OSError as e2:
+                logger.error(
+                    f"❌ Temp storage dirs also not writable ({e2}); "
+                    "continuing without local storage dirs"
+                )
     
     logger.info("=" * 60)
 
