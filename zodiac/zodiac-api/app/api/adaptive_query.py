@@ -1264,6 +1264,15 @@ CHART_COLORS = [
 ]
 
 
+_SAP_ID_NEVER_MEASURE = frozenset({
+    "mandt", "vbeln", "kunnr", "kunag", "lifnr", "matnr", "werks", "bukrs",
+    "vkorg", "vtweg", "spart", "aubel", "vgbel", "fknum", "belnr",
+    "buzei", "posnr", "aupos", "ebelp", "ebeln", "knumv",
+    "vbelv", "posnn", "rnumb", "bolnr", "zterm", "kkber",
+    "gjahr", "fkart", "fktyp", "waerk", "waers", "pernr",
+})
+
+
 def _col_role(col: str) -> str:
     """
     Classify a column as 'date', 'label', 'numeric', or 'other'.
@@ -1271,6 +1280,8 @@ def _col_role(col: str) -> str:
     (e.g. 'material_id' must NOT match 'at' from DATE_KEYWORDS via substring).
     """
     c = col.lower()
+    if c in _SAP_ID_NEVER_MEASURE:
+        return "label"
     # Split on underscores and non-alpha to get meaningful word parts
     parts = set(re.split(r'[_\-\s]', c)) | {c}
 
@@ -1380,11 +1391,15 @@ def _auto_charts(
     label_cols  = [c for c in cols if _col_role(c) == "label"]
     numeric_cols = [
         c for c in cols
-        if _col_role(c) == "numeric" and _column_has_numeric(data, c)
+        if _col_role(c) == "numeric"
+        and c.lower() not in _SAP_ID_NEVER_MEASURE
+        and _column_has_numeric(data, c)
     ]
 
     # Also detect columns that are actually numeric by value but not by name
     for c in cols:
+        if c.lower() in _SAP_ID_NEVER_MEASURE:
+            continue
         if c not in date_cols + label_cols + numeric_cols:
             if _column_has_numeric(data, c) and not isinstance(data[0].get(c), str):
                 # Prefer non-string numerics; still allow numeric strings via sample
@@ -1410,6 +1425,15 @@ def _auto_charts(
     if not x_candidates or not y_candidates:
         return []
 
+    def _nunique(col: str) -> int:
+        return len({str(r.get(col) or "") for r in data[:50]})
+
+    # Prefer a dimension that actually varies (country=US on every row is a bad pie).
+    if not date_cols and len(x_candidates) > 1:
+        varying = [c for c in x_candidates if _nunique(c) > 1]
+        pool = varying or x_candidates
+        x_candidates = sorted(pool, key=_nunique, reverse=True) + [c for c in x_candidates if c not in pool]
+
     charts: List[Dict[str, Any]] = []
     n_rows = len(data)
     n_numeric = len(y_candidates)
@@ -1427,7 +1451,7 @@ def _auto_charts(
         # Pie chart — few segments, one value
         q_lower = question.lower()
         use_pie = any(kw in q_lower for kw in ["distribution","share","breakdown","proportion","percent","pie","split","by currency","by country","by region","by type","by status","by category"])
-        if use_pie or n_rows <= 6:
+        if (use_pie or n_rows <= 6) and _nunique(x_key) > 1:
             charts.append({
                 "chart_type": "pie",
                 "title": _chart_title(question, "Distribution"),
@@ -1438,19 +1462,6 @@ def _auto_charts(
                 "colors": CHART_COLORS,
                 "show_legend": True,
             })
-            if n_rows > 1:
-                # Also add bar as second view
-                charts.append({
-                    "chart_type": "bar",
-                    "title": _chart_title(question, "Bar Chart"),
-                    "description": f"{y_keys[0].replace('_',' ')} by {x_key.replace('_',' ')}",
-                    "data": chart_data,
-                    "x_key": x_key,
-                    "y_keys": y_keys,
-                    "colors": CHART_COLORS,
-                    "show_legend": False,
-                    "show_grid": True,
-                })
             return charts
 
     if has_time:
@@ -1468,18 +1479,6 @@ def _auto_charts(
             "show_grid": True,
         })
         # Add bar as alternative if not too many points
-        if n_rows <= 30 and n_numeric == 1:
-            charts.append({
-                "chart_type": "bar",
-                "title": _chart_title(question, "Bar Chart"),
-                "description": f"{y_keys[0].replace('_',' ')} by period",
-                "data": chart_data,
-                "x_key": date_cols[0],
-                "y_keys": y_keys[:1],
-                "colors": CHART_COLORS,
-                "show_legend": False,
-                "show_grid": True,
-            })
         return charts
 
     # Default: bar chart (handles categorical + multi-series)
@@ -1497,20 +1496,7 @@ def _auto_charts(
         "stacked": is_stacked and n_numeric > 1,
     })
 
-    # Add pie for comparison queries with ≤12 categories
-    if n_numeric == 1 and n_rows <= 12 and x_key in label_cols:
-        charts.append({
-            "chart_type": "pie",
-            "title": _chart_title(question, "Distribution"),
-            "description": f"Share of {y_keys[0].replace('_',' ')} by {x_key.replace('_',' ')}",
-            "data": chart_data,
-            "name_key": x_key,
-            "value_key": y_keys[0],
-            "colors": CHART_COLORS,
-            "show_legend": True,
-        })
-
-    return charts[:2]  # max 2 charts per query
+    return charts[:1]
 
 
 def _chart_title(question: str, fallback: str) -> str:

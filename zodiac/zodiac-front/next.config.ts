@@ -5,7 +5,7 @@ import path from "path";
 const backendOrigin = (
   process.env.BACKEND_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
-  "http://127.0.0.1:8000"
+  "http://127.0.0.1:8765"
 ).replace(/\/$/, "");
 
 /** Lock Turbopack to this app so Next does not pick a parent folder lockfile (e.g. C:\\Users\\…\\package-lock.json). */

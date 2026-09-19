@@ -318,7 +318,8 @@ def inject_currency_filter_sql(sql: str, table: str, column: str, currency_code:
     if not sql or not currency_code:
         return sql
     tbl = resolve_table_name(table) or table
-    if re.search(rf"{re.escape(column)}\s*=", sql, re.I):
+    # Match quoted/unquoted column refs: waerk =, "waerk" =, ."waerk"=
+    if re.search(rf'(?:^|[.\s"]){re.escape(column)}"?\s*=', sql, re.I):
         return sql
 
     def _depth_at(pos: int) -> int:
@@ -339,21 +340,25 @@ def inject_currency_filter_sql(sql: str, table: str, column: str, currency_code:
             i += 1
         return depth
 
-    from_m = re.search(
-        rf'(?:FROM|JOIN)\s+"{re.escape(tbl)}"\s+(?:AS\s+)?(?P<alias>[A-Za-z_][A-Za-z0-9_]*)?'
-        rf'|(?:FROM|JOIN)\s+{re.escape(tbl)}\s+(?:AS\s+)?(?P<alias2>[A-Za-z_][A-Za-z0-9_]*)?',
-        sql,
-        re.I,
+    reserved = frozenset(
+        {"ON", "LEFT", "RIGHT", "INNER", "OUTER", "JOIN", "WHERE", "GROUP", "ORDER", "LIMIT", "AS", "AND", "OR"}
     )
+    # Alias is only consumed when it is a real identifier, never WHERE/GROUP/etc.
+    # (consuming WHERE previously pushed search_from past the clause → second WHERE).
+    from_pat = (
+        rf'(?:FROM|JOIN)\s+"(?:{re.escape(tbl)})"'
+        rf'(?:\s+(?:AS\s+)?(?!(?:{"|".join(sorted(reserved))})\b)(?P<alias>[A-Za-z_][A-Za-z0-9_]*))?'
+        rf'|(?:FROM|JOIN)\s+(?:{re.escape(tbl)})'
+        rf'(?:\s+(?:AS\s+)?(?!(?:{"|".join(sorted(reserved))})\b)(?P<alias2>[A-Za-z_][A-Za-z0-9_]*))?'
+    )
+    from_m = re.search(from_pat, sql, re.I)
     if not from_m:
         from_m = re.search(rf'(?:FROM|JOIN)\s+"{re.escape(tbl)}"', sql, re.I)
     if not from_m:
         return sql
 
-    reserved = frozenset(
-        {"ON", "LEFT", "RIGHT", "INNER", "OUTER", "JOIN", "WHERE", "GROUP", "ORDER", "LIMIT", "AS", "AND", "OR"}
-    )
-    alias = (from_m.groupdict().get("alias") or from_m.groupdict().get("alias2") or "").strip()
+    groups = from_m.groupdict()
+    alias = (groups.get("alias") or groups.get("alias2") or "").strip()
     if alias and alias.upper() not in reserved:
         qual = alias
     else:

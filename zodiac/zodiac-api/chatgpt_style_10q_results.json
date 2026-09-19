@@ -1,0 +1,112 @@
+[
+  {
+    "q": "hai how are you",
+    "ok": true,
+    "mode": "general_chat",
+    "status": "SUCCESS",
+    "intent": "greeting",
+    "understood": true,
+    "method": "llm_understanding_response",
+    "summary": "Hi! I'm doing well \u2014 thanks for asking. How can I help you today?",
+    "reasons": []
+  },
+  {
+    "q": "what can you answer?",
+    "ok": true,
+    "mode": "general_chat",
+    "status": "SUCCESS",
+    "intent": "capability",
+    "understood": true,
+    "method": "llm_understanding_response",
+    "summary": "I can help with a mix of conversational, analytical, and data-driven questions about your migrated SAP extract. In brief, I can:\n\n- Carry on general conversation and answer general-knowledge questions.\n- Query and explai",
+    "reasons": []
+  },
+  {
+    "q": "is that hardcoded or do you decide dynamically?",
+    "ok": true,
+    "mode": "general_chat",
+    "status": "SUCCESS",
+    "intent": "capability",
+    "understood": true,
+    "method": "llm_understanding_response",
+    "summary": "Short answer \u2014 a mix of both.\n\nHardcoded / fixed rules (these are followed consistently)\n- I run queries only against the governed SQL over the migrated SAP extract when data is needed (I do not fetch ad hoc external sou",
+    "reasons": []
+  },
+  {
+    "q": "list out the tables",
+    "ok": true,
+    "mode": "database_metadata",
+    "status": "SUCCESS",
+    "intent": "metadata",
+    "understood": true,
+    "method": "schema_catalog",
+    "summary": "There are 121 tables available (showing 20 of 121): AFKO, AFPO, ai_analysis_memory, ai_chat_threads, ai_chat_turns, ai_learned_patterns, ai_query_embeddings, ai_query_memory, ai_training_data, AUFK, AUSP, BKPF, BSAD, BSE",
+    "reasons": []
+  },
+  {
+    "q": "how many tables are there?",
+    "ok": true,
+    "mode": "database_metadata",
+    "status": "SUCCESS",
+    "intent": "metadata",
+    "understood": true,
+    "method": "schema_catalog",
+    "summary": "There are 121 tables available in the connected database.",
+    "reasons": []
+  },
+  {
+    "q": "which tables look related to customers?",
+    "ok": true,
+    "mode": "database_metadata",
+    "status": "SUCCESS",
+    "intent": "metadata",
+    "understood": true,
+    "method": "schema_catalog",
+    "summary": "Based on schema evidence, 35 table(s) may relate to customers, customer. Top matches: customers (table name matches 'customers'; table name matches 'customer'; column 'customer_id'), user_customers (table name matches 'c",
+    "reasons": []
+  },
+  {
+    "q": "ok list the sales for top customers",
+    "ok": true,
+    "mode": "clarification",
+    "status": "CLARIFICATION",
+    "intent": "analytics",
+    "understood": true,
+    "method": "understanding_clarification",
+    "summary": "Do you want the top N customers \u2014 if so, what N? Which time period (e.g., year-to-date, calendar year, last 12 months)? Use billed invoices (default) or sales orders? Any specific currency or aggregation (total sales per",
+    "reasons": []
+  },
+  {
+    "q": "what did you just tell me about tables?",
+    "ok": true,
+    "mode": "general_chat",
+    "status": "SUCCESS",
+    "intent": "conversation",
+    "understood": true,
+    "method": "llm_understanding_response",
+    "summary": "You previously said:\n\n- There are 121 tables available (showing 20 of 121): AFKO, AFPO, ai_analysis_memory, ai_chat_threads, ai_chat_turns, ai_learned_patterns, ai_query_embeddings, ai_query_memory, ai_training_data, AUF",
+    "reasons": []
+  },
+  {
+    "q": "can you explain that simpler?",
+    "ok": true,
+    "mode": "general_chat",
+    "status": "SUCCESS",
+    "intent": "conversation",
+    "understood": true,
+    "method": "llm_understanding_response",
+    "summary": "Sure \u2014 here it is in simpler terms:\n\n- The database has 121 tables in total. I showed a sample list of 20 table names as examples (AFKO, AFPO, ai_analysis_memory, ai_chat_threads, \u2026 CE1R300).\n\n- From the schema, about 35",
+    "reasons": []
+  },
+  {
+    "q": "show billed sales by customer top 5",
+    "ok": true,
+    "mode": "database_analysis",
+    "status": "NO_DATA",
+    "intent": "analytics",
+    "understood": true,
+    "method": "pipeline2_sql",
+    "summary": "No matching records were found for the requested period and condition.",
+    "reasons": []
+  }
+]

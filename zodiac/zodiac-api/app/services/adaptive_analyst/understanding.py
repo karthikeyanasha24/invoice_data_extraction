@@ -49,6 +49,13 @@ _UNDERSTAND_SYSTEM = (
     "Rules:\n"
     "- Follow-ups about prior assistant answers (predefined? dynamic? explain more?) "
     "→ conversation, requires_database=false.\n"
+    "- Questions ABOUT a prior turn (why it was fast/slow, whether you understood, "
+    "summarize that result, 'from the above') → conversation, "
+    "requires_database=false, requires_metadata=false, "
+    "requires_conversation_context=true — even if the prior topic was tables or sales.\n"
+    "- Repeat catalog listing only when the user requests schema facts again "
+    "(count/list/describe tables), not when they mention tables while talking "
+    "about how the previous reply was produced.\n"
     "- Asking what the assistant can do → capability, requires_database=false.\n"
     "- What is SAP / plain-language concepts → knowledge, requires_database=false.\n"
     "- How many tables / schema size / which table has customers → metadata.\n"
@@ -77,7 +84,12 @@ _RESPONSE_SYSTEM = (
     "(under ~12 bullets) unless the user asks for detail. "
     "When the user asks what you previously said about tables/schema, "
     "answer from the recent conversation turns that discuss tables — "
-    "not from a later sales clarification."
+    "not from a later sales clarification. "
+    "If prior_result is provided, the user may be asking about that result: "
+    "summarize it using those facts. Never claim there was no previous answer "
+    "when prior_result or previous_assistant is present. "
+    "If they ask why a catalog list was fast, explain that table names come from "
+    "the already-loaded schema catalog (no business-row SQL) — do not list tables again."
 )
 
 
@@ -213,6 +225,101 @@ def is_sufficiently_specified_ranking(question: str) -> bool:
     return has_top and has_customer and has_metric
 
 
+_ASSISTANT_REF = re.compile(
+    r"\b(you|your|you're|you are|didn'?t you|did you)\b",
+    re.I,
+)
+_PRIOR_DEIXIS = re.compile(
+    r"\b("
+    r"above|previous|prior|earlier|"
+    r"that answer|this answer|the (last|previous) (answer|result|response)|"
+    r"my question|from the above"
+    r")\b",
+    re.I,
+)
+_PROCESS_OR_RECALL = re.compile(
+    r"\b("
+    r"how come|wonder(?:ing)?|"
+    r"so (quickly|fast)|took time|response times?|"
+    r"summarize|summarise|summary|"
+    r"properly|understand(?:ing)?|get my question|"
+    r"how (?:can|did|do) you"
+    r")\b",
+    re.I,
+)
+_CATALOG_RELIST = re.compile(
+    r"\b("
+    r"(?:list|show|display|enumerate)\s+(?:(me|out|all)\s+)*(?:the\s+)?(?:all\s+)?tables?"
+    r"|how many tables"
+    r")\b",
+    re.I,
+)
+_PROCESS_MANNER = re.compile(r"\b(quickly|fast|slow|time|wonder)\b", re.I)
+
+
+def is_prior_turn_discourse(question: str, *, has_prior: bool) -> bool:
+    """True when the user is talking about the previous assistant turn.
+
+    Generic: process/recall of a prior answer, not a new catalog or SQL ask.
+    """
+    if not has_prior:
+        return False
+    q = question or ""
+    process = bool(_PROCESS_OR_RECALL.search(q))
+    if _PRIOR_DEIXIS.search(q) and re.search(
+        r"\b(summarize|summarise|mean|explain|say about)\b", q, re.I
+    ):
+        process = True
+    if _ASSISTANT_REF.search(q) and _PRIOR_DEIXIS.search(q):
+        process = True
+    if not process:
+        return False
+    if _CATALOG_RELIST.search(q) and not _PROCESS_MANNER.search(q):
+        return False
+    return True
+
+
+def apply_prior_discourse_override(
+    understanding: TurnUnderstanding,
+    question: str,
+    *,
+    has_prior: bool,
+) -> TurnUnderstanding:
+    """Keep process/recall of a prior turn on the conversation path."""
+    if not is_prior_turn_discourse(question, has_prior=has_prior):
+        return understanding
+    understanding.intent = "conversation"
+    understanding.requires_database = False
+    understanding.requires_metadata = False
+    understanding.requires_conversation_context = True
+    understanding.clarification_needed = False
+    understanding.clarification_question = None
+    return understanding
+
+
+def compact_prior_result(
+    rows: Optional[List[Dict[str, Any]]],
+    summary: str = "",
+) -> Dict[str, Any]:
+    """Compact prior analytical rows for conversation (no raw dict dumps)."""
+    out: Dict[str, Any] = {
+        "summary": (summary or "")[:1200],
+        "row_count": len(rows or []),
+    }
+    if not rows:
+        return out
+    keys = [str(k) for k in list(rows[0].keys())[:6]]
+    preview: List[str] = []
+    for row in rows[:6]:
+        if not isinstance(row, dict):
+            continue
+        preview.append(
+            "; ".join(f"{k}={row.get(k)}" for k in keys if k in row)
+        )
+    out["preview"] = preview
+    return out
+
+
 def _normalize_intent(raw: str) -> str:
     t = re.sub(r"[^a-z_]", "", (raw or "").strip().lower().replace("-", "_").replace(" ", "_"))
     aliases = {
@@ -310,6 +417,11 @@ def understand_turn(
     if not isinstance(data, dict):
         raise RuntimeError("understanding model returned non-object JSON")
     result = _coerce_understanding(data, provider=provider)
+    result = apply_prior_discourse_override(
+        result,
+        q,
+        has_prior=bool(prior_question or prior_summary or prior_plan),
+    )
     logger.info(
         "[understanding] understanding_result intent=%s requires_db=%s requires_meta=%s clar=%s provider=%s",
         result.intent,
@@ -345,6 +457,9 @@ def generate_grounded_response(
                 ((evidence or {}).get("recent_turns") if isinstance(evidence, dict) else None)
                 or []
             ),
+            "prior_result": (
+                (evidence or {}).get("prior_result") if isinstance(evidence, dict) else None
+            ),
         },
         "current_user_message": (question or "")[:1500],
     }
@@ -356,7 +471,7 @@ def generate_grounded_response(
     text, provider = complete_text(
         _RESPONSE_SYSTEM,
         "Produce the assistant reply for the user.\n"
-        + json.dumps(payload, default=str)[:4500],
+        + json.dumps(payload, default=str)[:7000],
     )
     reply = (text or "").strip()
     if not reply:

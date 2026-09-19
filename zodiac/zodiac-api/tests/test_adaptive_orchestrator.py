@@ -4,6 +4,7 @@ from app.services.adaptive_analyst.capabilities import schema_capabilities
 from app.services.adaptive_analyst.conversation_state import InvestigationState
 from app.services.adaptive_analyst.orchestrator import (
     _force_general_chat,
+    _human_findings,
     _is_limit_clarify,
     _is_questionnaire,
     _is_sales_vs_billing_clarify,
@@ -125,6 +126,19 @@ def test_adapt_user_turn_each_message_in_thread():
     )
     assert top5.action == "query"
     assert top5.question == "top 5 customers by sales in 2004"
+
+
+def test_human_findings_drops_raw_row_dumps():
+    cleaned = _human_findings(
+        [
+            "{'vbeln': '0090023134', 'net_value': -4.83}",
+            "[1, 45.0]",
+            "13 negative sales transactions were recorded in 2000.",
+        ],
+        [{"vbeln": "1"}],
+        "fallback summary",
+    )
+    assert cleaned == ["13 negative sales transactions were recorded in 2000."]
 
 
 def test_capabilities_reports_vbed_absent_vbep_present():

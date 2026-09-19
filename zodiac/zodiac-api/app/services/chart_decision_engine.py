@@ -32,7 +32,7 @@ _SAMPLING_CAP = 500
 
 # SAP key/document columns — always IDs, never metrics
 _SAP_ID_COLS = frozenset({
-    "mandt", "vbeln", "kunnr", "lifnr", "matnr", "werks", "bukrs",
+    "mandt", "vbeln", "kunnr", "kunag", "kunnr", "lifnr", "matnr", "werks", "bukrs",
     "vkorg", "vtweg", "spart", "aubel", "vgbel", "fknum", "belnr",
     "buzei", "posnr", "aupos", "ebelp", "ebeln", "knumv",
     "vbelv", "posnn", "rnumb", "bolnr", "zterm", "kkber",
@@ -380,8 +380,17 @@ def decide_chart(
     def _hints():
         return {"progressive": progressive_hint(len(rows), opts["samplingCap"]), "binning": binning}
 
-    # Non-ID text label column
-    text_label_col = next((c for c in text_cols if c not in id_cols), None)
+    # Prefer the most distinctive non-ID text column (avoid pie/bar of all-US country).
+    def _nunique(col: str) -> int:
+        return len({str(r.get(col) or "") for r in rows})
+
+    label_candidates = [c for c in text_cols if c not in id_cols]
+    if len(label_candidates) > 1:
+        label_candidates.sort(key=_nunique, reverse=True)
+        distinctive = [c for c in label_candidates if _nunique(c) > 1]
+        text_label_col = (distinctive or label_candidates)[0]
+    else:
+        text_label_col = label_candidates[0] if label_candidates else None
 
     # ── Rule 1: KPI (single aggregate row) ────────────────────────────────
     if len(rows) == 1 and len(numeric_cols) >= 1:
@@ -444,7 +453,14 @@ def decide_chart(
 
     # ── Rule 4: Pie — part-to-whole with moderate skew ─────────────────────
     pie_val_col = next((c for c in money_cols), None) or next((c for c in count_cols), None) or (numeric_cols[0] if numeric_cols else None)
-    pie_eligible = bool(text_label_col) and len(money_cols) == 1 and not count_cols and not ratio_cols and len(rows) > 1
+    pie_eligible = (
+        bool(text_label_col)
+        and len(money_cols) == 1
+        and not count_cols
+        and not ratio_cols
+        and len(rows) > 1
+        and _nunique(text_label_col) > 1
+    )
     if pie_eligible and pie_val_col:
         pie_vals = []
         for r in rows:

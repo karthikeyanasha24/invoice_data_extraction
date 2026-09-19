@@ -123,6 +123,18 @@ function isChartMeasureKey(k: string): boolean {
   return !/^rn$|^row_num|sortorder|sort_key|rank_num/.test(lk);
 }
 
+function isYearCol(k: string): boolean {
+  return /^(gjahr|billing_year|fiscal_year|calyear|year)$/i.test(k) || /_year$/i.test(k);
+}
+
+function fmtSapDateTick(v: any): string {
+  const s = String(v ?? '').trim();
+  if (/^\d{8}$/.test(s)) {
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  return s;
+}
+
 function splitMeasureKeys(keys: string[]): { money: string[]; percent: string[]; other: string[] } {
   const money: string[] = [];
   const percent: string[] = [];
@@ -147,6 +159,7 @@ function fmtNumberPlain(v: number, maxFrac = 2): string {
 
 function fmtCell(key: string, v: number, rowCcy?: string): string {
   if (isPercentCol(key)) return `${fmtNumberPlain(v, 2)}%`;
+  if (isYearCol(key)) return String(Math.trunc(v));
   if (isMoneycol(key)) return fmtMoney(v, rowCcy);
   return fmtNumberPlain(v, 4);
 }
@@ -199,7 +212,8 @@ function multiCcy(data: any[]): boolean {
 function isDimension(col: string, sampleVal: any): boolean {
   const lk = col.toLowerCase();
   // Explicit SAP ID / key columns
-  if (/^(mandt|vbeln|kunnr|lifnr|matnr|werks|bukrs|vkorg|vtweg|spart|belnr|posnr|ebelp|ebeln|fkdat|budat|gjahr|pernr|aubel|knumv)$/.test(lk)) return true;
+  if (/^(mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|vtweg|spart|belnr|posnr|ebelp|ebeln|fkdat|budat|gjahr|pernr|aubel|knumv)$/.test(lk)) return true;
+  if (isYearCol(lk)) return true;
   // Generic pattern: ends in _id, _code, _no, _key; or IS "id", "code", "no"
   if (/(_id|_code|_no|_key|_num|id$|code$|no$|num$|sno$|ref$|seq$)/.test(lk)) return true;
   // High-cardinality unique integer strings look like IDs
@@ -244,10 +258,13 @@ function resolveKeys(chart: ChartData): { xKey: string; yKeys: string[] } {
 
   let xKey = chart.x_key || chart.name_key || dims[0] || allKeys[0];
   const usableMeasures = measures.filter(isChartMeasureKey);
-  let yKeys = chart.y_keys?.length ? chart.y_keys.filter(isChartMeasureKey)
-    : chart.value_key ? [chart.value_key]
+  const dropDim = (k: string) =>
+    isChartMeasureKey(k) && !isDimension(k, first[k]) && !isDateCol(k, first[k]);
+  let yKeys = chart.y_keys?.length ? chart.y_keys.filter(dropDim)
+    : chart.value_key && dropDim(chart.value_key) ? [chart.value_key]
     : usableMeasures.length ? usableMeasures.slice(0, 6)
-    : allKeys.filter(k => k !== xKey && isChartMeasureKey(k)).slice(0, 6);
+    : allKeys.filter(k => k !== xKey && dropDim(k)).slice(0, 6);
+  if (!yKeys.length && usableMeasures.length) yKeys = usableMeasures.slice(0, 6);
 
   return { xKey: xKey || allKeys[0], yKeys };
 }
@@ -385,6 +402,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
         tick={{ fill: '#64748b', fontSize: 11, fontWeight: 500 }}
         tickLine={false} axisLine={{ stroke: '#e2e8f0' }}
         interval="preserveStartEnd"
+        tickFormatter={(v) => fmtSapDateTick(v)}
       />
     );
     const yA = (
@@ -841,7 +859,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
                 className={`border-b border-slate-100 hover:bg-indigo-50/30 transition-colors ${ri % 2 === 1 ? 'bg-slate-50/40' : 'bg-white'}`}>
                 {colKeys.map((k, ci) => {
                   const v = row[k];
-                  const num = typeof v === 'number' || (typeof v === 'string' && v !== '' && !isNaN(toNum(v)) && !isDimension(k, v));
+                  const num = typeof v === 'number' || (typeof v === 'string' && v !== '' && !isNaN(toNum(v)) && !isDimension(k, v) && !isYearCol(k));
                   const rc = getCcy(row) ?? currency;
                   const display = v == null ? '—'
                     : num ? (

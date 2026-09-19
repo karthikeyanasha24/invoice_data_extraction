@@ -36,8 +36,26 @@ class InvestigationState:
             asst["mode"] = str(mode)[:40]
         turns.append(asst)
         self.recent_turns = turns[-12:]
-        self.last_user_question = (user or "")[:500]
-        self.last_summary = (assistant or "")[:2000]
+        # Greetings must not erase the last data/schema answer — follow-ups
+        # like "summarize the above" need that result, not "Hello".
+        if mode != "general_chat" or not (self.last_summary or "").strip():
+            self.last_user_question = (user or "")[:500]
+            self.last_summary = (assistant or "")[:2000]
+
+    def substantive_prior_summary(self) -> str:
+        """Last assistant turn that was data or schema, skipping greetings."""
+        for item in reversed(self.recent_turns or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("role") or "") != "assistant":
+                continue
+            mode = str(item.get("mode") or "")
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            if mode in {"database_analysis", "database_metadata"}:
+                return content[:2000]
+        return (self.last_summary or "").strip()[:2000]
 
     @classmethod
     def from_context(

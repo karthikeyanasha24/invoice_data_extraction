@@ -324,9 +324,127 @@ def test_understanding_failure_is_not_metric_clarification():
 
 def test_ranking_specifier_is_exported_for_orchestrator():
     """Live ImportError: orchestrator imported a name that was never on GitHub."""
+    from app.services.adaptive_analyst.understanding import is_sufficiently_specified_ranking
+
     assert callable(is_sufficiently_specified_ranking)
     assert is_sufficiently_specified_ranking("top 5 customers by billed sales")
     assert not is_sufficiently_specified_ranking("hai")
+
+
+def test_process_question_about_table_list_is_conversation_not_metadata():
+    from app.services.adaptive_analyst.understanding import is_prior_turn_discourse
+
+    assert is_prior_turn_discourse(
+        "i am wondering how you can give list of tables so quickly",
+        has_prior=True,
+    )
+    assert is_prior_turn_discourse(
+        "didnt you get my question properly?",
+        has_prior=True,
+    )
+    assert is_prior_turn_discourse(
+        "from the above answer what can you summarize",
+        has_prior=True,
+    )
+    assert not is_prior_turn_discourse(
+        "can you able to list out all the tables you mentioned?",
+        has_prior=True,
+    )
+    assert not is_prior_turn_discourse(
+        "i am wondering how you can give list of tables so quickly",
+        has_prior=False,
+    )
+
+
+def test_table_speed_followup_does_not_relist_tables(mock_llm):
+    prior_plan = {
+        "last_mode": "database_metadata",
+        "investigation_state": {
+            "mode": "database_metadata",
+            "last_summary": "There are 121 tables available: AFKO, AFPO, VBAK.",
+            "last_user_question": "list all the tables",
+            "recent_turns": [
+                {"role": "user", "content": "list all the tables", "mode": ""},
+                {
+                    "role": "assistant",
+                    "content": "There are 121 tables available: AFKO, AFPO, VBAK.",
+                    "mode": "database_metadata",
+                },
+            ],
+        },
+    }
+    out = run_adaptive_orchestrator(
+        "i am wondering how you can give list of tables so quickly",
+        MagicMock(),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no sql")),
+        use_sap=False,
+        prior_question="list all the tables",
+        prior_plan=prior_plan,
+        prior_status="SUCCESS",
+    )
+    assert out["mode"] == "general_chat"
+    assert out.get("rowCount", 0) == 0
+    assert out.get("sql_generation_method") != "metadata"
+
+
+def test_summarize_above_uses_prior_result_not_empty_denial(mock_llm):
+    prior_rows = [
+        {"vbeln": "0090023134", "net_value": -4.83, "billing_year": "2000"},
+        {"vbeln": "0090023135", "net_value": -4.83, "billing_year": "2000"},
+    ]
+    prior_plan = {
+        "last_mode": "database_analysis",
+        "investigation_state": {
+            "mode": "database_analysis",
+            "last_summary": "13 billed documents in 2000 have negative net value, largest -4.83 DEM.",
+            "last_user_question": "show me the negative sales for the year 2000",
+            "recent_turns": [
+                {
+                    "role": "user",
+                    "content": "show me the negative sales for the year 2000",
+                },
+                {
+                    "role": "assistant",
+                    "content": "13 billed documents in 2000 have negative net value, largest -4.83 DEM.",
+                    "mode": "database_analysis",
+                },
+                {"role": "user", "content": "hai"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                    "mode": "general_chat",
+                },
+            ],
+        },
+    }
+    out = run_adaptive_orchestrator(
+        "from the above answer what can you summarize",
+        MagicMock(),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no sql")),
+        use_sap=False,
+        prior_question="hai",
+        prior_plan=prior_plan,
+        prior_rows=prior_rows,
+        prior_status="SUCCESS",
+    )
+    assert out["mode"] == "general_chat"
+    assert "hasn't been a previous answer" not in (out.get("summary") or "").lower()
+    assert "has not been a previous" not in (out.get("summary") or "").lower()
+    assert "prior_result" in mock_llm["last_respond_user"]
+
+
+def test_greeting_does_not_erase_data_summary():
+    from app.services.adaptive_analyst.conversation_state import InvestigationState
+
+    state = InvestigationState(last_summary="13 negative invoices in 2000.")
+    state.remember_turn(
+        "show negatives",
+        "13 billed documents in 2000 have negative net value.",
+        mode="database_analysis",
+    )
+    state.remember_turn("hai", "Hello! How can I assist you today?", mode="general_chat")
+    assert "negative" in state.substantive_prior_summary().lower()
+    assert "Hello" not in state.substantive_prior_summary()
 
 
 def test_metadata_path_uses_understanding_then_tool(mock_llm, monkeypatch):

@@ -21,8 +21,12 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables (Zodiac's .env first)
-load_dotenv()
+# Load environment variables from zodiac-api/.env regardless of process cwd.
+_zodiac_api_env = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_zodiac_api_env, encoding="utf-8-sig", override=True)
+_bom_db = os.getenv("\ufeffDATABASE_URL")
+if _bom_db and not (os.getenv("DATABASE_URL") or "").strip():
+    os.environ["DATABASE_URL"] = _bom_db
 
 # Option B: load invoice-bot .env so the single backend uses invoice-bot config for Generative AI and shared vars
 # Set INVOICE_BOT_ENV_PATH to the full path to invoice-bot's .env, or INVOICE_BOT_CONFIG_DIR to the invoice-bot folder.

@@ -42,6 +42,35 @@ def test_repair_table_qualifier_mismatch():
     assert '"VBRK"."waerk"' not in fixed
 
 
+def test_inject_does_not_create_second_where_after_bare_from():
+    """FROM \"VBRK\"\\nWHERE ... must not become ... AND waerk=USD WHERE waerk=USD."""
+    import re
+
+    sql = (
+        'SELECT SUM(CAST(NULLIF(TRIM(CAST("VBRK"."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "total_sales", '
+        '"VBRK"."fkdat", SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 1, 4) AS "year"\n'
+        'FROM "VBRK"\n'
+        'WHERE TRIM(CAST("VBRK"."fkdat" AS TEXT)) <> \'\' '
+        "AND SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 4) = '2000'\n"
+        'GROUP BY "VBRK"."fkdat"'
+    )
+    fixed = inject_currency_filter_sql(sql, "VBRK", "waerk", "USD")
+    assert len(re.findall(r"\bWHERE\b", fixed, flags=re.I)) == 1
+    assert "waerk" in fixed.lower()
+    assert "USD" in fixed
+
+
+def test_inject_skips_when_quoted_waerk_already_filtered():
+    sql = (
+        'SELECT SUM(CAST("VBRK"."netwr" AS NUMERIC)) AS total FROM "VBRK" '
+        'WHERE SUBSTRING("VBRK"."fkdat", 1, 4) = \'2000\' AND "VBRK"."waerk" = \'USD\' '
+        'GROUP BY "VBRK"."fkdat"'
+    )
+    fixed = inject_currency_filter_sql(sql, "VBRK", "waerk", "USD")
+    assert fixed == sql
+    assert len(__import__("re").findall(r"\bWHERE\b", fixed, flags=__import__("re").I)) == 1
+
+
 def test_inject_currency_filter():
     sql = 'SELECT SUM(CAST("VBRK"."netwr" AS NUMERIC)) FROM "VBRK" GROUP BY "VBRK"."kunag" ORDER BY 1 DESC LIMIT 5'
     fixed = inject_currency_filter_sql(sql, "VBRK", "waerk", "EUR")

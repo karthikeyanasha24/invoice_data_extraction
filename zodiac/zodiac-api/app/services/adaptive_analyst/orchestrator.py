@@ -284,7 +284,43 @@ def _force_general_chat(question: str) -> bool:
     return False
 
 
+def _human_findings(
+    findings: List[Any],
+    rows: Optional[List[Dict[str, Any]]],
+    summary: str = "",
+) -> List[str]:
+    """Key findings must be prose, never raw row dicts."""
+    cleaned: List[str] = []
+    for item in findings or []:
+        if isinstance(item, dict):
+            continue
+        text = str(item).strip()
+        if not text:
+            continue
+        if text.startswith("{") and ":" in text:
+            continue
+        if text.startswith("[") and text.endswith("]"):
+            continue
+        if text.startswith("(") and text.endswith(")"):
+            continue
+        cleaned.append(text[:400])
+        if len(cleaned) >= 8:
+            break
+    if cleaned:
+        return cleaned
+    if (summary or "").strip():
+        return [summary.strip()[:240]]
+    if rows:
+        return [f"{len(rows)} row(s) returned."]
+    return []
+
+
 def _prior_summary_from_state(state: "InvestigationState", prior_plan: Optional[Dict[str, Any]]) -> str:
+    substantive = ""
+    if hasattr(state, "substantive_prior_summary"):
+        substantive = (state.substantive_prior_summary() or "").strip()
+    if substantive:
+        return substantive
     if (state.last_summary or "").strip():
         return state.last_summary.strip()
     plan = prior_plan if isinstance(prior_plan, dict) else {}
@@ -843,6 +879,14 @@ def run_adaptive_orchestrator(
                     resp_evidence = base
                 elif isinstance(resp_evidence, dict):
                     resp_evidence = {**resp_evidence, **base}
+            if resp_evidence is None:
+                resp_evidence = {}
+            if isinstance(resp_evidence, dict):
+                from .understanding import compact_prior_result
+
+                resp_evidence["prior_result"] = compact_prior_result(
+                    prior_rows, prior_summary
+                )
             reply, provider = generate_grounded_response(
                 q,
                 understanding,
@@ -1267,8 +1311,11 @@ def run_adaptive_orchestrator(
             msg = user_safe_pipeline_message(
                 "technical" if failure_class in {"TECHNICAL_ERROR", "SYSTEM_FAILURE", "TOOL_FAILURE", "MODEL_FAILURE"} else "repair_failed"
             )
-            if failure_class == "TOOL_FAILURE":
+            err_class = str(p2.get("error_class") or "").lower()
+            if failure_class == "TOOL_FAILURE" and err_class in {"timeout", "db_unavailable", "connection"}:
                 msg = "I couldn't complete the database analysis because the data service is temporarily unavailable."
+            elif failure_class == "TOOL_FAILURE":
+                msg = "I couldn't complete a verified query for that breakdown. Try asking with one metric and one dimension at a time."
             elif failure_class == "MODEL_FAILURE":
                 msg = "I couldn't plan a verified query for that question. Try rephrasing with a metric and period."
             status = "CANNOT_ANSWER"
@@ -1372,7 +1419,7 @@ def run_adaptive_orchestrator(
     findings = p3.get("findings") or []
     if not isinstance(findings, list):
         findings = [str(findings)]
-    findings = [str(f).strip() for f in findings if str(f).strip()][:8]
+    findings = _human_findings(findings, rows, str(p3.get("summary") or ""))
     limitations = p3.get("limitations") or []
     if not isinstance(limitations, list):
         limitations = [str(limitations)] if limitations else []

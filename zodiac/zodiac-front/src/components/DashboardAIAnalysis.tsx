@@ -109,7 +109,8 @@ function fmt(v: any): string {
 /** SAP/db key columns and ID-like values must stay verbatim, never formatted. */
 function isIdLike(col: string, val: any): boolean {
   const lk = col.toLowerCase();
-  if (/^(mandt|vbeln|kunnr|lifnr|matnr|werks|bukrs|vkorg|belnr|posnr|ebeln|ebelp|gjahr|uuid|rfc)$/.test(lk)) return true;
+  if (/^(mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|belnr|posnr|ebeln|ebelp|gjahr|uuid|rfc)$/.test(lk)) return true;
+  if (/(^year$|_year$|billing_year|fiscal_year)/.test(lk)) return true;
   if (/(_id|_code|_no|_key|_num|id$|code$|uuid|rfc)/.test(lk)) return true;
   if (typeof val === 'string' && /^\d{5,}$/.test(val.trim())) return true;
   return false;
@@ -505,6 +506,7 @@ function humanizeFindings(findings?: string[]): string[] {
       if (INTERNAL_REASON_CODES.has(key)) return false;
       if (/^[a-z]+(_[a-z]+)+$/.test(key)) return false; // bare snake_case code
       if (/sql generation|query generation failed|no unrelated edi fallback/i.test(f)) return false;
+      if (/^[\{\[\(]/.test(f) && /[:\],]/.test(f)) return false;
       return true;
     });
 }
@@ -837,13 +839,13 @@ function ResultDashboard({
     ).toUpperCase();
     const heading =
       failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
-        ? 'Data service unavailable'
+        ? 'Query could not be completed'
         : failure === 'MODEL_FAILURE' || failure === 'SQL_GENERATION_FAILED'
           ? 'Analysis could not be planned'
           : 'Investigation incomplete';
     const fallback =
       failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
-        ? "I couldn't complete the database analysis because the data service is temporarily unavailable."
+        ? "I couldn't complete a verified query for that breakdown. Try asking with one metric and one dimension at a time."
         : "I couldn't verify the requested analysis from the available database evidence.";
     return (
       <StatusOutcomeCard

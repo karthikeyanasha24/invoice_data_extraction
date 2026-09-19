@@ -2119,6 +2119,8 @@ def classify_sql_execution_error(error_text: str) -> str:
         return "invalid_join"
     if "timeout" in txt or "canceling statement" in txt:
         return "timeout"
+    if any(tok in txt for tok in ("could not connect", "connection refused", "connection reset", "operationalerror", "server closed the connection")):
+        return "db_unavailable"
     if "invalid input syntax" in txt or "cannot cast" in txt:
         return "invalid_datatype"
     if "extract" in txt and "does not exist" in txt:

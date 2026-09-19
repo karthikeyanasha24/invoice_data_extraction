@@ -131,11 +131,17 @@ def run_startup() -> Dict[str, Any]:
         logger.error("[startup] config validation failed: %s", exc)
         report["config"] = {"ok": False, "errors": [str(exc)], "warnings": []}
 
-    try:
-        report["adaptive_warmup"] = warmup_adaptive_runtime()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("[startup] adaptive warmup failed (non-fatal): %s", exc)
-        report["adaptive_warmup"] = {"ok": False, "error": str(exc)}
+    skip_warmup = os.getenv("SKIP_ADAPTIVE_WARMUP", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if skip_warmup:
+        report["adaptive_warmup"] = {"ok": True, "skipped": True}
+    else:
+        try:
+            report["adaptive_warmup"] = warmup_adaptive_runtime()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[startup] adaptive warmup failed (non-fatal): %s", exc)
+            report["adaptive_warmup"] = {"ok": False, "error": str(exc)}
 
     return report
 
