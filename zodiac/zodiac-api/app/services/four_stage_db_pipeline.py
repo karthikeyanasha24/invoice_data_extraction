@@ -972,7 +972,9 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         if sql:
             from .plan_satisfaction import sql_satisfies_analytical_intent
 
-            if not sql_satisfies_analytical_intent(sql, question, ctx.semantic_requirements):
+            # Question-derived intent only: LLM extras (e.g. negative_measure on "lowest")
+            # must not skip a valid ranking template after SQL execution failed.
+            if not sql_satisfies_analytical_intent(sql, question, None):
                 continue
             _register_template_tables(ctx, sql)
             return sql

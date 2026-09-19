@@ -3086,7 +3086,11 @@ def repair_bare_year_alias_in_case(sql: str) -> str:
 
 def sanitize_generated_sql(sql: str, question: str = "") -> str:
     """Generic post-processing for any LLM-generated SQL."""
-    from .sql_generation_sanitizers import sanitize_netwr_sql, sanitize_sap_amount_columns_sql
+    from .sql_generation_sanitizers import (
+        sanitize_netwr_sql,
+        sanitize_sap_amount_columns_sql,
+        sanitize_sap_amount_predicates_sql,
+    )
 
     out = repair_quoted_expressions_as_columns(sql or "")
     out = repair_extract_on_text_dates(out)
@@ -3094,6 +3098,7 @@ def sanitize_generated_sql(sql: str, question: str = "") -> str:
     out = repair_bare_time_grain_aliases(out)
     out = sanitize_sap_amount_columns_sql(out)
     out = sanitize_netwr_sql(out)
+    out = sanitize_sap_amount_predicates_sql(out)
     if question:
         out = repair_absurd_question_literal_filters(out, question)
     return out

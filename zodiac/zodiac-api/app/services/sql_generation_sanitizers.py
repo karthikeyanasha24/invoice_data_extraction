@@ -778,6 +778,37 @@ def sanitize_having_alias_references(sql: str) -> str:
     return sql
 
 
+def sanitize_sap_amount_predicates_sql(sql: str) -> str:
+    """Cast TEXT SAP amount columns when compared to a numeric literal.
+
+    Bare `"VBAK".netwr < 0` raises: operator does not exist: text < integer.
+    """
+    if not sql:
+        return sql
+    cols = "|".join(re.escape(c) for c in sorted(_SAP_NUMERIC_TEXT_COLUMNS, key=len, reverse=True))
+    pattern = re.compile(
+        rf'(?P<lhs>(?:(?P<alias>"?[A-Za-z_][\w]*"?)\s*\.\s*)?"?(?P<col>{cols})"?)'
+        rf'\s*(?P<op><=|>=|<>|!=|=|<|>)\s*(?P<num>-?\d+(?:\.\d+)?)'
+        rf'(?!\s+AS\s)',
+        re.IGNORECASE,
+    )
+
+    def _repl(m: re.Match) -> str:
+        start = m.start()
+        prefix = sql[max(0, start - 80) : start].upper()
+        last_cast = prefix.rfind("CAST(")
+        last_close = prefix.rfind(")")
+        if last_cast > last_close:
+            return m.group(0)
+        lhs = m.group("lhs")
+        return (
+            f"CAST(NULLIF(TRIM(CAST({lhs} AS TEXT)), '') AS NUMERIC) "
+            f"{m.group('op')} {m.group('num')}"
+        )
+
+    return pattern.sub(_repl, sql)
+
+
 def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
     """
     Apply all SQL sanitization in order:
@@ -793,6 +824,7 @@ def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
     s = sanitize_gjahr_sql(s)
     s = sanitize_netwr_sql(s)
     s = sanitize_sap_amount_columns_sql(s)
+    s = sanitize_sap_amount_predicates_sql(s)
     s = sanitize_having_alias_references(s)
     if question:
         s, _notes = inject_fkdat_calendar_year_filter(s, question)

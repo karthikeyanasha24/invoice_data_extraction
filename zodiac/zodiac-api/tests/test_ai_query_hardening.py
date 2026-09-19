@@ -310,6 +310,18 @@ def test_sanitize_generated_sap_sql_casts_hsl_aggregates() -> None:
     assert "sum(cast(nullif(trim(cast(f.\"hsl\" as text)), '') as numeric))" in low
 
 
+def test_sanitize_text_amount_compared_to_integer() -> None:
+    from app.services.sql_generation_sanitizers import sanitize_sap_amount_predicates_sql
+
+    raw = 'AND "VBAK".netwr < 0'
+    out = sanitize_sap_amount_predicates_sql(raw)
+    assert "text < integer" not in out.lower()
+    assert "AS NUMERIC" in out.upper()
+    assert "< 0" in out
+    already = "CAST(NULLIF(TRIM(CAST(\"VBAK\".\"netwr\" AS TEXT)), '') AS NUMERIC) < 0"
+    assert sanitize_sap_amount_predicates_sql(already).count("CAST(") == already.count("CAST(")
+
+
 def test_extract_explicit_table_identifiers_ignores_generic_invoice_words() -> None:
     q = "Show average total amount and tax amount by currency from invoice app tables"
     ids = [x.lower() for x in extract_explicit_table_identifiers(q)]

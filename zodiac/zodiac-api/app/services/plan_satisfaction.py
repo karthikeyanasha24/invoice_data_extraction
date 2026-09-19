@@ -305,7 +305,13 @@ def sql_satisfies_analytical_intent(
                 # Allow alias k for fact table with land1
                 if not re.search(r'\bk\."land1"|VBRK\."?land1"?', sql, re.I):
                     return False
-    if ops.get("negative_measure") and not re.search(r"[<>]\s*0", sql):
+    ql = (question or "").lower()
+    ranking_not_credit = bool(
+        ranking
+        and re.search(r"\b(top|highest|lowest|best|worst|rank|most|bottom)\b", ql)
+        and not re.search(r"\b(negative|credit memo|below zero|less than zero)\b", ql)
+    )
+    if ops.get("negative_measure") and not ranking_not_credit and not re.search(r"[<>]\s*0", sql):
         return False
     return True
 def result_matches_analytical_intent(
