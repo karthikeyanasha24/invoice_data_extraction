@@ -94,6 +94,10 @@ def test_topn_reply_after_highest_sales():
         "top 10 customers by sales in 2004"
     )
     assert ensure_default_ranking_limit("top 5 customers by sales") == "top 5 customers by sales"
+    q = "show me the lowest sales for the year 2000 by country customer and product"
+    rewritten = ensure_default_ranking_limit(q)
+    assert rewritten.lower().startswith("bottom 10")
+    assert "country" in rewritten.lower() and "product" in rewritten.lower()
 
 
 def test_adapt_user_turn_each_message_in_thread():
@@ -126,6 +130,13 @@ def test_adapt_user_turn_each_message_in_thread():
     )
     assert top5.action == "query"
     assert top5.question == "top 5 customers by sales in 2004"
+
+    lowest = adapt_user_turn(
+        "show me the lowest sales for the year 2000 by country customer and product"
+    )
+    assert lowest.action == "query"
+    assert "bottom 10" in lowest.question.lower()
+    assert lowest.clarify_message == ""
 
 
 def test_human_findings_drops_raw_row_dumps():

@@ -35,6 +35,17 @@ _SQL_FUNCS = (
     "ROUND", "ABS", "GREATEST", "LEAST", "CASE", "WHEN", "THEN", "ELSE", "END",
 )
 
+
+def _makt_join(matnr_expr: str) -> str:
+    """Join material texts without multiplying rows across languages."""
+    on = (
+        f'LPAD(TRIM(CAST({matnr_expr} AS TEXT)), 10, \'0\') = '
+        'LPAD(TRIM(CAST(m."matnr" AS TEXT)), 10, \'0\')'
+    )
+    if has_column("MAKT", "spras"):
+        on += " AND UPPER(TRIM(CAST(m.\"spras\" AS TEXT))) IN ('E', 'EN')"
+    return f'LEFT JOIN "MAKT" m ON {on}'
+
 # "TABLE"."EXPR(...)" — expression incorrectly quoted as a column identifier
 _QUOTED_EXPR_AS_COL = re.compile(
     r'"([A-Za-z0-9_]+)"\s*\.\s*"([^"]*\([^"]*)"',
@@ -888,7 +899,7 @@ def build_dimension_ranking_sql(
         sel.append('TRIM(p."matnr") AS "material_id"')
         gb.append('TRIM(p."matnr")')
         if has_table("MAKT") and has_column("MAKT", "maktx"):
-            joins.append('LEFT JOIN "MAKT" m ON TRIM(p."matnr") = TRIM(m."matnr")')
+            joins.append(_makt_join("p.\"matnr\""))
             sel.append('TRIM(m."maktx") AS "material_name"')
             gb.append('TRIM(m."maktx")')
         where.append('NULLIF(TRIM(CAST(p."matnr" AS TEXT)), \'\') IS NOT NULL')
@@ -1237,8 +1248,7 @@ def build_period_compare_sql(
             'FROM "vbrp" p',
             f'JOIN "{hdr}" k ON LPAD(TRIM(CAST(p."vbeln" AS TEXT)), 10, \'0\') = '
             f'LPAD(TRIM(CAST(k."vbeln" AS TEXT)), 10, \'0\')',
-            'LEFT JOIN "MAKT" m ON LPAD(TRIM(CAST(p."matnr" AS TEXT)), 10, \'0\') = '
-            'LPAD(TRIM(CAST(m."matnr" AS TEXT)), 10, \'0\')',
+            _makt_join("p.\"matnr\""),
         ]
         net = 'CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)'
         sel.append('TRIM(p."matnr") AS "material_id"')
@@ -1373,10 +1383,7 @@ def build_partitioned_topn_sql(
                 f'LPAD(TRIM(CAST(k."vbeln" AS TEXT)), 10, \'0\')'
             )
         if has_table("MAKT") and has_column("MAKT", "maktx"):
-            joins.append(
-                'LEFT JOIN "MAKT" m ON LPAD(TRIM(CAST(p."matnr" AS TEXT)), 10, \'0\') = '
-                'LPAD(TRIM(CAST(m."matnr" AS TEXT)), 10, \'0\')'
-            )
+            joins.append(_makt_join("p.\"matnr\""))
             sel_parts.insert(2, 'TRIM(m."maktx") AS "material_name"')
             gb += ', TRIM(m."maktx")'
         inner = (
@@ -1416,10 +1423,7 @@ def build_partitioned_topn_sql(
             'LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')',
         ]
         if has_table("MAKT"):
-            joins.append(
-                'LEFT JOIN "MAKT" m ON LPAD(TRIM(CAST(p."matnr" AS TEXT)), 10, \'0\') = '
-                'LPAD(TRIM(CAST(m."matnr" AS TEXT)), 10, \'0\')'
-            )
+            joins.append(_makt_join("p.\"matnr\""))
             sel = (
                 f'TRIM(c."land1") AS "country", TRIM(p."matnr") AS "material_id", '
                 f'TRIM(m."maktx") AS "material_name", SUM({metric}) AS "{alias}"'

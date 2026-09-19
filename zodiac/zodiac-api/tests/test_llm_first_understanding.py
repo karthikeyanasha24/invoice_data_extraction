@@ -326,7 +326,8 @@ def test_ranking_specifier_is_exported_for_orchestrator():
     """Live ImportError: orchestrator imported a name that was never on GitHub."""
     from app.services.adaptive_analyst.understanding import is_sufficiently_specified_ranking
 
-    assert callable(is_sufficiently_specified_ranking)
+    q = "show me the lowest sales for the year 2000 by country customer and product"
+    assert is_sufficiently_specified_ranking(q)
     assert is_sufficiently_specified_ranking("top 5 customers by billed sales")
     assert not is_sufficiently_specified_ranking("hai")
 

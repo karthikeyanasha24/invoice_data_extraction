@@ -63,6 +63,13 @@ _UNDERSTAND_SYSTEM = (
     "- Why did X fall / drivers → investigation.\n"
     "- Underspecified analytics like 'show growth' without metric → "
     "clarification with clarification_needed=true.\n"
+    "- If the user already gives a ranking word (highest/lowest/top/bottom) "
+    "plus a sales/revenue metric plus at least one dimension "
+    "(customer/country/product) and optionally a year, intent=analytics and "
+    "clarification_needed=false. Do not ask billed-vs-orders, single-vs-N, "
+    "or grain questions. Default billed invoices, LIMIT 10, and group by "
+    "every named dimension. Example: 'lowest sales for 2000 by country "
+    "customer and product'.\n"
     "- If the user already gives metric + dimension + top-N "
     "(e.g. 'top 5 customers by billed sales'), intent=analytics and "
     "clarification_needed=false; default time scope to all available data "
@@ -215,14 +222,29 @@ def _context_block(
 
 
 def is_sufficiently_specified_ranking(question: str) -> bool:
-    """True when metric + customer + top-N (or billed) is already present."""
+    """True when ranking + metric + dimension is already present.
+
+    Explicit top-N is not required: highest/lowest defaults to LIMIT 10.
+    """
     ql = (question or "").strip().lower()
-    has_top = bool(re.search(r"\btop\s+\d+\b", ql)) or bool(re.search(r"\b\d+\s+customers?\b", ql))
-    has_customer = "customer" in ql
+    has_limit = bool(re.search(r"\b(?:top|bottom)\s+\d+\b", ql)) or bool(
+        re.search(r"\b\d+\s+customers?\b", ql)
+    )
+    has_superlative = bool(
+        re.search(r"\b(highest|lowest|smallest|largest|minimum|maximum)\b", ql)
+    )
+    has_dim = bool(
+        re.search(
+            r"\b(customers?|countries|country|products?|materials?|industr(?:y|ies)|regions?)\b",
+            ql,
+        )
+    )
     has_metric = bool(
         re.search(r"\b(billed|billing|invoice|revenue|sales)\b", ql)
     )
-    return has_top and has_customer and has_metric
+    if has_limit and has_dim and has_metric:
+        return True
+    return bool(has_superlative and has_dim and has_metric)
 
 
 _ASSISTANT_REF = re.compile(

@@ -139,17 +139,47 @@ def _prior_is_sales_ranking(prior_question: str) -> bool:
 
 
 def ensure_default_ranking_limit(question: str) -> str:
-    """If the question is a top-customers ranking without N, default to top 10."""
+    """If a ranking has no N, default to 10 (top or bottom)."""
     q = (question or "").strip()
-    if re.search(r"\btop\s+\d+\b", q, re.I):
+    if re.search(r"\b(?:top|bottom)\s+\d+\b", q, re.I):
         return q
-    return re.sub(
+    q2 = re.sub(
         r"\btop\s+(customers?|countries)\s+by\s+",
-        r"top 10 \1 by ",
+        lambda m: (
+            "top 10 customers by "
+            if m.group(1).lower().startswith("customer")
+            else "top 10 countries by "
+        ),
         q,
         count=1,
         flags=re.I,
     )
+    if q2 != q:
+        return q2
+    if re.search(r"\b(lowest|smallest|minimum|worst)\b", q, re.I):
+        q2 = re.sub(
+            r"\b(?:show\s+me\s+)?(?:the\s+)?lowest\b",
+            "bottom 10",
+            q,
+            count=1,
+            flags=re.I,
+        )
+        if q2 != q:
+            return q2
+        return "bottom 10 " + q
+    if re.search(r"\b(highest|largest|maximum|best)\b", q, re.I) and re.search(
+        r"\b(sales|revenue|customer|country|product)\b", q, re.I
+    ):
+        q2 = re.sub(
+            r"\b(?:show\s+me\s+)?(?:the\s+)?highest\b",
+            "top 10",
+            q,
+            count=1,
+            flags=re.I,
+        )
+        if q2 != q:
+            return q2
+    return q
 
 
 def resolve_topn_choice(question: str, prior_question: str = "") -> Optional[str]:
