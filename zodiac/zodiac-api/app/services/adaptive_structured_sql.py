@@ -521,8 +521,11 @@ def build_multidim_ranking_sql(
     limit: Optional[int] = None,
 ) -> Optional[str]:
     """
-    Deterministic SQL for multi-dimensional sales rankings using VBRK → KNA1 → T016T.
-    Avoids vbrp fan-out and bad LLM join plans.
+    Deterministic SQL for multi-dimensional sales rankings.
+
+    Country/customer/industry stay on VBRK → KNA1 (no line fan-out).
+    Product/material grain uses vbrp amounts and material id — no MAKT
+    language explosion (that join times out on serverless).
     """
     if not detect_multidim_ranking_intent(question, semantic):
         return None
@@ -531,17 +534,16 @@ def build_multidim_ranking_sql(
 
     q = (question or "").lower()
     if limit is None:
-        limit = 1
-        m = re.search(r"\btop\s+(\d+)", q)
-        if m:
-            limit = int(m.group(1))
-        elif re.search(r"\b(highest|most|best|largest|biggest|lowest|worst)\b", q):
-            limit = 1
+        limit = extract_ranking_limit(question, default=10)
+        # "by country, customer and product" is a ranked list, not a single row.
+        if limit == 1 and re.search(r"\bby\b.+\band\b", q):
+            limit = 10
 
     want_country = bool(re.search(r"\b(country|countries|nation)\b", q))
     want_customer = bool(re.search(r"\b(customer|customers|client|clients)\b", q))
     want_industry = bool(re.search(r"\b(industry|industries|sector|sectors)\b", q))
-    if not any((want_country, want_customer, want_industry)):
+    want_product = bool(re.search(r"\b(products?|materials?)\b", q))
+    if not any((want_country, want_customer, want_industry, want_product)):
         sem_dims = (semantic or {}).get("dimensions")
         if isinstance(sem_dims, list):
             for d in sem_dims:
@@ -552,57 +554,93 @@ def build_multidim_ranking_sql(
                     want_customer = True
                 if "industry" in dl or "sector" in dl:
                     want_industry = True
+                if "product" in dl or "material" in dl:
+                    want_product = True
 
     hdr = resolve_table_name("VBRK") or "VBRK"
-    net = numeric_cast_expr(hdr, "netwr")
+    line = resolve_table_name("vbrp") or "vbrp"
+    years = extract_question_years(question)
     sel: List[str] = []
     gb: List[str] = []
+    joins: List[str] = []
+    where_parts: List[str] = []
 
-    if want_country and has_table("KNA1") and has_column("KNA1", "land1"):
-        sel.append(f'TRIM("KNA1"."land1") AS "country"')
-        gb.append('TRIM("KNA1"."land1")')
-    if want_customer and has_table("KNA1"):
-        if has_column("KNA1", "kunnr"):
-            sel.append(f'TRIM("KNA1"."kunnr") AS "customer_id"')
-            gb.append('TRIM("KNA1"."kunnr")')
-        if has_column("KNA1", "name1"):
-            sel.append(f'TRIM("KNA1"."name1") AS "customer_name"')
-            gb.append('TRIM("KNA1"."name1")')
-    if want_industry and has_table("KNA1") and has_table("T016T"):
-        if has_column("T016T", "brtxt"):
-            sel.append(f'TRIM("T016T"."brtxt") AS "industry"')
-            gb.append('TRIM("T016T"."brtxt")')
-        elif has_column("KNA1", "brsch"):
-            sel.append(f'TRIM("KNA1"."brsch") AS "industry_code"')
-            gb.append('TRIM("KNA1"."brsch")')
+    use_line = want_product and has_table(line) and has_column(line, "matnr")
+    if use_line:
+        net = (
+            'CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)'
+            if has_column(line, "netwr")
+            else numeric_cast_expr(hdr, "netwr")
+        )
+        joins.append(f'FROM "{line}" p')
+        joins.append(
+            f'JOIN "{hdr}" k ON LPAD(TRIM(CAST(p."vbeln" AS TEXT)), 10, \'0\') = '
+            f'LPAD(TRIM(CAST(k."vbeln" AS TEXT)), 10, \'0\')'
+        )
+        if (want_country or want_customer or want_industry) and has_table("KNA1"):
+            joins.append(
+                'LEFT JOIN "KNA1" c ON LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') = '
+                'LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')'
+            )
+        if want_country and has_column("KNA1", "land1"):
+            sel.append('TRIM(c."land1") AS "country"')
+            gb.append('TRIM(c."land1")')
+        if want_customer and has_table("KNA1"):
+            if has_column("KNA1", "name1"):
+                sel.append('TRIM(c."name1") AS "customer"')
+                gb.append('TRIM(c."name1")')
+            elif has_column("KNA1", "kunnr"):
+                sel.append('TRIM(c."kunnr") AS "customer"')
+                gb.append('TRIM(c."kunnr")')
+        sel.append('TRIM(p."matnr") AS "product"')
+        gb.append('TRIM(p."matnr")')
+        year_pred = _sap_year_predicate("k", "fkdat", years) if has_column(hdr, "fkdat") else None
+    else:
+        net = numeric_cast_expr(hdr, "netwr")
+        joins.append(f'FROM "{hdr}" k')
+        if has_table("KNA1") and has_column(hdr, "kunag") and has_column("KNA1", "kunnr"):
+            joins.append(
+                'LEFT JOIN "KNA1" c ON LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') = '
+                'LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')'
+            )
+        if want_country and has_table("KNA1") and has_column("KNA1", "land1"):
+            sel.append('TRIM(c."land1") AS "country"')
+            gb.append('TRIM(c."land1")')
+        if want_customer and has_table("KNA1"):
+            if has_column("KNA1", "kunnr"):
+                sel.append('TRIM(c."kunnr") AS "customer_id"')
+                gb.append('TRIM(c."kunnr")')
+            if has_column("KNA1", "name1"):
+                sel.append('TRIM(c."name1") AS "customer_name"')
+                gb.append('TRIM(c."name1")')
+        if want_industry and has_table("KNA1") and has_table("T016T"):
+            if has_column("T016T", "brtxt"):
+                joins.append(
+                    'LEFT JOIN "T016T" ON '
+                    "LPAD(TRIM(CAST(c.\"brsch\" AS TEXT)), 10, '0') = "
+                    "LPAD(TRIM(CAST(\"T016T\".\"brsch\" AS TEXT)), 10, '0')"
+                )
+                sel.append('TRIM("T016T"."brtxt") AS "industry"')
+                gb.append('TRIM("T016T"."brtxt")')
+            elif has_column("KNA1", "brsch"):
+                sel.append('TRIM(c."brsch") AS "industry_code"')
+                gb.append('TRIM(c."brsch")')
+        if want_customer:
+            where_parts.append("NULLIF(TRIM(CAST(k.\"kunag\" AS TEXT)), '') IS NOT NULL")
+        year_pred = _sap_year_predicate("k", "fkdat", years) if has_column(hdr, "fkdat") else None
 
     if not sel:
         return None
 
     sel.append(f'SUM({net}) AS "total_sales"')
+    if year_pred:
+        where_parts.append(year_pred)
 
-    sql = f"SELECT {', '.join(sel)}\nFROM \"{hdr}\""
-    if has_table("KNA1") and has_column(hdr, "kunag") and has_column("KNA1", "kunnr"):
-        sql += (
-            f'\nLEFT JOIN "KNA1" ON '
-            f"LPAD(TRIM(CAST(\"{hdr}\".\"kunag\" AS TEXT)), 10, '0') = "
-            f"LPAD(TRIM(CAST(\"KNA1\".\"kunnr\" AS TEXT)), 10, '0')"
-        )
-    if want_industry and has_table("T016T") and has_table("KNA1") and has_column("KNA1", "brsch") and has_column("T016T", "brsch"):
-        sql += (
-            f'\nLEFT JOIN "T016T" ON '
-            f"LPAD(TRIM(CAST(\"KNA1\".\"brsch\" AS TEXT)), 10, '0') = "
-            f"LPAD(TRIM(CAST(\"T016T\".\"brsch\" AS TEXT)), 10, '0')"
-        )
-
-    where_parts: List[str] = []
-    if want_customer and has_column(hdr, "kunag"):
-        where_parts.append(f'NULLIF(TRIM(CAST("{hdr}"."kunag" AS TEXT)), \'\') IS NOT NULL')
+    sql = f"SELECT {', '.join(sel)}\n" + "\n".join(joins)
     if where_parts:
         sql += f"\nWHERE {' AND '.join(where_parts)}"
-
     sql += f"\nGROUP BY {', '.join(gb)}"
-    direction = "ASC" if re.search(r"\b(lowest|worst|smallest|minimum)\b", q) else "DESC"
+    direction = "ASC" if re.search(r"\b(lowest|worst|smallest|minimum|bottom)\b", q) else "DESC"
     sql += f'\nORDER BY "total_sales" {direction} NULLS LAST'
     sql += f"\nLIMIT {max(1, min(int(limit), 500))}"
     return sql.strip()
