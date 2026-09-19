@@ -367,7 +367,10 @@ def get_sap_engine():
             connect_args={
                 "connect_timeout": 15,
                 # Safety net; per-query SET LOCAL statement_timeout still applies.
-                "options": "-c statement_timeout=20000",
+                "options": (
+                    "-c statement_timeout="
+                    f"{int(os.getenv('ADAPTIVE_SQL_TIMEOUT_MS') or '120000')}"
+                ),
             },
         )
         _sap_session_factory = sessionmaker(autocommit=False, autoflush=False, bind=_sap_engine)

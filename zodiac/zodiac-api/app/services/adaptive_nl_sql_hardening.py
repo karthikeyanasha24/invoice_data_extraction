@@ -22,8 +22,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 logger = logging.getLogger("zodiac-api.adaptive_hardening")
 
 # Adaptive SQL must not occupy the SAP pool indefinitely (pool_size is small).
-# 20s is a safety net; the live p95 gate remains 15s for successful answers.
-ADAPTIVE_SQL_TIMEOUT_MS = int(os.getenv("ADAPTIVE_SQL_TIMEOUT_MS", "20000"))
+# Default 120s so multi-join rankings can finish on Vercel; override with env.
+ADAPTIVE_SQL_TIMEOUT_MS = int(os.getenv("ADAPTIVE_SQL_TIMEOUT_MS", "120000"))
 
 _WORD_N = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,

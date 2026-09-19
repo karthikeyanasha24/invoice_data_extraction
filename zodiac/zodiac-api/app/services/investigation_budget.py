@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("zodiac-api.investigation_budget")
 
 HARD_LIMIT_SECONDS = float(os.getenv("ADAPTIVE_INVESTIGATION_LIMIT_SECONDS") or "120")
+_SQL_TIMEOUT_MS = int(os.getenv("ADAPTIVE_SQL_TIMEOUT_MS") or "120000")
 
 TIMEOUT_USER_MESSAGE = (
     "This analysis exceeded the allowed processing time and was stopped. "
@@ -164,11 +165,12 @@ class InvestigationBudget:
             raise InvestigationTimeout("llm_timeout", self.elapsed_s())
         return max(floor, min(default, rem - 1.0))
 
-    def statement_timeout_ms(self, default_ms: int = 20_000) -> int:
+    def statement_timeout_ms(self, default_ms: Optional[int] = None) -> int:
         rem_ms = self.remaining_ms()
         if rem_ms <= 0:
             return 1
-        return max(1, min(int(default_ms), rem_ms))
+        cap = int(default_ms) if default_ms is not None else _SQL_TIMEOUT_MS
+        return max(1, min(cap, rem_ms))
 
     def allow_repair(self, attempt: int, max_attempts: int = 3) -> bool:
         if self.cancelled or self.expired():
