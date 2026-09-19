@@ -78,6 +78,22 @@ def test_build_multidim_ranking_country_customer_industry():
     assert "LIMIT 1" in sql
 
 
+def test_detect_multidim_ranking_after_bottom_rewrite():
+    from app.services.adaptive_structured_sql import (
+        build_multidim_ranking_sql,
+        detect_multidim_ranking_intent,
+    )
+
+    rewritten = "bottom 10 sales for the year 2000 by country customer and product"
+    assert detect_multidim_ranking_intent(rewritten)
+    sql = build_multidim_ranking_sql(rewritten, ["VBRK", "vbrp", "KNA1"], {})
+    assert sql
+    assert "VBRK" in sql
+    assert "vbrp" in sql.lower()
+    assert "ASC" in sql.upper()
+    assert "VBAK" not in sql.upper()
+
+
 def test_build_multidim_lowest_sales_country_customer_product_2000():
     from app.services.adaptive_structured_sql import build_multidim_ranking_sql
 

@@ -793,8 +793,22 @@ def sanitize_sap_amount_predicates_sql(sql: str) -> str:
         re.IGNORECASE,
     )
 
+    def _in_sql_string(pos: int) -> bool:
+        in_str = False
+        i = 0
+        while i < pos:
+            if sql[i] == "'":
+                if in_str and i + 1 < pos and sql[i + 1] == "'":
+                    i += 2
+                    continue
+                in_str = not in_str
+            i += 1
+        return in_str
+
     def _repl(m: re.Match) -> str:
         start = m.start()
+        if _in_sql_string(start):
+            return m.group(0)
         prefix = sql[max(0, start - 80) : start].upper()
         last_cast = prefix.rfind("CAST(")
         last_close = prefix.rfind(")")

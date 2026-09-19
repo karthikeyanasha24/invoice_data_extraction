@@ -498,7 +498,11 @@ def build_filter_list_sql(
 def detect_multidim_ranking_intent(question: str, semantic: Optional[Dict[str, Any]] = None) -> bool:
     """Multi-dimension sales ranking (country + customer + industry, etc.)."""
     q = (question or "").lower()
-    if not re.search(r"\b(highest|top|most|best|largest|biggest|lowest|worst)\b", q):
+    # Include "bottom" — ensure_default_ranking_limit rewrites "lowest" to "bottom 10".
+    if not re.search(
+        r"\b(highest|top|most|best|largest|biggest|lowest|worst|bottom|smallest|least|minimum)\b",
+        q,
+    ):
         return False
     if not re.search(r"\b(sales|revenue|billing|turnover)\b", q):
         return False

@@ -37,6 +37,7 @@ _DIM_RESULT_KEYS = {
     "country": ("country", "land1", "landx"),
     "customer": ("customer", "customer_id", "customer_name", "kunnr", "kunag", "name1"),
     "material": ("material", "material_id", "matnr", "maktx", "product", "product_id"),
+    "product": ("product", "product_id", "material", "material_id", "matnr", "maktx"),
     "vendor": ("vendor", "supplier", "supplier_id", "lifnr", "name1"),
     "industry": ("industry", "brsch", "brtxt", "sector", "segment"),
     "month": ("month", "yyyymm", "period", "ym"),

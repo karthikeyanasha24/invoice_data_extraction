@@ -320,6 +320,8 @@ def test_sanitize_text_amount_compared_to_integer() -> None:
     assert "< 0" in out
     already = "CAST(NULLIF(TRIM(CAST(\"VBAK\".\"netwr\" AS TEXT)), '') AS NUMERIC) < 0"
     assert sanitize_sap_amount_predicates_sql(already).count("CAST(") == already.count("CAST(")
+    inside_like = "WHERE c.\"name1\" ILIKE '%\"VBAK\".netwr < 0%'"
+    assert sanitize_sap_amount_predicates_sql(inside_like) == inside_like
 
 
 def test_extract_explicit_table_identifiers_ignores_generic_invoice_words() -> None:

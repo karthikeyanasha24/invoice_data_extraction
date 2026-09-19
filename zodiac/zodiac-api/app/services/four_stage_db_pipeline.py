@@ -954,12 +954,12 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
     )
 
     for builder in (
+        lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_relative_document_list_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_period_compare_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_partitioned_topn_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements),
-        lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
-        lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_period_sales_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_customer_industry_revenue_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_country_customer_list_sql(question, ctx.tables),
@@ -970,11 +970,13 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
     ):
         sql = builder()
         if sql:
+            from .adaptive_structured_sql import detect_multidim_ranking_intent
             from .plan_satisfaction import sql_satisfies_analytical_intent
 
-            # Question-derived intent only: LLM extras (e.g. negative_measure on "lowest")
-            # must not skip a valid ranking template after SQL execution failed.
-            if not sql_satisfies_analytical_intent(sql, question, None):
+            ranking_sql = detect_multidim_ranking_intent(
+                question, ctx.semantic_requirements
+            ) and re.search(r"total_sales", sql, re.I)
+            if not ranking_sql and not sql_satisfies_analytical_intent(sql, question, None):
                 continue
             _register_template_tables(ctx, sql)
             return sql
@@ -1073,6 +1075,10 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         # First-class templates: validate against question-derived semantics only.
         # LLM semantic pollution (spurious currency/group_by dims) must not reject
         # correct deterministic templates in favor of broken free-form SQL.
+        # Ranking templates already encode billed grain (VBRK/vbrp). Do not
+        # reject them for extra LLM dims (VBAK, partition_by, negative_measure).
+        if source in {"multidim_ranking_template", "dimension_ranking_template"}:
+            return _template_sql(ctx, question, source, out)
         sem_for_check = (
             None
             if source.endswith("_template")
@@ -1090,6 +1096,8 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
     for source, builder in (
+        ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("relative_document_list_template", lambda: build_relative_document_list_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("period_compare_template", lambda: build_period_compare_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("negation_anti_join_template", lambda: build_negation_anti_join_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1098,8 +1106,6 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         ("above_average_template", lambda: build_above_average_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("filter_list_template", lambda: build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("document_count_period_template", lambda: build_document_count_by_period_sql(question, ctx.tables, ctx.semantic_requirements)),
-        ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
-        ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
     ):
         accepted = _accept(source, builder())
         if accepted:
@@ -1143,6 +1149,8 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
             return accepted
 
     for source, builder in (
+        ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("relative_document_list_template", lambda: build_relative_document_list_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("period_compare_template", lambda: build_period_compare_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("negation_anti_join_template", lambda: build_negation_anti_join_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1152,8 +1160,6 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         ("document_count_period_template", lambda: build_document_count_by_period_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("country_customer_list_template", lambda: build_country_customer_list_sql(question, ctx.tables)),
         ("master_list_template", lambda: build_master_list_sql(question, ctx.tables)),
-        ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
-        ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("period_sales_template", lambda: build_period_sales_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("customer_industry_revenue_template", lambda: build_customer_industry_revenue_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("sat_logs_template", lambda: build_sat_logs_sql(question, ctx.tables)),
