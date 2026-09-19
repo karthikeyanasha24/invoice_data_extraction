@@ -7,11 +7,13 @@ REQUIRED_CORS = (
     "https://www.bridgeedi.com",
     "https://bridgeedi.com",
     "https://zodiac-front.vercel.app",
+    "https://zodiac-front-woad.vercel.app",
 )
 
 DEFAULT_CORS = (
     "https://www.bridgeedi.com,https://bridgeedi.com,"
-    "https://zodiac-front.vercel.app,http://localhost:3000"
+    "https://zodiac-front.vercel.app,https://zodiac-front-woad.vercel.app,"
+    "http://localhost:3000"
 )
 
 
