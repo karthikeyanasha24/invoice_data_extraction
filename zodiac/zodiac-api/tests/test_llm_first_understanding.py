@@ -202,6 +202,12 @@ def test_capability_facts_are_structured_not_paragraph():
     assert "I can answer governed questions across" not in str(facts)
 
 
+def test_time_bounded_sales_ranking_does_not_block_on_optional_dimension():
+    assert is_sufficiently_specified_ranking(
+        "Show me the lowest negative sales in 2000 and compare with 2001."
+    )
+
+
 def test_what_can_you_answer_calls_understanding_and_response(mock_llm):
     out = run_adaptive_orchestrator(
         "What can you answer?",
@@ -500,3 +506,19 @@ def test_followup_chain_sap_then_simpler(mock_llm):
     assert t2["meta"]["selected_capability"] == "conversation"
     assert t2["meta"]["understanding_model_called"] is True
     assert "Previous" in mock_llm["last_understand_user"]
+
+
+def test_understanding_receives_prior_result_rows_for_reference_resolution(mock_llm):
+    und.understand_turn(
+        "For that country, show billed sales by year.",
+        prior_question="Which country has the highest billed sales?",
+        prior_summary="The query returned five country rows.",
+        prior_plan={"result_artifact": {"row_count": 5, "truncated": False}},
+        prior_status="SUCCESS",
+        prior_rows=[{"country": "US", "currency": "USD", "total sales": 143325570.43}],
+        capability_context={"available_capabilities": {"business_analytics": True}},
+    )
+    prompt = mock_llm["last_understand_user"]
+    assert "Previous verified result sample" in prompt
+    assert '"country": "US"' in prompt
+    assert "truncated=false" in prompt

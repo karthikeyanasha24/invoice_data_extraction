@@ -142,3 +142,27 @@ def test_relative_period_plus_comparison_stays_on_plan():
     assert req.get("period_compare")
     df = req.get("date_filter")
     assert not df or df.get("type") != "calendar_year"
+
+
+def test_ranked_negative_documents_keep_document_grain_and_neutral_compare():
+    q = (
+        "Return the 12 billing documents with the most negative billed amounts "
+        "in 2024, one row per document, and compare values in 2024 vs 2025."
+    )
+    ops = extract_analytical_operations(q)
+    req = required_semantics(q, {})
+
+    assert ops["ranking"]["limit"] == 12
+    assert ops["ranking"]["direction"] == "ASC"
+    assert ops.get("partition_by") == []
+    assert ops.get("group_by") == ["document"]
+    assert req.get("partition_by") == []
+    assert req["period_compare"]["base_period"]["year"] == "2024"
+    assert req["period_compare"]["comparison_period"]["year"] == "2025"
+    assert req["period_compare"]["op"] == "compare"
+    assert req["period_compare"]["condition"] is None
+
+    partitioned = extract_analytical_operations(
+        "Show the highest sales in each country, one row per customer."
+    )
+    assert partitioned["ranking"]["partition_by"] == ["country"]

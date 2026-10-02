@@ -27,6 +27,7 @@ _TX_GRAIN_MARKERS = (
 )
 
 _GROUP_PATTERNS: List[Tuple[str, str]] = [
+    (r"\b(?:one row per|by|per|each)\s+(?:billing\s+)?(?:documents?|invoices?)\b", "document"),
     (r"\b(by|per|each|for each)\s+months?\b|\bmonthly\b", "month"),
     (r"\b(by|per|each|for each)\s+years?\b|\byearly\b|\bannually\b|\bannual\b|\beach year\b", "year"),
     (r"\b(by|per|each|for each)\s+quarters?\b|\bquarterly\b", "quarter"),
@@ -41,6 +42,12 @@ _GROUP_PATTERNS: List[Tuple[str, str]] = [
 ]
 
 _TOP_N = re.compile(r"\b(?:top|bottom|highest|lowest)\s+(\d{1,3})\b", re.I)
+_RANKED_SET_COUNT = re.compile(
+    r"\b(\d{1,3})\s+(?:(?:[a-z][a-z-]*\s+){1,4})"
+    r"(?:with|having)\s+(?:the\s+)?"
+    r"(?:most|least|highest|lowest|largest|smallest|biggest|worst|best)\b",
+    re.I,
+)
 _YEAR = re.compile(r"\b((?:19|20)\d{2})\b")
 _PARTITION_RANK = re.compile(
     r"\b(?:top|bottom)\s+(\d{1,3})\s+\w+\s+(?:in each|per|for each|by each|within each)\s+(\w+)",
@@ -83,6 +90,8 @@ _ENTITY_WORDS = {
     "vendor": "vendor", "vendors": "vendor",
     "industry": "industry", "industries": "industry",
     "plant": "plant", "plants": "plant", "werks": "plant",
+    "document": "document", "documents": "document",
+    "invoice": "document", "invoices": "document",
 }
 
 
@@ -290,6 +299,17 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             ops["aggregation"] = "SUM"
     else:
         part2 = _PARTITION_EACH.search(ql)
+        # "one row per X" describes result grain; it does not request a
+        # top-N window inside each X. The broad wording on either side of the
+        # ranking verb must not turn a later row-grain phrase into a partition.
+        row_grain = re.search(r"\bone\s+row\s+per\s+(\w+)", ql)
+        if part2 and row_grain:
+            partition = _ENTITY_WORDS.get(part2.group(1).lower(), part2.group(1).lower())
+            row_entity = _ENTITY_WORDS.get(
+                row_grain.group(1).lower(), row_grain.group(1).lower().rstrip("s")
+            )
+            if partition == row_entity:
+                part2 = None
         if part2:
             dim = _ENTITY_WORDS.get(part2.group(1).lower(), part2.group(1).lower())
             direction = "ASC" if re.search(r"\b(bottom|lowest|least|smallest|worst)\b", ql) else "DESC"
@@ -306,9 +326,17 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
                 ops["aggregation"] = "SUM"
 
     m = _TOP_N.search(ql)
+    if not m:
+        m = _RANKED_SET_COUNT.search(ql)
     if m and not ops.get("ranking"):
         n = int(m.group(1))
-        direction = "ASC" if re.search(r"\b(bottom|lowest|least|smallest|worst)\b", ql) else "DESC"
+        most_negative = bool(re.search(r"\b(most|lowest|largest|biggest)\s+negative\b", ql))
+        least_negative = bool(re.search(r"\b(least|highest|smallest|closest)\s+negative\b", ql))
+        direction = (
+            "DESC" if least_negative else
+            "ASC" if most_negative or re.search(r"\b(bottom|lowest|least|smallest|worst)\b", ql) else
+            "DESC"
+        )
         ops["ranking"] = {"direction": direction, "limit": n}
         ops["limit"] = n
         ops["order"] = direction
@@ -397,6 +425,16 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             ops["limit"] = lim
             ops["order"] = "ASC"
 
+    # A request for the most negative values orders ascending on the measure:
+    # the sign of the threshold alone does not determine ranking direction.
+    if isinstance(ops.get("ranking"), dict):
+        if re.search(r"\b(most|lowest|largest|biggest)\s+negative\b", ql):
+            ops["ranking"]["direction"] = "ASC"
+            ops["order"] = "ASC"
+        elif re.search(r"\b(least|highest|smallest|closest)\s+negative\b", ql):
+            ops["ranking"]["direction"] = "DESC"
+            ops["order"] = "DESC"
+
     if ops.get("group_by") and ops.get("measure_concept") and not ops.get("aggregation"):
         ops["aggregation"] = "SUM"
 
@@ -473,12 +511,14 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         decline = bool(re.search(_decline_cue, ql)) and not re.search(
             r"\b(increas\w*|grew|growth)\b", ql
         )
+        increase = bool(re.search(_growth_cue, ql)) and not decline
+        direction = "decline" if decline else "growth" if increase else "compare"
         ops["period_compare"] = {
             "type": "period_change",
             "base_period": {"year": ordered[0], "start": ordered[0], "end": ordered[0]},
             "comparison_period": {"year": ordered[-1], "start": ordered[-1], "end": ordered[-1]},
-            "op": "decline" if decline else "growth",
-            "condition": "decreased" if decline else "increased",
+            "op": direction,
+            "condition": "decreased" if decline else "increased" if increase else None,
             "calculation": "percentage_change" if re.search(r"\b(percent|percentage|%|pct)\b", ql) else "difference",
             "contribution": bool(ops.get("contribution")),
         }

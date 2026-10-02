@@ -63,6 +63,22 @@ _UNDERSTAND_SYSTEM = (
     "- Why did X fall / drivers → investigation.\n"
     "- Underspecified analytics like 'show growth' without metric → "
     "clarification with clarification_needed=true.\n"
+    "- Prefer reasonable, schema-grounded defaults over clarification. Ask only "
+    "when a missing choice materially changes the answer and cannot be inferred "
+    "from the request, conversation, or schema. State non-blocking assumptions "
+    "briefly instead of asking a questionnaire. For a ranking with no named "
+    "dimension, use the most direct transactional grain supported by the request; "
+    "default to 10 rows. Use calendar periods unless fiscal periods are requested. "
+    "For a comparison, return both period values and the requested change measures; "
+    "do not assume the result increased or decreased unless the user says so.\n"
+    "- 'Most negative' means ascending order by a verified numeric measure with a "
+    "less-than-zero filter. Keep negative/credit amounts when the user asks for "
+    "negative values. Do not ask whether to include them.\n"
+    "- Referential follow-ups ('those results', 'that country', 'which of those "
+    "columns', 'the one you just mentioned') use the latest relevant conversation "
+    "and verified result sample. Resolve references from that evidence before asking.\n"
+    "- A request to run an analysis that mentions verified columns/schema is still "
+    "an analytics request; it is not a request to count or list schema columns.\n"
     "- If the user already gives a ranking word (highest/lowest/top/bottom) "
     "plus a sales/revenue metric plus at least one dimension "
     "(customer/country/product) and optionally a year, intent=analytics and "
@@ -190,6 +206,7 @@ def _context_block(
     prior_summary: str = "",
     prior_plan: Optional[Dict[str, Any]] = None,
     prior_status: str = "",
+    prior_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     parts: List[str] = []
     plan = prior_plan if isinstance(prior_plan, dict) else {}
@@ -197,7 +214,7 @@ def _context_block(
     recent = inv.get("recent_turns") or plan.get("recent_turns") or []
     if isinstance(recent, list) and recent:
         lines: List[str] = []
-        for item in recent[-40:]:
+        for item in recent[-12:]:
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role") or "")
@@ -205,9 +222,9 @@ def _context_block(
             if not content:
                 continue
             label = "User" if role == "user" else "Assistant"
-            lines.append(f"{label}: {content[:2000]}")
+            lines.append(f"{label}: {content[:1400]}")
         if lines:
-            parts.append("Recent conversation:\n" + "\n".join(lines)[-26000:])
+            parts.append("Recent conversation:\n" + "\n".join(lines)[-12000:])
     if prior_question:
         parts.append(f"Previous user message: {prior_question[:500]}")
     if prior_summary:
@@ -219,6 +236,26 @@ def _context_block(
         parts.append(f"Previous mode: {last_mode}")
     if prior_status:
         parts.append(f"Previous answer_status: {prior_status}")
+    if prior_rows:
+        artifact = plan.get("result_artifact")
+        artifact = artifact if isinstance(artifact, dict) else {}
+        try:
+            sample = json.dumps(
+                [row for row in prior_rows[:5] if isinstance(row, dict)],
+                default=str,
+                ensure_ascii=False,
+            )[:2400]
+        except (TypeError, ValueError):
+            sample = "[]"
+        if sample != "[]":
+            row_count = artifact.get("row_count")
+            truncated = bool(artifact.get("truncated"))
+            parts.append(
+                "Previous verified result sample (use only to resolve references; "
+                "this may be a partial sample): "
+                f"row_count={row_count if row_count is not None else 'unknown'}, "
+                f"truncated={str(truncated).lower()}, rows={sample}"
+            )
     if inv.get("metric"):
         parts.append(f"Active metric: {inv.get('metric')}")
     if inv.get("time_period"):
@@ -249,7 +286,14 @@ def is_sufficiently_specified_ranking(question: str) -> bool:
     )
     if has_limit and has_dim and has_metric:
         return True
-    return bool(has_superlative and has_dim and has_metric)
+    if has_superlative and has_metric and has_dim:
+        return True
+
+    # A time-bounded numeric ranking with an explicit measure predicate is
+    # answerable at the closest supported transactional grain. Do not block it
+    # for optional grouping, currency, or presentation choices.
+    has_period = bool(re.search(r"\b(?:19|20)\d{2}\b|\b(last|this)\s+(?:year|quarter|month)\b", ql))
+    return bool(has_superlative and has_metric and has_period)
 
 
 _ASSISTANT_REF = re.compile(
@@ -430,6 +474,7 @@ def understand_turn(
     prior_summary: str = "",
     prior_plan: Optional[Dict[str, Any]] = None,
     prior_status: str = "",
+    prior_rows: Optional[List[Dict[str, Any]]] = None,
     capability_context: Optional[Dict[str, Any]] = None,
 ) -> TurnUnderstanding:
     """LLM understanding stage. Raises on model/infrastructure failure."""
@@ -445,7 +490,7 @@ def understand_turn(
 
     caps = capability_context if isinstance(capability_context, dict) else capability_facts()
     user = (
-        f"Conversation context:\n{_context_block(prior_question=prior_question, prior_summary=prior_summary, prior_plan=prior_plan, prior_status=prior_status)}\n\n"
+        f"Conversation context:\n{_context_block(prior_question=prior_question, prior_summary=prior_summary, prior_plan=prior_plan, prior_status=prior_status, prior_rows=prior_rows)}\n\n"
         f"Available capabilities (facts, not the answer):\n{json.dumps(caps, default=str)[:1800]}\n\n"
         f"Current user message:\n{q[:4000]}\n"
     )

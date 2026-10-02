@@ -74,6 +74,18 @@ _SEARCH_CUE = re.compile(
     r"tables?\s+(?:with|for|about))\b",
     re.I,
 )
+_CONTEXTUAL_CATALOG_REFERENCE = re.compile(
+    r"\b(?:those|these|that|same|above|previous|prior|earlier)\b|"
+    r"\bjust\s+(?:said|mention(?:ed)?|list(?:ed)?|show(?:ed)?)\b|"
+    r"\byou\s+just\s+(?:said|mention(?:ed)?|list(?:ed)?|show(?:ed)?)\b|"
+    r"\byou\s+(?:said|mention(?:ed)?|list(?:ed)?|show(?:ed)?)\b|"
+    r"\bfrom\s+the\s+results?\b",
+    re.I,
+)
+_ANALYSIS_EXECUTION_CUE = re.compile(
+    r"\b(?:run|execute|perform|calculate|compare|rank|return)\b",
+    re.I,
+)
 _SCHEMA_OVERVIEW = re.compile(
     r"\b(show\s+(?:me\s+)?(?:the\s+)?schema|describe\s+(?:the\s+)?schema|"
     r"database\s+schema|what\s+(?:database\s+)?tables?\s+do\s+you\s+have|"
@@ -253,6 +265,17 @@ def is_database_metadata_question(question: str) -> bool:
     if not q:
         return False
     ql = q.lower()
+
+    # Referential questions about an earlier answer need conversation context.
+    # Do not answer them with an unrelated global catalog count/list before the
+    # dialogue resolver can inspect the prior turn.
+    if _CONTEXTUAL_CATALOG_REFERENCE.search(ql):
+        return False
+
+    # Mentioning schema/columns as a constraint on an analysis does not change
+    # the requested capability from analytics to catalog introspection.
+    if _BUSINESS_FACT.search(ql) and _ANALYSIS_EXECUTION_CUE.search(ql):
+        return False
 
     # Ranking / measure analytics are never metadata.
     if _RANKING_ANALYTICS.search(ql) and not _SCHEMA_ENTITY.search(ql):

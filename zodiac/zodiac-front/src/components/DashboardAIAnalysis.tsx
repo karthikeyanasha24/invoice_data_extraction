@@ -948,6 +948,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [elapsed,    setElapsed]    = useState(0);
   const [progress, setProgress] = useState<AnalystProgress>({ pipeline_stage: 'UNDERSTANDING' });
   const [error,      setError]      = useState<string | null>(null);
+  const [failedQuestion, setFailedQuestion] = useState<string | null>(null);
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -1040,7 +1041,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue' }) => {
+  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue' }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading || !historyLoaded) return;
 
@@ -1048,9 +1049,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     if (!threadId) setThreadId(tid);
 
     setError(null);
+    setFailedQuestion(null);
     setInput('');
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: q, ts: Date.now() };
-    setMessages(prev => [...prev, userMsg]);
+    if (!opts?.retry) setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     setProgress({ pipeline_stage: 'UNDERSTANDING', elapsed_s: 0, stages: [] });
 
@@ -1061,8 +1063,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       || opts?.source === 'overview-chip'
       || opts?.source === 'saved-restore'
     );
+    const contextMessages = opts?.retry ? messages.slice(0, -1) : messages;
     const contextData = followupContextForSend(
-      messages,
+      contextMessages,
       lastSuccessfulAnalyticalRef.current,
       treatAsNew,
     );
@@ -1098,7 +1101,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         threadId: tid,
         investigationId,
         newQuestion: treatAsNew,
-        conversationHistory: treatAsNew ? [] : messages.slice(-40).map(message => ({
+        conversationHistory: treatAsNew ? [] : contextMessages.slice(-40).map(message => ({
           role: message.role, content: message.content.slice(0, 6000), mode: message.result?.mode,
         })),
       }, { signal: ac.signal });
@@ -1191,6 +1194,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         return;
       }
       setError(publicApiError(err, 'Could not complete this analysis. Please try rephrasing.'));
+      setFailedQuestion(q);
       // Keep the user message visible so history does not silently lose questions
     } finally {
       polling = false;
@@ -1238,6 +1242,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setMessages([]);
     lastSuccessfulAnalyticalRef.current = null;
     setError(null);
+    setFailedQuestion(null);
     setLaunchBanner(investigationLaunch('explicit-new', true).banner);
     // Start a fresh adaptive thread so cleared UI does not reload old turns
     if (typeof window !== 'undefined') {
@@ -1419,7 +1424,16 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <div>
               <div className="font-semibold mb-0.5">We could not complete this analysis</div>
               <div className="text-red-700">{error}</div>
-              <p className="mt-1 text-xs text-red-600">Try again or rephrase — your chat history is still here.</p>
+              <p className="mt-1 text-xs text-red-600">Your chat history is still here.</p>
+              {failedQuestion && (
+                <button
+                  type="button"
+                  onClick={() => void sendQuestion(failedQuestion, { retry: true, source: 'typed-continue' })}
+                  className="mt-2 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800"
+                >
+                  Retry last question
+                </button>
+              )}
             </div>
             <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600" aria-label="Dismiss error">
               <X className="h-4 w-4" />

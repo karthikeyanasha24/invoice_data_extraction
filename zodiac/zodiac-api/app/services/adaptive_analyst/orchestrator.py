@@ -871,6 +871,7 @@ def run_adaptive_orchestrator(
             prior_summary=prior_summary,
             prior_plan={**(prior_plan or {}), "recent_turns": state.recent_turns},
             prior_status=prior_status,
+            prior_rows=prior_rows,
             capability_context=capability_facts(),
         )
     except Exception as understand_err:
@@ -1351,7 +1352,10 @@ def run_adaptive_orchestrator(
             if failure_class == "TOOL_FAILURE" and err_class in {"timeout", "db_unavailable", "connection"}:
                 msg = "I couldn't complete the database analysis because the data service is temporarily unavailable."
             elif failure_class == "TOOL_FAILURE":
-                msg = "I couldn't complete a verified query for that breakdown. Try asking with one metric and one dimension at a time."
+                msg = (
+                    "I couldn't execute a verified query against the connected data. "
+                    "Retry the question or narrow its time range."
+                )
             elif failure_class == "MODEL_FAILURE":
                 msg = "I couldn't plan a verified query for that question. Try rephrasing with a metric and period."
             status = "CANNOT_ANSWER"

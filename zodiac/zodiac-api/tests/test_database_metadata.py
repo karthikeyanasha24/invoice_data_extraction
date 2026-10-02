@@ -148,6 +148,21 @@ def test_metadata_not_business_analytics() -> None:
         assert classify_metadata_operation(q, SAMPLE_SCHEMA) is None
 
 
+def test_contextual_schema_followups_are_not_global_catalog_requests() -> None:
+    followups = [
+        "Which SAP table did you just mention for sales order and billing headers?",
+        "Which of those columns is the billing date?",
+        "For the top country from those results, show billed sales by year.",
+        (
+            "Run the query now, including negative billing amounts and using only "
+            "real columns from the connected schema."
+        ),
+    ]
+    for q in followups:
+        assert not is_database_metadata_question(q), q
+        assert classify_metadata_operation(q, SAMPLE_SCHEMA) is None
+
+
 def test_general_chat_regressions() -> None:
     for q in ("Hi", "What can I ask?", "What is SAP?"):
         assert not is_database_metadata_question(q), q
