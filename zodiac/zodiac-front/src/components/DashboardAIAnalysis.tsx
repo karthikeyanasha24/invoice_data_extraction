@@ -16,6 +16,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
+import { ANALYST_STAGE_LABELS, mergeAnalystProgress, type AnalystProgress } from '@/lib/analystProgress';
 import { humanizeFollowups } from '@/lib/followupChips';
 import {
   analysisTrustFromResult,
@@ -51,12 +52,31 @@ import AIChartRenderer from './ai/AIChartRenderer';
 /** Persist adaptive Full Chat thread id (reuses backend chat_thread_store via ada_ prefix). */
 const ADA_THREAD_KEY = 'zodiac_ada_thread_id';
 
+function adaptiveThreadStorageKey(): string {
+  try {
+    const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+    return user.id != null ? `${ADA_THREAD_KEY}:${user.id}` : '';
+  } catch { return ''; }
+}
+
+function saveAdaptiveThreadId(tid: string) {
+  try {
+    const key = adaptiveThreadStorageKey();
+    if (key) localStorage.setItem(key, tid);
+    else sessionStorage.setItem(ADA_THREAD_KEY, tid);
+  } catch { /* Chat still works when browser storage is unavailable. */ }
+}
+
 function ensureAdaptiveThreadId(): string {
   if (typeof window === 'undefined') return `ada_ssr_${Date.now()}`;
-  let tid = sessionStorage.getItem(ADA_THREAD_KEY) || '';
+  let tid = '';
+  try {
+    const key = adaptiveThreadStorageKey();
+    tid = (key ? localStorage.getItem(key) : sessionStorage.getItem(ADA_THREAD_KEY)) || '';
+  } catch { /* Generate a session when browser storage is unavailable. */ }
   if (!tid.startsWith('ada_')) {
     tid = `ada_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-    sessionStorage.setItem(ADA_THREAD_KEY, tid);
+    saveAdaptiveThreadId(tid);
   }
   return tid;
 }
@@ -78,23 +98,6 @@ const QUICK_QUESTIONS = [
 ];
 
 // ─── Pipeline progress steps ─────────────────────────────────────────────────
-const PIPELINE_STAGE_LABELS: Record<string, string> = {
-  UNDERSTANDING: 'Understanding your question',
-  RETRIEVING_SCHEMA: 'Finding relevant data',
-  SELECTING_TABLES: 'Selecting tables',
-  SELECTING_COLUMNS: 'Selecting columns',
-  BUILDING_PLAN: 'Building the analysis plan',
-  VALIDATING_PLAN: 'Validating the plan',
-  GENERATING_SQL: 'Generating the query',
-  VALIDATING_SQL: 'Validating the query',
-  EXECUTING: 'Running the query',
-  REPAIRING: 'Repairing the analysis',
-  VALIDATING_RESULT: 'Checking the result',
-  COMPLETED: 'Preparing your answer',
-  TIMEOUT: 'Stopping — time limit reached',
-  FAILED: 'Could not complete this analysis',
-  CANCELLED: 'Cancelled',
-};
 
 // ─── Number formatting ────────────────────────────────────────────────────────
 function fmt(v: any): string {
@@ -632,20 +635,32 @@ function MetaStrip({ meta, sqlStrategy: _sqlStrategy, rowCount, totalCount }: {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pipeline progress indicator
 // ═══════════════════════════════════════════════════════════════════════════════
-function AnalysisProgress({ elapsed, stage }: { elapsed: number; stage: string }) {
-  const label = PIPELINE_STAGE_LABELS[stage] || PIPELINE_STAGE_LABELS.UNDERSTANDING;
+function AnalysisProgress({ elapsed, progress }: { elapsed: number; progress: AnalystProgress }) {
+  const stage = progress.pipeline_stage || 'UNDERSTANDING';
+  const label = ANALYST_STAGE_LABELS[stage] || 'Working on your question';
+  const history = (progress.stages || []).filter((step, i, list) =>
+    ANALYST_STAGE_LABELS[step.pipeline_stage] && (i === 0 || step.pipeline_stage !== list[i - 1].pipeline_stage));
   return (
-    <div className="space-y-2 py-1">
-      <div className="flex items-center gap-3 text-sm font-medium text-indigo-700">
+    <div className="space-y-3 py-1">
+      <div className="flex items-center gap-3 text-sm font-medium text-indigo-700" role="status">
         <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
         <span>{label}</span>
       </div>
-      {elapsed > 5000 && (
-        <p className="text-xs text-slate-500 pl-7">Still working — larger questions can take a few seconds.</p>
+      <p className="text-xs text-slate-500 pl-7" aria-live="off">
+        {Math.floor(elapsed / 1000)}s elapsed
+        {progress.stage_elapsed_s != null && ` · ${Math.floor(progress.stage_elapsed_s)}s on this step`}
+      </p>
+      {history.length > 1 && (
+        <ol className="space-y-1.5 pl-7 text-xs text-slate-500" aria-label="Analysis progress">
+          {history.slice(0, -1).slice(-6).map((step, i) => (
+            <li key={`${step.pipeline_stage}-${i}`} className="flex items-center gap-2">
+              <Check className="h-3 w-3 text-emerald-600" />
+              <span>{ANALYST_STAGE_LABELS[step.pipeline_stage]}</span>
+            </li>
+          ))}
+        </ol>
       )}
-      {elapsed > 20000 && (
-        <p className="text-xs text-amber-700 pl-7">Taking longer than usual. You can wait or try a simpler question.</p>
-      )}
+      {elapsed > 15000 && <p className="text-xs text-slate-500 pl-7">Still working on this step. You can stop the analysis at any time.</p>}
     </div>
   );
 }
@@ -794,6 +809,9 @@ function ResultDashboard({
       />
     );
   }
+  if (status === 'CANCELLED' || mode === 'cancelled') {
+    return <StatusOutcomeCard heading="Stopped" message={summary || 'This analysis was stopped.'} tone="slate" />;
+  }
 
   if (isGeneral && !isClarification && !isGap && !isTechFailure) {
     // Metadata list-all: show the text once + optional table of names (no Key Findings echo).
@@ -912,7 +930,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [input,      setInput]      = useState('');
   const [loading,    setLoading]    = useState(false);
   const [elapsed,    setElapsed]    = useState(0);
-  const [pipelineStage, setPipelineStage] = useState('UNDERSTANDING');
+  const [progress, setProgress] = useState<AnalystProgress>({ pipeline_stage: 'UNDERSTANDING' });
   const [error,      setError]      = useState<string | null>(null);
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
@@ -924,6 +942,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const lastSuccessfulAnalyticalRef = useRef<LastSuccessfulAnalyticalContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const investigationIdRef = useRef<string>('');
+
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   // Resolve / restore adaptive thread id once on mount
   useEffect(() => {
@@ -946,6 +966,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               data: m.result.data || [],
               rowCount: m.result.rowCount ?? (m.result.data?.length ?? 0),
               charts: m.result.charts || [],
+              meta: m.result.meta || {},
               summary: m.result.summary || m.content,
               query_plan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
               answer_status: (m.result as any).answer_status
@@ -1001,7 +1022,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
   const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue' }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
-    if (!q || loading) return;
+    if (!q || loading || !historyLoaded) return;
 
     const tid = threadId || ensureAdaptiveThreadId();
     if (!threadId) setThreadId(tid);
@@ -1011,7 +1032,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: q, ts: Date.now() };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
-    setPipelineStage('UNDERSTANDING');
+    setProgress({ pipeline_stage: 'UNDERSTANDING', elapsed_s: 0, stages: [] });
 
     // Continuous chat (ChatGPT-style): typed messages always carry the latest
     // turn context. Only Overview / saved deep-links start an isolated ask.
@@ -1039,11 +1060,15 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         ? crypto.randomUUID().replace(/-/g, '')
         : `inv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     investigationIdRef.current = investigationId;
-    const poll = window.setInterval(() => {
-      dashboardApi.getInvestigationStatus(investigationId).then((st) => {
-        if (st?.pipeline_stage) setPipelineStage(st.pipeline_stage);
-      }).catch(() => undefined);
-    }, 800);
+    let polling = true;
+    let poll: ReturnType<typeof setTimeout> | undefined;
+    const pollStatus = async () => {
+      const st = await dashboardApi.getInvestigationStatus(investigationId, ac.signal);
+      if (!polling || ac.signal.aborted || investigationIdRef.current !== investigationId) return;
+      setProgress(previous => mergeAnalystProgress(previous, st));
+      poll = setTimeout(pollStatus, 1200);
+    };
+    poll = setTimeout(pollStatus, 300);
 
     try {
       const res = await dashboardApi.postAdaptiveQuery({
@@ -1052,6 +1077,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         contextData: treatAsNew ? null : contextData,
         threadId: tid,
         investigationId,
+        newQuestion: treatAsNew,
+        conversationHistory: treatAsNew ? [] : messages.slice(-40).map(message => ({
+          role: message.role, content: message.content.slice(0, 6000), mode: message.result?.mode,
+        })),
       }, { signal: ac.signal });
 
       const answerStatus = res.answer_status || res.answerStatus || '';
@@ -1120,7 +1149,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         role: 'assistant',
         content: summaryContent,
         // Keep result for follow-up context even on cannot_answer (plan/status), but no fake rows
-        result: res.type === 'analysis' && !isCannotAnswer ? undefined : result,
+        result,
         ts: Date.now(),
       };
       if (!isClarification && !isCannotAnswer && !isTimeout) {
@@ -1130,7 +1159,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           result,
         );
       }
-      setMessages(prev => [...prev, assistantMsg]);
+      if (!ac.signal.aborted && investigationIdRef.current === investigationId) setMessages(prev => [...prev, assistantMsg]);
     } catch (err: any) {
       if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') {
         return;
@@ -1138,12 +1167,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       setError(publicApiError(err, 'Could not complete this analysis. Please try rephrasing.'));
       // Keep the user message visible so history does not silently lose questions
     } finally {
-      window.clearInterval(poll);
-      setLoading(false);
+      polling = false;
+      if (poll) window.clearTimeout(poll);
+      if (investigationIdRef.current === investigationId) setLoading(false);
     }
     // Continuous chat: keep latest turn in the dependency list so follow-ups
     // always see the newest assistant context.
-  }, [messages, loading, threadId]);
+  }, [messages, loading, threadId, historyLoaded]);
 
   // Auto-run a question handed over from another view (e.g. "What can you ask?"
   // sidebar on the Real-time tab). Guarded so the same question only fires once.
@@ -1161,10 +1191,21 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   }, [initialQuestion, historyLoaded]);
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       sendQuestion(input);
     }
+  };
+
+  const stopAnalysis = () => {
+    const id = investigationIdRef.current;
+    if (id) void dashboardApi.cancelInvestigation(id);
+    abortRef.current?.abort();
+    setLoading(false);
+    setMessages(previous => [...previous, {
+      id: `cancelled-${id}`, role: 'assistant', content: 'This analysis was stopped.', ts: Date.now(),
+      result: { answer_status: 'CANCELLED', mode: 'cancelled', summary: 'This analysis was stopped.', data: [] },
+    }]);
   };
 
   const clearAll = () => {
@@ -1175,7 +1216,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     // Start a fresh adaptive thread so cleared UI does not reload old turns
     if (typeof window !== 'undefined') {
       const tid = `ada_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-      sessionStorage.setItem(ADA_THREAD_KEY, tid);
+      saveAdaptiveThreadId(tid);
       setThreadId(tid);
       setHistoryLoaded(true);
     }
@@ -1223,6 +1264,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           <div className="flex items-center gap-2">
             {messages.length > 0 && (
               <button onClick={clearAll}
+                disabled={loading}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
                 title="Clear chat"
                 aria-label="Clear chat">
@@ -1332,15 +1374,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               <div className="text-xs font-semibold text-slate-500 mb-3 flex items-center gap-1.5">
                 Working on your question
               </div>
-              <AnalysisProgress elapsed={elapsed} stage={pipelineStage} />
+              <AnalysisProgress elapsed={elapsed} progress={progress} />
               <button
                 type="button"
-                onClick={() => {
-                  const id = investigationIdRef.current;
-                  if (id) dashboardApi.cancelInvestigation(id);
-                  abortRef.current?.abort();
-                  setLoading(false);
-                }}
+                onClick={stopAnalysis}
                 className="mt-3 text-xs font-medium text-slate-600 hover:text-slate-900 underline"
               >
                 Cancel
@@ -1397,12 +1434,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           {loading ? (
             <button
               type="button"
-              onClick={() => {
-                const id = investigationIdRef.current;
-                if (id) dashboardApi.cancelInvestigation(id);
-                abortRef.current?.abort();
-                setLoading(false);
-              }}
+              onClick={stopAnalysis}
               className="flex-none h-10 px-3 rounded-xl bg-slate-700 text-white text-xs font-medium hover:bg-slate-800"
               aria-label="Cancel analysis"
             >
@@ -1411,7 +1443,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           ) : (
             <button
               onClick={() => sendQuestion(input)}
-              disabled={!input.trim()}
+              disabled={!input.trim() || !historyLoaded}
               aria-label="Send question"
               className={cn(
                 "flex-none w-10 h-10 rounded-xl flex items-center justify-center transition-all",

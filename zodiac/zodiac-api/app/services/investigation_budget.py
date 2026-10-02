@@ -95,9 +95,11 @@ class InvestigationBudget:
     columns: List[str] = field(default_factory=list)
     row_count: int = 0
     final_status: str = "running"
+    stage_started_at: float = field(default_factory=time.monotonic)
+    finished_at: Optional[float] = None
 
     def elapsed_s(self) -> float:
-        return time.monotonic() - self.started_at
+        return (self.finished_at or time.monotonic()) - self.started_at
 
     def remaining_s(self) -> float:
         if self.cancelled:
@@ -121,6 +123,12 @@ class InvestigationBudget:
         return "normal"
 
     def set_stage(self, stage: str) -> None:
+        # A transport call belongs to the current task; it is not a new intent
+        # analysis. Resetting here hid table/column selection throughout each call.
+        if stage == "llm_call":
+            self.last_stage = stage
+            return
+        previous = self.pipeline_stage
         public = _STAGE_ALIASES.get(stage, stage.upper() if stage.isupper() else stage)
         if public in _STAGE_ALIASES.values() or public in {
             "UNDERSTANDING", "RETRIEVING_SCHEMA", "SELECTING_TABLES", "SELECTING_COLUMNS",
@@ -132,6 +140,8 @@ class InvestigationBudget:
         else:
             self.pipeline_stage = public or self.pipeline_stage
         self.last_stage = stage
+        if self.pipeline_stage != previous:
+            self.stage_started_at = time.monotonic()
 
     def checkpoint(self, stage: str) -> None:
         self.set_stage(stage)
@@ -204,6 +214,11 @@ class InvestigationBudget:
         )
 
     def public_status(self) -> Dict[str, Any]:
+        stages = []
+        for event in list(self.diagnostics.get("stages") or []):
+            public = event["pipeline_stage"]
+            if not stages or stages[-1]["pipeline_stage"] != public:
+                stages.append({"pipeline_stage": public, "elapsed_s": event["elapsed_s"]})
         return {
             "request_id": self.request_id,
             "pipeline_stage": self.pipeline_stage,
@@ -219,6 +234,8 @@ class InvestigationBudget:
                 )
             ),
             "status": self.final_status,
+            "stage_elapsed_s": round(max(0.0, (self.finished_at or time.monotonic()) - self.stage_started_at), 2),
+            "stages": stages[-40:],
         }
 
     def trace(self) -> Dict[str, Any]:
@@ -336,6 +353,14 @@ def end_investigation(status: str = "") -> None:
         elif budget.final_status == "running":
             budget.final_status = "completed"
             budget.pipeline_stage = "COMPLETED"
+        terminal_stage = {
+            "completed": "COMPLETED", "success": "COMPLETED",
+            "cannot_answer": "FAILED", "clarification": "COMPLETED",
+            "timeout": "TIMEOUT", "cancelled": "CANCELLED",
+        }.get(budget.final_status)
+        if terminal_stage:
+            budget.set_stage(terminal_stage)
+        budget.finished_at = time.monotonic()
         logger.info(
             "[budget] end id=%s status=%s elapsed=%.1fs",
             budget.request_id[:12],

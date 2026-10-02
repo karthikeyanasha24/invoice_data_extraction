@@ -260,24 +260,44 @@ def sanitize_trim_type_safety_sql(sql: str) -> str:
     this way fixes the crash regardless of the column's actual stored type,
     without needing to know in advance which columns are numeric.
 
-    Skips arguments that are already a function call / CAST / nested
-    expression (only rewrites the simple `alias.column` or bare `column`
-    case) to avoid double-wrapping or mangling more complex expressions.
+    Handles nested expressions, preserves literals/comments and standard SQL
+    TRIM syntax, and skips arguments already cast to text.
     """
-    if not sql or "trim(" not in sql.lower():
+    if not sql or not re.search(r"\btrim\s*\(", sql, re.I):
         return sql
 
-    def _replace(m: re.Match) -> str:
-        arg = m.group(1)
-        return f"TRIM(CAST({arg} AS TEXT))"
-
-    # alias.column or bare column — simple identifier(s) only, no nested parens/commas
-    sql = re.sub(
-        r'\bTRIM\(\s*("?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\.\s*"?[A-Za-z_][A-Za-z0-9_]*"?)?)\s*\)',
-        _replace,
-        sql,
-        flags=re.IGNORECASE,
-    )
+    # Walk SQL tokens instead of replacing text inside quoted literals/comments.
+    # Balanced arguments also cover TRIM(COALESCE(numeric_column, '0')).
+    tokens = re.compile(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*|/\*[\s\S]*?\*/|\$[A-Za-z_0-9]*\$[\s\S]*?\$[A-Za-z_0-9]*\$|[A-Za-z_][A-Za-z_0-9]*|[^\s]", re.I)
+    spans = list(tokens.finditer(sql))
+    edits = []
+    for index, token in enumerate(spans):
+        if token.group().upper() != "TRIM" or index + 1 >= len(spans) or spans[index + 1].group() != "(":
+            continue
+        depth = 1
+        start = spans[index + 1].end()
+        standard_form = False
+        for end_token in spans[index + 2:]:
+            value = end_token.group()
+            if value == "(":
+                depth += 1
+            elif value == ")":
+                depth -= 1
+                if depth == 0:
+                    end = end_token.start()
+                    arg = sql[start:end].strip()
+                    already_text = bool(re.fullmatch(r"CAST\s*\([\s\S]+\s+AS\s+(?:TEXT|VARCHAR|CHARACTER VARYING)\s*\)", arg, re.I))
+                    if arg and not standard_form and not already_text:
+                        edits.append((start, end))
+                    break
+            elif depth == 1 and (value == "," or value.upper() in {"FROM", "LEADING", "TRAILING", "BOTH"}):
+                standard_form = True
+    # Insert wrappers backwards so nested TRIM arguments retain their positions.
+    insertions = []
+    for start, end in edits:
+        insertions.extend([(start, "CAST("), (end, " AS TEXT)")])
+    for position, value in sorted(insertions, reverse=True):
+        sql = sql[:position] + value + sql[position:]
     return sql
 
 

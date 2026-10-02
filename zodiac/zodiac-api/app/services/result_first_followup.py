@@ -224,6 +224,19 @@ def try_answer_from_prior_rows(
     rows = [r for r in (prior_rows or []) if isinstance(r, dict)]
     if not is_result_scoped_followup(question, has_prior_rows=bool(rows)):
         return None
+    # Explaining, summarizing, or asking why requires a model-grounded answer.
+    # A reference to "this result" alone is not a frequency/count request.
+    if not _GROWTH_RANK.search(question or "") and not _APPEARS_MOST.search(question or ""):
+        return None
+    artifact = (prior_plan or {}).get("result_artifact") or {}
+    if artifact.get("truncated"):
+        # A stored sample cannot establish the most frequent entity or largest
+        # change across the full result. Re-query rather than claiming accuracy.
+        return {
+            "needs_plan_expansion": True,
+            "missing_concept": "complete_prior_result",
+            "query_plan": prior_plan or {},
+        }
 
     if not rows:
         return {

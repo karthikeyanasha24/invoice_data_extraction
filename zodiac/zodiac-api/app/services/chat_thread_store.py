@@ -246,7 +246,7 @@ def load_thread(
                    time_scope, query_mode, action, turn_index
             FROM ai_chat_turns
             WHERE user_id = :uid AND thread_id = :tid
-            ORDER BY turn_index DESC
+            ORDER BY turn_index DESC, id DESC
             LIMIT :n
         """), {"uid": user_id, "tid": thread_id, "n": last_n}).mappings().all()
 

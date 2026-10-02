@@ -1,0 +1,76 @@
+[
+  {
+    "case": "nested numeric TRIM on PostgreSQL",
+    "passed": true
+  },
+  {
+    "case": "remember a preference",
+    "passed": false,
+    "answer_status": "CANNOT_ANSWER",
+    "mode": "error",
+    "row_count": 0,
+    "latency_s": 15.0,
+    "stages": [
+      {
+        "pipeline_stage": "UNDERSTANDING",
+        "elapsed_s": 0.016
+      }
+    ]
+  },
+  {
+    "case": "recall and general knowledge",
+    "passed": false,
+    "answer_status": "CANNOT_ANSWER",
+    "mode": "error",
+    "row_count": 0,
+    "latency_s": 0.0,
+    "stages": [
+      {
+        "pipeline_stage": "UNDERSTANDING",
+        "elapsed_s": 0.0
+      }
+    ]
+  },
+  {
+    "case": "flexible coding answer",
+    "passed": false,
+    "answer_status": "CANNOT_ANSWER",
+    "mode": "error",
+    "row_count": 0,
+    "latency_s": 0.0,
+    "stages": [
+      {
+        "pipeline_stage": "UNDERSTANDING",
+        "elapsed_s": 0.0
+      }
+    ]
+  },
+  {
+    "case": "database query",
+    "passed": false,
+    "answer_status": "CANNOT_ANSWER",
+    "mode": "error",
+    "row_count": 0,
+    "latency_s": 0.0,
+    "stages": [
+      {
+        "pipeline_stage": "UNDERSTANDING",
+        "elapsed_s": 0.0
+      }
+    ]
+  },
+  {
+    "case": "database follow-up",
+    "passed": false,
+    "answer_status": "CANNOT_ANSWER",
+    "mode": "error",
+    "row_count": 0,
+    "latency_s": 0.0,
+    "stages": [
+      {
+        "pipeline_stage": "UNDERSTANDING",
+        "elapsed_s": 0.0
+      }
+    ]
+  }
+]

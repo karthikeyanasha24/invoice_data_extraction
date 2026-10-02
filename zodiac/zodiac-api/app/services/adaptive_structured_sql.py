@@ -763,7 +763,7 @@ def detect_ranking_dimension(
 def detect_ranking_measure(
     question: str, semantic: Optional[Dict[str, Any]] = None
 ) -> str:
-    """sales | quantity | invoice_count | purchase_value | vendor_invoice_value"""
+    """Resolve a ranking measure from the semantic metric catalog first."""
     q = (question or "").lower()
     # Supplier/vendor *invoice* amount → MM vendor invoices (RBKP), not PO value.
     if (
@@ -781,6 +781,18 @@ def detect_ranking_measure(
         and not re.search(r"\binvoice\b", q)
     ):
         return "purchase_value"
+    # Resolve curated business metrics before defaulting generic sales words.
+    try:
+        from .business_semantic_layer import resolve_metric
+
+        proposed = resolve_metric(question)
+        measure = (semantic or {}).get("measure")
+        concept = str(measure.get("concept") or "").strip() if isinstance(measure, dict) else ""
+        metric = proposed or resolve_metric(concept)
+        if metric:
+            return metric.name
+    except Exception:
+        pass
     # Sales/revenue phrases take precedence over incidental 'invoice' wording.
     if re.search(r"\b(billed sales|invoice value|billing amount|revenue|turnover|netwr)\b", q) or (
         re.search(r"\bsales\b", q) and not re.search(r"\b(how many|number of|count of)\s+invoices?\b", q)
@@ -878,7 +890,25 @@ def build_dimension_ranking_sql(
 
     hdr = resolve_table_name("VBRK") or "VBRK"
     line = resolve_table_name("vbrp") or "vbrp"
-    use_line = dimension == "material" or measure == "quantity"
+    metric_def = None
+    try:
+        from .business_semantic_layer import METRICS
+
+        metric_def = METRICS.get(measure)
+    except Exception:
+        metric_def = None
+    if metric_def and metric_def.status != "supported":
+        # Never reinterpret a known-but-unavailable metric as sales.
+        return None
+    metric_tables = {
+        (resolve_table_name(t) or t).upper()
+        for t in (getattr(metric_def, "base_tables", ()) or ())
+    }
+    use_line = (
+        dimension == "material"
+        or measure == "quantity"
+        or "VBRP" in metric_tables
+    )
     if use_line and not has_table("vbrp"):
         return None
 
@@ -948,7 +978,35 @@ def build_dimension_ranking_sql(
     else:
         return None
 
-    if measure == "invoice_count":
+    if metric_def and metric_def.formula_sql:
+        # MetricDef formulas are curated and schema-backed. Adapt their logical
+        # billing aliases to this query's aliases, then group by the metric's
+        # currency field so rankings never combine unlike currencies.
+        formula = metric_def.formula_sql
+        alias_map = {"v": "p", "vk": "k"} if use_line else {"vk": "k"}
+        for source_alias, sql_alias in alias_map.items():
+            formula = re.sub(
+                rf"\b{re.escape(source_alias)}\.([A-Za-z_][A-Za-z0-9_]*)",
+                lambda m: f'{sql_alias}."{m.group(1).lower()}"',
+                formula,
+                flags=re.I,
+            )
+        references = re.findall(r'\b([pk])\."([A-Za-z_][A-Za-z0-9_]*)"', formula, re.I)
+        for sql_alias, column in references:
+            source_table = line if sql_alias.lower() == "p" else hdr
+            if not has_column(source_table, column):
+                return None
+        currency_field = str(getattr(metric_def, "currency_field", None) or "").strip()
+        currency_match = re.fullmatch(r"(?:vk|k)\.([A-Za-z_][A-Za-z0-9_]*)", currency_field, re.I)
+        if currency_match:
+            currency_col = currency_match.group(1).lower()
+            if not has_column(hdr, currency_col):
+                return None
+            sel.append(f'k."{currency_col}" AS "currency"')
+            gb.append(f'k."{currency_col}"')
+        alias = "total_sales" if metric_def.name == "revenue" else metric_def.name
+        sel.append(f'({formula}) AS "{alias}"')
+    elif measure == "invoice_count":
         if not has_column(hdr, "vbeln"):
             return None
         sel.append('COUNT(DISTINCT TRIM(CAST(k."vbeln" AS TEXT))) AS "invoice_count"')
@@ -2153,6 +2211,11 @@ def detect_expression_as_column_errors(sql: str) -> List[str]:
 
 def classify_sql_execution_error(error_text: str) -> str:
     txt = (error_text or "").lower()
+    # Error messages include the whole query; JOIN in that query does not
+    # turn an expression type failure into an invalid join.
+    txt = txt.split("[sql:", 1)[0]
+    if re.search(r"function\s+(?:pg_catalog\.)?b?trim\s*\(", txt) and "does not exist" in txt:
+        return "invalid_datatype"
     if "column" in txt and "does not exist" in txt:
         if any(fn.lower() in txt for fn in _SQL_FUNCS):
             return "expression_as_column"
@@ -3094,6 +3157,7 @@ def sanitize_generated_sql(sql: str, question: str = "") -> str:
         sanitize_netwr_sql,
         sanitize_sap_amount_columns_sql,
         sanitize_sap_amount_predicates_sql,
+        sanitize_trim_type_safety_sql,
     )
 
     out = repair_quoted_expressions_as_columns(sql or "")
@@ -3105,7 +3169,7 @@ def sanitize_generated_sql(sql: str, question: str = "") -> str:
     out = sanitize_sap_amount_predicates_sql(out)
     if question:
         out = repair_absurd_question_literal_filters(out, question)
-    return out
+    return sanitize_trim_type_safety_sql(out)
 
 
 def repair_bare_time_grain_aliases(sql: str) -> str:

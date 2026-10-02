@@ -35,6 +35,17 @@ const CLARIFICATION = {
 };
 
 describe('continuous chat context policy', () => {
+  it('a narrative-only reply retains its own context', () => {
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show sales for 2004' },
+      { role: 'assistant', content: 'Sales results', result: SUCCESS_2004 },
+      { role: 'user', content: 'Call me Mira' },
+      { role: 'assistant', content: 'Of course, Mira.' },
+    ];
+    const context = followupContextForSend(messages, lastSuccessfulAnalyticalContext(messages), false);
+    assert.equal(context?.previousQuestion, 'Call me Mira');
+    assert.equal(context?.previousSQL, '');
+  });
   it('exposes continuous_chat_v1 marker', () => {
     assert.equal(ADAPTIVE_CONTEXT_POLICY, 'continuous_chat_v1');
   });

@@ -433,12 +433,12 @@ def pipeline1_table_selection(question: str, ctx: VerifiedDbContext) -> None:
     from .investigation_budget import current_budget
 
     budget = current_budget()
-    if budget is not None:
-        budget.checkpoint("SELECTING_TABLES")
     reg = get_schema_registry()
     include_ops = _question_needs_operational_tables(question)
 
     ctx.semantic_requirements = extract_semantic_requirements(question)
+    if budget is not None:
+        budget.checkpoint("SELECTING_TABLES")
 
     catalog = reg.lightweight_table_catalog(include_operational=include_ops)
     catalog_text = reg.compact_catalog_text(include_operational=include_ops)
@@ -1230,7 +1230,7 @@ def pipeline4_result_analysis(
     budget = current_budget()
     if budget is not None:
         try:
-            budget.checkpoint("result_analysis")
+            budget.checkpoint("PREPARING_ANSWER")
         except Exception:
             return {
                 "answer": f"Query returned {len(rows)} row(s).",

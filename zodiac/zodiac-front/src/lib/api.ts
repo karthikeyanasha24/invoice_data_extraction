@@ -1827,6 +1827,8 @@ export const dashboardApi = {
         overrideSql?: string | null;
         threadId?: string | null;
         investigationId?: string | null;
+        conversationHistory?: { role: 'user' | 'assistant'; content: string; mode?: string }[];
+        newQuestion?: boolean;
     }, config?: { signal?: AbortSignal }) => {
         try {
             const response = await api.post('/api/query/adaptive', body, { timeout: 0, signal: config?.signal });
@@ -1846,9 +1848,9 @@ export const dashboardApi = {
         }
     },
 
-    getInvestigationStatus: async (requestId: string) => {
+    getInvestigationStatus: async (requestId: string, signal?: AbortSignal) => {
         try {
-            const response = await api.get(`/api/query/adaptive/investigations/${encodeURIComponent(requestId)}`);
+            const response = await api.get(`/api/query/adaptive/investigations/${encodeURIComponent(requestId)}`, { signal, timeout: 10000 });
             return response.data as {
                 request_id?: string;
                 pipeline_stage?: string;
@@ -1857,6 +1859,8 @@ export const dashboardApi = {
                 cancelled?: boolean;
                 timeout?: boolean;
                 status?: string;
+                stage_elapsed_s?: number;
+                stages?: { pipeline_stage: string; elapsed_s: number }[];
             };
         } catch {
             return { pipeline_stage: 'UNDERSTANDING', status: 'unknown' };

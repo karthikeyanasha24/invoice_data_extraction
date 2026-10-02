@@ -26,7 +26,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -2607,9 +2607,11 @@ async def get_adaptive_chat_history(
                 "data": rows,
                 "charts": t.get("charts") or [],
                 "summary": content,
-                "rowCount": len(rows) if isinstance(rows, list) else 0,
+                "rowCount": metrics.get("row_count") if metrics.get("row_count") is not None else (len(rows) if isinstance(rows, list) else 0),
                 "query_plan": metrics.get("query_plan"),
                 "answer_status": metrics.get("answer_status") or "SUCCESS",
+                "mode": metrics.get("mode"),
+                "meta": metrics.get("meta") or {},
             }
         messages.append(msg)
     return {"thread_id": tid, "messages": messages}
@@ -2626,10 +2628,13 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
         ensure_chat_tables(db2)
         uid = int(snapshot["user_id"])
         tid = str(snapshot["thread_id"])
+        # Pair writes and index allocation must share one DB transaction, even
+        # when rapid follow-ups are persisted by different worker processes.
+        db2.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"adaptive:{uid}:{tid}"})
         idx = next_turn_index(db2, uid, tid)
         rows = snapshot.get("rows") or []
         cols = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else None
-        save_turn(
+        user_saved = save_turn(
             db2,
             user_id=uid,
             thread_id=tid,
@@ -2640,7 +2645,9 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
             action="adaptive",
             commit=False,
         )
-        save_turn(
+        if not user_saved:
+            raise RuntimeError("user turn persistence failed")
+        assistant_saved = save_turn(
             db2,
             user_id=uid,
             thread_id=tid,
@@ -2654,11 +2661,16 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
             key_metrics={
                 "query_plan": snapshot.get("query_plan"),
                 "answer_status": snapshot.get("answer_status"),
+                "mode": snapshot.get("mode"),
+                "meta": snapshot.get("meta"),
+                "row_count": snapshot.get("row_count"),
             },
             query_mode="new",
             action=snapshot.get("pipeline") or "adaptive",
             commit=False,
         )
+        if not assistant_saved:
+            raise RuntimeError("assistant turn persistence failed")
         db2.commit()
     except Exception as persist_err:
         logger.debug("adaptive chat persist skipped: %s", persist_err)
@@ -2716,6 +2728,9 @@ def post_query_adaptive(
     overrideSql: Optional[str] = Body(default=None, embed=True),
     threadId: Optional[str] = Body(default=None, embed=True),
     investigationId: Optional[str] = Body(default=None, embed=True),
+    conversationHistory: Optional[List[Dict[str, Any]]] = Body(default=None, embed=True),
+    newQuestion: bool = Body(default=False, embed=True),
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: ZodiacUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -2774,9 +2789,12 @@ def post_query_adaptive(
             contextData=contextData,
             overrideSql=overrideSql,
             threadId=threadId,
-            investigationId=investigationId,
+            investigationId=investigationId if isinstance(investigationId, str) else None,
             db=db,
             current_user=current_user,
+            conversation_history=conversationHistory if isinstance(conversationHistory, list) else None,
+            new_question=newQuestion is True,
+            background_tasks=background_tasks,
         )
     finally:
         if _scope_token is not None:
@@ -2797,6 +2815,9 @@ def _post_query_adaptive_body(
     investigationId: Optional[str],
     db: Session,
     current_user: ZodiacUser,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+    new_question: bool = False,
+    background_tasks: Optional[BackgroundTasks] = None,
 ) -> Dict[str, Any]:
     _original_question = original_question
     openai_key = (
@@ -2817,6 +2838,29 @@ def _post_query_adaptive_body(
         thread_id = None  # ignore non-adaptive thread ids
     user_id = int(current_user.id) if current_user is not None and getattr(current_user, "id", None) is not None else 0
 
+    from ..services.chat_thread_store import thread_owner_user_id, load_thread
+    from ..services.adaptive_analyst.chat_memory import context_from_stored_turns, recent_conversation, remember_response
+    if thread_id and user_id:
+        owner = thread_owner_user_id(db, thread_id)
+        if owner is not None and owner != user_id:
+            raise HTTPException(status_code=403, detail="thread_not_owned")
+    memory_turns = recent_conversation(conversation_history)
+    if not new_question and not memory_turns:
+        plan_input = (contextData or {}).get("previousPlan") or {}
+        plan_input = plan_input if isinstance(plan_input, dict) else {}
+        inv_input = plan_input.get("investigation_state") or {}
+        inv_input = inv_input if isinstance(inv_input, dict) else {}
+        memory_turns = recent_conversation(plan_input.get("recent_turns") or inv_input.get("recent_turns"))
+        if not memory_turns and thread_id and user_id:
+            stored = load_thread(db, user_id, thread_id, last_n=80)
+            restored_context = context_from_stored_turns(stored)
+            memory_turns = recent_conversation(stored)
+            if not contextData:
+                contextData = restored_context
+    if new_question:
+        contextData = None
+        memory_turns = []
+
     routing_meta: Dict[str, Any] = {}
     from ..services.investigation_budget import (
         InvestigationTimeout,
@@ -2836,7 +2880,7 @@ def _post_query_adaptive_body(
         # ranking normalizer rewrite. Wrong results must never become SUCCESS.
         try:
             if str(payload.get("answer_status") or "").upper() == "SUCCESS" and (
-                payload.get("sql") or payload.get("data") is not None
+                payload.get("sql") or payload.get("data")
             ):
                 pipe = str(payload.get("pipeline") or payload.get("sql_generation_method") or "").lower()
                 # Result-first follow-ups answer from prior rows; do not re-apply
@@ -2889,21 +2933,38 @@ def _post_query_adaptive_body(
                             },
                         }
         except Exception as gate_err:
-            logger.warning("[adaptive] final semantic gate failed open-safe: %s", gate_err)
+            logger.warning("[adaptive] final semantic validation failed: %s", gate_err)
+            message = "I couldn't verify this result. Please try the analysis again."
+            payload = {
+                **payload, "answer_status": "CANNOT_ANSWER", "status": "cannot_answer",
+                "mode": "error", "type": "cannot_answer", "data": [], "rowCount": 0,
+                "answer": message, "summary": message, "keyFindings": [], "charts": [], "kpis": [],
+                "meta": {**(payload.get("meta") or {}), "validation_failed": True},
+            }
+        payload["query_plan"] = remember_response(
+            payload.get("query_plan") or payload.get("queryPlan"), memory_turns,
+            _original_question, str(payload.get("answer") or payload.get("summary") or ""),
+            str(payload.get("mode") or payload.get("route") or ""),
+        )
+        result_rows = payload.get("data") or payload.get("rows") or []
+        if isinstance(result_rows, list) and result_rows:
+            payload["query_plan"]["result_artifact"] = {
+                "row_count": payload.get("rowCount") or len(result_rows),
+                "sample_row_count": min(30, len(result_rows)),
+                "truncated": len(result_rows) > 30,
+            }
         budget_now = current_budget()
         if budget_now is not None:
             payload["request_id"] = budget_now.request_id
-            payload.setdefault("pipeline_stage", budget_now.pipeline_stage)
+            terminal = {
+                "SUCCESS": "completed", "SUCCESS_EMPTY": "completed", "NO_DATA": "completed",
+                "CLARIFICATION": "clarification", "CANNOT_ANSWER": "cannot_answer",
+                "TIMEOUT": "timeout", "CANCELLED": "cancelled",
+            }.get(str(payload.get("answer_status") or "").upper(), "cannot_answer")
+            end_investigation(terminal)
+            payload["pipeline_stage"] = budget_now.pipeline_stage
             meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
             payload["meta"] = {**meta, **budget_now.public_status()}
-            if str(payload.get("answer_status") or "").upper() == "SUCCESS":
-                budget_now.final_status = "completed"
-                budget_now.pipeline_stage = "COMPLETED"
-                payload["pipeline_stage"] = "COMPLETED"
-            elif str(payload.get("answer_status") or "").upper() == "TIMEOUT":
-                payload["pipeline_stage"] = budget_now.pipeline_stage
-            elif str(payload.get("answer_status") or "").upper() == "CANNOT_ANSWER":
-                budget_now.final_status = "cannot_answer"
         if routing_meta.get("turn_intent"):
             meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
             payload["meta"] = {**meta, "turn_intent": routing_meta["turn_intent"]}
@@ -2944,13 +3005,19 @@ def _post_query_adaptive_body(
             "query_plan": payload.get("query_plan") or payload.get("queryPlan"),
             "answer_status": payload.get("answer_status"),
             "pipeline": payload.get("pipeline") or payload.get("answer_status") or "adaptive",
+            "mode": payload.get("mode") or payload.get("route"),
+            "meta": payload.get("meta"),
+            "row_count": payload.get("rowCount"),
         }
-        threading.Thread(
-            target=_persist_adaptive_turn_async,
-            args=(snapshot,),
-            daemon=True,
-            name="adaptive-persist",
-        ).start()
+        if background_tasks is not None:
+            background_tasks.add_task(_persist_adaptive_turn_async, snapshot)
+        else:
+            threading.Thread(
+                target=_persist_adaptive_turn_async,
+                args=(snapshot,),
+                daemon=True,
+                name="adaptive-persist",
+            ).start()
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
         payload["meta"] = {**meta, "persist_async": True}
         end_investigation()
@@ -3224,6 +3291,9 @@ def _post_query_adaptive_body(
 
     if _orch_enabled:
         try:
+            # Classification may clear analytical filters, but conversational
+            # memory must survive topic changes and unsuccessful SQL turns.
+            prev_plan_dict = {**(prev_plan_dict or {}), "recent_turns": memory_turns}
             orch = run_adaptive_orchestrator(
                 clean_q,
                 db,

@@ -53,24 +53,6 @@ _GENERAL_CHAT_SYSTEM = (
 )
 
 
-def _deterministic_greeting_reply(question: str) -> Optional[str]:
-    """Fast English greeting — avoids LLM language drift on hi/hai/hey."""
-    try:
-        from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
-    except Exception:
-        return None
-    if not is_greeting_or_chitchat(question):
-        return None
-    ql = re.sub(r"[?!.,]+$", "", (question or "").strip().lower())
-    if ql in {"thanks", "thank you", "thankyou"}:
-        return "You're welcome! Ask me anything — general questions or SAP business analysis."
-    if ql in {"bye", "goodbye", "good night"}:
-        return "Goodbye! Come back anytime you need help."
-    if ql in {"good morning", "good evening", "good afternoon"}:
-        return "Hello! How can I help you today?"
-    return "Hi there! How can I help you today?"
-
-
 def _is_questionnaire(text: str) -> bool:
     t = text or ""
     return (
@@ -761,15 +743,18 @@ def run_adaptive_orchestrator(
         prior_plan = None
         prior_rows = []
     state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
+    from .chat_memory import recent_conversation
+    preserved_turns = recent_conversation(preserved_turns)
     if preserved_turns and not state.recent_turns:
-        state.recent_turns = preserved_turns[-12:]
+        state.recent_turns = preserved_turns[-40:]
     elif preserved_turns and adapted.drop_prior:
         # Merge: keep preserved history even if a thin plan was rebuilt.
         merged = list(preserved_turns)
         for t in state.recent_turns:
             if t not in merged:
                 merged.append(t)
-        state.recent_turns = merged[-12:]
+        state.recent_turns = merged[-40:]
+    state.recent_turns = recent_conversation(state.recent_turns)
     if thread_id:
         state.conversation_id = thread_id
     prior_summary = _prior_summary_from_state(state, prior_plan)
@@ -795,9 +780,11 @@ def run_adaptive_orchestrator(
             reply, provider = complete_text(
                 "You are BridgeEDI AI Analyst. Reply naturally in 1-2 short sentences. "
                 "Do not invent database numbers. Do not list capabilities unless asked.",
-                f"{prior_bit}User: {q}\nAssistant:",
+                f"Conversation: {json.dumps(state.recent_turns[-12:], default=str)}\n{prior_bit}User: {q}\nAssistant:",
             )
-            reply = (reply or "").strip() or "Hi — how can I help you today?"
+            reply = (reply or "").strip()
+            if not reply:
+                raise RuntimeError("response model returned empty text")
         except Exception as greet_err:
             return technical_understanding_failure(q, greet_err)
         state.remember_turn(q, reply, mode="general_chat")
@@ -852,7 +839,7 @@ def run_adaptive_orchestrator(
             q,
             prior_question=prior_question,
             prior_summary=prior_summary,
-            prior_plan=prior_plan if isinstance(prior_plan, dict) else None,
+            prior_plan={**(prior_plan or {}), "recent_turns": state.recent_turns},
             prior_status=prior_status,
             capability_context=capability_facts(),
         )
@@ -917,6 +904,9 @@ def run_adaptive_orchestrator(
                 resp_evidence["prior_result"] = compact_prior_result(
                     prior_rows, prior_summary
                 )
+                artifact = (prior_plan or {}).get("result_artifact") or {}
+                if isinstance(artifact, dict) and artifact:
+                    resp_evidence["prior_result"]["result_scope"] = artifact
             reply, provider = generate_grounded_response(
                 q,
                 understanding,
@@ -924,40 +914,6 @@ def run_adaptive_orchestrator(
                 prior_summary=prior_summary,
                 evidence=resp_evidence,
             )
-            # If user asks what we said about tables and we have prior metadata
-            # turns, ground the reply on those turns (ChatGPT-style recall).
-            if (
-                table_turns
-                and re.search(r"\btables?\b", q, re.I)
-                and re.search(r"\b(tell|told|say|said|mention|about)\b", q, re.I)
-            ):
-                grounded_bits = []
-                for t in table_turns:
-                    if str(t.get("role")) != "assistant":
-                        continue
-                    c = str(t.get("content") or "").strip()
-                    if c:
-                        grounded_bits.append(c[:500])
-                if grounded_bits:
-                    recall_user = (
-                        "The user asked what you previously said about tables/schema.\n"
-                        "Prior assistant answers about tables (authoritative):\n- "
-                        + "\n- ".join(grounded_bits[-4:])
-                        + "\n\nWrite a short natural reply that recalls those facts. "
-                        "Do not deny them. Do not switch to sales clarification."
-                    )
-                    try:
-                        from .llm_provider import complete_text as _complete
-
-                        recall, provider2 = _complete(
-                            "You are BridgeEDI AI Analyst. Recall prior answers accurately.",
-                            recall_user,
-                        )
-                        if (recall or "").strip():
-                            reply = recall.strip()
-                            provider = provider2 or provider
-                    except Exception:
-                        reply = "Earlier about tables I said:\n- " + "\n- ".join(grounded_bits[-3:])
         except Exception as resp_err:
             return technical_understanding_failure(q, resp_err)
         state.remember_turn(q, reply, mode="general_chat")

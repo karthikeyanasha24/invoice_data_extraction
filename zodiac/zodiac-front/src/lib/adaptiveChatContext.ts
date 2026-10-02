@@ -162,8 +162,11 @@ export function latestAssistantContext(
 ): LastSuccessfulAnalyticalContext | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (message.role !== 'assistant' || !message.result) continue;
-    const result = message.result;
+    if (message.role !== 'assistant') continue;
+    const result = message.result || {
+      answer_status: 'SUCCESS', mode: 'general_chat',
+      query_plan: { last_mode: 'general_chat', investigation_state: { last_summary: message.content } },
+    };
     const status = answerStatusOf(result);
     const previousQuestion = precedingUserQuestion(messages, i);
 
@@ -217,12 +220,20 @@ export function followupContextForSend(
 ): LastSuccessfulAnalyticalContext | null {
   if (isNewQuestion) return null;
   // ChatGPT-style: always prefer the latest assistant turn.
-  return (
+  const context = (
     latestAssistantContext(messages)
     || lastPendingClarificationContext(messages)
     || lastGeneralChatContext(messages)
     || buildFollowupContextData(analytical, false)
   );
+  if (!context) return null;
+  const plan = (context.previousPlan && typeof context.previousPlan === 'object')
+    ? context.previousPlan as Record<string, unknown> : {};
+  const artifact = (plan.result_artifact || {}) as Record<string, unknown>;
+  return { ...context, previousPlan: { ...plan, result_artifact: {
+    ...artifact, sample_row_count: context.data.length,
+    truncated: Boolean(artifact.truncated) || Number(artifact.row_count || 0) > context.data.length,
+  } } };
 }
 
 export function buildFollowupContextData(

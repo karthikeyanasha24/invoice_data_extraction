@@ -30,12 +30,12 @@ class InvestigationState:
 
     def remember_turn(self, user: str, assistant: str, *, mode: str = "") -> None:
         turns = list(self.recent_turns or [])
-        turns.append({"role": "user", "content": (user or "")[:500]})
-        asst: Dict[str, str] = {"role": "assistant", "content": (assistant or "")[:900]}
+        turns.append({"role": "user", "content": (user or "")[:4000]})
+        asst: Dict[str, str] = {"role": "assistant", "content": (assistant or "")[:6000]}
         if mode:
             asst["mode"] = str(mode)[:40]
         turns.append(asst)
-        self.recent_turns = turns[-12:]
+        self.recent_turns = turns[-40:]
         # Greetings must not erase the last data/schema answer — follow-ups
         # like "summarize the above" need that result, not "Hello".
         if mode != "general_chat" or not (self.last_summary or "").strip():
@@ -77,13 +77,13 @@ class InvestigationState:
         if not isinstance(recent, list):
             recent = []
         cleaned_recent: List[Dict[str, str]] = []
-        for item in recent[-12:]:
+        for item in recent[-40:]:
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role") or "")
             content = str(item.get("content") or "")
             if role and content:
-                row = {"role": role, "content": content[:900]}
+                row = {"role": role, "content": content[:6000]}
                 if item.get("mode"):
                     row["mode"] = str(item.get("mode"))[:40]
                 cleaned_recent.append(row)

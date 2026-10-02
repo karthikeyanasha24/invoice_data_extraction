@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -143,10 +144,13 @@ def _openai_chat(system: str, user: str, *, json_mode: bool = False) -> str:
     from .investigation_budget import current_budget
 
     budget = current_budget()
-    timeout_s = budget.llm_timeout_s(default=90.0) if budget is not None else 90.0
+    cap = float(os.getenv("AI_LLM_CALL_TIMEOUT_SECONDS") or "30")
+    timeout_s = budget.llm_timeout_s(default=cap) if budget is not None else cap
 
     model = _openai_model()
-    client = OpenAI(api_key=_openai_key(), timeout=timeout_s)
+    # The investigation owns retries and fallback; SDK retries would multiply
+    # the per-call timeout and silently exceed its wall-clock budget.
+    client = OpenAI(api_key=_openai_key(), timeout=timeout_s, max_retries=0)
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [
@@ -154,7 +158,10 @@ def _openai_chat(system: str, user: str, *, json_mode: bool = False) -> str:
             {"role": "user", "content": user},
         ],
         **openai_chat_temperature_kwargs(model, 0.1),
-        **openai_completion_limit_kwargs(model, 1200),
+        **openai_completion_limit_kwargs(model, int(
+            (os.getenv("AI_JSON_MAX_TOKENS") or "1500") if json_mode
+            else (os.getenv("AI_RESPONSE_MAX_TOKENS") or "3000")
+        )),
     }
     if json_mode and not str(model).lower().startswith("gpt-5"):
         kwargs["response_format"] = {"type": "json_object"}
@@ -170,7 +177,7 @@ def _gemini_chat(system: str, user: str) -> str:
         {
             "system_instruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": int(os.getenv("AI_RESPONSE_MAX_TOKENS") or "3000")},
         }
     ).encode()
     model = _gemini_model()
@@ -183,7 +190,8 @@ def _gemini_chat(system: str, user: str) -> str:
         from .investigation_budget import current_budget
 
         budget = current_budget()
-        timeout_s = budget.llm_timeout_s(default=90.0) if budget is not None else 90.0
+        cap = float(os.getenv("AI_LLM_CALL_TIMEOUT_SECONDS") or "30")
+        timeout_s = budget.llm_timeout_s(default=cap) if budget is not None else cap
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             payload = json.load(resp)
     except urllib.error.HTTPError as exc:
@@ -209,15 +217,31 @@ def _is_gemini_quota(exc: BaseException) -> bool:
     )
 
 
-_SKIP_OPENAI = False
-_SKIP_GEMINI = False
+_PROVIDER_FAILURE_UNTIL: Dict[str, float] = {}
+
+
+def _provider_identity(provider: str) -> str:
+    import hashlib
+    key = _google_key() if provider == "gemini" else _openai_key()
+    model = _gemini_model() if provider == "gemini" else _openai_model()
+    return f"{provider}:{model}:{hashlib.sha256(key.encode()).hexdigest()[:16]}"
+
+
+def _provider_available(provider: str) -> bool:
+    return time.monotonic() >= _PROVIDER_FAILURE_UNTIL.get(_provider_identity(provider), 0.0)
+
+
+def _provider_failed(provider: str, error: BaseException) -> None:
+    # Recover automatically after transient, configuration, and quota failures;
+    # do not try the same broken provider at every stage of one investigation.
+    seconds = 300 if _is_openai_quota(error) or _is_gemini_quota(error) else 60
+    _PROVIDER_FAILURE_UNTIL[_provider_identity(provider)] = time.monotonic() + seconds
 
 
 def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, str]:
     """Return (text, provider). Prefer Gemini for chat speed when configured;
     always fall back to the other provider on quota/rate-limit failures.
     """
-    global _SKIP_OPENAI, _SKIP_GEMINI
     from .investigation_budget import current_budget
 
     budget = current_budget()
@@ -235,38 +259,40 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
     last_err: Optional[BaseException] = None
 
     def _try_gemini() -> Optional[Tuple[str, str]]:
-        global _SKIP_GEMINI
         nonlocal last_err
-        if not _google_key() or _SKIP_GEMINI:
+        if not _google_key() or not _provider_available("gemini"):
             return None
         try:
-            return _gemini_chat(system, user), "gemini"
+            response = _gemini_chat(system, user)
+            if not response:
+                raise RuntimeError("Gemini returned an empty response")
+            return response, "gemini"
         except Exception as exc:
             from .investigation_budget import InvestigationTimeout
 
             if isinstance(exc, InvestigationTimeout):
                 raise
             last_err = exc
-            if _is_gemini_quota(exc):
-                _SKIP_GEMINI = True
+            _provider_failed("gemini", exc)
             logger.warning("[ai-native] Gemini failed (%s); trying OpenAI", type(exc).__name__)
             return None
 
     def _try_openai() -> Optional[Tuple[str, str]]:
-        global _SKIP_OPENAI
         nonlocal last_err
-        if not _openai_key() or _SKIP_OPENAI:
+        if not _openai_key() or not _provider_available("openai"):
             return None
         try:
-            return _openai_chat(system, user, json_mode=json_mode), "openai"
+            response = _openai_chat(system, user, json_mode=json_mode)
+            if not response:
+                raise RuntimeError("OpenAI returned an empty response")
+            return response, "openai"
         except Exception as exc:
             from .investigation_budget import InvestigationTimeout
 
             if isinstance(exc, InvestigationTimeout):
                 raise
             last_err = exc
-            if _is_openai_quota(exc):
-                _SKIP_OPENAI = True
+            _provider_failed("openai", exc)
             logger.warning("[ai-native] OpenAI failed (%s); trying Gemini", type(exc).__name__)
             return None
 
@@ -287,6 +313,8 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
 
     if last_err:
         raise last_err
+    if _openai_key() or _google_key():
+        raise RuntimeError("Configured model services are temporarily unavailable; retry after cooldown")
     raise RuntimeError("No OpenAI or Gemini API key configured")
 
 

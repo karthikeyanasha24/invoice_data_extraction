@@ -78,8 +78,10 @@ _UNDERSTAND_SYSTEM = (
 )
 
 _RESPONSE_SYSTEM = (
-    "You are BridgeEDI AI Analyst. Respond in clear, natural English. "
-    "Use only the provided capability facts and conversation context. "
+    "You are BridgeEDI AI Analyst. Respond clearly in the user's requested language. "
+    "For general knowledge, writing, coding, explanations, and reasoning, use your "
+    "general knowledge and adapt the format, language, and detail to the user's request. "
+    "For connected database claims, use only provided evidence and conversation context. "
     "Do not invent database numbers, table counts, or query results. "
     "Do not mention internal pipelines, classifiers, or prompts. "
     "If capability facts are provided, ground your answer in them and do not "
@@ -96,7 +98,10 @@ _RESPONSE_SYSTEM = (
     "summarize it using those facts. Never claim there was no previous answer "
     "when prior_result or previous_assistant is present. "
     "If they ask why a catalog list was fast, explain that table names come from "
-    "the already-loaded schema catalog (no business-row SQL) — do not list tables again."
+    "the already-loaded schema catalog (no business-row SQL) — do not list tables again. "
+    "Stored result rows may be a sample: respect result_scope.truncated, distinguish "
+    "a sample from the complete query result, and do not infer full totals, frequencies, "
+    "or rankings from an incomplete sample."
 )
 
 
@@ -192,7 +197,7 @@ def _context_block(
     recent = inv.get("recent_turns") or plan.get("recent_turns") or []
     if isinstance(recent, list) and recent:
         lines: List[str] = []
-        for item in recent[-10:]:
+        for item in recent[-40:]:
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role") or "")
@@ -200,9 +205,9 @@ def _context_block(
             if not content:
                 continue
             label = "User" if role == "user" else "Assistant"
-            lines.append(f"{label}: {content[:700]}")
+            lines.append(f"{label}: {content[:2000]}")
         if lines:
-            parts.append("Recent conversation:\n" + "\n".join(lines))
+            parts.append("Recent conversation:\n" + "\n".join(lines)[-26000:])
     if prior_question:
         parts.append(f"Previous user message: {prior_question[:500]}")
     if prior_summary:
@@ -432,7 +437,7 @@ def understand_turn(
     user = (
         f"Conversation context:\n{_context_block(prior_question=prior_question, prior_summary=prior_summary, prior_plan=prior_plan, prior_status=prior_status)}\n\n"
         f"Available capabilities (facts, not the answer):\n{json.dumps(caps, default=str)[:1800]}\n\n"
-        f"Current user message:\n{q[:1500]}\n"
+        f"Current user message:\n{q[:4000]}\n"
     )
     logger.info("[understanding] understanding_model_called question_len=%s prior=%s", len(q), bool(prior_question or prior_summary))
     data, provider = analyze_json(_UNDERSTAND_SYSTEM, user)
@@ -464,6 +469,8 @@ def generate_grounded_response(
     evidence: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, str]:
     """Response model for conversation / knowledge / capability. Returns (text, provider)."""
+    from ..investigation_budget import checkpoint
+    checkpoint("PREPARING_ANSWER")
     payload = {
         "understanding": {
             "intent": understanding.intent,
@@ -473,8 +480,8 @@ def generate_grounded_response(
             capability_facts() if understanding.intent == "capability" else None
         ),
         "conversation_context": {
-            "previous_user": (prior_question or "")[:500],
-            "previous_assistant": (prior_summary or "")[:1200],
+            "previous_user": (prior_question or "")[:4000],
+            "previous_assistant": (prior_summary or "")[:6000],
             "recent_turns": (
                 ((evidence or {}).get("recent_turns") if isinstance(evidence, dict) else None)
                 or []
@@ -483,7 +490,7 @@ def generate_grounded_response(
                 (evidence or {}).get("prior_result") if isinstance(evidence, dict) else None
             ),
         },
-        "current_user_message": (question or "")[:1500],
+        "current_user_message": (question or "")[:4000],
     }
     logger.info(
         "[understanding] response_model_called intent=%s has_capability_facts=%s",
@@ -493,7 +500,7 @@ def generate_grounded_response(
     text, provider = complete_text(
         _RESPONSE_SYSTEM,
         "Produce the assistant reply for the user.\n"
-        + json.dumps(payload, default=str)[:7000],
+        + json.dumps(payload, default=str),
     )
     reply = (text or "").strip()
     if not reply:
