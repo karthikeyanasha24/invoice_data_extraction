@@ -327,19 +327,29 @@ def apply_prior_discourse_override(
 def compact_prior_result(
     rows: Optional[List[Dict[str, Any]]],
     summary: str = "",
+    *,
+    result_scope: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compact prior analytical rows for conversation (no raw dict dumps)."""
+    safe_rows = [row for row in (rows or []) if isinstance(row, dict)]
+    scope = result_scope if isinstance(result_scope, dict) else {}
+    try:
+        row_count = max(0, int(scope.get("row_count")))
+    except (TypeError, ValueError):
+        row_count = len(safe_rows)
+    if row_count == 0 and safe_rows:
+        row_count = len(safe_rows)
     out: Dict[str, Any] = {
         "summary": (summary or "")[:1200],
-        "row_count": len(rows or []),
+        "row_count": row_count,
+        "sample_row_count": len(safe_rows),
+        "truncated": bool(scope.get("truncated")) or row_count > len(safe_rows),
     }
-    if not rows:
+    if not safe_rows:
         return out
-    keys = [str(k) for k in list(rows[0].keys())[:6]]
+    keys = [str(k) for k in list(safe_rows[0].keys())[:6]]
     preview: List[str] = []
-    for row in rows[:6]:
-        if not isinstance(row, dict):
-            continue
+    for row in safe_rows[:6]:
         preview.append(
             "; ".join(f"{k}={row.get(k)}" for k in keys if k in row)
         )

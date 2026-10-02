@@ -2602,12 +2602,17 @@ async def get_adaptive_chat_history(
         if role == "assistant":
             rows = t.get("result_rows") or []
             metrics = t.get("key_metrics") if isinstance(t.get("key_metrics"), dict) else {}
+            try:
+                stored_row_count = int(metrics.get("row_count") or 0)
+            except (TypeError, ValueError):
+                stored_row_count = 0
+            row_count = max(stored_row_count, len(rows) if isinstance(rows, list) else 0)
             msg["result"] = {
                 "sql": t.get("sql_executed") or "",
                 "data": rows,
                 "charts": t.get("charts") or [],
                 "summary": content,
-                "rowCount": metrics.get("row_count") if metrics.get("row_count") is not None else (len(rows) if isinstance(rows, list) else 0),
+                "rowCount": row_count,
                 "query_plan": metrics.get("query_plan"),
                 "answer_status": metrics.get("answer_status") or "SUCCESS",
                 "mode": metrics.get("mode"),
@@ -2948,8 +2953,16 @@ def _post_query_adaptive_body(
         )
         result_rows = payload.get("data") or payload.get("rows") or []
         if isinstance(result_rows, list) and result_rows:
+            try:
+                reported_row_count = int(payload.get("rowCount") or 0)
+            except (TypeError, ValueError):
+                reported_row_count = 0
+            # The returned records are direct evidence; never persist a zero or
+            # undersized count alongside a non-empty result sample.
+            coherent_row_count = max(reported_row_count, len(result_rows))
+            payload["rowCount"] = coherent_row_count
             payload["query_plan"]["result_artifact"] = {
-                "row_count": payload.get("rowCount") or len(result_rows),
+                "row_count": coherent_row_count,
                 "sample_row_count": min(30, len(result_rows)),
                 "truncated": len(result_rows) > 30,
             }
@@ -2989,6 +3002,9 @@ def _post_query_adaptive_body(
             sql_to_store = ""
             rows = []
             charts = []
+        stored_row_count = payload.get("rowCount")
+        if stored_row_count is None:
+            stored_row_count = len(result_rows) if isinstance(result_rows, list) else 0
         snapshot = {
             "user_id": user_id,
             "thread_id": thread_id,
@@ -3007,7 +3023,7 @@ def _post_query_adaptive_body(
             "pipeline": payload.get("pipeline") or payload.get("answer_status") or "adaptive",
             "mode": payload.get("mode") or payload.get("route"),
             "meta": payload.get("meta"),
-            "row_count": payload.get("rowCount"),
+            "row_count": stored_row_count,
         }
         if background_tasks is not None:
             background_tasks.add_task(_persist_adaptive_turn_async, snapshot)
@@ -3203,6 +3219,33 @@ def _post_query_adaptive_body(
             prev_plan_dict = None
             rows_list = []
             logger.info("[adaptive] cleared contaminated prior SQL/rows before turn classification")
+
+        # General conversation is the latest turn, while the last verified
+        # analysis remains available as a separate anchor for data follow-ups.
+        retained = (prev_plan_dict or {}).get("retained_analytical_context")
+        if isinstance(retained, dict) and not prev_sql:
+            retained_sql = str(retained.get("previousSQL") or "").strip()
+            retained_status = str(retained.get("previousAnswerStatus") or "").upper()
+            retained_plan = retained.get("previousPlan")
+            retained_rows = retained.get("data")
+            if (
+                retained_status not in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CLARIFICATION"}
+                and re.search(r"\bselect\b", retained_sql, re.I)
+            ):
+                outer_plan = prev_plan_dict or {}
+                recent_turns = outer_plan.get("recent_turns")
+                if not isinstance(recent_turns, list):
+                    outer_state = outer_plan.get("investigation_state")
+                    recent_turns = outer_state.get("recent_turns") if isinstance(outer_state, dict) else []
+                prev_q = str(retained.get("previousQuestion") or prev_q)
+                prev_sql = retained_sql
+                prev_status = retained_status or "SUCCESS"
+                rows = retained_rows if isinstance(retained_rows, list) else []
+                rows_list = [row for row in rows if isinstance(row, dict)]
+                prev_plan_dict = {
+                    **(retained_plan if isinstance(retained_plan, dict) else {}),
+                    "recent_turns": recent_turns if isinstance(recent_turns, list) else [],
+                }
 
     from ..services.adaptive_analyst.orchestrator import adapt_user_turn
 

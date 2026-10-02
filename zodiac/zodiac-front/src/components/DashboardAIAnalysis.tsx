@@ -12,7 +12,7 @@
  *   4. Frontend renders: KPI cards → Charts → Scrollable table → Insights
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { useRouter } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
@@ -43,7 +43,7 @@ import {
   Send, Sparkles, RotateCcw, Copy, Check, Loader2,
   TrendingUp, BarChart3, PieChart as PieIcon,
   LineChart as LineIcon, Table2, Lightbulb, AlertCircle,
-  CheckCircle2, Code2, ChevronDown, ChevronUp, X,
+  CheckCircle2, ChevronDown, ChevronUp, X,
   ArrowRight, Zap, Database,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -323,6 +323,7 @@ function DataTable({
   columnSemantics?: QueryResult['column_semantics'];
 }) {
   const [showSql, setShowSql] = useState(false);
+  const sqlPanelId = useId();
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(0);
@@ -394,22 +395,37 @@ function DataTable({
             </button>
           )}
           {sql && (
-            <button onClick={() => setShowSql(v => !v)}
+            <button
+              type="button"
+              onClick={() => setShowSql(v => !v)}
+              aria-expanded={showSql}
+              aria-controls={sqlPanelId}
+              aria-label={showSql ? 'Collapse SQL query' : 'Expand SQL query'}
               className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-50">
-              <Code2 className="h-3.5 w-3.5" />
-              {showSql ? 'Hide SQL' : 'View SQL'}
+              {showSql
+                ? <ChevronUp className="h-3.5 w-3.5" />
+                : <ChevronDown className="h-3.5 w-3.5" />}
+              {showSql ? 'Collapse SQL' : 'Expand SQL'}
             </button>
           )}
         </div>
       </div>
 
-      {sql && showSql && (
-        <div className="relative px-4 py-3 bg-slate-950 text-slate-200 text-xs font-mono overflow-x-auto border-b border-slate-800">
-          <button onClick={() => copy(sql)}
-            className="absolute top-2 right-2 p-1.5 rounded bg-slate-700 hover:bg-slate-600">
+      {sql && (
+        <div
+          id={sqlPanelId}
+          role="region"
+          aria-label="SQL query"
+          hidden={!showSql}
+          className="relative max-h-[60vh] overflow-auto px-4 py-3 bg-slate-950 text-slate-200 text-xs font-mono border-b border-slate-800">
+          <button
+            type="button"
+            onClick={() => copy(sql)}
+            aria-label="Copy SQL query"
+            className="sticky float-right top-2 z-10 p-1.5 rounded bg-slate-700 hover:bg-slate-600">
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
           </button>
-          <pre className="pr-8 whitespace-pre-wrap break-all leading-relaxed">{sql}</pre>
+          <pre className="whitespace-pre leading-relaxed">{sql}</pre>
         </div>
       )}
 
@@ -961,10 +977,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         const restored: Message[] = (hist.messages || [])
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .map((m, i) => {
+            const storedRows = Array.isArray(m.result?.data) ? m.result.data : [];
+            const storedCount = Number(m.result?.rowCount);
             const rawResult = m.role === 'assistant' && m.result ? {
               sql: m.result.sql,
-              data: m.result.data || [],
-              rowCount: m.result.rowCount ?? (m.result.data?.length ?? 0),
+              data: storedRows,
+              rowCount: Number.isFinite(storedCount)
+                ? Math.max(storedCount, storedRows.length)
+                : storedRows.length,
               charts: m.result.charts || [],
               meta: m.result.meta || {},
               summary: m.result.summary || m.content,
@@ -1093,12 +1113,18 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         answerStatus === 'CANNOT_ANSWER' ||
         res.type === 'cannot_answer' ||
         !!res.degraded_fallback);
+      const responseData = isCannotAnswer || isTimeout ? [] : (res.data || res.rows || []);
+      const reportedRowCount = Number(res.rowCount ?? res.row_count);
 
       // Normalise response — backend may return old shape or new pipeline shape
       const result: QueryResult = {
         sql:         isTimeout ? undefined : (res.sql || res.generatedSql),
-        data:        isCannotAnswer || isTimeout ? [] : (res.data || res.rows || []),
-        rowCount:    isCannotAnswer || isTimeout ? 0 : (res.rowCount ?? res.row_count ?? (res.data?.length ?? 0)),
+        data:        responseData,
+        rowCount:    isCannotAnswer || isTimeout
+          ? 0
+          : Number.isFinite(reportedRowCount)
+            ? Math.max(reportedRowCount, responseData.length)
+            : responseData.length,
         totalCount:  res.totalCount ?? res.total_count ?? -1,
         sqlStrategy: res.sqlStrategy || res.sql_strategy || 'full',
         summary:     humanizePublicSummary(

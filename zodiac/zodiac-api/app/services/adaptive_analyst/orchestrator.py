@@ -685,6 +685,34 @@ def run_adaptive_orchestrator(
     from ..ai_followup_routing import is_prior_general_chat
 
     q = (question or "").strip()
+    # A general reply is the most recent conversational turn, but it should not
+    # discard the last verified database result. The client carries that result
+    # separately so a later data follow-up can still use its rows and SQL.
+    outer_plan = prior_plan if isinstance(prior_plan, dict) else {}
+    retained = outer_plan.get("retained_analytical_context")
+    if isinstance(retained, dict) and not (prior_sql or "").strip():
+        retained_sql = str(retained.get("previousSQL") or "").strip()
+        retained_status = str(retained.get("previousAnswerStatus") or "").upper()
+        retained_plan = retained.get("previousPlan")
+        retained_rows = retained.get("data")
+        if (
+            retained_status not in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CLARIFICATION"}
+            and re.search(r"\bselect\b", retained_sql, re.I)
+            and isinstance(retained_plan, dict)
+        ):
+            recent_turns = outer_plan.get("recent_turns")
+            if not isinstance(recent_turns, list):
+                outer_state = outer_plan.get("investigation_state")
+                recent_turns = outer_state.get("recent_turns") if isinstance(outer_state, dict) else []
+            prior_question = str(retained.get("previousQuestion") or prior_question)
+            prior_sql = retained_sql
+            prior_rows = [row for row in retained_rows if isinstance(row, dict)] if isinstance(retained_rows, list) else []
+            prior_plan = {
+                **retained_plan,
+                "recent_turns": recent_turns if isinstance(recent_turns, list) else [],
+            }
+            prior_status = retained_status or "SUCCESS"
+
     adapted = adapt_user_turn(
         q,
         prior_question=prior_question,
@@ -773,10 +801,12 @@ def run_adaptive_orchestrator(
     if is_greeting_or_chitchat(q):
         try:
             from .llm_provider import complete_text
+            from ..investigation_budget import checkpoint
 
             prior_bit = ""
             if prior_summary:
                 prior_bit = f"Prior assistant reply (context only): {prior_summary[:400]}\n"
+            checkpoint("PREPARING_ANSWER")
             reply, provider = complete_text(
                 "You are BridgeEDI AI Analyst. Reply naturally in 1-2 short sentences. "
                 "Do not invent database numbers. Do not list capabilities unless asked.",
@@ -847,6 +877,24 @@ def run_adaptive_orchestrator(
         return technical_understanding_failure(q, understand_err)
 
     intent = understanding.intent
+    # The model can over-classify business-count questions as schema metadata.
+    # Route to governed analytics whenever the question requires business rows
+    # and the generic schema detector says it is not a catalog request.
+    if intent == "metadata":
+        try:
+            from .database_metadata import is_database_metadata_question
+            from ..adaptive_nl_sql_hardening import question_requires_database
+
+            if question_requires_database(q) and not is_database_metadata_question(q):
+                understanding.intent = "analytics"
+                understanding.requires_database = True
+                understanding.requires_metadata = False
+                understanding.clarification_needed = False
+                understanding.clarification_question = None
+                intent = "analytics"
+        except Exception as route_err:
+            logger.warning("[adaptive-orch] metadata intent correction skipped: %s", route_err)
+
     # Do not over-clarify when the user already gave metric + top-N + dimension.
     if is_sufficiently_specified_ranking(q) and intent in {
         "analytics",
@@ -901,10 +949,12 @@ def run_adaptive_orchestrator(
             if isinstance(resp_evidence, dict):
                 from .understanding import compact_prior_result
 
-                resp_evidence["prior_result"] = compact_prior_result(
-                    prior_rows, prior_summary
-                )
                 artifact = (prior_plan or {}).get("result_artifact") or {}
+                resp_evidence["prior_result"] = compact_prior_result(
+                    prior_rows,
+                    prior_summary,
+                    result_scope=artifact if isinstance(artifact, dict) else None,
+                )
                 if isinstance(artifact, dict) and artifact:
                     resp_evidence["prior_result"]["result_scope"] = artifact
             reply, provider = generate_grounded_response(

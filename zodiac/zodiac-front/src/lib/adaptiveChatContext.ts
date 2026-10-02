@@ -171,10 +171,20 @@ export function latestAssistantContext(
     const previousQuestion = precedingUserQuestion(messages, i);
 
     if (isGeneralChatResult(result)) {
+      const priorPlan = result.query_plan || result.queryPlan || { last_mode: 'general_chat' };
+      const retainedAnalysis = lastSuccessfulAnalyticalContext(messages);
+      const contextPlan = retainedAnalysis
+        ? {
+            ...(priorPlan && typeof priorPlan === 'object'
+              ? priorPlan as Record<string, unknown>
+              : {}),
+            retained_analytical_context: retainedAnalysis,
+          }
+        : priorPlan;
       return {
         previousQuestion,
         previousSQL: '',
-        previousPlan: result.query_plan || result.queryPlan || { last_mode: 'general_chat' },
+        previousPlan: contextPlan,
         previousAnswerStatus: status || 'SUCCESS',
         data: [],
       };
