@@ -11,6 +11,35 @@ import {
 } from './analysisTrust.ts';
 
 describe('analysisTrustFromResult', () => {
+  it('does not invent billing calculations when intent is missing or unsupported', () => {
+    for (const intent of ['', 'count_documents', 'inventory_custom_unsupported']) {
+      const trust = analysisTrustFromResult({
+        sql: 'SELECT COUNT(*) FROM documents',
+        answer_status: 'SUCCESS',
+        meta: { intent, schema_tables: ['documents'] },
+      });
+      assert.equal(trust.tables, 'documents');
+      assert.equal(trust.source, 'documents');
+      assert.equal(trust.calculation, '');
+      assert.equal(trust.grain, undefined);
+      assert.equal(trust.aggregation, undefined);
+    }
+  });
+
+  it('uses the returned calculation contract for generic database queries', () => {
+    const trust = analysisTrustFromResult({
+      query_plan: { intent: 'custom_query' },
+      calculation: {
+        source: 'documents', definition: 'Count distinct document IDs',
+        aggregation: 'COUNT(DISTINCT document_id)', grain: 'One aggregate row', period: 'All records',
+      },
+    });
+    assert.equal(trust.source, 'documents');
+    assert.equal(trust.calculation, 'Count distinct document IDs');
+    assert.equal(trust.aggregation, 'COUNT(DISTINCT document_id)');
+    assert.equal(trust.grain, 'One aggregate row');
+  });
+
   it('reads intent and gaps from analytical_context without exposing SQL', () => {
     const trust = analysisTrustFromResult({
       sql: 'SELECT * FROM MBEW',

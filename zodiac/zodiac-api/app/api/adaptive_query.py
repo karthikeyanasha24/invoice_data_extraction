@@ -1231,8 +1231,16 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     if budget is not None:
         apply_statement_timeout(db, timeout_ms=budget.statement_timeout_ms())
         budget.checkpoint("db_execute")
+    if budget is not None:
+        budget.diagnostics["sql_execution"] = {
+            "input_sql": sql, "sql": sanitized, "succeeded": False,
+        }
+        budget.diagnostics["sql_status"] = "execution_failed"
     result = db.execute(text(safe), bind_params or {})
     rows = result.fetchall()
+    if budget is not None:
+        budget.diagnostics["sql_execution"]["succeeded"] = True
+        budget.diagnostics["sql_status"] = "executed"
     keys = list(result.keys())
 
     import datetime, decimal
@@ -2881,6 +2889,30 @@ def _post_query_adaptive_body(
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
+        budget_now = current_budget()
+        execution = (budget_now.diagnostics.get("sql_execution") or {}) if budget_now else {}
+        displayed_sql = str(payload.get("sql") or payload.get("attempted_sql") or "")
+        if execution and (not displayed_sql or displayed_sql == execution.get("input_sql")):
+            # Display and validate the query actually sent to the database. The
+            # execution sanitizer may have changed quoting, casts or scope.
+            displayed_sql = str(execution.get("sql") or displayed_sql)
+            payload["sql"] = displayed_sql
+            payload["attempted_sql"] = displayed_sql
+            payload["sql_status"] = (
+                "result_validation_failed" if execution.get("succeeded") and payload.get("sql_status") == "result_validation_failed"
+                else "executed" if execution.get("succeeded") else "execution_failed"
+            )
+        elif not displayed_sql and budget_now:
+            displayed_sql = str(budget_now.diagnostics.get("generated_sql") or "")
+            if displayed_sql:
+                payload["sql"] = displayed_sql
+                payload["attempted_sql"] = displayed_sql
+                payload["sql_status"] = str(budget_now.diagnostics.get("sql_status") or "generated")
+        payload.setdefault("sql_status", "generated" if displayed_sql else "not_generated")
+        if str(payload.get("answer_status") or "").upper() in {
+            "CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED", "CLARIFICATION",
+        }:
+            payload.update({"data": [], "rows": [], "rowCount": 0, "charts": [], "kpis": [], "keyFindings": []})
         # Final hard gate: validate against the USER's original wording, not any
         # ranking normalizer rewrite. Wrong results must never become SUCCESS.
         try:
@@ -2900,8 +2932,13 @@ def _post_query_adaptive_body(
                     if not isinstance(rows_chk, list):
                         rows_chk = []
                     sql_chk = str(payload.get("sql") or "")
+                    verified_ctx = (payload.get("query_plan") or {}).get("verified_db_context")
+                    verified_semantics = (
+                        verified_ctx.get("semantic_requirements")
+                        if isinstance(verified_ctx, dict) else None
+                    )
                     gate_warn = result_matches_analytical_intent(
-                        rows_chk, _original_question, sql=sql_chk
+                        rows_chk, _original_question, verified_semantics, sql=sql_chk
                     )
                     gate_warn.extend(
                         answer_consistent_with_rows(
@@ -2926,11 +2963,14 @@ def _post_query_adaptive_body(
                             "status": "cannot_answer",
                             "type": "semantic_mismatch",
                             "mode": "error",
+                            "sql_status": "result_validation_failed" if sql_chk else "not_generated",
                             "data": [],
                             "rowCount": 0,
                             "summary": msg,
                             "answer": msg,
                             "keyFindings": [],
+                            "charts": [],
+                            "kpis": [],
                             "meta": {
                                 **(payload.get("meta") if isinstance(payload.get("meta"), dict) else {}),
                                 "validation_warnings": gate_warn,
@@ -2943,6 +2983,7 @@ def _post_query_adaptive_body(
             payload = {
                 **payload, "answer_status": "CANNOT_ANSWER", "status": "cannot_answer",
                 "mode": "error", "type": "cannot_answer", "data": [], "rowCount": 0,
+                "sql_status": "result_validation_failed" if payload.get("sql") else "not_generated",
                 "answer": message, "summary": message, "keyFindings": [], "charts": [], "kpis": [],
                 "meta": {**(payload.get("meta") or {}), "validation_failed": True},
             }
@@ -3358,11 +3399,7 @@ def _post_query_adaptive_body(
                 orch_status = str(orch.get("answer_status") or "").upper()
                 orch_mode = str(orch.get("mode") or "")
                 if orch.get("timeout") or orch.get("error") == "timeout" or orch_status == "TIMEOUT" or orch_mode == "timeout":
-                    return _persist_and_return(timeout_response(
-                        str((orch.get("pipeline_log") or {}).get("timeout_stage") or "orchestrator"),
-                        float((orch.get("pipeline_log") or {}).get("elapsed_s") or 0),
-                        question=clean_q,
-                    ))
+                    return _persist_and_return(orch)
                 orch_fail = str(
                     (orch.get("meta") or {}).get("failure_class")
                     or orch.get("failure_class")

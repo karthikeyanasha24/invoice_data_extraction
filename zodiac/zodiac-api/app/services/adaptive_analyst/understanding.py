@@ -424,8 +424,18 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
     if not has_prior or is_prior_turn_discourse(question, has_prior=True):
         return False
     q = question or ""
+    reference_text = re.sub(
+        r"\b(?:this|previous|prior)\s+(?:(?:\d+|one|two|three|complete|full|calendar|fiscal)\s+)*"
+        r"(?:years?|months?|quarters?|weeks?|days?)(?:['’]s)?\b",
+        "", q, flags=re.I,
+    )
     refers_to_prior = bool(
-        re.search(r"\b(this|these|those|that|same|above|previous|prior|earlier)\b", q, re.I)
+        re.search(r"\b(this|these|those|that|same|above|previous|prior|earlier|its|their)\b", reference_text, re.I)
+        or re.search(
+            r"\b(?:the\s+(?:top|first|second|last|selected)|leading|highest[-\s]ranked|lowest[-\s]ranked)\s+"
+            r"(?:customer|country|material|product|vendor|supplier|document|invoice|order)\b",
+            reference_text, re.I,
+        )
     )
     requests_data = bool(
         re.search(
@@ -438,8 +448,8 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
     )
     mentions_business_data = bool(
         re.search(
-            r"\b(invoice|billing|document|order|sales|revenue|customer|country|"
-            r"material|product|vendor|supplier|amount|date|year|result|rows?)\b",
+            r"\b(invoices?|billing|documents?|orders?|sales|revenue|customers?|countr(?:y|ies)|"
+            r"materials?|products?|vendors?|suppliers?|amounts?|dates?|years?|results?|rows?)\b",
             q,
             re.I,
         )
@@ -588,6 +598,18 @@ def understand_turn(
         q,
         has_prior=bool(prior_question or prior_summary or prior_plan),
     )
+    from .database_metadata import classify_metadata_operation
+
+    metadata_plan = classify_metadata_operation(q)
+    if metadata_plan is not None and not is_prior_turn_discourse(
+        q, has_prior=bool(prior_question or prior_summary or prior_plan)
+    ):
+        result.intent = "metadata"
+        result.requires_database = False
+        result.requires_metadata = True
+        result.operation = metadata_plan.operation.lower()
+        result.clarification_needed = False
+        result.clarification_question = None
     logger.info(
         "[understanding] understanding_result intent=%s requires_db=%s requires_meta=%s clar=%s provider=%s",
         result.intent,
@@ -619,8 +641,8 @@ def generate_grounded_response(
 
         recent_turns = relevant_conversation(question, recent_turns)
     schema_facts = _schema_semantics_evidence(question, recent_turns)
-    if schema_facts and isinstance(evidence, dict):
-        evidence = {**evidence, "schema_semantics": schema_facts}
+    if schema_facts:
+        evidence = {**(evidence or {}), "schema_semantics": schema_facts}
     payload = {
         "understanding": {
             "intent": understanding.intent,
@@ -679,11 +701,28 @@ def _schema_semantics_evidence(question: str, recent_turns: Any) -> List[str]:
     except Exception:
         return []
     mapping_dir = Path(__file__).resolve().parents[2] / "table_mapping"
+    from .database_metadata import _table_semantics, _topic_table_score
+
+    table_roles = {table: _table_semantics(table) for table in schema}
+    current_mentions = {
+        table for table in schema if re.search(rf"\b{re.escape(str(table))}\b", question or "", re.I)
+    }
+    selected_tables = set(current_mentions)
+    if not selected_tables:
+        ranked_tables = sorted(
+            ((_topic_table_score(" ".join(terms), table, role), table) for table, role in table_roles.items()),
+            reverse=True,
+        )
+        best = ranked_tables[0][0] if ranked_tables else 0
+        selected_tables.update(table for score, table in ranked_tables[:4] if score >= max(2.0, best - 3.0))
+    selected_tables.update(
+        table for table in schema if re.search(rf"\b{re.escape(str(table))}\b", context, re.I)
+    )
     scored: List[tuple[int, int, int, float, str]] = []
     for table in schema:
-        if not re.search(rf"\b{re.escape(str(table))}\b", context, re.I):
+        if table not in selected_tables:
             continue
-        path = mapping_dir / f"{table}.json"
+        path = mapping_dir / f"{str(table).upper()}.json"
         try:
             mappings = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -713,13 +752,22 @@ def _schema_semantics_evidence(question: str, recent_turns: Any) -> List[str]:
                 precision = overlap / max(1, len(label_tokens))
                 # Prefer a direct label match and primary field names over a
                 # longer specialized variant such as a list/cancelled document.
-                scored.append((overlap, prefix_match, -len(col), precision, f"{table}.{col}: {description}"))
+                meaning = str(description).replace("_", " ")
+                scored.append((overlap, prefix_match, -len(col), precision, f"{table}.{col}: {meaning}"))
     scored.sort(key=lambda item: item[:4], reverse=True)
-    return [fact for _overlap, _prefix, _length, _precision, fact in scored[:6]]
+    roles = [
+        f"{table} table role: {table_roles[table]['description']}; grain: {table_roles[table]['grain']}"
+        for table in sorted(
+            selected_tables,
+            key=lambda table: (-_topic_table_score(" ".join(terms), table, table_roles[table]), table),
+        )
+        if table_roles[table]["description"]
+    ]
+    return [fact for _overlap, _prefix, _length, _precision, fact in scored[:6]] + roles[:6]
 
 
 _MEMORY_LANGUAGE_STOP_WORDS = frozenset(
-    {"about", "and", "are", "column", "columns", "could", "data", "does", "for", "from", "have", "how", "in", "into", "is", "me", "of", "on", "please", "show", "table", "the", "those", "this", "what", "which", "with", "you"}
+    {"about", "and", "are", "available", "between", "column", "columns", "could", "data", "difference", "does", "explain", "field", "fields", "for", "from", "have", "how", "in", "into", "is", "me", "of", "on", "please", "show", "store", "table", "the", "those", "this", "what", "which", "with", "you"}
 )
 
 

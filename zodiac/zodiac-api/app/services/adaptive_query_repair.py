@@ -47,6 +47,11 @@ def column_required_for_question(
     col = column.lower()
     q = _question_text(question, semantic)
     dims = _semantic_dimensions(semantic)
+    from .analytical_operations import classify_column_role, extract_analytical_operations
+
+    ops = extract_analytical_operations(question)
+    dims.update(str(d).lower() for d in (ops.get("group_by") or []))
+    agg = str((semantic or {}).get("measure", {}).get("aggregation") or ops.get("aggregation") or "").upper()
 
     if col in _MEASURE_COLS:
         if any(w in q for w in ("quantity", "qty", "units", "volume")) and col in {"fkimg", "menge"}:
@@ -55,7 +60,12 @@ def column_required_for_question(
             return True
         return False
 
-    if col in _DATE_COLS:
+    if col in _DATE_COLS or classify_column_role(table, column) == "date":
+        # The underlying date is needed in predicates and derived buckets;
+        # keeping it as an output/grouping dimension changes a year total into
+        # daily/document rows. Document detail is a separate valid grain.
+        if agg in {"SUM", "COUNT", "AVG", "MIN", "MAX"} and "document" not in dims:
+            return bool(re.search(r"\b(?:by|per|each)\s+(?:day|date)\b|\bdaily\b", q))
         if any(w in q for w in ("year", "month", "date", "period", "when", "time", "daily", "monthly")):
             return True
         if semantic and semantic.get("time_filter"):
@@ -83,6 +93,8 @@ def column_required_for_question(
                     return True
                 if token in {"industry", "sector"} and col in {"brsch", "brtxt"}:
                     return True
+    if "document" in dims and classify_column_role(table, column) == "identifier":
+        return True
     return False
 
 
@@ -94,13 +106,47 @@ def prune_plan_for_aggregation(plan: StructuredQueryPlan) -> None:
     if not _needs_plan_aggregation(plan):
         return
 
+    from .analytical_operations import classify_column_role, extract_analytical_operations
+    from .plan_satisfaction import _expression_time_grain
+
+    ops = extract_analytical_operations(plan.question)
+    requested_grain = ops.get("time_grain")
+    semantic_measure = (plan.semantic_requirements or {}).get("measure") or {}
+    primary_aggregation = str(semantic_measure.get("aggregation") or ops.get("aggregation") or "").upper()
+    only_count = primary_aggregation == "COUNT" and not any(
+        str(aggregation).upper() in {"SUM", "AVG", "MAX", "MIN"}
+        for aggregation in ((plan.semantic_requirements or {}).get("aggregations") or [])
+    )
+
+    def expression_required(expression: str, *, grouping: bool = False) -> bool:
+        if re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", expression, re.I):
+            return not grouping
+        refs = re.findall(r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?', expression)
+        if requested_grain and _expression_time_grain(expression):
+            return _expression_time_grain(expression) == requested_grain
+        for table, column in refs:
+            role = classify_column_role(table, column)
+            if role == "measure":
+                return False
+            if role == "date" and not column_required_for_question(table, column, plan.question, plan.semantic_requirements):
+                return False
+        return True
+
     kept: List[PlanField] = []
+    aggregated_refs = {
+        (table.lower(), column.lower())
+        for field in plan.select
+        if field.type == "expression" and re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", field.expression, re.I)
+        for table, column in re.findall(r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?', field.expression)
+    }
     for pf in plan.select:
         if pf.type == "expression":
-            kept.append(pf)
+            if expression_required(pf.expression):
+                kept.append(pf)
             continue
         if pf.column.lower() in _MEASURE_COLS:
-            kept.append(pf)
+            if not only_count and (pf.table.lower(), pf.column.lower()) not in aggregated_refs:
+                kept.append(pf)
             continue
         if column_required_for_question(
             pf.table or "", pf.column, plan.question, plan.semantic_requirements
@@ -114,9 +160,15 @@ def prune_plan_for_aggregation(plan: StructuredQueryPlan) -> None:
         plan.group_by = [
             g
             for g in plan.group_by
-            if g.type == "expression"
+            if g.type == "expression" and expression_required(g.expression, grouping=True)
             or column_required_for_question(g.table or "", g.column, plan.question, plan.semantic_requirements)
-            or g.column.lower() in _MEASURE_COLS
+        ]
+        # A measure being aggregated cannot also split that aggregate into
+        # separate groups. This remains true when the model labels it as a
+        # dimension or a previous execution repair appended it to GROUP BY.
+        plan.group_by = [
+            g for g in plan.group_by
+            if g.type != "column" or g.column.lower() not in _MEASURE_COLS
         ]
 
 
@@ -160,6 +212,12 @@ def repair_grouping_error_sql(
     if not parsed:
         return None
     tbl, col = parsed
+    from .analytical_operations import classify_column_role
+
+    # Adding an unaggregated amount into GROUP BY changes the answer's grain.
+    # Regenerate from the verified plan instead of performing that repair.
+    if classify_column_role(tbl, col) == "measure" and re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", sql, re.I):
+        return None
     if column_required_for_question(tbl, col, question, semantic):
         # Add to GROUP BY instead of removing
         qual = qualified_column(resolve_table_name(tbl) or tbl, col)

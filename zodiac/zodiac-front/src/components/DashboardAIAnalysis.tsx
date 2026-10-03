@@ -17,10 +17,10 @@ import { useRouter } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
 import { ANALYST_STAGE_LABELS, mergeAnalystProgress, type AnalystProgress } from '@/lib/analystProgress';
+import { analystSqlEvidence, analystSqlFields, type AnalystSqlFields } from '@/lib/analystSql';
 import { humanizeFollowups } from '@/lib/followupChips';
 import {
   analysisTrustFromResult,
-  dataGapTryInstead,
   humanizePublicSummary,
   humanizeDataGapMessage,
   isDataGapResult,
@@ -138,8 +138,7 @@ type Chart = {
   datasets: { label: string; data: (number | null)[] }[];
   options?: Record<string, any>;
 };
-type QueryResult = {
-  sql?: string;
+type QueryResult = AnalystSqlFields & {
   data?: any[];
   rowCount?: number;
   totalCount?: number;
@@ -312,26 +311,21 @@ function exportCsv(data: any[], filename: string) {
 function DataTable({
   data,
   totalCount,
-  sql,
   heading,
   columnSemantics,
 }: {
   data: any[];
   totalCount?: number;
-  sql?: string;
   heading?: string;
   columnSemantics?: QueryResult['column_semantics'];
 }) {
-  const [showSql, setShowSql] = useState(false);
-  const sqlPanelId = useId();
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(0);
   const [filter, setFilter] = useState('');
-  const { copied, copy } = useCopy();
   const pageSize = 25;
 
-  if (!data?.length && !sql) return null;
+  if (!data?.length) return null;
 
   const headers = data?.length ? Object.keys(data[0]) : [];
   const isEmpty = !data?.length;
@@ -394,40 +388,8 @@ function DataTable({
               Export CSV
             </button>
           )}
-          {sql && (
-            <button
-              type="button"
-              onClick={() => setShowSql(v => !v)}
-              aria-expanded={showSql}
-              aria-controls={sqlPanelId}
-              aria-label={showSql ? 'Collapse SQL query' : 'Expand SQL query'}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-50">
-              {showSql
-                ? <ChevronUp className="h-3.5 w-3.5" />
-                : <ChevronDown className="h-3.5 w-3.5" />}
-              {showSql ? 'Collapse SQL' : 'Expand SQL'}
-            </button>
-          )}
         </div>
       </div>
-
-      {sql && (
-        <div
-          id={sqlPanelId}
-          role="region"
-          aria-label="SQL query"
-          hidden={!showSql}
-          className="relative max-h-[60vh] overflow-auto px-4 py-3 bg-slate-950 text-slate-200 text-xs font-mono border-b border-slate-800">
-          <button
-            type="button"
-            onClick={() => copy(sql)}
-            aria-label="Copy SQL query"
-            className="sticky float-right top-2 z-10 p-1.5 rounded bg-slate-700 hover:bg-slate-600">
-            {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-          </button>
-          <pre className="whitespace-pre leading-relaxed">{sql}</pre>
-        </div>
-      )}
 
       {!isEmpty && (
         <>
@@ -538,23 +500,16 @@ function ConversationCard({ message }: { message: string }) {
   );
 }
 
-function ClarificationCard({ message, onAskFollowup }: { message: string; onAskFollowup?: (q: string) => void }) {
-  const asksLimit = /how many|should i return|answer with a number/i.test(message || '');
-  const examples = asksLimit
-    ? [
-        { label: 'Top 5', question: 'top 5 customers by billed sales' },
-        { label: 'Top 10', question: 'top 10 customers by billed sales' },
-        { label: 'Top 20', question: 'top 20 customers by billed sales' },
-      ]
-    : [
-        { label: 'Sales orders', question: 'How many sales orders are there?' },
-        { label: 'Billed invoices', question: 'Show the top customers by billed sales.' },
-        { label: 'Highest sales by country', question: 'Show the highest sales by country.' },
-      ];
+function ClarificationCard({ message, followups, onAskFollowup }: {
+  message: string;
+  followups?: string[];
+  onAskFollowup?: (q: string) => void;
+}) {
+  const examples = humanizeFollowups(followups);
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
       <p className="text-sm text-slate-800 whitespace-pre-line">{message}</p>
-      {onAskFollowup && (
+      {examples.length > 0 && onAskFollowup && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {examples.map((e) => (
             <button key={e.question} type="button" onClick={() => onAskFollowup(e.question)}
@@ -656,6 +611,8 @@ function AnalysisProgress({ elapsed, progress }: { elapsed: number; progress: An
   const label = ANALYST_STAGE_LABELS[stage] || 'Working on your question';
   const history = (progress.stages || []).filter((step, i, list) =>
     ANALYST_STAGE_LABELS[step.pipeline_stage] && (i === 0 || step.pipeline_stage !== list[i - 1].pipeline_stage));
+  const previousSteps = history[history.length - 1]?.pipeline_stage === stage
+    ? history.slice(0, -1) : history;
   return (
     <div className="space-y-3 py-1">
       <div className="flex items-center gap-3 text-sm font-medium text-indigo-700" role="status">
@@ -666,11 +623,11 @@ function AnalysisProgress({ elapsed, progress }: { elapsed: number; progress: An
         {Math.floor(elapsed / 1000)}s elapsed
         {progress.stage_elapsed_s != null && ` · ${Math.floor(progress.stage_elapsed_s)}s on this step`}
       </p>
-      {history.length > 1 && (
-        <ol className="space-y-1.5 pl-7 text-xs text-slate-500" aria-label="Analysis progress">
-          {history.slice(0, -1).slice(-6).map((step, i) => (
+      {previousSteps.length > 0 && (
+        <ol className="space-y-1.5 pl-7 text-xs text-slate-500" aria-label="Previous analysis steps">
+          {previousSteps.slice(-6).map((step, i) => (
             <li key={`${step.pipeline_stage}-${i}`} className="flex items-center gap-2">
-              <Check className="h-3 w-3 text-emerald-600" />
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" aria-hidden="true" />
               <span>{ANALYST_STAGE_LABELS[step.pipeline_stage]}</span>
             </li>
           ))}
@@ -712,12 +669,7 @@ function DataGapCard({
   followups?: string[];
   onAskFollowup?: (q: string) => void;
 }) {
-  const mapped = humanizeFollowups(followups);
-  const seen = new Set(mapped.map((c) => c.question.toLowerCase()));
-  const chips = [
-    ...mapped,
-    ...dataGapTryInstead(message).filter((c) => !seen.has(c.question.toLowerCase())),
-  ].slice(0, 6);
+  const chips = humanizeFollowups(followups);
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3" role="status">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Data limitation</p>
@@ -726,7 +678,7 @@ function DataGapCard({
         This is not an application failure. The question was understood, but the required data is not in this extract.
         No unsupported number was calculated. Previous conversation context is kept.
       </p>
-      {onAskFollowup && (
+      {chips.length > 0 && onAskFollowup && (
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-900 mb-1.5">Try instead</p>
           <div className="flex flex-wrap gap-1.5">
@@ -793,8 +745,72 @@ function ResultDashboard({
   result: QueryResult;
   onAskFollowup?: (q: string) => void;
 }) {
+  return (
+    <div className="space-y-3">
+      <ResultContent result={result} onAskFollowup={onAskFollowup} />
+      <SqlDisclosure result={result} />
+    </div>
+  );
+}
+
+function SqlDisclosure({ result }: { result: QueryResult }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const { copied, copy } = useCopy();
+  const evidence = analystSqlEvidence(result);
+  if (!evidence) {
+    const failed = isInvestigationFailure(result) || result.answer_status === 'TIMEOUT';
+    return failed ? (
+      <p className="text-xs text-slate-500 px-1">
+        {result.sql_status === 'not_generated'
+          ? 'The service could not generate a database query for this investigation.'
+          : 'No SQL was returned for this investigation.'}
+      </p>
+    ) : null;
+  }
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={open ? 'Collapse SQL query' : 'Expand SQL query'}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+      >
+        <span className="flex items-center gap-2 text-xs font-medium text-slate-700">
+          <Database className="h-4 w-4 flex-shrink-0 text-slate-400" />
+          {evidence.label}
+        </span>
+        <span className="flex items-center gap-1.5 text-xs text-indigo-700 flex-shrink-0">
+          {open ? 'Collapse SQL' : 'Expand SQL'}
+          {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        </span>
+      </button>
+      <div id={panelId} role="region" aria-label={evidence.label} hidden={!open}>
+        <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-600">{evidence.explanation}</p>
+        <div className="relative max-h-[60vh] overflow-auto px-4 py-3 bg-slate-950 text-slate-200 text-xs font-mono">
+          <button
+            type="button"
+            onClick={() => copy(evidence.sql)}
+            aria-label="Copy SQL query"
+            className="sticky float-right top-2 z-10 p-1.5 rounded bg-slate-700 hover:bg-slate-600"
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+          </button>
+          <pre className="whitespace-pre leading-relaxed">{evidence.sql}</pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultContent({ result, onAskFollowup }: {
+  result: QueryResult;
+  onAskFollowup?: (q: string) => void;
+}) {
   if (!result) return null;
-  const { kpis, charts, summary, keyFindings, data, totalCount, sql, sqlStrategy, rowCount, meta, suggested_followups } = result;
+  const { kpis, charts, summary, keyFindings, data, totalCount, sqlStrategy, rowCount, meta, suggested_followups } = result;
 
   const hasKpis    = (kpis?.length ?? 0) > 0;
   const hasCharts  = (charts?.length ?? 0) > 0;
@@ -838,7 +854,6 @@ function ResultDashboard({
           <DataTable
             data={data || []}
             totalCount={totalCount}
-            sql={undefined}
             heading="Tables"
             columnSemantics={result.column_semantics}
           />
@@ -852,6 +867,7 @@ function ResultDashboard({
     return (
       <ClarificationCard
         message={summary || 'I need one more detail to answer this accurately.'}
+        followups={suggested_followups}
         onAskFollowup={onAskFollowup}
       />
     );
@@ -869,7 +885,7 @@ function ResultDashboard({
 
   if (isTechFailure) {
     const failure = String(
-      (result as any).failure_class || result.meta?.investigation_status || ''
+      result.failure_class || result.meta?.investigation_status || ''
     ).toUpperCase();
     const heading =
       failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
@@ -910,7 +926,7 @@ function ResultDashboard({
       {hasSummary && <SummaryCard summary={summary!} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
-      {(hasData || sql) && <DataTable data={data || []} totalCount={totalCount} sql={sql} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
+      {hasData && <DataTable data={data || []} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
       {hasInsights && <InsightsPanel findings={cleanFindings} />}
       {!isGeneral && <TrustPanel result={result} />}
       {followups.length > 0 && onAskFollowup && (
@@ -981,7 +997,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             const storedRows = Array.isArray(m.result?.data) ? m.result.data : [];
             const storedCount = Number(m.result?.rowCount);
             const rawResult = m.role === 'assistant' && m.result ? {
-              sql: m.result.sql,
+              ...analystSqlFields(m.result),
               data: storedRows,
               rowCount: Number.isFinite(storedCount)
                 ? Math.max(storedCount, storedRows.length)
@@ -989,11 +1005,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               charts: m.result.charts || [],
               meta: m.result.meta || {},
               summary: m.result.summary || m.content,
-              query_plan: (m.result as any).query_plan || (m.result as any).queryPlan || null,
-              answer_status: (m.result as any).answer_status
-                || ((m.result as any).mode === 'general_chat' ? 'SUCCESS'
+              query_plan: m.result.query_plan || m.result.queryPlan || null,
+              answer_status: m.result.answer_status
+                || (m.result.mode === 'general_chat' ? 'SUCCESS'
                   : ((m.result.sql || '').trim() ? 'SUCCESS' : 'SUCCESS')),
-              mode: (m.result as any).mode,
+              mode: m.result.mode,
+              failure_class: m.result.failure_class || m.result.meta?.failure_class,
             } : undefined;
             const intent = rawResult ? analysisTrustFromResult(rawResult).intent : undefined;
             return {
@@ -1121,7 +1138,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
       // Normalise response — backend may return old shape or new pipeline shape
       const result: QueryResult = {
-        sql:         isTimeout ? undefined : (res.sql || res.generatedSql),
+        ...analystSqlFields(res),
         data:        responseData,
         rowCount:    isCannotAnswer || isTimeout
           ? 0
@@ -1144,6 +1161,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           ? 'CLARIFICATION'
           : (answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS')),
         mode:        res.mode || res.route || res.meta?.mode,
+        type:        res.type,
+        failure_class: res.failure_class || res.meta?.failure_class || res.meta?.investigation_status,
         calculation: res.calculation,
         meta:        res.meta || {
           domain:        res.domain,
@@ -1152,14 +1171,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           pipeline_ms:   res.pipeline_ms,
           warnings:      res.warnings || [],
         },
-        ...( {
-          query_plan: res.query_plan || res.queryPlan,
-          answer_status: isTimeout
-            ? 'TIMEOUT'
-            : isClarification
-            ? 'CLARIFICATION'
-            : (answerStatus || (isCannotAnswer ? 'CANNOT_ANSWER' : 'SUCCESS')),
-        } as any),
+        query_plan: res.query_plan || res.queryPlan,
       };
 
       const timeoutMessage = 'This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned.';

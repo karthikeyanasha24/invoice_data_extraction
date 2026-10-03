@@ -161,6 +161,160 @@ def _rank_measure_column(rows: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _expand_billing_document_followup(
+    question: str,
+    rows: List[Dict[str, Any]],
+    prior_plan: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Ground a document drill-down in the leading customer row and its scope."""
+    q = question or ""
+    if not re.search(r"\b(?:billing\s+documents?|invoices?)\b", q, re.I) or not re.search(
+        r"\b(?:leading|top|highest|number[- ]one)\s+customer\b|\bcustomer'?s\s+(?:total|sales|revenue)\b",
+        q,
+        re.I,
+    ):
+        return None
+    measure_col = _rank_measure_column(rows)
+    ranked = _rank_by_column(rows, measure_col, descending=True) if measure_col else []
+    keys = {str(key).lower(): key for key in (ranked[0].keys() if ranked else [])}
+    id_col = next((keys[name] for name in ("customer_id", "kunag", "kunnr", "customer_number") if name in keys), None)
+    if not ranked or not id_col or ranked[0].get(id_col) in (None, ""):
+        return {
+            "mode": "clarification",
+            "status": "clarification",
+            "answer_status": "CLARIFICATION",
+            "sql": "",
+            "sql_status": "not_generated",
+            "sql_generation_method": "followup_missing_customer_anchor",
+            "pipeline": "result_first_followup",
+            "rowCount": 0,
+            "data": [],
+            "summary": (
+                "The previous result does not include a customer ID, so I can't reliably "
+                "link its leading customer to billing documents. Specify the customer or "
+                "rerun the ranking with customer identifiers included."
+            ),
+            "answer": "Please specify the customer or rerun the ranking with customer identifiers included.",
+            "charts": [],
+            "query_plan": prior_plan or {},
+            "meta": {"investigation_status": "clarification", "followup": "missing_customer_anchor"},
+        }
+
+    customer_id = str(ranked[0][id_col]).strip().replace("'", "''")
+    if not customer_id:
+        return None
+    years: List[str] = []
+    currency: Optional[str] = None
+    plan = prior_plan if isinstance(prior_plan, dict) else {}
+    verified = plan.get("verified_db_context") if isinstance(plan.get("verified_db_context"), dict) else {}
+    if not verified and isinstance(plan.get("query_plan"), dict):
+        verified = (plan["query_plan"].get("verified_db_context") or {})
+    semantic = verified.get("semantic_requirements") if isinstance(verified, dict) else {}
+    time_filter = (semantic or {}).get("time_filter") if isinstance(semantic, dict) else {}
+    if isinstance(time_filter, dict) and time_filter.get("resolved_from_data") is True:
+        years = [str(year) for year in (time_filter.get("years") or []) if re.fullmatch(r"\d{4}", str(year))]
+    currency_col = keys.get("currency")
+    if currency_col and ranked[0].get(currency_col) not in (None, ""):
+        currency = str(ranked[0][currency_col]).strip()
+    expanded = f"Show the top ten billing documents by billed amount for customer ID '{customer_id}'"
+    if years:
+        expanded += " in calendar year " + ", ".join(years)
+    if currency and re.fullmatch(r"[A-Za-z]{3}", currency):
+        expanded += f" in currency {currency}"
+    expanded += ", including billing document number, customer, date, and amount."
+    return {
+        "needs_plan_expansion": True,
+        "missing_concept": "billing_documents_for_leading_customer",
+        "expanded_question": expanded,
+        "query_plan": prior_plan or {},
+    }
+
+
+def _expand_entity_period_followup(
+    question: str,
+    rows: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Replace a demonstrative entity reference with its verified prior value."""
+    q = question or ""
+    if not re.search(r"\bthat\s+country\b", q, re.I) or not re.search(
+        r"\b(?:sales|revenue|billing|billed)\b[\s\S]{0,80}\b(?:by|per|each)\s+year|\byearly\b",
+        q,
+        re.I,
+    ):
+        return None
+    row = next((item for item in rows if isinstance(item, dict)), None)
+    if not row:
+        return None
+    keys = {str(key).lower(): key for key in row}
+    country_col = next((keys[name] for name in ("country", "land1", "country_code") if name in keys), None)
+    if not country_col or row.get(country_col) in (None, ""):
+        return None
+    country = str(row[country_col]).strip().replace("'", "''")
+    expanded = (
+        f"Show billed sales by year for country code '{country}' "
+        "for the last five complete years available in the data"
+    )
+    currency_col = keys.get("currency") or keys.get("waerk") or keys.get("waers")
+    currency = str(row.get(currency_col) or "").strip() if currency_col else ""
+    if re.fullmatch(r"[A-Za-z]{3}", currency):
+        expanded += f" in currency {currency}"
+    expanded += "."
+    return {
+        "needs_plan_expansion": True,
+        "missing_concept": "verified_entity_period_series",
+        "expanded_question": expanded,
+    }
+
+
+def _expand_linked_order_followup(
+    question: str,
+    rows: List[Dict[str, Any]],
+    prior_plan: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Anchor a linked-order lookup to the billing-document IDs in prior rows."""
+    q = question or ""
+    if not re.search(r"\b(?:sales\s+orders?|orders?)\b", q, re.I) or not re.search(
+        r"\b(?:same|those|these|above|previous|prior)\s+(?:billing\s+)?documents?\b|\bthem\b",
+        q,
+        re.I,
+    ):
+        return None
+    ids: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = next((key for key in row if str(key).lower() in {"billing_document", "invoice_id", "invoice_number", "vbeln"}), None)
+        value = str(row.get(key) or "").strip() if key is not None else ""
+        if value and value not in ids:
+            ids.append(value.replace("'", "''"))
+        if len(ids) >= 50:
+            break
+    if not ids:
+        return {
+            "mode": "clarification",
+            "status": "clarification",
+            "answer_status": "CLARIFICATION",
+            "sql": "",
+            "sql_status": "not_generated",
+            "pipeline": "result_first_followup",
+            "rowCount": 0,
+            "data": [],
+            "summary": "The prior answer has no billing-document numbers to use for this link lookup. Run the document list again with document numbers included.",
+            "answer": "Please rerun the document list with document numbers included.",
+            "query_plan": prior_plan or {},
+        }
+    literal_ids = ", ".join(f"'{value}'" for value in ids)
+    return {
+        "needs_plan_expansion": True,
+        "missing_concept": "verified_sales_order_links",
+        "expanded_question": (
+            "List sales orders linked through document flow to billing document IDs: "
+            f"{literal_ids}. Return the billing document and linked sales order."
+        ),
+        "query_plan": prior_plan or {},
+    }
+
+
 def _rank_by_column(rows: List[Dict[str, Any]], col: str, *, descending: bool = True) -> List[Dict[str, Any]]:
     scored: List[Tuple[float, Dict[str, Any]]] = []
     for row in rows:
@@ -254,6 +408,16 @@ def try_answer_from_prior_rows(
     prior_plan: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     rows = [r for r in (prior_rows or []) if isinstance(r, dict)]
+    if rows:
+        entity_period = _expand_entity_period_followup(question, rows)
+        if entity_period:
+            return entity_period
+        linked_order = _expand_linked_order_followup(question, rows, prior_plan)
+        if linked_order:
+            return linked_order
+        document_followup = _expand_billing_document_followup(question, rows, prior_plan)
+        if document_followup:
+            return document_followup
     if not is_result_scoped_followup(question, has_prior_rows=bool(rows)):
         return None
     # Explaining, summarizing, or asking why requires a model-grounded answer.

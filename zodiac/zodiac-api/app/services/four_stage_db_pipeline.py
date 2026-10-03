@@ -49,7 +49,7 @@ _FOLLOWUP_LIMIT = re.compile(
 _FOLLOWUP_YEAR = re.compile(r"\b(20\d{2}|19\d{2})\b")
 _UNRESOLVED_SQL_VALUE = re.compile(
     r"\b(?:placeholder|replace_me|insert_value|sample_value|your_[a-z0-9_]+|[a-z0-9_]+_here)\b"
-    r"|<[^>]+>|\.\.\.",
+    r"|<[A-Za-z_][A-Za-z0-9_ -]*>|\.\.\.",
     re.I,
 )
 
@@ -70,6 +70,7 @@ class VerifiedDbContext:
     coverage: Dict[str, Any] = field(default_factory=dict)
     query_plan: Dict[str, Any] = field(default_factory=dict)
     pipeline_log: Dict[str, Any] = field(default_factory=dict)
+    prior_sql: str = ""  # Context for the model; never part of the current question.
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -77,6 +78,16 @@ class VerifiedDbContext:
 
 def _log_stage(ctx: VerifiedDbContext, stage: str, payload: Dict[str, Any]) -> None:
     ctx.pipeline_log[stage] = payload
+    from .investigation_budget import current_budget
+
+    budget = current_budget()
+    if budget is not None:
+        if stage.startswith("SQL_VALIDATION"):
+            budget.set_stage("sql_validation")
+        elif stage in {"RESULT_VALIDATION", "RESULT_VALIDATION_FAILED"}:
+            budget.set_stage("result_analysis")
+        elif "REPAIR" in stage or "RECOVERY" in stage:
+            budget.set_stage("REPAIRING")
     logger.info("[four_stage] %s %s", stage, json.dumps(payload, default=str)[:1200])
 
 
@@ -840,7 +851,7 @@ def _resolve_latest_data_years(
     candidates.sort(key=_date_candidate_score, reverse=True)
 
     from sqlalchemy import text
-    from datetime import date
+    from datetime import date, datetime
 
     selected_years: List[str] = []
     selected_column: Optional[Tuple[str, str]] = None
@@ -848,9 +859,12 @@ def _resolve_latest_data_years(
         table_q = table.replace('"', '""')
         column_q = column.replace('"', '""')
         expression = f'SUBSTRING(TRIM(CAST("{table_q}"."{column_q}" AS TEXT)), 1, 4)'
+        compact_date = f"REPLACE(SUBSTRING(TRIM(CAST(\"{table_q}\".\"{column_q}\" AS TEXT)), 1, 10), '-', '')"
         sql = (
-            f"SELECT DISTINCT {expression} AS y FROM \"{table_q}\" "
-            f"WHERE {expression} ~ '^[12][0-9]{{3}}$' ORDER BY y DESC LIMIT 20"
+            f"SELECT DISTINCT {expression} AS y, MAX({compact_date}) OVER () AS data_end, "
+            f"MIN({compact_date}) OVER () AS data_start FROM \"{table_q}\" "
+            f"WHERE {compact_date} ~ '^[12][0-9]{{3}}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$' "
+            "ORDER BY y DESC LIMIT 100"
         )
         try:
             rows = db.execute(text(sql)).fetchall()
@@ -861,17 +875,28 @@ def _resolve_latest_data_years(
                 pass
             continue
         years = [str(row[0]) for row in rows if row and re.fullmatch(r"(?:19|20)\d{2}", str(row[0]))]
-        # The current calendar year is still in progress. Historical years are
-        # resolved from the data itself rather than from the wall-clock year.
-        complete_candidates = [year for year in years if int(year) < date.today().year]
-        count = 2 if relative == "latest_two_full_years" else 1
+        # A historical year can still be a partial extract. Select only whole
+        # calendar periods within the observed date range, and expose that basis
+        # in the plan rather than claiming that missing rows prove completeness.
+        try:
+            observed_end = datetime.strptime(str(rows[0][1]), "%Y%m%d").date()
+            observed_start = datetime.strptime(str(rows[0][2]), "%Y%m%d").date()
+        except (IndexError, ValueError, TypeError):
+            continue
+        complete_candidates = [
+            year for year in years
+            if int(year) < date.today().year
+            and date(int(year), 1, 1) >= observed_start
+            and date(int(year), 12, 31) <= observed_end
+        ]
+        count = int(tf.get("count") or (2 if relative == "latest_two_full_years" else 1))
         if len(complete_candidates) >= count:
             selected_years = complete_candidates[:count]
             selected_column = (table, column)
             break
 
     if not selected_years or not selected_column:
-        needed = 2 if relative == "latest_two_full_years" else 1
+        needed = int(tf.get("count") or (2 if relative == "latest_two_full_years" else 1))
         sem["clarification"] = {
             "type": "latest_data_period",
             "message": f"I couldn't verify {needed} completed calendar year(s) for the selected date field. Specify the years to compare or a different date field.",
@@ -893,6 +918,12 @@ def _resolve_latest_data_years(
             "start_yyyymmdd": start.replace("-", ""),
             "end_yyyymmdd": end.replace("-", ""),
             "years": chronological,
+            "resolved_from_data": True,
+            "date_table": selected_column[0],
+            "date_column": selected_column[1],
+            "coverage_basis": "calendar period within observed date range",
+            "observed_start": observed_start.isoformat(),
+            "observed_end": observed_end.isoformat(),
         }
     )
     tf.pop("value", None)
@@ -1135,6 +1166,8 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
     from .adaptive_structured_sql import (
         build_country_customer_list_sql,
         build_customer_industry_revenue_sql,
+        build_billing_document_ranking_sql,
+        build_dimension_period_sales_sql,
         build_dimension_ranking_sql,
         build_filter_list_sql,
         build_master_list_sql,
@@ -1142,12 +1175,15 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         build_partitioned_topn_sql,
         build_period_compare_sql,
         build_period_sales_sql,
+        build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
         build_total_measure_sql,
     )
 
     for builder in (
+        lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_relative_document_list_sql(question, ctx.tables, ctx.semantic_requirements),
@@ -1226,6 +1262,8 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
     from .adaptive_structured_sql import (
         build_country_customer_list_sql,
         build_customer_industry_revenue_sql,
+        build_billing_document_ranking_sql,
+        build_dimension_period_sales_sql,
         build_dimension_ranking_sql,
         build_document_count_by_period_sql,
         build_above_average_sql,
@@ -1237,6 +1275,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         build_partitioned_topn_sql,
         build_period_compare_sql,
         build_period_sales_sql,
+        build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
         build_total_measure_sql,
@@ -1290,6 +1329,9 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
     for source, builder in (
+        ("linked_sales_orders_template", lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("billing_document_ranking_template", lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("dimension_period_sales", lambda: build_dimension_period_sales_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("relative_document_list_template", lambda: build_relative_document_list_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1403,6 +1445,8 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
             f"Verified tables: {ctx.tables}\n"
             f"Verified columns: {ctx.columns}\n"
             f"Relationships: {ctx.relationships}\n\n"
+            f"Prior verified SQL for scope (not the current request): {ctx.prior_sql[:6000]}\n\n"
+            f"Validation feedback: {json.dumps({k: v for k, v in ctx.pipeline_log.items() if 'VALIDATION' in k or 'REPAIR' in k}, default=str)[:2000]}\n\n"
             f"{detail}\n\nGenerate SQL."
         ),
     )
@@ -1513,6 +1557,9 @@ def _run_four_stage_body(
 
     budget = current_budget()
     ctx = _apply_followup_to_context(question, prior_plan)
+    if ctx is not None:
+        ctx.prior_sql = prior_sql
+        ctx.semantic_requirements = extract_semantic_requirements(question)
     if ctx is not None and ctx.pipeline_log.get("followup_requery"):
         prior_tables = list(ctx.tables)
         pipeline1_table_selection(question, ctx)
@@ -1576,17 +1623,14 @@ def _run_four_stage_body(
             "pipeline_log": ctx.pipeline_log,
         }
 
-    if prior_sql and ctx.pipeline_log.get("followup_reuse"):
-        sql = pipeline3_sql_generation(
-            question + f"\nModify the previous SQL (do not rediscover tables):\n{prior_sql[:3000]}",
-            ctx,
-        )
-        _log_stage(ctx, "PIPELINE_3_SQL_GENERATION", {"followup_modified": True})
-    else:
-        sql = pipeline3_sql_generation(question, ctx)
+    # SQL/repair instructions belong to generation context. Mixing the previous
+    # query into the question contaminates deterministic grain and metric parsing.
+    sql = pipeline3_sql_generation(question, ctx)
 
     sql = sanitize_generated_sql(sql, question)
     sql = _apply_currency_if_needed(question, sql, ctx, db)
+    if budget is not None:
+        budget.diagnostics["generated_sql"] = sql
 
     from .adaptive_currency_strategy import is_currency_validation_error
 
@@ -1603,10 +1647,7 @@ def _run_four_stage_body(
 
     if viol:
         sql = sanitize_generated_sql(
-            pipeline3_sql_generation(
-                question + f" Fix these validation errors using ONLY verified tables {ctx.tables}: {'; '.join(viol[:5])}",
-                ctx,
-            )
+            pipeline3_sql_generation(question, ctx)
         )
         viol = _validate_sql_against_context(sql, ctx, db)
         if viol and is_currency_validation_error(viol):
@@ -1616,6 +1657,9 @@ def _run_four_stage_body(
         _log_stage(ctx, "SQL_VALIDATION_RETRY", {"pass": not viol, "errors": viol})
 
     if not sql or viol:
+        if budget is not None:
+            budget.diagnostics["generated_sql"] = sql
+            budget.diagnostics["sql_status"] = "validation_failed" if sql else "not_generated"
         err_kind = "pipeline_error"
         if any("data limitation" in str(v).lower() for v in viol):
             err_kind = "data_limitation"
@@ -1722,13 +1766,17 @@ def _run_four_stage_body(
                     sql = sanitize_generated_sql(_apply_currency_if_needed(question, fallback, ctx, db), question)
                     _log_stage(ctx, "SQL_EXECUTION_FALLBACK", {"source": "deterministic_template", "sql": sql[:500]})
                     continue
+                _log_stage(
+                    ctx,
+                    "SQL_VALIDATION_RETRY_FEEDBACK",
+                    {
+                        "failure_class": err_class,
+                        "diagnosis": exec_error[:400],
+                        "previous_sql": sql[:1200],
+                    },
+                )
                 sql = sanitize_generated_sql(
-                    pipeline3_sql_generation(
-                        question + f"\nPrevious SQL failed ({err_class}): {exec_error[:400]}\n"
-                        f"Regenerate using verified tables {ctx.tables}. "
-                        "Never quote SQL functions as column names.",
-                        ctx,
-                    ),
+                    pipeline3_sql_generation(question, ctx),
                     question,
                 )
                 viol = _validate_sql_against_context(sql, ctx, db)

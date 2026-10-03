@@ -10,6 +10,8 @@ from app.services.adaptive_analyst.database_metadata import (
     LIST_COLUMNS,
     LIST_TABLES,
     SEARCH_TABLES,
+    SEARCH_COLUMNS,
+    LIST_DATA_SOURCES,
     answer_database_metadata,
     classify_metadata_operation,
     execute_metadata_plan,
@@ -205,3 +207,96 @@ def test_no_fabricated_count_when_schema_empty() -> None:
     result = execute_metadata_plan(plan, {})
     assert result.value == 0
     assert "0 tables" in result.summary.lower()
+
+
+@pytest.mark.parametrize("question", [
+    "Show the top five countries by billed sales in the latest complete year available in the data",
+    "Show total billed sales for the last two complete years.",
+    "Give the full customer breakdown of sales in 2001.",
+    "Show all billing documents for the selected customer.",
+    "Show billed sales from all connected data sources.",
+])
+def test_period_and_output_completeness_do_not_become_catalog_lists(question):
+    assert not is_database_metadata_question(question)
+    assert classify_metadata_operation(question, SAMPLE_SCHEMA) is None
+
+
+def test_natural_field_question_resolves_primary_billing_document_identifier():
+    from app.data_catalog.physical import load_physical_schema
+
+    schema = load_physical_schema()
+    answer = answer_database_metadata("Which table and field store the billing document number?", schema)
+    assert answer["meta"]["operation"] == SEARCH_COLUMNS
+    assert [(row["table"].upper(), row["column"].lower()) for row in answer["data"]] == [("VBRK", "vbeln")]
+    assert "header" in answer["data"][0]["table_role"].lower()
+
+
+def test_scoped_date_and_amount_question_does_not_count_all_columns():
+    from app.data_catalog.physical import load_physical_schema
+
+    answer = answer_database_metadata("Which date and amount fields are available for billing documents?", load_physical_schema())
+    assert answer["meta"]["operation"] == SEARCH_COLUMNS
+    assert {(row["table"].upper(), row["column"].lower()) for row in answer["data"]} == {("VBRK", "fkdat"), ("VBRK", "netwr")}
+
+
+def test_multi_topic_discovery_preserves_table_roles_and_covers_each_domain():
+    from app.data_catalog.physical import load_physical_schema
+
+    answer = answer_database_metadata("Which tables contain billing documents, sales orders, customers, and materials?", load_physical_schema())
+    tables = {row["table"].upper() for row in answer["data"]}
+    assert {"VBRK", "VBRP", "VBAK", "VBAP", "KNA1", "MARA"} <= tables
+    assert len(tables) <= 12
+    assert all(row["role"] for row in answer["data"])
+    assert "LIKP" not in tables and "LIPS" not in tables
+
+
+def test_source_inventory_derives_domains_and_counts_from_authorized_schema():
+    answer = answer_database_metadata("Which data sources are connected for this chat?", SAMPLE_SCHEMA)
+    assert answer["meta"]["operation"] == LIST_DATA_SOURCES
+    assert sum(row["table_count"] for row in answer["data"]) == len(SAMPLE_SCHEMA)
+    assert all(table in " ".join(row["tables"] for row in answer["data"]) for table in SAMPLE_SCHEMA)
+
+
+def test_exact_physical_field_discovery_returns_all_authorized_occurrences():
+    answer = answer_database_metadata("Which tables have a column VBELN?", SAMPLE_SCHEMA)
+    assert answer["meta"]["operation"] == SEARCH_COLUMNS
+    assert {row["table"] for row in answer["data"]} == {"VBRK", "VBRP"}
+
+
+def test_schema_evidence_disambiguates_delivery_and_billing_identifiers():
+    from app.services.adaptive_analyst.understanding import _schema_semantics_evidence
+
+    facts = _schema_semantics_evidence("Explain LIKP and LIPS delivery document number fields", [])
+    assert any(fact.startswith("LIKP.VBELN:") and "delivery document number" in fact for fact in facts)
+    assert any(fact.startswith("LIPS.VBELN:") and "delivery document number" in fact for fact in facts)
+    assert not any(fact.startswith(("LIKP.VBELN:", "LIPS.VBELN:")) and "billing document" in fact for fact in facts)
+
+
+@pytest.mark.parametrize("question", [
+    "Show the billing documents behind the leading customer's total.",
+    "For the highest-ranked material, show its sales by month in that year.",
+    "Compare its sales with the previous complete year.",
+    "For that country, show billed sales by year.",
+])
+def test_selected_result_references_are_database_followups(question):
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    assert is_referential_database_action(question, has_prior=True)
+    assert not is_referential_database_action(question, has_prior=False)
+
+
+def test_new_top_customer_question_is_not_inferred_as_a_selected_reference():
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    assert not is_referential_database_action("Show the top five customers by billed sales.", has_prior=True)
+
+
+@pytest.mark.parametrize("question", [
+    "Show this year's billed sales.",
+    "Show sales in the previous year.",
+    "Show sales in the previous two complete years.",
+])
+def test_calendar_relative_periods_are_not_entity_references(question):
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    assert not is_referential_database_action(question, has_prior=True)

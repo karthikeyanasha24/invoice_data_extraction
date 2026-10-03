@@ -41,7 +41,9 @@ _GROUP_PATTERNS: List[Tuple[str, str]] = [
     (r"\b(by|per|each|for each)\s+(?:types?|document types?)\b", "type"),
 ]
 
-_TOP_N = re.compile(r"\b(?:top|bottom|highest|lowest)\s+(\d{1,3})\b", re.I)
+_TOP_N = re.compile(
+    r"\b(?:top|bottom|highest|lowest)\s+(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)\b", re.I,
+)
 _RANKED_SET_COUNT = re.compile(
     r"\b(\d{1,3})\s+(?:(?:[a-z][a-z-]*\s+){1,4})"
     r"(?:with|having)\s+(?:the\s+)?"
@@ -49,6 +51,15 @@ _RANKED_SET_COUNT = re.compile(
     re.I,
 )
 _YEAR = re.compile(r"\b((?:19|20)\d{2})\b")
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_LATEST_DATA_YEARS = re.compile(
+    r"\b(?:latest|most recent|last)\s+"
+    r"(?:(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?"
+    r"(?:full|complete)\s+(?:calendar\s+)?years?\b", re.I,
+)
 _PARTITION_RANK = re.compile(
     r"\b(?:top|bottom)\s+(\d{1,3})\s+\w+\s+(?:in each|per|for each|by each|within each)\s+(\w+)",
     re.I,
@@ -285,6 +296,17 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     elif ops["aggregation"] == "COUNT":
         ops["measure_concept"] = "count"
 
+    # A combined metric request needs both aggregates. A COUNT cue must not
+    # replace the requested monetary/quantity total merely because it appears
+    # in the same sentence.
+    if (
+        re.search(r"\b(count|how many|number of)\b", ql)
+        and re.search(r"\b(total|sum|combined|aggregate)\b", ql)
+        and ops.get("measure_concept") in {"sales", "revenue", "quantity"}
+    ):
+        ops["aggregation"] = "SUM"
+        ops["aggregations"] = ["SUM", "COUNT"]
+
     part = _PARTITION_RANK.search(ql)
     if part:
         n = int(part.group(1))
@@ -331,7 +353,8 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     if not m:
         m = _RANKED_SET_COUNT.search(ql)
     if m and not ops.get("ranking"):
-        n = int(m.group(1))
+        raw_n = m.group(1).lower()
+        n = _NUMBER_WORDS.get(raw_n, int(raw_n) if raw_n.isdigit() else 10)
         most_negative = bool(re.search(r"\b(most|lowest|largest|biggest)\s+negative\b", ql))
         least_negative = bool(re.search(r"\b(least|highest|smallest|closest)\s+negative\b", ql))
         direction = (
@@ -436,6 +459,16 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         elif re.search(r"\b(least|highest|smallest|closest)\s+negative\b", ql):
             ops["ranking"]["direction"] = "DESC"
             ops["order"] = "DESC"
+        # The ranked noun determines the output grain. A customer named later
+        # as a filter must not turn a document ranking into a customer total.
+        if re.search(
+            r"\b(?:top|bottom|highest|lowest|most|least|largest|smallest)\s+"
+            r"(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(?:negative\s+)?"
+            r"(?:(?:billing|billed|sales|purchase)\s+)?(?:documents?|invoices?|orders?)\b",
+            ql,
+        ):
+            ops["group_by"] = ["document"]
+            group_by = ops["group_by"]
 
     if ops.get("group_by") and ops.get("measure_concept") and not ops.get("aggregation"):
         ops["aggregation"] = "SUM"
@@ -736,6 +769,12 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         if re.search(pat, ql):
             ops["relative_period"] = name
             break
+    recent = _LATEST_DATA_YEARS.search(ql)
+    if recent:
+        raw_count = (recent.group(1) or "1").lower()
+        count = _NUMBER_WORDS.get(raw_count, int(raw_count) if raw_count.isdigit() else 1)
+        ops["relative_period"] = "latest_two_full_years" if count == 2 else "latest_full_year"
+        ops["relative_period_count"] = max(1, min(count, 50))
 
     return ops
 
@@ -772,6 +811,7 @@ def merge_semantic_requirements(
         if not concept:
             concept = str(ops.get("measure_concept") or "count")
     req["measure"] = {"concept": concept or measure.get("concept") or "", "aggregation": agg}
+    req["aggregations"] = list(ops.get("aggregations") or ([agg.upper()] if agg else []))
 
     ranking = req.get("ranking") if isinstance(req.get("ranking"), dict) else None
     if isinstance(ranking, dict) and not (
@@ -829,10 +869,16 @@ def merge_semantic_requirements(
                 req.pop("ranking", None)
     if ops.get("relative_period"):
         tf = req.get("time_filter") if isinstance(req.get("time_filter"), dict) else {}
+        same_period = tf.get("relative") == ops["relative_period"]
         tf["relative"] = ops["relative_period"]
-        # Clear any LLM-invented absolute bounds; resolver fills them later.
-        for k in ("start", "end", "start_yyyymmdd", "end_yyyymmdd", "value"):
-            tf.pop(k, None)
+        if ops.get("relative_period_count"):
+            tf["count"] = ops["relative_period_count"]
+        # Retain bounds produced by the database resolver when subsequent
+        # validation merges the same requirement again. Unverified LLM bounds
+        # still need to be discarded before resolving the period.
+        if not (same_period and tf.get("resolved_from_data") is True):
+            for k in ("start", "end", "start_yyyymmdd", "end_yyyymmdd", "value", "years"):
+                tf.pop(k, None)
         req["time_filter"] = tf
 
     if ops.get("negative_measure"):

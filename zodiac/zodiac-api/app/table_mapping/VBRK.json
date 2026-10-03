@@ -49,7 +49,7 @@
         "MANSP": "dunning_block",
         "MRNKZ": "manual_invoice_maintenance",
         "MWSBK": "tax_amount_in_document_currency",
-        "NETWR": "net_value_of_the_billing_item_in_document_currency",
+        "NETWR": "net_value_of_the_billing_document_in_document_currency",
         "NUMPG": "number_of_pages_of_invoice",
         "PLTYP": "price_list_type",
         "POPER": "posting_period",

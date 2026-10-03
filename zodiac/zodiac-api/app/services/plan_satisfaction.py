@@ -34,6 +34,132 @@ def sql_has_group_by(sql: str) -> bool:
     return bool(re.search(r"\bGROUP\s+BY\b", sql or "", re.I))
 def sql_has_aggregation(sql: str) -> bool:
     return bool(re.search(r"\b(SUM|COUNT|AVG|MAX|MIN)\s*\(", sql or "", re.I))
+
+
+def _split_sql_expressions(text: str) -> List[str]:
+    """Split a SELECT/GROUP list without splitting function arguments."""
+    parts: List[str] = []
+    depth, start, quote = 0, 0, ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 1
+                else:
+                    quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+        index += 1
+    if text[start:].strip():
+        parts.append(text[start:].strip())
+    return parts
+
+
+def _grouped_selects(sql: str) -> List[tuple[List[str], List[str]]]:
+    """Find each SELECT's grouping at its own nesting level, including CTEs."""
+    token_pattern = re.compile(r"--[^\n]*|/\*[\s\S]*?\*/|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|[A-Za-z_][A-Za-z0-9_]*|[()]|[^\s]", re.I)
+    tokens = []
+    depth = 0
+    for match in token_pattern.finditer(sql or ""):
+        raw = match.group(0)
+        if raw.startswith(("--", "/*")):
+            continue
+        if raw == ")":
+            depth -= 1
+        tokens.append((raw.upper(), match.start(), match.end(), depth))
+        if raw == "(":
+            depth += 1
+    blocks = []
+    for index, (word, _start, end, level) in enumerate(tokens):
+        if word != "SELECT":
+            continue
+        from_start = group_start = group_end = None
+        block_end = len(sql)
+        for offset in range(index + 1, len(tokens)):
+            token, start_at, end_at, token_level = tokens[offset]
+            if token_level < level or token == ";" and token_level == level:
+                block_end = start_at
+                break
+            if token_level != level:
+                continue
+            if token == "FROM" and from_start is None:
+                from_start = start_at
+            if token == "GROUP" and offset + 1 < len(tokens) and tokens[offset + 1][0] == "BY":
+                group_start = tokens[offset + 1][2]
+            elif group_start is not None and token in {"HAVING", "ORDER", "LIMIT", "OFFSET", "UNION", "FETCH"}:
+                group_end = start_at
+                break
+        if from_start is not None and group_start is not None:
+            blocks.append((
+                _split_sql_expressions(sql[end:from_start]),
+                _split_sql_expressions(sql[group_start:group_end or block_end]),
+            ))
+    return blocks
+
+
+def _expression_time_grain(expression: str) -> Optional[str]:
+    value = expression or ""
+    if re.search(r"\b(?:EXTRACT\s*\(\s*YEAR\b|DATE_PART\s*\(\s*'year'|DATE_TRUNC\s*\(\s*'year')", value, re.I):
+        return "year"
+    if re.search(r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*4\s*\)|TO_CHAR\s*\([\s\S]*?,\s*'YYYY'", value, re.I):
+        return "year"
+    if re.search(r"DATE_TRUNC\s*\(\s*'month'|SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*6\s*\)|TO_CHAR\s*\([\s\S]*?'YYYY-?MM'", value, re.I):
+        return "month"
+    if re.search(r"DATE_TRUNC\s*\(\s*'quarter'|TO_CHAR\s*\([\s\S]*?'YYYY[^']*Q'", value, re.I):
+        return "quarter"
+    return None
+
+
+def _grouping_matches_required_grain(sql: str, group_by: List[str]) -> bool:
+    """A year-shaped SELECT alias cannot conceal date/measure-level grouping."""
+    from .analytical_operations import classify_column_role
+
+    requested_time = next((grain for grain in ("month", "quarter", "year") if grain in group_by), None)
+    matched = False
+    for selections, groups in _grouped_selects(sql):
+        if not any(sql_has_aggregation(expression) for expression in selections):
+            continue
+        aliases = {}
+        output = []
+        for selection in selections:
+            alias = re.search(r'\s+AS\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s*$', selection, re.I)
+            expression = selection[:alias.start()].strip() if alias else selection
+            output.append(expression)
+            if alias:
+                aliases[alias.group(1).lower()] = expression
+        resolved = []
+        for expression in groups:
+            if expression.isdigit() and 0 < int(expression) <= len(output):
+                expression = output[int(expression) - 1]
+            else:
+                expression = aliases.get(expression.strip('"').lower(), expression)
+            resolved.append(expression)
+        if requested_time and not any(_expression_time_grain(expression) == requested_time for expression in resolved):
+            return False
+        matched = True
+        for expression in resolved:
+            if _expression_time_grain(expression):
+                continue
+            for table, column in re.findall(r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?', expression):
+                role = classify_column_role(table, column)
+                if role == "measure" or role == "date" and "document" not in group_by:
+                    return False
+                field_dimensions = {
+                    dimension for dimension in ("country", "customer", "material", "vendor", "industry", "document")
+                    if result_has_dimension([column], dimension)
+                }
+                if field_dimensions and "document" not in group_by and not field_dimensions.intersection(group_by):
+                    return False
+    return matched if requested_time else True
 def sql_has_month_bucket(sql: str) -> bool:
     s = sql or ""
     if re.search(r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*6\s*\)", s, re.I):
@@ -45,6 +171,8 @@ def sql_has_month_bucket(sql: str) -> bool:
     return False
 def sql_has_year_bucket(sql: str) -> bool:
     s = sql or ""
+    if _expression_time_grain(s) == "year":
+        return True
     if re.search(r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*4\s*\)", s, re.I):
         return True
     if re.search(r"EXTRACT\s*\(\s*YEAR", s, re.I):
@@ -194,6 +322,12 @@ def sql_satisfies_analytical_intent(
     if not measure.get("aggregation"):
         measure = sem.get("measure") if isinstance(sem.get("measure"), dict) else {}
     agg = str(measure.get("aggregation") or ops.get("aggregation") or "").upper()
+    document_rows = (
+        "document" in group_by
+        and bool(re.search(r"\b(?:billing\s+documents?|invoices?|billed\s+documents?)\b", question or "", re.I))
+    )
+    if document_rows:
+        agg = ""
     concept = str(measure.get("concept") or ops.get("measure_concept") or "").lower()
     ranking = _normalize_ranking(req.get("ranking") or sem.get("ranking") or ops.get("ranking"))
     period = req.get("period_compare")
@@ -237,6 +371,9 @@ def sql_satisfies_analytical_intent(
             return False
     if agg in {"SUM", "COUNT", "AVG", "MAX", "MIN"} and not sql_has_aggregation_fn(sql, agg):
         return False
+    for requested_aggregate in req.get("aggregations") or []:
+        if not sql_has_aggregation_fn(sql, str(requested_aggregate)):
+            return False
     if agg == "COUNT" and group_by:
         if not sql_has_group_by(sql):
             return False
@@ -251,6 +388,8 @@ def sql_satisfies_analytical_intent(
             return False
         if "month" in group_by and not sql_has_month_bucket(sql):
             return False
+        if not _grouping_matches_required_grain(sql, group_by):
+            return False
     if agg == "SUM" and monetary and sql_is_master_only(sql):
         return False
     if ranking and isinstance(ranking, dict) and ranking.get("partition_by"):
@@ -258,6 +397,9 @@ def sql_satisfies_analytical_intent(
             return False
     elif ranking and isinstance(ranking, dict) and ranking.get("limit"):
         if "ORDER BY" not in sql_u:
+            return False
+        limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.I)
+        if not limit_match or int(limit_match.group(1)) != int(ranking["limit"]):
             return False
     if period:
         years = _period_years(period if isinstance(period, dict) else {}, ops)
@@ -275,6 +417,25 @@ def sql_satisfies_analytical_intent(
         if str(date_filter.get("type") or "") == "calendar_year":
             year = str(date_filter.get("value") or (date_filter.get("years") or [""])[0] or "")
             if year and not sql_has_calendar_year(sql, year):
+                return False
+        elif str(date_filter.get("type") or "") == "latest_data_years":
+            if not date_filter.get("resolved_from_data"):
+                return False
+            years = [str(year) for year in (date_filter.get("years") or [])]
+            start = str(date_filter.get("start_yyyymmdd") or "")
+            end = str(date_filter.get("end_yyyymmdd") or "")
+            iso_start = str(date_filter.get("start") or "")
+            iso_end = str(date_filter.get("end") or "")
+            has_year_scope = bool(years) and all(sql_has_calendar_year(sql, year) for year in years)
+            has_exact_bounds = bool(start and end) and (
+                start in sql and end in sql
+                or iso_start and iso_end and iso_start in sql and iso_end in sql
+            )
+            if not (has_year_scope or has_exact_bounds):
+                return False
+            tf = (req.get("semantic") or {}).get("time_filter") or {}
+            date_column = str(tf.get("date_column") or "")
+            if date_column and not re.search(rf"\b{re.escape(date_column)}\b", sql, re.I):
                 return False
         elif not sql_has_relative_date_bound(
             sql,
@@ -331,6 +492,12 @@ def result_matches_analytical_intent(
     measure = req.get("measure") if isinstance(req.get("measure"), dict) else {}
     concept = str(measure.get("concept") or "").lower()
     agg = str(measure.get("aggregation") or ops.get("aggregation") or "").upper()
+    document_rows = (
+        "document" in group_by
+        and bool(re.search(r"\b(?:billing\s+documents?|invoices?|billed\s+documents?)\b", question or "", re.I))
+    )
+    if document_rows:
+        agg = ""
     partition_by = [
         str(p).lower()
         for p in (
@@ -372,6 +539,7 @@ def result_matches_analytical_intent(
         "industry",
         "currency",
         "supplier",
+        "document",
     }
     check_dims = set(g for g in group_by if g in _entity_dims or g in {"month", "year", "quarter"})
     if ranking or period:
@@ -424,12 +592,7 @@ def result_matches_analytical_intent(
     if ranking and isinstance(ranking, dict) and ranking.get("limit"):
         try:
             lim = int(ranking["limit"])
-            sql_lim_m = re.search(r"\bLIMIT\s+(\d+)\b", sql or "", re.I)
-            # When SQL has an explicit LIMIT and the result respects it, do not fail
-            # on an understated plan limit (e.g. plural list with LLM top-1 pollution).
-            if sql_lim_m and len(rows) <= int(sql_lim_m.group(1)):
-                pass
-            elif not partition_by and len(rows) > lim * 5:
+            if not partition_by and len(rows) > lim:
                 warnings.append("ranking limit was not applied")
         except (TypeError, ValueError):
             pass

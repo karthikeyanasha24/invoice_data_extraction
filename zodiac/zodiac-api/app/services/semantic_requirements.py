@@ -43,6 +43,7 @@ _DIM_RESULT_KEYS = {
     "month": ("month", "yyyymm", "period", "ym"),
     "year": ("year", "yyyy", "gjahr", "fiscal_year"),
     "currency": ("currency", "waerk", "waers"),
+    "document": ("document_id", "document_number", "billing_document", "invoice_id", "invoice_number", "vbeln", "belnr", "ebeln"),
 }
 
 
@@ -121,8 +122,18 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
     measure = sem.get("measure") if isinstance(sem.get("measure"), dict) else {}
     concept = str(measure.get("concept") or ops.get("measure_concept") or "").lower()
     agg = str(measure.get("aggregation") or ops.get("aggregation") or "").upper()
+    # A result explicitly requested at billing-document grain is a list of
+    # invoice headers. VBRK already stores the document amount, so SUM/GROUP BY
+    # would incorrectly turn the requested rows into aggregates.
+    document_rows = (
+        "document" in group_by
+        and bool(re.search(r"\b(?:billing\s+documents?|invoices?|billed\s+documents?)\b", ql))
+    )
+    if document_rows:
+        agg = ""
     if ranking and not agg:
-        agg = "SUM"
+        if not document_rows:
+            agg = "SUM"
 
     period = sem.get("period_compare") if isinstance(sem.get("period_compare"), dict) else ops.get("period_compare")
     # LLM sometimes emits {"type": null, "base_period": null, ...} — treat as absent.
@@ -214,7 +225,9 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
             date_filter = {
                 "type": "latest_data_years",
                 "period": relative_name,
-                "count": 2 if relative_name == "latest_two_full_years" else 1,
+                "count": int(tf.get("count") or (2 if relative_name == "latest_two_full_years" else 1)),
+                "years": list(tf.get("years") or []),
+                "resolved_from_data": tf.get("resolved_from_data") is True,
                 "start": start_text,
                 "end": end_text,
                 "start_yyyymmdd": start_digits,
@@ -266,6 +279,7 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         "dimensions": dims,
         "group_by": group_by,
         "measure": {"concept": concept, "aggregation": agg},
+        "aggregations": [] if document_rows else list(sem.get("aggregations") or ([agg] if agg else [])),
         "ranking": None if having_distinct else ranking,
         "partition_by": partition_by,
         "period_compare": period,
@@ -350,8 +364,12 @@ def enrich_semantic_with_requirements(
     elif req.get("clarification"):
         sem["clarification"] = dict(req["clarification"])
         sem.pop("period_compare", None)
+    else:
+        sem.pop("period_compare", None)
     if req.get("negation"):
         sem["negation"] = dict(req["negation"])
+    else:
+        sem.pop("negation", None)
     if req.get("date_filter"):
         df = req["date_filter"]
         if str(df.get("type") or "") == "calendar_year":
@@ -364,8 +382,11 @@ def enrich_semantic_with_requirements(
                 "years": df.get("years") or ([df.get("value")] if df.get("value") else []),
             }
         else:
-            # Always overwrite invented absolute bounds with deterministic calendar resolution.
+            # Keep verified date-field evidence when the period was resolved
+            # from data; a period name is never a literal year value.
+            prior_tf = sem.get("time_filter") if isinstance(sem.get("time_filter"), dict) else {}
             sem["time_filter"] = {
+                **prior_tf,
                 "relative": df.get("period"),
                 "start": df.get("start"),
                 "end": df.get("end"),
@@ -373,8 +394,14 @@ def enrich_semantic_with_requirements(
                 "end_yyyymmdd": df.get("end_yyyymmdd"),
                 "type": "relative_period",
                 "concept": "relative_period",
-                "value": df.get("period"),
             }
+            sem["time_filter"].pop("value", None)
+            if str(df.get("type") or "") == "latest_data_years":
+                sem["time_filter"].update({
+                    "resolved_from_data": df.get("resolved_from_data") is True,
+                    "years": list(df.get("years") or []),
+                    "count": int(df.get("count") or 1),
+                })
     if req.get("comparison"):
         sem["comparison"] = dict(req["comparison"])
         condition = sem.get("condition") if isinstance(sem.get("condition"), dict) else {}

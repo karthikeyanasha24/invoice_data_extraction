@@ -198,7 +198,7 @@
         "UPFLU": "update_indicator_for_sales_document_document_flow",
         "VBEAF": "[VBEAF]",
         "VBEAV": "variable_shipping_processing_time_in_days",
-        "VBELN": "billing_document",
+        "VBELN": "delivery_document_number",
         "VBELV": "originating_document",
         "VERURPOS": "[VERURPOS]",
         "VFDAT": "[VFDAT]",

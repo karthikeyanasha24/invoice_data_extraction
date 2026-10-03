@@ -109,7 +109,7 @@
         "TZONIS": "time_zone_of_delivering_location",
         "TZONRC": "time_zone_of_recipient_location",
         "VBEAK": "[VBEAK]",
-        "VBELN": "billing_document",
+        "VBELN": "delivery_document_number",
         "VBTYP": "sd_document_category",
         "VBUND": "company_id_of_trading_partner",
         "VERUR": "distribution_delivery",

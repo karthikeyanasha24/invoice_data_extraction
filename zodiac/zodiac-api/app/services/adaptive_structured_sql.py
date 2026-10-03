@@ -262,6 +262,25 @@ def _normalize_plan_expressions(plan: StructuredQueryPlan) -> None:
         if flt.type == "expression" and flt.expression:
             flt.expression = repair_extract_on_text_dates(flt.expression)
 
+    # SELECT aliases are unavailable in WHERE/HAVING in PostgreSQL. The model
+    # may name a verified transformation and then use that name as a field;
+    # expand only aliases derived from actual plan expressions.
+    derived_aliases = {
+        pf.alias: pf.expression for pf in plan.select
+        if pf.type == "expression" and pf.alias and pf.expression
+    }
+    for flt in plan.filters:
+        if flt.type != "expression":
+            continue
+        for alias, expression in derived_aliases.items():
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", alias):
+                segments = re.split(r"('(?:''|[^'])*')", flt.expression)
+                pattern = rf'(?<![\w.])(?:"{re.escape(alias)}"|{re.escape(alias)})(?![\w.]|\s*\(|\s+FROM\b)'
+                flt.expression = "".join(
+                    segment if index % 2 else re.sub(pattern, f"({expression})", segment, flags=re.I)
+                    for index, segment in enumerate(segments)
+                )
+
     seen_select: set[str] = set()
     deduped_select: List[PlanField] = []
     for pf in plan.select:
@@ -863,6 +882,9 @@ def build_dimension_ranking_sql(
         return None
     measure = detect_ranking_measure(question, semantic)
     years = extract_question_years(question)
+    resolved_tf = (req.get("semantic") or {}).get("time_filter") or {}
+    if not years and resolved_tf.get("resolved_from_data") is True:
+        years = [str(y) for y in (resolved_tf.get("years") or [])]
     if limit is None:
         limit = extract_ranking_limit(question)
     direction = ranking_direction(question)
@@ -1044,6 +1066,118 @@ def build_dimension_ranking_sql(
     sql += f'\nORDER BY "{alias}" {direction} NULLS LAST'
     sql += f"\nLIMIT {max(1, min(int(limit), 500))}"
     return sql.strip()
+
+
+def build_billing_document_ranking_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Build a document-grain list from the billing header's verified fields.
+
+    A requested customer or country is an attribute/filter on these rows; it
+    must not silently change the output grain to a customer aggregate.
+    """
+    from .semantic_requirements import required_semantics
+
+    q = (question or "").lower()
+    if not has_table("VBRK") or not re.search(r"\b(?:billing\s+documents?|invoices?|billed\s+documents?)\b", q):
+        return None
+    req = required_semantics(question, semantic)
+    if "document" not in [str(g).lower() for g in (req.get("group_by") or [])]:
+        return None
+    header = resolve_table_name("VBRK") or "VBRK"
+    document_col = next((c for c in ("vbeln", "belnr") if has_column(header, c)), None)
+    amount_col = next((c for c in ("netwr", "dmbtr", "wrbtr", "rmwwr") if has_column(header, c)), None)
+    if not document_col or not amount_col:
+        return None
+
+    rank = req.get("ranking") if isinstance(req.get("ranking"), dict) else {}
+    try:
+        limit = int(rank.get("limit") or extract_ranking_limit(question, default=200))
+    except (TypeError, ValueError):
+        limit = 200
+    limit = max(1, min(limit, 500))
+    direction = str(rank.get("direction") or ranking_direction(question)).upper()
+    if direction not in {"ASC", "DESC"}:
+        direction = ranking_direction(question)
+
+    doc_expr = f'TRIM(CAST(k."{document_col}" AS TEXT))'
+    amount_expr = numeric_cast_expr(header, amount_col).replace(f'"{header}".', "k.")
+    select = [f'{doc_expr} AS "billing_document"']
+    where = [f'NULLIF(TRIM(CAST(k."{amount_col}" AS TEXT)), \'\') IS NOT NULL']
+    joins: List[str] = []
+
+    date_col = next((c for c in ("fkdat", "budat", "bldat", "audat") if has_column(header, c)), None)
+    if date_col:
+        select.append(f'TRIM(CAST(k."{date_col}" AS TEXT)) AS "billing_date"')
+    customer_col = next((c for c in ("kunag", "kunnr") if has_column(header, c)), None)
+    if customer_col:
+        select.append(f'TRIM(CAST(k."{customer_col}" AS TEXT)) AS "customer_id"')
+        customer_match = re.search(
+            r"\bcustomer\s+(?:id|number)\s+(?:is\s+|=\s*)?['\"]?([A-Za-z0-9_-]+)", question, re.I
+        )
+        if customer_match:
+            customer_id = customer_match.group(1).replace("'", "''")
+            where.append(
+                f"LPAD(TRIM(CAST(k.\"{customer_col}\" AS TEXT)), 10, '0') = "
+                f"LPAD('{customer_id}', 10, '0')"
+            )
+    if customer_col and has_table("KNA1") and has_column("KNA1", "kunnr"):
+        joins.append(
+            'LEFT JOIN "KNA1" c ON LPAD(TRIM(CAST(k."' + customer_col + '" AS TEXT)), 10, \'0\') '
+            '= LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')'
+        )
+        if has_column("KNA1", "name1"):
+            select.append('TRIM(CAST(c."name1" AS TEXT)) AS "customer_name"')
+    select.append(f'{amount_expr} AS "billed_amount"')
+    currency_col = next((c for c in ("waerk", "waers", "rtcur") if has_column(header, c)), None)
+    if currency_col:
+        select.append(f'TRIM(CAST(k."{currency_col}" AS TEXT)) AS "currency"')
+        currency_match = re.search(r"\bcurrency\s+([A-Za-z]{3})\b", question, re.I)
+        if currency_match:
+            currency = currency_match.group(1).upper()
+            where.append(f'TRIM(CAST(k."{currency_col}" AS TEXT)) = \'{currency}\'')
+
+    # Carry a document's existing order reference when this extract provides it.
+    for order_col in ("aubel", "vgbel"):
+        if has_column(header, order_col):
+            select.append(f'TRIM(CAST(k."{order_col}" AS TEXT)) AS "linked_sales_order"')
+            break
+
+    comparison = req.get("comparison") if isinstance(req.get("comparison"), dict) else {}
+    if comparison.get("operator") is not None:
+        op = str(comparison["operator"])
+        if op not in {"<", "<=", ">", ">=", "=", "!="}:
+            return None
+        try:
+            value = float(comparison.get("value", 0))
+        except (TypeError, ValueError):
+            return None
+        where.append(f'{amount_expr} {op} {value:g}')
+    elif re.search(r"\bnegative\b", q):
+        where.append(f"{amount_expr} < 0")
+
+    years = extract_question_years(question)
+    tf = (req.get("semantic") or {}).get("time_filter") or {}
+    if not years and tf.get("resolved_from_data") is True:
+        years = [str(y) for y in (tf.get("years") or [])]
+    if years and date_col:
+        where.append(_sap_year_predicate("k", date_col, years) or "")
+    elif date_col and req.get("date_filter"):
+        date_filter = req["date_filter"]
+        start = str(date_filter.get("start_yyyymmdd") or "")
+        end = str(date_filter.get("end_yyyymmdd") or "")
+        if start and end and start.isdigit() and end.isdigit():
+            date_expr = f'TRIM(CAST(k."{date_col}" AS TEXT))'
+            where.extend([f"{date_expr} >= '{start}'", f"{date_expr} < '{end}'"])
+
+    return (
+        f'SELECT {", ".join(select)}\nFROM "{header}" k'
+        + ("\n" + "\n".join(joins) if joins else "")
+        + "\nWHERE " + "\n  AND ".join(part for part in where if part)
+        + f'\nORDER BY "billed_amount" {direction} NULLS LAST\nLIMIT {limit}'
+    )
 
 
 def _build_vendor_invoice_ranking_sql(
@@ -1249,6 +1383,124 @@ def build_period_sales_sql(
     )
 
 
+def build_dimension_period_sales_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Build a verified year series scoped to an explicit prior-result entity."""
+    from .semantic_requirements import required_semantics
+
+    q = question or ""
+    if not re.search(r"\b(?:sales|revenue|billing|billed|turnover)\b", q, re.I):
+        return None
+    if not re.search(r"\b(?:by|per|each)\s+years?|\byearly\b", q, re.I):
+        return None
+    header = resolve_table_name("VBRK") or "VBRK"
+    if not has_table(header) or not has_column(header, "netwr"):
+        return None
+    req = required_semantics(q, semantic)
+    time_filter = (req.get("semantic") or {}).get("time_filter") or {}
+    years = extract_question_years(q)
+    if not years and time_filter.get("resolved_from_data") is True:
+        years = [str(year) for year in (time_filter.get("years") or [])]
+    if not years or not has_column(header, "fkdat"):
+        return None
+
+    where: List[str] = []
+    joins: List[str] = []
+    country_match = re.search(r"\bcountry\s+code\s+['\"]?([A-Za-z]{2,3})\b", q, re.I)
+    customer_match = re.search(
+        r"\bcustomer\s+(?:id|number)\s+(?:is\s+|=\s*)?['\"]?([A-Za-z0-9_-]+)", q, re.I
+    )
+
+
+    if country_match:
+        if not has_table("KNA1") or not has_column(header, "kunag") or not has_column("KNA1", "kunnr") or not has_column("KNA1", "land1"):
+            return None
+        joins.append(
+            'JOIN "KNA1" c ON LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') '
+            '= LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')'
+        )
+        country = country_match.group(1).upper()
+        where.append(f'TRIM(CAST(c."land1" AS TEXT)) = \'{country}\'')
+    elif customer_match:
+        if not has_column(header, "kunag"):
+            return None
+        customer = customer_match.group(1).replace("'", "''")
+        where.append(f'LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') = LPAD(\'{customer}\', 10, \'0\')')
+    else:
+        return None
+
+    date_expr = 'TRIM(CAST(k."fkdat" AS TEXT))'
+    where.append(f"SUBSTRING({date_expr}, 1, 4) IN ({', '.join(repr(year) for year in years)})")
+    currency_col = next((col for col in ("waerk", "waers", "rtcur") if has_column(header, col)), None)
+    currency_match = re.search(r"\bcurrency\s+([A-Za-z]{3})\b", q, re.I)
+    if currency_col and currency_match:
+        currency = currency_match.group(1).upper()
+        where.append(f'TRIM(CAST(k."{currency_col}" AS TEXT)) = \'{currency}\'')
+        currency_select = f', k."{currency_col}" AS "currency"'
+        currency_group = f', k."{currency_col}"'
+    elif currency_col:
+        # Never combine amounts whose currency is unknown or different.
+        currency_select = f', k."{currency_col}" AS "currency"'
+        currency_group = f', k."{currency_col}"'
+    else:
+        currency_select = currency_group = ""
+
+    bucket = f'SUBSTRING({date_expr}, 1, 4)'
+    amount_expr = numeric_cast_expr(header, "netwr").replace(f'"{header}".', "k.")
+    return (
+        f'SELECT {bucket} AS "year", SUM({amount_expr}) AS "total_billed_sales"{currency_select}\n'
+        f'FROM "{header}" k' + ("\n" + "\n".join(joins) if joins else "") + "\n"
+        + "WHERE " + "\n  AND ".join(where) + "\n"
+        + f"GROUP BY {bucket}{currency_group}\nORDER BY \"year\" ASC"
+    )
+
+
+def build_linked_sales_orders_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Resolve sales-order predecessors for explicit billing IDs via SAP flow."""
+    q = question or ""
+    if not re.search(r"\b(?:sales\s+orders?|linked\s+orders?)\b", q, re.I):
+        return None
+    if not all(
+        has_table(table) and has_column(table, column)
+        for table, column in (
+            ("VBFA", "vbeln"), ("VBFA", "vbelv"),
+            ("VBAK", "vbeln"), ("VBRK", "vbeln"),
+        )
+    ):
+        return None
+    id_clause = re.search(r"\bbilling\s+document\s+ids?\s*:\s*([\s\S]+)$", q, re.I)
+    if not id_clause:
+        return None
+    ids = list(dict.fromkeys(value.replace("''", "'") for value in re.findall(r"'((?:''|[^'])*)'", id_clause.group(1))))
+    ids = [value for value in ids if value.strip()][:50]
+    if not ids:
+        return None
+    id_list = ", ".join(
+        f"LPAD('{value.replace(chr(39), chr(39) * 2)}', 10, '0')" for value in ids
+    )
+    flow = resolve_table_name("VBFA") or "VBFA"
+    orders = resolve_table_name("VBAK") or "VBAK"
+    invoices = resolve_table_name("VBRK") or "VBRK"
+    return (
+        'SELECT DISTINCT TRIM(CAST(f."vbeln" AS TEXT)) AS "billing_document", '
+        'TRIM(CAST(o."vbeln" AS TEXT)) AS "linked_sales_order"\n'
+        f'FROM "{flow}" f\n'
+        f'JOIN "{invoices}" b ON LPAD(TRIM(CAST(f."vbeln" AS TEXT)), 10, \'0\') '
+        f'= LPAD(TRIM(CAST(b."vbeln" AS TEXT)), 10, \'0\')\n'
+        f'JOIN "{orders}" o ON LPAD(TRIM(CAST(f."vbelv" AS TEXT)), 10, \'0\') '
+        f'= LPAD(TRIM(CAST(o."vbeln" AS TEXT)), 10, \'0\')\n'
+        f'WHERE LPAD(TRIM(CAST(f."vbeln" AS TEXT)), 10, \'0\') IN ({id_list})\n'
+        'ORDER BY "billing_document", "linked_sales_order"'
+    )
+
+
 def build_period_compare_sql(
     question: str,
     tables: List[str],
@@ -1427,7 +1679,7 @@ def build_period_compare_sql(
         sel.append(
             f'ROUND(100.0 * {change} / NULLIF(SUM({change}) OVER (), 0), 2) AS "contribution_pct"'
         )
-        lim = min(max(int(lim), 5), 50)
+        lim = min(max(int(lim), 1), 50)
     sql = (
         f"SELECT {', '.join(sel)}\n"
         + "\n".join(joins) + "\n"
@@ -2394,14 +2646,18 @@ def _ensure_baseline_columns(plan: StructuredQueryPlan, semantic: Dict[str, Any]
 
     if condition or tf:
         mcol = _find_measure_column(plan, measure)
-        if mcol and not any(
+        has_aggregate = any(
+            pf.type == "expression" and re.search(r"\b(SUM|COUNT|AVG|MAX|MIN)\s*\(", pf.expression or "", re.I)
+            for pf in plan.select
+        )
+        if mcol and not has_aggregate and not any(
             pf.type == "column" and pf.table == mcol[0] and pf.column == mcol[1] for pf in plan.select
         ):
             plan.select.append(
                 PlanField(type="column", table=mcol[0], column=mcol[1], purpose="measure")
             )
         dcol = _find_date_column(plan)
-        if dcol and not any(
+        if dcol and not _needs_aggregation(plan) and not any(
             pf.type == "column" and pf.table == dcol[0] and pf.column == dcol[1] for pf in plan.select
         ):
             plan.select.append(
@@ -2445,7 +2701,7 @@ def _year_from_semantic(semantic: Dict[str, Any]) -> Optional[str]:
     tf = semantic.get("time_filter")
     if isinstance(tf, dict):
         v = tf.get("value")
-        if v is not None:
+        if v is not None and re.fullmatch(r"(?:19|20)\d{2}", str(v)):
             return str(v)
     for f in semantic.get("filters") or []:
         if isinstance(f, dict) and str(f.get("concept") or "").lower() in {"year", "time"}:
@@ -2624,7 +2880,7 @@ def _apply_semantic_defaults(plan: StructuredQueryPlan, semantic: Dict[str, Any]
 
     # Time filter year
     tf = semantic.get("time_filter")
-    if isinstance(tf, dict) and tf.get("value") is not None:
+    if isinstance(tf, dict) and tf.get("value") is not None and re.fullmatch(r"(?:19|20)\d{2}", str(tf["value"])):
         year = str(tf["value"])
         date_col = _find_date_column(plan)
         if date_col:
@@ -2682,7 +2938,16 @@ def _apply_semantic_defaults(plan: StructuredQueryPlan, semantic: Dict[str, Any]
         if not any(g.alias == "year" for g in plan.group_by):
             plan.group_by.append(PlanField(type="expression", expression=expr, alias="year", purpose="dimension"))
 
-    if agg == "COUNT":
+    requested_aggregations = {str(a).upper() for a in (semantic.get("aggregations") or [agg])}
+    if agg in {"SUM", "AVG", "MAX", "MIN"} and not any(
+        pf.type == "expression" and re.search(rf"\b{agg}\s*\(", pf.expression or "", re.I)
+        or pf.type == "column" and classify_column_role(pf.table, pf.column) == "measure"
+        for pf in plan.select
+    ):
+        measure_col = _find_measure_column(plan, measure)
+        if measure_col:
+            plan.select.append(PlanField(type="column", table=measure_col[0], column=measure_col[1], purpose="measure"))
+    if "COUNT" in requested_aggregations:
         has_count = any(
             pf.type == "expression" and "COUNT(" in (pf.expression or "").upper() for pf in plan.select
         )
@@ -2715,6 +2980,25 @@ def _apply_semantic_defaults(plan: StructuredQueryPlan, semantic: Dict[str, Any]
 
 
 def _find_identifier_column(plan: StructuredQueryPlan) -> Optional[Tuple[str, str]]:
+    from .adaptive_analyst.database_metadata import _column_meanings
+
+    requested = set(re.findall(r"[a-z]+", (plan.question or "").lower()))
+    subjects = requested & {"billing", "document", "documents", "invoice", "invoices", "order", "orders", "customer", "customers", "material", "materials", "vendor", "vendors"}
+    subjects = {word.rstrip("s") for word in subjects}
+    candidates = []
+    for table in plan.tables:
+        for column, meaning in _column_meanings(table).items():
+            if not has_column(table, column):
+                continue
+            terms = set(re.findall(r"[a-z]+", meaning))
+            if not terms & {"number", "identifier", "id"}:
+                continue
+            overlap = subjects & terms
+            if overlap:
+                candidates.append((len(overlap), -len(terms), table, column))
+    if candidates:
+        _, _, table, column = max(candidates)
+        return resolve_table_name(table) or table, column
     id_names = {"vbeln", "belnr", "ebeln", "kunnr", "matnr"}
     for pf in plan.select:
         if pf.type == "column" and pf.column.lower() in id_names:
@@ -2741,6 +3025,11 @@ def _find_measure_column(plan: StructuredQueryPlan, measure: Dict[str, Any]) -> 
 
 
 def _find_date_column(plan: StructuredQueryPlan) -> Optional[Tuple[str, str]]:
+    tf = (plan.semantic_requirements or {}).get("time_filter") or {}
+    if tf.get("resolved_from_data") is True:
+        table, column = str(tf.get("date_table") or ""), str(tf.get("date_column") or "")
+        if table and column and has_column(table, column):
+            return table, column
     date_names = {"fkdat", "audat", "bedat", "budat", "erdat", "bldat", "wadat"}
     for pf in plan.select:
         if pf.type == "column" and pf.column.lower() in date_names:
@@ -2798,6 +3087,20 @@ def validate_query_plan(plan: StructuredQueryPlan) -> List[str]:
             errors.append("measure source missing: no transactional amount/quantity column")
     if group_by_dims and agg in {"SUM", "COUNT", "AVG"} and not plan.group_by:
         errors.append("group_by required by analytical plan but missing from query plan")
+    from .plan_satisfaction import _expression_time_grain
+
+    for grain in ("year", "month", "quarter"):
+        if grain in group_by_dims:
+            if not any(
+                pf.type == "expression" and _expression_time_grain(pf.expression) == grain
+                for pf in plan.select
+            ):
+                errors.append(f"{grain} grouping missing from result projection")
+            if not any(
+                pf.type == "expression" and _expression_time_grain(pf.expression) == grain
+                for pf in plan.group_by
+            ):
+                errors.append(f"{grain} grouping missing from query plan")
 
     return errors[:15]
 
@@ -2806,11 +3109,28 @@ def _validate_expression_refs(expr: str, allowed_tables: List[str]) -> List[str]
     """Ensure expression references only verified table.column pairs."""
     errors: List[str] = []
     allowed = {resolve_table_name(t) or t for t in allowed_tables}
-    for tbl, col in re.findall(r'"([A-Za-z0-9_]+)"\s*\.\s*"([A-Za-z0-9_]+)"', expr):
-        if tbl not in allowed and tbl.upper() not in {t.upper() for t in allowed}:
+    literal_free = re.sub(r"'(?:''|[^'])*'", "", expr)
+    reference_pattern = r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'
+    for tbl, col in re.findall(reference_pattern, literal_free):
+        if tbl.upper() not in {t.upper() for t in allowed}:
             errors.append(f"expression references unverified table {tbl}")
         elif not has_column(tbl, col):
             errors.append(f"expression references unknown column {tbl}.{col}")
+    bare = re.sub(reference_pattern, "", literal_free)
+    keywords = set(_SQL_FUNCS) | {
+        "AS", "TEXT", "NUMERIC", "DECIMAL", "INTEGER", "INT", "BIGINT", "SMALLINT", "REAL", "DOUBLE", "PRECISION",
+        "VARCHAR", "CHAR", "CHARACTER", "VARYING", "DATE", "TIMESTAMP", "TIMESTAMPTZ", "TIME", "ZONE", "WITHOUT",
+        "DISTINCT", "FROM", "IN", "IS", "NOT", "NULL", "AND", "OR", "LIKE", "ILIKE", "BETWEEN", "TRUE", "FALSE",
+        "YEAR", "MONTH", "QUARTER", "DAY", "WEEK", "CURRENT_DATE", "CURRENT_TIMESTAMP", "INTERVAL", "OVER",
+        "PARTITION", "BY", "ORDER", "ASC", "DESC", "NULLS", "FIRST", "LAST", "FILTER", "WHERE", "__HAVING__",
+    }
+    known_columns = {column.lower() for table in allowed for column in column_names(table)}
+    for match in re.finditer(r'"([A-Za-z_][A-Za-z0-9_]*)"|\b([A-Za-z_][A-Za-z0-9_]*)\b', bare):
+        token = match.group(1) or match.group(2)
+        if token.upper() in keywords or re.match(r"\s*\(", bare[match.end():]):
+            continue
+        if token.lower() not in known_columns:
+            errors.append(f"expression references unknown field {token}")
     return errors
 
 
@@ -2878,7 +3198,8 @@ def render_sql_from_plan(plan: StructuredQueryPlan) -> str:
     select_parts: List[str] = []
     for pf in plan.select:
         if aggregating and agg != "COUNT" and pf.type == "column" and pf.column.lower() in {"netwr", "dmbtr", "wrbtr", "rmwwr", "fkimg", "wavwr"}:
-            expr = f"SUM({numeric_cast_expr(pf.table, pf.column)})"
+            aggregate = agg if agg in {"SUM", "AVG", "MAX", "MIN"} else "SUM"
+            expr = f"{aggregate}({numeric_cast_expr(pf.table, pf.column)})"
             alias = pf.alias or f"{pf.column.lower()}_total"
             select_parts.append(f'{expr} AS "{alias}"')
         else:
@@ -2965,7 +3286,17 @@ def render_sql_from_plan(plan: StructuredQueryPlan) -> str:
     if plan.order_by:
         ob_parts = []
         for ob in plan.order_by:
-            field_name = str(ob.get("field") or ob.get("alias") or ob.get("column") or "")
+            raw_order_field = ob.get("field") or ob.get("alias") or ob.get("column") or ""
+            if isinstance(raw_order_field, dict):
+                order_field = _parse_plan_field(raw_order_field)
+                selected = next((
+                    field for field in plan.select
+                    if order_field and field.type == order_field.type
+                    and (field.table, field.column, field.expression) == (order_field.table, order_field.column, order_field.expression)
+                ), None)
+                field_name = str(selected.alias if selected and selected.alias else order_field.column if order_field else "")
+            else:
+                field_name = str(raw_order_field)
             direction = str(ob.get("direction") or "ASC").upper()
             if field_name:
                 ob_parts.append(f"\"{field_name}\" {direction}")
@@ -3070,7 +3401,10 @@ def _wrap_partitioned_ranking(sql: str, plan: StructuredQueryPlan) -> str:
 
 def _apply_anti_join_nulls(sql: str, plan: StructuredQueryPlan) -> str:
     """If the plan requests negation, keep LEFT JOIN semantics and require the fact key IS NULL."""
-    if not (plan.negation or (plan.semantic_requirements or {}).get("negation")):
+    from .semantic_requirements import required_semantics
+
+    negation = required_semantics(plan.question, plan.semantic_requirements).get("negation")
+    if not isinstance(negation, dict) or not negation.get("forbidden"):
         return sql
     if re.search(r"\bIS\s+NULL\b", sql, re.I):
         return sql

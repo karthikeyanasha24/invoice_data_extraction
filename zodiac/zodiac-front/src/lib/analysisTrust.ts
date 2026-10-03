@@ -79,6 +79,11 @@ export const ANALYSIS_LABELS: Record<string, string> = {
   net_profit_gap: 'Data limitation',
 };
 
+function hasKnownCalculation(intent: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ANALYSIS_LABELS, intent)
+    && !['unsupported_deep', 'dimensional_extend'].includes(intent);
+}
+
 export function analysisLabelFor(intent?: string): string | undefined {
   const i = (intent || '').trim().toLowerCase();
   if (!i) return undefined;
@@ -97,6 +102,7 @@ function definitionFor(intent?: string, isGap = false, ac: Record<string, unknow
   if (isGap) return GAP_DEFINITION;
   const i = (intent || '').toLowerCase();
   const agg = typeof ac.aggregation === 'string' ? ac.aggregation.trim() : '';
+  if (!hasKnownCalculation(i)) return agg;
   if (i.includes('sales_order')) {
     return agg || 'Sales-order value = VBAP.NETWR; sales-order count = COUNT(DISTINCT VBAK.VBELN). This is not billed revenue.';
   }
@@ -114,6 +120,7 @@ function sourceFor(intent?: string, isGap = false, ac: Record<string, unknown> =
   const i = (intent || '').toLowerCase();
   const domain = String(ac.domain || '').toLowerCase();
   const tables = Array.isArray(ac.tables) ? ac.tables.filter(Boolean).join(', ') : '';
+  if (!hasKnownCalculation(i)) return tables;
   if (i.includes('sales_order') || (domain === 'sales' && i.includes('order'))) {
     return tables
       ? `SAP sales orders (${tables}) — not billed invoices`
@@ -141,6 +148,8 @@ function sourceFor(intent?: string, isGap = false, ac: Record<string, unknown> =
 function grainFor(intent?: string, ac: Record<string, unknown> = {}, isGap = false): string | undefined {
   if (isGap) return 'Not applicable';
   const i = (intent || '').toLowerCase();
+  const fact = typeof ac.fact_grain === 'string' ? ac.fact_grain.trim() : '';
+  if (!hasKnownCalculation(i)) return fact || undefined;
   if (typeof ac.fact_grain === 'string' && ac.fact_grain.trim() && i.includes('sales_order')) {
     return String(ac.fact_grain);
   }
@@ -148,7 +157,6 @@ function grainFor(intent?: string, ac: Record<string, unknown> = {}, isGap = fal
   if (i.includes('purchasing')) return 'Purchase-order item';
   if (i.includes('production')) return 'Production order header';
   if (i.includes('supplier_concentration')) return 'Purchase-order item, then supplier';
-  const fact = typeof ac.fact_grain === 'string' ? ac.fact_grain.trim() : '';
   if (fact === 'po_item') return 'Purchase-order item, then supplier';
   if (fact) return fact;
   if (i.includes('supplier')) return 'Purchase-order item, then supplier × product';
@@ -174,6 +182,7 @@ function aggregationFor(intent?: string, ac: Record<string, unknown> = {}, isGap
       ? String(ac.aggregation_grain).trim()
       : '';
   if (fromCtx) return fromCtx;
+  if (!hasKnownCalculation(i)) return undefined;
   if (i.startsWith('inventory')) return 'Product (and plant when requested) on the current snapshot';
   if (i.includes('supplier')) return 'Supplier × product on purchase-order items';
   if (i.includes('monthly')) return 'Calendar month from billing date (FKDAT)';
@@ -233,7 +242,9 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
     : total != null && Number.isFinite(Number(total)) && Number(total) >= 0
       ? `${Number(total)} row${Number(total) === 1 ? '' : 's'} returned (display may be paginated)`
       : undefined;
-  const tablesList = Array.isArray(ac.tables) ? ac.tables.map(String).filter(Boolean) : [];
+  const tablesList = Array.isArray(ac.tables) && ac.tables.length
+    ? ac.tables.map(String).filter(Boolean)
+    : Array.isArray(meta.schema_tables) ? meta.schema_tables.map(String).filter(Boolean) : [];
   const fromCalc = String(calc.source || '').split(',').map((s: string) => s.trim()).filter(Boolean);
   const joinsList = Array.isArray(ac.joins) ? ac.joins.map(String).filter(Boolean) : [];
   return {
@@ -241,12 +252,12 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
     analysisLabel: gap ? (analysisLabelFor(intent) || 'Data limitation') : analysisLabelFor(intent),
     metric,
     period,
-    aggregation: aggregationFor(intent, ac, gap),
+    aggregation: String(calc.aggregation || '') || aggregationFor(intent, ac, gap),
     grain: String(calc.grain || '') || grainFor(intent, ac, gap),
     rowLimit,
     calculation: String(calc.definition || '') || definitionFor(intent, gap, ac),
     limitations: Array.from(new Set(gaps)),
-    source: fromCalc.length ? fromCalc.join(' + ') : sourceFor(intent, gap, ac),
+    source: fromCalc.length ? fromCalc.join(' + ') : sourceFor(intent, gap, { ...ac, tables: tablesList }),
     domain: String(ac.domain || qp.domain || meta.domain || '').trim() || undefined,
     tables: tablesList.length ? tablesList.join(' → ') : (fromCalc.length ? fromCalc.join(' → ') : undefined),
     joins: joinsList.length ? joinsList.join('; ') : undefined,

@@ -124,7 +124,9 @@ def test_latest_data_year_resolution_uses_schema_meaning_and_verified_years():
         semantic_requirements={"time_filter": {"relative": "latest_two_full_years"}},
     )
     db = MagicMock()
-    db.execute.return_value.fetchall.return_value = [("2001",), ("2000",)]
+    db.execute.return_value.fetchall.return_value = [
+        ("2001", "20011231", "19991231"), ("2000", "20011231", "19991231")
+    ]
 
     assert _resolve_latest_data_years(question, ctx, db) is True
     executed_sql = str(db.execute.call_args.args[0])

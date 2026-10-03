@@ -469,6 +469,18 @@ def classify_turn(
     if not has_active:
         return TurnClassification(TurnIntent.NEW_ANALYTICAL_QUERY, "fresh_turn")
 
+    from .adaptive_analyst.understanding import is_referential_database_action
+    from .result_first_followup import is_result_scoped_followup
+
+    if (
+        is_referential_database_action(q, has_prior=True)
+        or is_result_scoped_followup(q, has_prior_rows=True)
+    ):
+        needs_sql, plan = resolve_follow_up_sql_need(
+            q, previous_question, previous_sql, previous_plan
+        )
+        return TurnClassification(TurnIntent.FOLLOWUP_DELTA, "referential_analysis", plan)
+
     if looks_like_standalone_analytical(q):
         return TurnClassification(TurnIntent.NEW_ANALYTICAL_QUERY, "standalone_restatement")
 

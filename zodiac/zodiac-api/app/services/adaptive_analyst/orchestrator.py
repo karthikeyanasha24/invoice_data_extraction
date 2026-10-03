@@ -241,6 +241,15 @@ def adapt_user_turn(
         return AdaptedTurn("chat", q)
 
     awaiting_sales = _awaiting_sales_choice(prior_plan, prior_question)
+    from .understanding import is_referential_database_action
+    from ..result_first_followup import is_result_scoped_followup
+
+    has_prior = bool(prior_question or prior_plan)
+    if (
+        is_referential_database_action(q, has_prior=has_prior)
+        or is_result_scoped_followup(q, has_prior_rows=has_prior)
+    ):
+        return AdaptedTurn("query", q, drop_prior=False, is_fragment=True)
     chosen = resolve_sales_choice(q, awaiting=awaiting_sales)
     if chosen:
         return AdaptedTurn("query", chosen, drop_prior=True)
@@ -251,6 +260,8 @@ def adapt_user_turn(
         if status == "CLARIFICATION" or _prior_is_sales_ranking(prior_question):
             topn = resolve_topn_choice(q, prior_question or "highest sales")
     if topn:
+        if prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"} and has_prior:
+            return AdaptedTurn("query", q, drop_prior=False, is_fragment=True)
         return AdaptedTurn("query", ensure_default_ranking_limit(topn), drop_prior=True)
 
     ranked = normalize_ranking_question(q)
@@ -787,6 +798,28 @@ def run_adaptive_orchestrator(
         state.conversation_id = thread_id
     prior_summary = _prior_summary_from_state(state, prior_plan)
 
+    # A scoped drill-down cannot replace a failed parent analysis with a new,
+    # unrelated ranking. Ask for the missing selection if no verified anchor
+    # exists; retain the conversation so the user can supply it.
+    from .understanding import is_referential_database_action
+
+    if (
+        is_referential_database_action(q, has_prior=True)
+        and not (prior_rows or (prior_sql and prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}))
+    ):
+        msg = (
+            "There is no verified result identifying the entity or documents for this follow-up. "
+            "Specify the customer, country, or document selection, or retry the preceding analysis."
+        )
+        return {
+            "mode": "clarification", "route": "clarification", "status": "clarification",
+            "answer_status": "CLARIFICATION", "type": "clarification",
+            "sql": "", "sql_status": "not_generated", "data": [], "rowCount": 0,
+            "summary": msg, "answer": msg, "keyFindings": [], "charts": [],
+            "suggested_followups": [], "pipeline": "adaptive_orchestrator",
+            "query_plan": {"investigation_state": state.to_dict()},
+        }
+
     from ...data_catalog.source_selector import (
         _ambiguous_sales,
         _explicit_invoice,
@@ -1138,7 +1171,7 @@ def run_adaptive_orchestrator(
 
     # analytics / investigation → existing governed SQL pipeline
     adapted = AdaptedTurn("query", q, drop_prior=adapted.drop_prior, is_fragment=adapted.is_fragment)
-    skip_p1_clarify = not adapted.is_fragment
+    skip_p1_clarify = not adapted.is_fragment or bool(understanding.resolved_question)
     if skip_p1_clarify:
         p1 = {
             "question_type": "database_question",
@@ -1151,7 +1184,14 @@ def run_adaptive_orchestrator(
     else:
         p1 = _pipeline1_understand(q, state, prior_rows or [])
     rewritten_followup = str(understanding.resolved_question or "").strip()
-    if rewritten_followup and intent in {"analytics", "investigation"}:
+    is_sql_rewrite = bool(
+        re.search(r"\bSELECT\b[\s\S]*\bFROM\b|^\s*(?:WITH|UPDATE|DELETE|INSERT)\b|```", rewritten_followup, re.I)
+    )
+    if (
+        rewritten_followup and not is_sql_rewrite
+        and adapted.is_fragment and (prior_sql or prior_rows)
+        and intent in {"analytics", "investigation"}
+    ):
         p1["rewritten_question"] = rewritten_followup
         p1["is_follow_up"] = True
     requires_db = True
@@ -1220,47 +1260,14 @@ def run_adaptive_orchestrator(
                 p1 = {**(p1 or {}), "rewritten_question": expanded, "is_follow_up": True}
                 _log_stage("FOLLOWUP_PLAN_EXPANSION", {"expanded": expanded[:200]})
 
-    # ── Reliability: regenerate on a plan-check miss instead of dead-ending ──
-    # SQL is generated fresh by the LLM each turn, so an answerable question can
-    # fail the validation gate on one run and pass on the next. Give it a few
-    # attempts to reach a plan-compliant result before falling through to the
-    # existing gate. This only adds tries to runs that would otherwise fail; the
-    # authoritative gate below is unchanged, so it never lowers the correctness bar.
-    _MAX_SQL_ATTEMPTS = 3
-    p2 = {}
-    for _sql_attempt in range(_MAX_SQL_ATTEMPTS):
-        p2 = _run_four_stage_or_legacy_sql(
-            resolved, q, p1, state, db, execute_sql,
-            use_sap=use_sap, get_sap_session=get_sap_session,
-            prior_plan=prior_plan,
-            prior_sql=prior_sql,
-        )
-        # Only retry the one failure we can improve: a completed query whose
-        # result would be rejected by the plan gate. Errors, clarifications,
-        # data limitations and empty results are handled by the logic below.
-        if p2.get("error") or p2.get("data_limitation"):
-            break
-        _try_rows = p2.get("rows") or []
-        if not _try_rows:
-            break
-        try:
-            from ..plan_satisfaction import result_matches_analytical_intent as _rmai
-            _try_sem = (
-                (p2.get("verified_context") or {}).get("semantic_requirements")
-                if isinstance(p2.get("verified_context"), dict)
-                else None
-            ) or p1
-            _try_warnings = _rmai(
-                _try_rows, resolved or q, _try_sem, sql=str(p2.get("sql") or "")
-            )
-        except Exception:
-            _try_warnings = []
-        if not _try_warnings:
-            break
-        _log_stage(
-            "SQL_REGENERATE",
-            {"attempt": _sql_attempt + 1, "warnings": _try_warnings[:4]},
-        )
+    # The four-stage pipeline repairs the specific failed requirements within
+    # the request budget. Repeating discovery from scratch loses that diagnosis
+    # and adds model calls without changing the requested analytical plan.
+    p2 = _run_four_stage_or_legacy_sql(
+        resolved, q, p1, state, db, execute_sql,
+        use_sap=use_sap, get_sap_session=get_sap_session,
+        prior_plan=prior_plan, prior_sql=prior_sql,
+    )
     if p2.get("data_limitation"):
         msg = str(p2["data_limitation"])
         return {
@@ -1404,6 +1411,12 @@ def run_adaptive_orchestrator(
             "failure_class": failure_class,
             "type": "cannot_answer" if is_data_limitation else "pipeline_error",
             "sql": p2.get("sql") or "",
+            "attempted_sql": p2.get("sql") or "",
+            "sql_status": (
+                "result_validation_failed" if p2.get("error") == "semantic_mismatch"
+                else "execution_failed" if p2.get("error") == "sql_execution_failed"
+                else "validation_failed" if p2.get("sql") else "not_generated"
+            ),
             "data": [],
             "rowCount": 0,
             "summary": msg,
@@ -1417,7 +1430,12 @@ def run_adaptive_orchestrator(
                 "investigation_status": failure_class,
                 "failure_class": failure_class,
             },
-            "query_plan": {"investigation_state": state.to_dict(), "pipeline1": p1, "pipeline2": {k: p2.get(k) for k in ("error", "tables", "missing", "failure_class")}},
+            "query_plan": {
+                "investigation_state": state.to_dict(), "pipeline1": p1,
+                "pipeline2": {k: p2.get(k) for k in ("error", "tables", "missing", "failure_class")},
+                "verified_db_context": p2.get("verified_context"),
+                "pipeline_log": p2.get("pipeline_log"),
+            },
         }
 
     sql = p2["sql"]
@@ -1516,6 +1534,8 @@ def run_adaptive_orchestrator(
         else None
     ) or p1
     final_warnings = result_matches_analytical_intent(rows, resolved or q, semantic, sql=sql)
+    if p3.get("incomplete"):
+        final_warnings.append("The answer model identified missing requirements in the result.")
     answer_text = str(p3.get("answer") or summary)
     final_warnings.extend(answer_consistent_with_rows(answer_text, rows, resolved or q))
     if final_warnings:
@@ -1531,6 +1551,8 @@ def run_adaptive_orchestrator(
             "failure_class": "RESULT_VALIDATION_FAILED",
             "type": "semantic_mismatch",
             "sql": sql or "",
+            "attempted_sql": sql or "",
+            "sql_status": "result_validation_failed",
             "data": [],
             "rowCount": 0,
             "summary": msg,
@@ -1561,6 +1583,7 @@ def run_adaptive_orchestrator(
         "answer_status": "NO_DATA" if empty else "SUCCESS",
         "failure_class": "NO_DATA" if empty else "SUCCESS",
         "sql": sql,
+        "sql_status": "executed",
         "data": rows,
         "rowCount": len(rows),
         "summary": summary,
@@ -1572,11 +1595,7 @@ def run_adaptive_orchestrator(
         "llm_calls": 4,
         "tables_used": tables,
         "resolved_question": resolved,
-        "suggested_followups": p3.get("follow_up_suggestions") or [
-            "Which country?",
-            "And industry?",
-            "Show the top 5.",
-        ],
+        "suggested_followups": p3.get("follow_up_suggestions") or [],
         "query_plan": {
             "investigation_state": state.to_dict(),
             "verified_db_context": p2.get("verified_context"),

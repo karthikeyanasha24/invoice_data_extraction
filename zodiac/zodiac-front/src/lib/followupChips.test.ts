@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { humanizeFollowups } from './followupChips.ts';
 
 describe('humanizeFollowups', () => {
-  it('maps semantic labels to canonical questions', () => {
+  it('shortens labels while preserving the question scope', () => {
     const chips = humanizeFollowups([
       'Customer contribution for the current product/revenue set',
       'Country / region (LAND1) breakdown',
@@ -16,12 +16,12 @@ describe('humanizeFollowups', () => {
       'Show suppliers',
       'Show inventory',
     ]);
-    assert.equal(chips[1].question, 'Show their regions.');
+    assert.equal(chips[1].question, 'Country / region (LAND1) breakdown');
   });
 
   it('does not remap concentration suggestions to supplier listing', () => {
     const chips = humanizeFollowups(['Supplier concentration by PO share']);
-    assert.equal(chips[0].question, 'Show supplier concentration.');
+    assert.equal(chips[0].question, 'Supplier concentration by PO share');
   });
 
   it('keeps concentration follow-ups distinct from R3 supplier listing', () => {
@@ -38,11 +38,16 @@ describe('humanizeFollowups', () => {
 
   it('keeps R3 supplier listing distinct from concentration', () => {
     const chips = humanizeFollowups(['Vendors sourcing the current materials (PO grain, not invoice COGS)']);
-    assert.equal(chips[0].question, 'Show their suppliers.');
+    assert.equal(chips[0].question, 'Vendors sourcing the current materials (PO grain, not invoice COGS)');
   });
 
   it('strips leftover SAP parentheticals', () => {
     const chips = humanizeFollowups(['Something custom (VBRK.FKDAT)']);
     assert.equal(chips[0].label, 'Something custom');
+  });
+
+  it('does not drop years, limits, or metrics from an analytical follow-up', () => {
+    const question = 'Compare the top five countries by billed sales in 2000 and 2001, including absolute and percentage change.';
+    assert.equal(humanizeFollowups([question])[0].question, question);
   });
 });
