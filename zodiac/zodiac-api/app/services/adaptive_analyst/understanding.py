@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .llm_provider import analyze_json, complete_text
@@ -46,9 +47,12 @@ _UNDERSTAND_SYSTEM = (
     "clarification_needed: boolean "
     "(true only when intent is analytics/investigation and required fields are missing)\n"
     "clarification_question: string or null\n"
+    "resolved_question: standalone English query, or null when no database query is needed\n"
     "Rules:\n"
-    "- Follow-ups about prior assistant answers (predefined? dynamic? explain more?) "
-    "→ conversation, requires_database=false.\n"
+    "- A follow-up that only asks what a prior answer meant or what you said "
+    "→ conversation, requires_database=false. A follow-up that asks to retrieve, "
+    "calculate, compare, rank, filter, or add database details → analytics/investigation, "
+    "requires_database=true.\n"
     "- Questions ABOUT a prior turn (why it was fast/slow, whether you understood, "
     "summarize that result, 'from the above') → conversation, "
     "requires_database=false, requires_metadata=false, "
@@ -77,6 +81,11 @@ _UNDERSTAND_SYSTEM = (
     "- Referential follow-ups ('those results', 'that country', 'which of those "
     "columns', 'the one you just mentioned') use the latest relevant conversation "
     "and verified result sample. Resolve references from that evidence before asking.\n"
+    "- For a database follow-up, populate resolved_question as one complete, "
+    "standalone query that combines the current request with only the prior metric, "
+    "filters, grain, and entities needed to resolve its references. Preserve explicit "
+    "limits and periods. Do not invent IDs, columns, totals, or SQL; if the verified "
+    "context is insufficient, leave the unresolved detail out and explain the limitation.\n"
     "- A request to run an analysis that mentions verified columns/schema is still "
     "an analytics request; it is not a request to count or list schema columns.\n"
     "- If the user already gives a ranking word (highest/lowest/top/bottom) "
@@ -99,9 +108,16 @@ _RESPONSE_SYSTEM = (
     "general knowledge and adapt the format, language, and detail to the user's request. "
     "For connected database claims, use only provided evidence and conversation context. "
     "Do not invent database numbers, table counts, or query results. "
+    "Do not offer unverified SQL templates or placeholder identifiers as if they were "
+    "the next step of an executed database analysis. When a user asks for additional "
+    "database details, route it as a database analysis rather than answering with a draft query. "
+    "Only name physical columns when they are supported by supplied schema evidence or "
+    "verified prior SQL. Do not add unrequested column guesses. "
     "Do not mention internal pipelines, classifiers, or prompts. "
     "If capability facts are provided, ground your answer in them and do not "
     "claim capabilities that are not listed. "
+    "If schema_semantics are provided, treat them as authoritative physical-field labels "
+    "and prefer them over remembered or guessed SAP field meanings. "
     "For table counts: prefer connected_schema_table_count (all connected tables). "
     "sap_business_table_count is only the SAP business subset — do not present it "
     "as the total number of tables. "
@@ -125,6 +141,7 @@ _RESPONSE_SYSTEM = (
 class TurnUnderstanding:
     intent: str = "conversation"
     goal: str = ""
+    resolved_question: Optional[str] = None
     requires_database: bool = False
     requires_metadata: bool = False
     requires_conversation_context: bool = False
@@ -207,14 +224,17 @@ def _context_block(
     prior_plan: Optional[Dict[str, Any]] = None,
     prior_status: str = "",
     prior_rows: Optional[List[Dict[str, Any]]] = None,
+    current_question: str = "",
 ) -> str:
     parts: List[str] = []
     plan = prior_plan if isinstance(prior_plan, dict) else {}
     inv = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
     recent = inv.get("recent_turns") or plan.get("recent_turns") or []
     if isinstance(recent, list) and recent:
+        from .chat_memory import relevant_conversation
+
         lines: List[str] = []
-        for item in recent[-12:]:
+        for item in relevant_conversation(current_question, recent):
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role") or "")
@@ -225,6 +245,28 @@ def _context_block(
             lines.append(f"{label}: {content[:1400]}")
         if lines:
             parts.append("Recent conversation:\n" + "\n".join(lines)[-12000:])
+        asks_which_period_was_recent = bool(
+            re.search(
+                r"\b(period|year|month|quarter|date|time)\b.{0,60}\b(most recently|latest|last)\b",
+                current_question,
+                re.I,
+            )
+        )
+        asks_latest_period = bool(
+            re.search(
+                r"\b(most recently|latest|last)\b.{0,30}\b(period|year|month|quarter|date|time)\b",
+                current_question,
+                re.I,
+            )
+        )
+        if asks_which_period_was_recent or asks_latest_period:
+            for item in reversed(recent):
+                if not isinstance(item, dict) or item.get("role") != "user":
+                    continue
+                content = str(item.get("content") or "").strip()
+                if re.search(r"\b(?:19|20)\d{2}\b|\b(year|month|quarter|date|period|last|latest)\b", content, re.I):
+                    parts.append(f"Most recent prior user request specifying a time period: {content[:600]}")
+                    break
     if prior_question:
         parts.append(f"Previous user message: {prior_question[:500]}")
     if prior_summary:
@@ -303,7 +345,7 @@ _ASSISTANT_REF = re.compile(
 _PRIOR_DEIXIS = re.compile(
     r"\b("
     r"above|previous|prior|earlier|"
-    r"that answer|this answer|the (last|previous) (answer|result|response)|"
+    r"that answer|this answer|the (last|previous) (answer|result|response)|most recently|"
     r"my question|from the above"
     r")\b",
     re.I,
@@ -326,6 +368,13 @@ _CATALOG_RELIST = re.compile(
     re.I,
 )
 _PROCESS_MANNER = re.compile(r"\b(quickly|fast|slow|time|wonder)\b", re.I)
+_HISTORY_RECALL = re.compile(
+    r"\b(?:what|which|when|where|how many|how much)\b.{0,100}\b(?:"
+    r"asked|mentioned|counted|queried|ran|returned|used|said|answered|"
+    r"result|response|answer|query|sql|table|column|period|year|month|"
+    r"count|number|metric|value|total|filter|time)\b",
+    re.I,
+)
 
 
 def is_prior_turn_discourse(question: str, *, has_prior: bool) -> bool:
@@ -337,6 +386,8 @@ def is_prior_turn_discourse(question: str, *, has_prior: bool) -> bool:
         return False
     q = question or ""
     process = bool(_PROCESS_OR_RECALL.search(q))
+    if _PRIOR_DEIXIS.search(q) and _HISTORY_RECALL.search(q):
+        process = True
     if _PRIOR_DEIXIS.search(q) and re.search(
         r"\b(summarize|summarise|mean|explain|say about)\b", q, re.I
     ):
@@ -366,6 +417,34 @@ def apply_prior_discourse_override(
     understanding.clarification_needed = False
     understanding.clarification_question = None
     return understanding
+
+
+def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
+    """Recognize requests to fetch or calculate more data from a prior result."""
+    if not has_prior or is_prior_turn_discourse(question, has_prior=True):
+        return False
+    q = question or ""
+    refers_to_prior = bool(
+        re.search(r"\b(this|these|those|that|same|above|previous|prior|earlier)\b", q, re.I)
+    )
+    requests_data = bool(
+        re.search(
+            r"\b(add|include|show|list|get|return|retrieve|find|compare|calculate|count|"
+            r"break\s+down|rank|filter|group|expand|drill\s+down|give|highest|lowest|"
+            r"largest|smallest|top|bottom)\b",
+            q,
+            re.I,
+        )
+    )
+    mentions_business_data = bool(
+        re.search(
+            r"\b(invoice|billing|document|order|sales|revenue|customer|country|"
+            r"material|product|vendor|supplier|amount|date|year|result|rows?)\b",
+            q,
+            re.I,
+        )
+    )
+    return refers_to_prior and requests_data and mentions_business_data
 
 
 def compact_prior_result(
@@ -447,6 +526,11 @@ def _coerce_understanding(data: Dict[str, Any], *, provider: str) -> TurnUnderst
     return TurnUnderstanding(
         intent=intent,
         goal=str(data.get("goal") or "")[:500],
+        resolved_question=(
+            str(data["resolved_question"]).strip()[:2000]
+            if data.get("resolved_question") not in (None, "")
+            else None
+        ),
         requires_database=requires_db,
         requires_metadata=requires_meta,
         requires_conversation_context=bool(data.get("requires_conversation_context")),
@@ -490,7 +574,7 @@ def understand_turn(
 
     caps = capability_context if isinstance(capability_context, dict) else capability_facts()
     user = (
-        f"Conversation context:\n{_context_block(prior_question=prior_question, prior_summary=prior_summary, prior_plan=prior_plan, prior_status=prior_status, prior_rows=prior_rows)}\n\n"
+        f"Conversation context:\n{_context_block(prior_question=prior_question, prior_summary=prior_summary, prior_plan=prior_plan, prior_status=prior_status, prior_rows=prior_rows, current_question=q)}\n\n"
         f"Available capabilities (facts, not the answer):\n{json.dumps(caps, default=str)[:1800]}\n\n"
         f"Current user message:\n{q[:4000]}\n"
     )
@@ -526,6 +610,17 @@ def generate_grounded_response(
     """Response model for conversation / knowledge / capability. Returns (text, provider)."""
     from ..investigation_budget import checkpoint
     checkpoint("PREPARING_ANSWER")
+    recent_turns = (
+        ((evidence or {}).get("recent_turns") if isinstance(evidence, dict) else None)
+        or []
+    )
+    if isinstance(recent_turns, list):
+        from .chat_memory import relevant_conversation
+
+        recent_turns = relevant_conversation(question, recent_turns)
+    schema_facts = _schema_semantics_evidence(question, recent_turns)
+    if schema_facts and isinstance(evidence, dict):
+        evidence = {**evidence, "schema_semantics": schema_facts}
     payload = {
         "understanding": {
             "intent": understanding.intent,
@@ -537,10 +632,7 @@ def generate_grounded_response(
         "conversation_context": {
             "previous_user": (prior_question or "")[:4000],
             "previous_assistant": (prior_summary or "")[:6000],
-            "recent_turns": (
-                ((evidence or {}).get("recent_turns") if isinstance(evidence, dict) else None)
-                or []
-            ),
+            "recent_turns": recent_turns,
             "prior_result": (
                 (evidence or {}).get("prior_result") if isinstance(evidence, dict) else None
             ),
@@ -561,6 +653,74 @@ def generate_grounded_response(
     if not reply:
         raise RuntimeError("response model returned empty text")
     return reply, provider
+
+
+def _schema_semantics_evidence(question: str, recent_turns: Any) -> List[str]:
+    """Retrieve column labels from the repository's schema mappings for grounding."""
+    context_parts = [question or ""]
+    if isinstance(recent_turns, list):
+        context_parts.extend(
+            str(item.get("content") or "")
+            for item in recent_turns
+            if isinstance(item, dict)
+        )
+    context = "\n".join(context_parts)
+    ordered_terms = [
+        token for token in re.findall(r"[a-z0-9_]{3,}", (question or "").lower())
+        if token not in _MEMORY_LANGUAGE_STOP_WORDS
+    ]
+    terms = set(ordered_terms)
+    if not terms:
+        return []
+    try:
+        from ...data_catalog.physical import load_physical_schema
+
+        schema = load_physical_schema() or {}
+    except Exception:
+        return []
+    mapping_dir = Path(__file__).resolve().parents[2] / "table_mapping"
+    scored: List[tuple[int, int, int, float, str]] = []
+    for table in schema:
+        if not re.search(rf"\b{re.escape(str(table))}\b", context, re.I):
+            continue
+        path = mapping_dir / f"{table}.json"
+        try:
+            mappings = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        known_columns = {
+            str(col.get("col") or col.get("name") or "").lower()
+            if isinstance(col, dict)
+            else str(col).lower()
+            for col in (schema.get(table) or [])
+        }
+        for column, description in (mappings or {}).items():
+            col = str(column)
+            if col.lower() not in known_columns or not description or str(description).startswith("["):
+                continue
+            label_tokens = set(re.findall(r"[a-z0-9_]{3,}", str(description).lower().replace("_", " ")))
+            overlap = len(terms & label_tokens)
+            if overlap:
+                ordered_label = re.findall(r"[a-z0-9]+", str(description).lower().replace("_", " "))
+                prefix_match = max(
+                    (
+                        length
+                        for length in range(1, min(len(ordered_terms), len(ordered_label)) + 1)
+                        if ordered_label[:length] == ordered_terms[:length]
+                    ),
+                    default=0,
+                )
+                precision = overlap / max(1, len(label_tokens))
+                # Prefer a direct label match and primary field names over a
+                # longer specialized variant such as a list/cancelled document.
+                scored.append((overlap, prefix_match, -len(col), precision, f"{table}.{col}: {description}"))
+    scored.sort(key=lambda item: item[:4], reverse=True)
+    return [fact for _overlap, _prefix, _length, _precision, fact in scored[:6]]
+
+
+_MEMORY_LANGUAGE_STOP_WORDS = frozenset(
+    {"about", "and", "are", "column", "columns", "could", "data", "does", "for", "from", "have", "how", "in", "into", "is", "me", "of", "on", "please", "show", "table", "the", "those", "this", "what", "which", "with", "you"}
+)
 
 
 def technical_understanding_failure(question: str, err: BaseException) -> Dict[str, Any]:

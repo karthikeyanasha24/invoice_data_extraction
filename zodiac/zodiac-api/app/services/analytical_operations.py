@@ -29,7 +29,7 @@ _TX_GRAIN_MARKERS = (
 _GROUP_PATTERNS: List[Tuple[str, str]] = [
     (r"\b(?:one row per|by|per|each)\s+(?:billing\s+)?(?:documents?|invoices?)\b", "document"),
     (r"\b(by|per|each|for each)\s+months?\b|\bmonthly\b", "month"),
-    (r"\b(by|per|each|for each)\s+years?\b|\byearly\b|\bannually\b|\bannual\b|\beach year\b", "year"),
+    (r"\b(by|per|each|for each)\s+(?:(?:calendar|fiscal|full|complete)\s+)?years?\b|\byearly\b|\bannually\b|\bannual\b|\beach year\b", "year"),
     (r"\b(by|per|each|for each)\s+quarters?\b|\bquarterly\b", "quarter"),
     (r"\b(by|per|each|for each)\s+countr(?:y|ies)\b", "country"),
     (r"\b(by|per|each|for each)\s+customers?\b", "customer"),
@@ -63,6 +63,8 @@ _WHICH_ENTITY = re.compile(
     re.I,
 )
 _RELATIVE_PERIODS = [
+    (r"\b(?:latest|most recent)\s+two\s+(?:(?:full|complete)\s+)?(?:calendar\s+)?years?\b", "latest_two_full_years"),
+    (r"\b(?:latest|most recent)\s+(?:(?:full|complete)\s+)?(?:calendar\s+)?years?\b", "latest_full_year"),
     (r"\bthis week\b", "this_week"),
     (r"\blast week\b", "last_week"),
     (r"\bthis month\b", "this_month"),
@@ -276,7 +278,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         ops["measure_concept"] = "revenue"
     elif re.search(r"\b(quantit(?:y|ies)|qty|billed quantity)\b", ql):
         ops["measure_concept"] = "quantity"
-    elif re.search(r"\b(sales order|sales document)\b", ql) and ops["aggregation"] == "COUNT":
+    elif re.search(r"\b(sales orders?|sales documents?)\b", ql) and ops["aggregation"] == "COUNT":
         ops["measure_concept"] = "sales_order"
     elif re.search(r"\b(sales|sold|sell|selling)\b", ql):
         ops["measure_concept"] = "sales"
@@ -513,13 +515,24 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         )
         increase = bool(re.search(_growth_cue, ql)) and not decline
         direction = "decline" if decline else "growth" if increase else "compare"
+        asks_for_both_changes = bool(
+            re.search(r"\bboth\b", ql)
+            and re.search(r"\babsolute\b", ql)
+            and re.search(r"\b(percent|percentage|%)\b", ql)
+        )
         ops["period_compare"] = {
             "type": "period_change",
             "base_period": {"year": ordered[0], "start": ordered[0], "end": ordered[0]},
             "comparison_period": {"year": ordered[-1], "start": ordered[-1], "end": ordered[-1]},
             "op": direction,
             "condition": "decreased" if decline else "increased" if increase else None,
-            "calculation": "percentage_change" if re.search(r"\b(percent|percentage|%|pct)\b", ql) else "difference",
+            "calculation": (
+                "both"
+                if asks_for_both_changes
+                else "percentage_change"
+                if re.search(r"\b(percent|percentage|%|pct)\b", ql)
+                else "difference"
+            ),
             "contribution": bool(ops.get("contribution")),
         }
         ops["compare"] = True
@@ -731,6 +744,7 @@ def merge_semantic_requirements(
     question: str, llm_req: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Fill gaps in LLM semantic JSON using generic analytical operations."""
+    ql = (question or "").lower()
     req = dict(llm_req or {})
     ops = extract_analytical_operations(question)
     req["analytical_operations"] = ops
@@ -739,17 +753,20 @@ def merge_semantic_requirements(
     for dim in ops.get("group_by") or []:
         if dim not in dims:
             dims.append(dim)
+    explicit_groups = list(ops.get("group_by") or [])
+    # The generic parser owns result grain when it found explicit grouping.
+    # Otherwise an LLM default such as customer/year can silently turn a total
+    # into a detailed breakdown, so clear dimensions for aggregate questions.
+    if explicit_groups:
+        dims = explicit_groups
+    elif ops.get("period_compare") or ops.get("aggregation") in {"SUM", "COUNT", "AVG"}:
+        dims = []
     req["dimensions"] = dims
-    req["group_by"] = list(ops.get("group_by") or [])
+    req["group_by"] = explicit_groups
 
     measure = req.get("measure") if isinstance(req.get("measure"), dict) else {}
-    concept = str(measure.get("concept") or ops.get("measure_concept") or "").strip()
-    agg = str(measure.get("aggregation") or ops.get("aggregation") or "").strip()
-    if ops.get("measure_concept") and not concept:
-        concept = str(ops["measure_concept"])
-    if ops.get("aggregation") and (not agg or agg.lower() in {"", "none", "null"}):
-        if not ops.get("negative_measure"):
-            agg = str(ops["aggregation"])
+    concept = str(ops.get("measure_concept") or measure.get("concept") or "").strip()
+    agg = str(ops.get("aggregation") or measure.get("aggregation") or "").strip()
     if ops.get("aggregation") == "COUNT":
         agg = "COUNT"
         if not concept:
@@ -765,11 +782,22 @@ def merge_semantic_requirements(
     if ops.get("ranking") and not ranking:
         req["ranking"] = dict(ops["ranking"])
     elif ops.get("ranking") and ranking:
-        ranking.setdefault("direction", ops["ranking"]["direction"])
-        ranking.setdefault("limit", ops["ranking"]["limit"])
+        # Explicitly parsed ranking words and counts are more reliable than an
+        # LLM-inferred default such as top 10 for "five countries ... highest".
+        ranking["direction"] = ops["ranking"]["direction"]
+        ranking["limit"] = ops["ranking"]["limit"]
         if ops["ranking"].get("partition_by"):
             ranking["partition_by"] = list(ops["ranking"]["partition_by"])
+        else:
+            ranking.pop("partition_by", None)
         req["ranking"] = ranking
+    elif not re.search(
+        r"\b(highest|lowest|largest|smallest|top|bottom|most|least|best|worst)\b",
+        ql,
+    ):
+        # Discard unsupported model-inferred ranking defaults (for example a
+        # top-10 limit on an ungrouped year-over-year total).
+        req.pop("ranking", None)
 
     if ops.get("partition_by"):
         req["partition_by"] = list(ops["partition_by"])
@@ -828,6 +856,36 @@ def merge_semantic_requirements(
         req["time_grain"] = ops["time_grain"]
     elif ops.get("time_grain"):
         req["time_grain"] = ops["time_grain"]
+
+    # A date field used to derive a calendar grain is not an additional
+    # grouping dimension. Remove date-shaped LLM guesses while retaining the
+    # explicit entities that the generic phrase parser found.
+    if ops.get("time_grain") in {"year", "month", "quarter"}:
+        explicit = set(ops.get("group_by") or [])
+        dimensions = [
+            str(dim).lower() for dim in (req.get("dimensions") or [])
+            if str(dim).lower() in explicit
+            or not (
+                str(dim).lower() in _DATE_COLS
+                or re.search(r"\b(date|time|year|month|quarter)\b", str(dim).lower())
+            )
+        ]
+        for dim in explicit:
+            if dim not in dimensions:
+                dimensions.append(dim)
+        req["dimensions"] = dimensions
+
+    # A comparison of two periods without a named entity is a company-level
+    # comparison. Do not let an inferred default turn totals into a customer
+    # or product breakdown.
+    if ops.get("period_compare") and not ops.get("group_by") and not ops.get("contribution"):
+        explicit_entities = any(
+            re.search(rf"\b{re.escape(word)}\b", ql)
+            for word in _ENTITY_WORDS
+        )
+        if not explicit_entities:
+            req["dimensions"] = []
+            req["group_by"] = []
 
     req["share"] = bool(ops.get("share"))
     req["growth"] = bool(ops.get("growth"))

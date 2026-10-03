@@ -154,8 +154,9 @@ def test_relative_last_month_bounds_are_calendar():
     assert end == date(2026, 9, 1)
     q = "Show invoices from last month."
     req = required_semantics(q)
-    assert req["date_filter"]["start_yyyymmdd"] == "20260801"
-    assert req["date_filter"]["end_yyyymmdd"] == "20260901"
+    dynamic_start, dynamic_end = resolve_relative_period_bounds("last_month", today=date.today())
+    assert req["date_filter"]["start_yyyymmdd"] == dynamic_start.strftime("%Y%m%d")
+    assert req["date_filter"]["end_yyyymmdd"] == dynamic_end.strftime("%Y%m%d")
     sql_bad = 'SELECT * FROM "VBRK" LIMIT 10'
     assert sql_satisfies_analytical_intent(sql_bad, q) is False
     sql_ok = (

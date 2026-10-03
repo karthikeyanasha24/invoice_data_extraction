@@ -38,6 +38,12 @@ _GROWTH_RANK = re.compile(
     r")\b",
     re.I,
 )
+_RESULT_RANK = re.compile(
+    r"\b(?:which|what)\b.{0,70}\b(?:highest|lowest|largest|smallest|"
+    r"top|bottom)\b.{0,70}\b(?:that|this|these|those)\s+"
+    r"(?:result|list|rows?|countries?|customers?|products?|materials?)\b",
+    re.I,
+)
 
 _CONCEPT_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "supplier": ("supplier", "vendor", "lifnr", "name1", "supplier_name", "vendor_name"),
@@ -62,6 +68,8 @@ def is_result_scoped_followup(question: str, *, has_prior_rows: bool) -> bool:
     if _APPEARS_MOST.search(q) and _FOLLOWUP_HINT.search(q):
         return True
     if _APPEARS_MOST.search(q) and len(q.split()) <= 12:
+        return True
+    if _RESULT_RANK.search(q):
         return True
     if has_prior_rows and _GROWTH_RANK.search(q):
         return True
@@ -124,9 +132,33 @@ def _to_float(v: Any) -> Optional[float]:
     try:
         if v is None or v == "":
             return None
-        return float(v)
+        return float(str(v).replace(",", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def _rank_measure_column(rows: List[Dict[str, Any]]) -> Optional[str]:
+    """Choose a numeric result measure from returned column names and values."""
+    if not rows:
+        return None
+    keys = list(rows[0].keys())
+    preferred = (
+        "total billed sales", "total_sales", "billed_sales", "total_revenue",
+        "revenue", "sales", "total_amount", "amount", "netwr", "total",
+    )
+    normalized = {str(key).lower().replace("_", " "): key for key in keys}
+    for alias in preferred:
+        actual = normalized.get(alias.replace("_", " "))
+        if actual is not None and any(_to_float(row.get(actual)) is not None for row in rows):
+            return str(actual)
+    excluded = ("id", "number", "currency", "year", "month", "period", "rank", "pct", "percent")
+    for key in keys:
+        name = str(key).lower()
+        if any(term in name for term in excluded):
+            continue
+        if any(_to_float(row.get(key)) is not None for row in rows):
+            return str(key)
+    return None
 
 
 def _rank_by_column(rows: List[Dict[str, Any]], col: str, *, descending: bool = True) -> List[Dict[str, Any]]:
@@ -226,10 +258,18 @@ def try_answer_from_prior_rows(
         return None
     # Explaining, summarizing, or asking why requires a model-grounded answer.
     # A reference to "this result" alone is not a frequency/count request.
-    if not _GROWTH_RANK.search(question or "") and not _APPEARS_MOST.search(question or ""):
+    if (
+        not _GROWTH_RANK.search(question or "")
+        and not _APPEARS_MOST.search(question or "")
+        and not _RESULT_RANK.search(question or "")
+    ):
         return None
     artifact = (prior_plan or {}).get("result_artifact") or {}
-    if artifact.get("truncated"):
+    try:
+        artifact_truncated = bool(artifact.get("truncated")) or int(artifact.get("row_count") or 0) > len(rows)
+    except (TypeError, ValueError):
+        artifact_truncated = bool(artifact.get("truncated"))
+    if artifact_truncated:
         # A stored sample cannot establish the most frequent entity or largest
         # change across the full result. Re-query rather than claiming accuracy.
         return {
@@ -319,6 +359,48 @@ def try_answer_from_prior_rows(
             "query_plan": prior_plan
             or {"reused_prior_result": True, "missing_concept": "period_change"},
             "meta": {"investigation_status": "completed", "followup": "needs_growth_sql"},
+        }
+
+    if _RESULT_RANK.search(question or ""):
+        concept = _detect_concept(question)
+        labels = _matching_columns(rows, concept) if concept else []
+        measure_col = _rank_measure_column(rows)
+        if not labels or not measure_col:
+            return {
+                "needs_plan_expansion": True,
+                "missing_concept": concept or "result_dimension_or_measure",
+                "query_plan": prior_plan or {},
+            }
+        descending = not bool(re.search(r"\b(lowest|smallest|least|bottom)\b", question, re.I))
+        ranked = _rank_by_column(rows, measure_col, descending=descending)
+        if not ranked:
+            return {
+                "needs_plan_expansion": True,
+                "missing_concept": measure_col,
+                "query_plan": prior_plan or {},
+            }
+        label_col = labels[0]
+        winner = ranked[0]
+        value = winner.get(measure_col)
+        summary = (
+            f"{winner.get(label_col)} ranks highest in the prior result by {measure_col} ({value})."
+            if descending
+            else f"{winner.get(label_col)} ranks lowest in the prior result by {measure_col} ({value})."
+        )
+        return {
+            "mode": "result_first",
+            "status": "completed",
+            "answer_status": "SUCCESS",
+            "sql": prior_sql or "",
+            "sql_generation_method": "result_first_rank",
+            "pipeline": "result_first_followup",
+            "rowCount": 1,
+            "data": [winner],
+            "summary": summary,
+            "answer": summary,
+            "charts": [],
+            "query_plan": prior_plan or {"reused_prior_result": True},
+            "meta": {"investigation_status": "completed", "followup": "result_rank"},
         }
 
     concept = _detect_concept(question)

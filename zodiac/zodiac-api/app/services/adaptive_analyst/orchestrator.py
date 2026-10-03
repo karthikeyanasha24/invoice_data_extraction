@@ -859,6 +859,7 @@ def run_adaptive_orchestrator(
         analytics_clarification_payload,
         capability_facts,
         generate_grounded_response,
+        is_referential_database_action,
         is_sufficiently_specified_ranking,
         understand_turn,
     )
@@ -903,6 +904,33 @@ def run_adaptive_orchestrator(
         "clarification",
     }:
         understanding.intent = "analytics"
+        understanding.clarification_needed = False
+        understanding.clarification_question = None
+        intent = "analytics"
+
+    # Answer a ranking follow-up from the complete, verified prior result when
+    # its requested dimension and measure are already present in those rows.
+    # If the saved result is only a sample, continue through the query pipeline.
+    if prior_rows:
+        from ..result_first_followup import try_answer_from_prior_rows
+
+        reused = try_answer_from_prior_rows(
+            q, prior_rows, prior_sql=prior_sql, prior_plan=prior_plan
+        )
+        if reused and reused.get("answer_status") == "SUCCESS" and not reused.get("needs_plan_expansion"):
+            summary = str(reused.get("summary") or reused.get("answer") or "")
+            state.remember_turn(q, summary, mode="result_first")
+            qp = reused.get("query_plan") if isinstance(reused.get("query_plan"), dict) else {}
+            reused["query_plan"] = {**qp, "investigation_state": state.to_dict()}
+            return _attach_understanding_meta(reused, understanding)
+
+    if is_referential_database_action(
+        q,
+        has_prior=bool(prior_rows or prior_question or prior_summary or state.recent_turns),
+    ):
+        understanding.intent = "analytics"
+        understanding.requires_database = True
+        understanding.requires_metadata = False
         understanding.clarification_needed = False
         understanding.clarification_question = None
         intent = "analytics"
@@ -1122,6 +1150,10 @@ def run_adaptive_orchestrator(
         }
     else:
         p1 = _pipeline1_understand(q, state, prior_rows or [])
+    rewritten_followup = str(understanding.resolved_question or "").strip()
+    if rewritten_followup and intent in {"analytics", "investigation"}:
+        p1["rewritten_question"] = rewritten_followup
+        p1["is_follow_up"] = True
     requires_db = True
     route = "database"
     skip_clarify = True
@@ -1623,7 +1655,14 @@ def run_adaptive_orchestrator(
         }
     except Exception:
         pass
-    state.remember_turn(q, str(out.get("summary") or ""), mode="database_analysis")
+    memory_answer = str(out.get("summary") or "")
+    if sql:
+        from .chat_memory import compact_sql_lineage
+
+        lineage = compact_sql_lineage(sql)
+        if lineage:
+            memory_answer = f"{memory_answer}\nVerified SQL structure: {lineage}"
+    state.remember_turn(q, memory_answer, mode="database_analysis")
     out.setdefault("query_plan", {})["investigation_state"] = {
         **state.to_dict(),
         "mode": "database_analysis",

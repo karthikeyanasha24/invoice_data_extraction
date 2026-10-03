@@ -47,6 +47,16 @@ _FOLLOWUP_LIMIT = re.compile(
     r"\b(top|limit|only)\s+(\d+|one|two|three|four|five|ten|twenty)\b", re.I
 )
 _FOLLOWUP_YEAR = re.compile(r"\b(20\d{2}|19\d{2})\b")
+_UNRESOLVED_SQL_VALUE = re.compile(
+    r"\b(?:placeholder|replace_me|insert_value|sample_value|your_[a-z0-9_]+|[a-z0-9_]+_here)\b"
+    r"|<[^>]+>|\.\.\.",
+    re.I,
+)
+
+
+def _contains_unresolved_sql_value(sql: str) -> bool:
+    """Reject template markers instead of executing guessed placeholder data."""
+    return bool(_UNRESOLVED_SQL_VALUE.search(sql or ""))
 
 
 @dataclass
@@ -93,6 +103,9 @@ def _apply_followup_to_context(
     if not isinstance(prev_ctx, dict) or not prev_ctx.get("tables"):
         return None
     q = (question or "").lower()
+    from .adaptive_analyst.understanding import is_referential_database_action
+
+    referential_action = is_referential_database_action(question, has_prior=True)
     is_followup = (
         len(q.split()) <= 8
         and (
@@ -108,6 +121,8 @@ def _apply_followup_to_context(
 
         if is_result_scoped_followup(question, has_prior_rows=True) and prev_ctx.get("tables"):
             is_followup = True
+    if referential_action:
+        is_followup = True
     if not is_followup:
         return None
     ctx = VerifiedDbContext(
@@ -116,7 +131,7 @@ def _apply_followup_to_context(
         columns=list(prev_ctx.get("columns") or []),
         joins=list(prev_ctx.get("joins") or []),
         relationships=list(prev_ctx.get("relationships") or []),
-        pipeline_log={"followup_reuse": True},
+        pipeline_log={"followup_reuse": True, "followup_requery": referential_action},
     )
     _log_stage(ctx, "PIPELINE_1_TABLE_SELECTION", {"reused": True, "tables": ctx.tables})
     _log_stage(ctx, "PIPELINE_2_COLUMN_SELECTION", {"reused": True, "columns": ctx.columns})
@@ -582,6 +597,10 @@ def pipeline25_query_plan(question: str, ctx: VerifiedDbContext, db: Optional[Se
     if budget is not None:
         budget.checkpoint("query_planning")
 
+    if not _resolve_latest_data_years(question, ctx, db):
+        _log_stage(ctx, "LATEST_DATA_YEARS_UNRESOLVED", {"clarification": (ctx.semantic_requirements or {}).get("clarification")})
+        return
+
     # Resolve relative YoY years from data when the plan requires two periods without literals.
     _resolve_relative_period_years(question, ctx, db)
 
@@ -725,6 +744,179 @@ def _resolve_relative_period_years(
             pass
 
 
+def _resolve_latest_data_years(
+    question: str, ctx: VerifiedDbContext, db: Optional[Session]
+) -> bool:
+    """Resolve latest full data year(s) from the selected fact date column."""
+    sem = ctx.semantic_requirements if isinstance(ctx.semantic_requirements, dict) else {}
+    tf = sem.get("time_filter") if isinstance(sem.get("time_filter"), dict) else {}
+    relative = str(tf.get("relative") or "").lower()
+    if relative not in {"latest_full_year", "latest_two_full_years"}:
+        return True
+    if tf.get("start_yyyymmdd") and tf.get("end_yyyymmdd"):
+        return True
+    if db is None:
+        sem["clarification"] = {
+            "type": "latest_data_period",
+            "message": "I need the connected database to identify the latest complete year in the selected data.",
+        }
+        return False
+
+    from .analytical_operations import classify_column_role
+
+    candidates: List[Tuple[str, str]] = []
+    for qualified in ctx.columns or []:
+        raw = str(qualified)
+        if "." not in raw:
+            continue
+        table, column = raw.rsplit(".", 1)
+        if has_column(table, column) and classify_column_role(table, column) == "date":
+            candidate = (resolve_table_name(table) or table, column)
+            if candidate not in candidates:
+                candidates.append(candidate)
+    for table in ctx.tables:
+        resolved_table = resolve_table_name(table) or table
+        try:
+            from ..data_catalog.physical import column_names
+
+            columns = column_names(resolved_table) or []
+        except Exception:
+            columns = []
+        for column in columns:
+            if classify_column_role(resolved_table, column) == "date":
+                candidate = (resolved_table, column)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+    if not candidates:
+        sem["clarification"] = {
+            "type": "latest_data_period",
+            "message": "I couldn't identify a date field for the requested latest-year analysis. Please specify the date field or calendar years.",
+        }
+        return False
+
+    # Prefer the date whose schema meaning matches the requested business event
+    # (for example billing date for billed sales, or creation date for orders).
+    # Meanings come from the checked-in physical-field catalog, so new tables
+    # and fields participate without adding table-specific query rules here.
+    question_tokens = set(re.findall(r"[a-z0-9]+", (question or "").lower()))
+    event_terms: List[set[str]] = []
+    if question_tokens & {"billing", "billed", "invoice", "invoices"}:
+        event_terms.append({"billing", "invoice"})
+    if question_tokens & {"created", "creation", "create"}:
+        event_terms.append({"created", "creation"})
+    if question_tokens & {"posting", "posted"}:
+        event_terms.append({"posting"})
+    if question_tokens & {"order", "orders"}:
+        event_terms.append({"order", "sales", "document"})
+    try:
+        from pathlib import Path
+
+        import json
+
+        mapping_dir = Path(__file__).resolve().parents[1] / "table_mapping"
+        labels_by_field: Dict[Tuple[str, str], str] = {}
+        for table in {table for table, _column in candidates}:
+            path = mapping_dir / f"{table.upper()}.json"
+            try:
+                mapping = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for column, label in mapping.items():
+                labels_by_field[(table.upper(), str(column).upper())] = str(label).replace("_", " ").lower()
+    except Exception:
+        labels_by_field = {}
+
+    def _date_candidate_score(candidate: Tuple[str, str]) -> int:
+        label = labels_by_field.get((candidate[0].upper(), candidate[1].upper()), "")
+        label_tokens = set(re.findall(r"[a-z0-9]+", label))
+        score = 0
+        for terms in event_terms:
+            if label_tokens & terms:
+                score += 3
+        if "date" in label_tokens or "day" in label_tokens:
+            score += 1
+        return score
+
+    candidates.sort(key=_date_candidate_score, reverse=True)
+
+    from sqlalchemy import text
+    from datetime import date
+
+    selected_years: List[str] = []
+    selected_column: Optional[Tuple[str, str]] = None
+    for table, column in candidates:
+        table_q = table.replace('"', '""')
+        column_q = column.replace('"', '""')
+        expression = f'SUBSTRING(TRIM(CAST("{table_q}"."{column_q}" AS TEXT)), 1, 4)'
+        sql = (
+            f"SELECT DISTINCT {expression} AS y FROM \"{table_q}\" "
+            f"WHERE {expression} ~ '^[12][0-9]{{3}}$' ORDER BY y DESC LIMIT 20"
+        )
+        try:
+            rows = db.execute(text(sql)).fetchall()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            continue
+        years = [str(row[0]) for row in rows if row and re.fullmatch(r"(?:19|20)\d{2}", str(row[0]))]
+        # The current calendar year is still in progress. Historical years are
+        # resolved from the data itself rather than from the wall-clock year.
+        complete_candidates = [year for year in years if int(year) < date.today().year]
+        count = 2 if relative == "latest_two_full_years" else 1
+        if len(complete_candidates) >= count:
+            selected_years = complete_candidates[:count]
+            selected_column = (table, column)
+            break
+
+    if not selected_years or not selected_column:
+        needed = 2 if relative == "latest_two_full_years" else 1
+        sem["clarification"] = {
+            "type": "latest_data_period",
+            "message": f"I couldn't verify {needed} completed calendar year(s) for the selected date field. Specify the years to compare or a different date field.",
+        }
+        return False
+
+    chronological = sorted(selected_years)
+    first_year = int(chronological[0])
+    last_year = int(chronological[-1])
+    start = f"{first_year:04d}-01-01"
+    end = f"{last_year + 1:04d}-01-01"
+    tf.update(
+        {
+            "type": "relative_period",
+            "concept": "relative_period",
+            "relative": relative,
+            "start": start,
+            "end": end,
+            "start_yyyymmdd": start.replace("-", ""),
+            "end_yyyymmdd": end.replace("-", ""),
+            "years": chronological,
+        }
+    )
+    tf.pop("value", None)
+    sem["time_filter"] = tf
+    sem.pop("clarification", None)
+    sem["required_semantics"] = {
+        **(sem.get("required_semantics") if isinstance(sem.get("required_semantics"), dict) else {}),
+        "date_filter": {
+            "type": "latest_data_years",
+            "period": relative,
+            "years": chronological,
+            "start": start,
+            "end": end,
+        },
+    }
+    ctx.semantic_requirements = sem
+    _log_stage(
+        ctx,
+        "LATEST_DATA_YEARS_RESOLVED",
+        {"table": selected_column[0], "column": selected_column[1], "years": chronological},
+    )
+    return True
+
+
 def _period_has_concrete_years(period: Dict[str, Any]) -> bool:
     for key in ("base_period", "comparison_period"):
         val = period.get(key)
@@ -819,6 +1011,8 @@ def _validate_sql_against_context(sql: str, ctx: VerifiedDbContext, db: Session)
     if budget is not None:
         budget.checkpoint("VALIDATING_SQL")
     errors = list(_schema_violations(sql) or [])
+    if _contains_unresolved_sql_value(sql):
+        errors.append("SQL contains an unresolved placeholder instead of a verified value")
     errors.extend(detect_expression_as_column_errors(sql))
     if errors:
         return errors
@@ -1196,6 +1390,8 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         "RIGHT: SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 4) "
         "Do NOT reference any table not listed under Verified tables. "
         "Quote identifiers. CAST text numerics with NULLIF(TRIM(...),''). "
+        "Never invent document/customer IDs or use placeholder values, ellipses, or template markers. "
+        "For a follow-up, preserve the prior query's verified scope or use it as a subquery; if the scope cannot be preserved, ask for clarification. "
         "Do not invent tables. Do not add restrictive date filters unless the question asks for a period. "
         "For show/list/filter questions (e.g. negative sales in a year): return ROW-LEVEL rows — NO SUM(), NO GROUP BY. "
         "If the plan has group_by (month/year/customer/...): SELECT the group expression AND the measure, GROUP BY the group expression. Never return a single grand total. "
@@ -1317,6 +1513,12 @@ def _run_four_stage_body(
 
     budget = current_budget()
     ctx = _apply_followup_to_context(question, prior_plan)
+    if ctx is not None and ctx.pipeline_log.get("followup_requery"):
+        prior_tables = list(ctx.tables)
+        pipeline1_table_selection(question, ctx)
+        ctx.tables = _dedupe_tables(prior_tables + ctx.tables)
+        pipeline2_column_selection(question, ctx)
+        pipeline25_query_plan(question, ctx, db)
     if ctx is None:
         ctx = VerifiedDbContext(question=question)
         pipeline1_table_selection(question, ctx)
@@ -1356,6 +1558,23 @@ def _run_four_stage_body(
 
     if ctx.tables and ctx.columns and not ctx.query_plan:
         pipeline25_query_plan(question, ctx, db)
+
+    period_clarification = (ctx.semantic_requirements or {}).get("clarification")
+    if isinstance(period_clarification, dict) and period_clarification.get("type") == "latest_data_period":
+        message = str(period_clarification.get("message") or "Please specify a calendar year for this analysis.")
+        return {
+            "error": "clarification_required",
+            "error_kind": "clarification",
+            "error_class": "CLARIFICATION",
+            "detail": [message],
+            "user_message": message,
+            "clarification": period_clarification,
+            "tables": ctx.tables,
+            "sql": "",
+            "rows": [],
+            "verified_context": ctx.to_dict(),
+            "pipeline_log": ctx.pipeline_log,
+        }
 
     if prior_sql and ctx.pipeline_log.get("followup_reuse"):
         sql = pipeline3_sql_generation(

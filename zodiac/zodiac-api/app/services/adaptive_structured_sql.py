@@ -2497,15 +2497,33 @@ def _apply_period_compare_fields(plan: StructuredQueryPlan, semantic: Dict[str, 
     period_a = f"SUM(CASE WHEN {year_expr} = '{y_a}' THEN {amt} ELSE 0 END)"
     period_b = f"SUM(CASE WHEN {year_expr} = '{y_b}' THEN {amt} ELSE 0 END)"
     calc = str(period.get("calculation") or "difference").lower()
-    if "percent" in calc or calc == "percentage_change":
+    change = f"({period_b} - {period_a})"
+    change_alias = "change"
+    change_fields = [
+        PlanField(type="expression", expression=period_a, alias="period_a", purpose="measure"),
+        PlanField(type="expression", expression=period_b, alias="period_b", purpose="measure"),
+    ]
+    change_fields.append(PlanField(type="expression", expression=change, alias="change", purpose="measure"))
+    if calc in {"both", "absolute_and_percent", "absolute_and_percentage_change"}:
+        pct_change = (
+            f"CASE WHEN {period_a} <> 0 "
+            f"THEN (({period_b} - {period_a}) / NULLIF({period_a}, 0)) * 100 END"
+        )
+        change_fields.append(
+            PlanField(type="expression", expression=pct_change, alias="pct_change", purpose="measure")
+        )
+        change_alias = "pct_change"
+    elif "percent" in calc or calc == "percentage_change":
         change = (
             f"CASE WHEN {period_a} <> 0 "
             f"THEN (({period_b} - {period_a}) / NULLIF({period_a}, 0)) * 100 END"
         )
         change_alias = "pct_change"
-    else:
-        change = f"({period_b} - {period_a})"
-        change_alias = "change"
+        change_fields = [
+            PlanField(type="expression", expression=period_a, alias="period_a", purpose="measure"),
+            PlanField(type="expression", expression=period_b, alias="period_b", purpose="measure"),
+            PlanField(type="expression", expression=change, alias=change_alias, purpose="measure"),
+        ]
 
     # Keep dimension columns; replace measure aggregates with period compare fields.
     kept: List[PlanField] = []
@@ -2519,10 +2537,7 @@ def _apply_period_compare_fields(plan: StructuredQueryPlan, semantic: Dict[str, 
         if is_measure or is_year:
             continue
         kept.append(pf)
-    kept.append(PlanField(type="expression", expression=period_a, alias="period_a", purpose="measure"))
-    kept.append(PlanField(type="expression", expression=period_b, alias="period_b", purpose="measure"))
-    kept.append(PlanField(type="expression", expression=change, alias=change_alias, purpose="measure"))
-    plan.select = kept
+    plan.select = kept + change_fields
 
     condition = str(period.get("condition") or period.get("op") or "").lower()
     if condition in {"increased", "growth", "increase"}:

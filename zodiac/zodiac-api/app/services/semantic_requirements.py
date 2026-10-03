@@ -205,15 +205,31 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
             relative = relative.lower().replace(" ", "_")
     date_filter = None
     if relative and str(relative).lower() not in {"true", "false", "none", ""}:
-        start, end = resolve_relative_period_bounds(str(relative))
-        date_filter = {
-            "type": "relative_period",
-            "period": str(relative),
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "start_yyyymmdd": start.strftime("%Y%m%d"),
-            "end_yyyymmdd": end.strftime("%Y%m%d"),
-        }
+        relative_name = str(relative).lower()
+        if relative_name in {"latest_full_year", "latest_two_full_years"}:
+            start_text = tf.get("start")
+            end_text = tf.get("end")
+            start_digits = tf.get("start_yyyymmdd")
+            end_digits = tf.get("end_yyyymmdd")
+            date_filter = {
+                "type": "latest_data_years",
+                "period": relative_name,
+                "count": 2 if relative_name == "latest_two_full_years" else 1,
+                "start": start_text,
+                "end": end_text,
+                "start_yyyymmdd": start_digits,
+                "end_yyyymmdd": end_digits,
+            }
+        else:
+            start, end = resolve_relative_period_bounds(relative_name)
+            date_filter = {
+                "type": "relative_period",
+                "period": relative_name,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "start_yyyymmdd": start.strftime("%Y%m%d"),
+                "end_yyyymmdd": end.strftime("%Y%m%d"),
+            }
     elif ops.get("years") and not period and len(ops.get("years") or []) == 1:
         years = [str(y) for y in (ops.get("years") or [])]
         date_filter = {

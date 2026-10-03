@@ -11,8 +11,10 @@ Answers are derived from the authorized schema catalog dict
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 CAPABILITY = "DATABASE_METADATA"
@@ -72,6 +74,11 @@ _SEARCH_CUE = re.compile(
     r"billing|vendor|product|order)|have\s+(?:a\s+)?(?:column|field)|"
     r"which\s+tables?\s+(?:have|contain|include)|"
     r"tables?\s+(?:with|for|about))\b",
+    re.I,
+)
+_FIELD_TARGET = re.compile(
+    r"\b(?:column\s+names?|fields?)\s+(?:for|representing|that\s+represent|"
+    r"corresponding\s+to)\s+(.+?)(?:[?.!]|$)",
     re.I,
 )
 _CONTEXTUAL_CATALOG_REFERENCE = re.compile(
@@ -329,6 +336,20 @@ def classify_metadata_operation(
     ql = q.lower()
     table = _resolve_table_mention(q, schema_n) if schema_n else None
     terms = _search_terms(q)
+    field_match = _FIELD_TARGET.search(q)
+    if table and field_match:
+        targets = [
+            re.sub(r"\s+", " ", part.strip(" ,;:-"))
+            for part in re.split(r"\s*(?:,|\band\b|\bor\b)\s*", field_match.group(1), flags=re.I)
+            if part.strip(" ,;:-")
+        ]
+        if targets:
+            return MetadataPlan(
+                operation=SEARCH_COLUMNS,
+                table_name=table,
+                search_terms=targets[:8],
+                confidence=0.94,
+            )
 
     # Named-table describe / list columns
     if table and (
@@ -505,6 +526,56 @@ def execute_metadata_plan(
 
     if op == SEARCH_COLUMNS:
         terms = [t.lower() for t in plan.search_terms]
+        if plan.table_name and terms:
+            table_name = plan.table_name
+            mapped: Dict[str, str] = {}
+            mapping_path = Path(__file__).resolve().parents[2] / "table_mapping" / f"{table_name.upper()}.json"
+            try:
+                mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+                mapped = {str(column).lower(): str(label).replace("_", " ").lower() for column, label in mapping.items()}
+            except Exception:
+                mapped = {}
+
+            selected: List[Dict[str, Any]] = []
+            table_columns = {str(c["col"]).lower(): c for c in schema_n.get(table_name, [])}
+            for term in terms:
+                normalized_term = re.sub(r"[^a-z0-9]+", " ", term).strip()
+                query_tokens = set(normalized_term.split()) - _STOP_TOKENS
+                ranked: List[Tuple[int, int, int, str, str]] = []
+                for column, description in mapped.items():
+                    if column not in table_columns or not description or description.startswith("["):
+                        continue
+                    description_tokens = set(re.findall(r"[a-z0-9]+", description)) - _STOP_TOKENS
+                    overlap = len(query_tokens & description_tokens)
+                    if not overlap:
+                        continue
+                    normalized_description = re.sub(r"[^a-z0-9]+", " ", description).strip()
+                    prefix_match = int(normalized_description.startswith(normalized_term))
+                    complete_match = int(bool(query_tokens) and query_tokens <= description_tokens)
+                    ranked.append((complete_match, prefix_match, overlap, column, description))
+                if ranked:
+                    # File order breaks otherwise equal matches in favor of the
+                    # primary field before similarly named specialized fields.
+                    best = max(ranked, key=lambda item: (item[0], item[1], item[2]))
+                    column = best[3]
+                    if not any(row.get("column", "").lower() == column for row in selected):
+                        selected.append({
+                            "table": table_name,
+                            "column": table_columns[column]["col"],
+                            "type": table_columns[column]["type"],
+                            "matched_term": term,
+                            "meaning": best[4],
+                        })
+            if selected:
+                labels = [f"{row['matched_term']} → {row['table']}.{row['column']}" for row in selected]
+                return MetadataResult(
+                    operation=op,
+                    value=selected,
+                    rows=selected,
+                    summary=f"Schema meaning matches: {', '.join(labels)}.",
+                    evidence={"source": "schema_catalog_and_column_mappings", "table": table_name, "match_count": len(selected)},
+                )
+
         hits: List[Dict[str, Any]] = []
         for t in tables_sorted:
             for c in schema_n[t]:
@@ -539,31 +610,43 @@ def execute_metadata_plan(
 
     if op == SEARCH_TABLES:
         terms = [t.lower() for t in plan.search_terms]
-        # Synonym seeds for common business topics → known SAP table families
-        topic_hints = {
-            "customer": ("kna1", "kunnr", "kunag", "name1"),
-            "sales": ("vbak", "vbap", "vbrk", "vbrp", "netwr"),
-            "billing": ("vbrk", "vbrp", "fkdat", "netwr"),
-            "invoice": ("vbrk", "vbrp", "vbeln"),
-            "vendor": ("lfa1", "lifnr", "ekko", "ekpo"),
-            "product": ("mara", "makt", "matnr"),
-            "material": ("mara", "makt", "matnr"),
-            "order": ("vbak", "vbap", "ekko", "ekpo"),
-            "purchase": ("ekko", "ekpo"),
-        }
-        expanded = list(terms)
-        for t in terms:
-            for hint in topic_hints.get(t, ()):
-                if hint not in expanded:
-                    expanded.append(hint)
+        try:
+            from ..schema_intelligence_registry import get_schema_registry
+
+            registry = get_schema_registry()
+        except Exception:
+            registry = None
+        requested_grains = set(terms) & {"header", "item", "line", "detail", "details"}
+        requested_topics = set(terms) - requested_grains
 
         scored: List[Tuple[int, str, List[str]]] = []
         for t in tables_sorted:
             tl = t.lower()
             colnames = [c["col"].lower() for c in schema_n[t]]
+            meta = registry.get_table(t) if registry is not None else None
+            meta_text = " ".join(
+                str(value or "")
+                for value in (
+                    getattr(meta, "description", ""),
+                    getattr(meta, "domain", ""),
+                    getattr(meta, "grain", ""),
+                )
+            ).lower()
+            meta_tokens = set(re.findall(r"[a-z0-9]+", meta_text))
+            if requested_grains and not (requested_grains & meta_tokens):
+                continue
+            if requested_grains and requested_topics and not (
+                requested_topics & meta_tokens
+                or any(term == col or (len(term) >= 4 and term in col) for term in requested_topics for col in colnames)
+            ):
+                continue
             reasons: List[str] = []
             score = 0
-            for term in expanded:
+            for term in terms:
+                if term in meta_tokens:
+                    weight = 8 if term in requested_grains else 4
+                    score += weight
+                    reasons.append(f"catalog meaning matches '{term}'")
                 if term == tl or term in tl:
                     score += 5
                     reasons.append(f"table name matches '{term}'")

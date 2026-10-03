@@ -68,7 +68,7 @@
         "TAXK3": "tax_classification_3_for_customer",
         "VALDT": "fixed_value_date",
         "VALTG": "additional_value_days",
-        "VBELN": "billing_document",
+        "VBELN": "billing_document_number",
         "VBTYP": "sd_document_category",
         "VBUND": "company_id_of_trading_partner",
         "VKORG": "sales_organization",
