@@ -108,14 +108,19 @@ def _grouped_selects(sql: str) -> List[tuple[List[str], List[str]]]:
 
 def _expression_time_grain(expression: str) -> Optional[str]:
     value = expression or ""
+    if re.search(
+        r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*4\s*\)\s*\|\|\s*'[-]?Q'|"
+        r"DATE_TRUNC\s*\(\s*'quarter'|TO_CHAR\s*\([\s\S]*?'YYYY[^']*Q'",
+        value,
+        re.I,
+    ):
+        return "quarter"
     if re.search(r"\b(?:EXTRACT\s*\(\s*YEAR\b|DATE_PART\s*\(\s*'year'|DATE_TRUNC\s*\(\s*'year')", value, re.I):
         return "year"
     if re.search(r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*4\s*\)|TO_CHAR\s*\([\s\S]*?,\s*'YYYY'", value, re.I):
         return "year"
     if re.search(r"DATE_TRUNC\s*\(\s*'month'|SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*6\s*\)|TO_CHAR\s*\([\s\S]*?'YYYY-?MM'", value, re.I):
         return "month"
-    if re.search(r"DATE_TRUNC\s*\(\s*'quarter'|TO_CHAR\s*\([\s\S]*?'YYYY[^']*Q'", value, re.I):
-        return "quarter"
     return None
 
 

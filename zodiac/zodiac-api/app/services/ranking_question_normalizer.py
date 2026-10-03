@@ -75,13 +75,38 @@ def _extract_years(q: str) -> List[str]:
     return re.findall(r"\b(?:19|20)\d{2}\b", q)
 
 
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
+}
+
+
+def _number_value(raw: str) -> Optional[int]:
+    value = _NUMBER_WORDS.get(raw.lower())
+    if value is not None:
+        return value
+    try:
+        return max(1, min(int(raw), 500))
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_limit(q: str) -> Optional[int]:
-    m = re.search(r"\btop\s+(\d{1,3})\b", q, re.I)
-    if m:
-        try:
-            return int(m.group(1))
-        except ValueError:
-            return None
+    number = r"(?:\d{1,3}|" + "|".join(_NUMBER_WORDS) + r")"
+    patterns = (
+        rf"\b(?:top|bottom|first|last)\s+({number})\b",
+        rf"\b(?:which|what)\s+({number})\s+(?:(?:biggest|largest|top|best|highest|leading)\s+)?(?:customers?|clients?|buyers?|vendors?|suppliers?|products?|materials?|countries)\b",
+        rf"\b({number})\s+(?:(?:biggest|largest|top|best|highest|leading)\s+)?(?:customers?|clients?|buyers?|vendors?|suppliers?|products?|materials?|countries)\b",
+    )
+    for pattern in patterns:
+        m = re.search(pattern, q, re.I)
+        if m:
+            value = _number_value(m.group(1))
+            if value is not None:
+                return value
     return None
 
 
@@ -133,7 +158,8 @@ def normalize_ranking_question(question: str) -> str:
     extras = [d for d in dims if d != primary]
 
     limit = _extract_limit(q)
-    # Singular superlative ("which country generated the most…") must stay top-1.
+    # Explicit ranked set size (including "which five countries") must be
+    # preserved. Do not collapse a plural request to a singular top-1 rewrite.
     # Rewriting to plural "top countries" invents a default top-10 and fails the
     # original-question hard gate ("ranking limit was not applied").
     singular_superlative = bool(

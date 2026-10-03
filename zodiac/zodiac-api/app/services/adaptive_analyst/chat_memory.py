@@ -18,6 +18,39 @@ _MEMORY_STOP_WORDS = frozenset(
 )
 
 
+def user_conversation_preferences(turns: Any) -> List[str]:
+    """Return user-authored communication instructions without inventing their meaning.
+
+    Keep the original wording, including scope and later corrections, so the
+    response model can resolve applicable preferences for the current message.
+    Assistant acknowledgements and questions about preferences are not rules.
+    """
+    preferences: List[str] = []
+    for turn in recent_conversation(turns):
+        if turn.get("role") != "user":
+            continue
+        content = str(turn.get("content") or "").strip()
+        durable_instruction = bool(re.search(
+            r"\b(?:I\s+(?:prefer|would\s+prefer)|from\s+now\s+on|"
+            r"for\s+(?:this|our|the)\s+(?:chat|conversation)|"
+            r"(?:remember|keep\s+in\s+mind)\s+(?:that\s+)?I\s+(?:prefer|want)|"
+            r"(?:always|please)\s+(?:answer|respond|reply|write|keep|use))\b",
+            content,
+            re.I,
+        ))
+        communication_change = bool(re.search(
+            r"\b(?:forget|ignore|stop|change|replace|use|keep)\b.{0,100}"
+            r"\b(?:preferences?|answers?|responses?|replies|reply|format|tone|language|style|concise|brief|brevity)\b",
+            content,
+            re.I,
+        ))
+        asks_about_rule = bool(re.match(r"(?:what|which|did|do|have|can|could)\b", content, re.I))
+        if (durable_instruction or communication_change) and not asks_about_rule:
+            preferences.append(content)
+    # Bound prompt memory while keeping corrections in chronological order.
+    return preferences[-8:]
+
+
 def relevant_conversation(
     question: str,
     turns: Any,
@@ -38,6 +71,12 @@ def relevant_conversation(
 
     recent_start = max(0, len(cleaned) - recent_limit)
     selected = set(range(recent_start, len(cleaned)))
+    preferences = set(user_conversation_preferences(cleaned))
+    for index, item in enumerate(cleaned):
+        if item.get("role") == "user" and item.get("content") in preferences:
+            selected.add(index)
+            if index + 1 < len(cleaned) and cleaned[index + 1].get("role") == "assistant":
+                selected.add(index + 1)
     q_tokens = {
         token
         for token in re.findall(r"[a-z0-9_]{3,}", (question or "").lower())
@@ -117,26 +156,138 @@ def recent_conversation(turns: Any) -> List[Dict[str, str]]:
 
 
 def context_from_stored_turns(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Reconstruct the same context contract used by the browser after reload."""
-    prior: Dict[str, Any] = {}
-    for index in range(len(turns) - 1, -1, -1):
+    """Reconstruct a usable context, skipping failed turns and retaining SQL lineage."""
+    failed = {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED"}
+
+    def turn_details(index: int) -> Dict[str, Any]:
         turn = turns[index]
-        if turn.get("role") != "assistant":
-            continue
         metrics = turn.get("key_metrics") or {}
         metrics = metrics if isinstance(metrics, dict) else {}
-        question = next((str(t.get("content") or "") for t in reversed(turns[:index]) if t.get("role") == "user"), "")
-        plan = metrics.get("query_plan") if isinstance(metrics, dict) else None
-        prior = {
-            "previousQuestion": question,
-            "previousSQL": turn.get("sql_executed") or "",
-            "previousPlan": plan if isinstance(plan, dict) else {},
-            "previousAnswerStatus": metrics.get("answer_status") or "SUCCESS",
-            "data": turn.get("result_rows") or [],
+        question = next(
+            (
+                str(item.get("content") or "")
+                for item in reversed(turns[:index])
+                if item.get("role") == "user"
+            ),
+            "",
+        )
+        plan = metrics.get("query_plan") if isinstance(metrics.get("query_plan"), dict) else {}
+        status = str(metrics.get("answer_status") or "SUCCESS").strip().upper()
+        mode = str(metrics.get("mode") or turn.get("mode") or "").strip().lower()
+        sql = str(turn.get("sql_executed") or "").strip()
+        rows = turn.get("result_rows")
+        rows = rows if isinstance(rows, list) else []
+        return {
+            "question": question,
+            "plan": plan,
+            "status": status,
+            "mode": mode,
+            "sql": sql,
+            "rows": rows,
         }
-        break
-    prior["previousPlan"] = {**(prior.get("previousPlan") or {}), "recent_turns": recent_conversation(turns)}
-    return prior
+
+    assistants = [i for i, turn in enumerate(turns) if turn.get("role") == "assistant"]
+    recent_turns = recent_conversation(turns)
+
+    def latest_successful_sql_before(index: int) -> Dict[str, Any] | None:
+        for previous_index in reversed(assistants):
+            if previous_index >= index:
+                continue
+            candidate = turn_details(previous_index)
+            if candidate["status"] not in failed and re.search(r"\bselect\b", candidate["sql"], re.I):
+                return candidate
+        return None
+
+    for index in reversed(assistants):
+        detail = turn_details(index)
+        if detail["status"] in failed:
+            continue
+
+        plan = detail["plan"]
+        sql = detail["sql"]
+        rows = detail["rows"]
+
+        # Result-first answers are calculated from previous validated rows and
+        # intentionally have no newly executed SQL. Reattach their source query.
+        if detail["mode"] == "result_first" and not sql:
+            source = latest_successful_sql_before(index)
+            if source:
+                source_plan = source["plan"]
+                return {
+                    "previousQuestion": detail["question"],
+                    "previousSQL": source["sql"],
+                    "previousPlan": {**source_plan, **plan, "recent_turns": recent_turns},
+                    "previousAnswerStatus": detail["status"],
+                    "data": rows[:30],
+                }
+
+        if re.search(r"\bselect\b", sql, re.I):
+            return {
+                "previousQuestion": detail["question"],
+                "previousSQL": sql,
+                "previousPlan": {**plan, "recent_turns": recent_turns},
+                "previousAnswerStatus": detail["status"],
+                "data": rows[:30],
+            }
+
+        # A general reply or clarification is still the latest conversational
+        # turn, but keep the most recent successful database result available
+        # as a separate follow-up anchor.
+        if detail["mode"] in {"general_chat", "clarification"} or detail["status"] == "CLARIFICATION":
+            source = latest_successful_sql_before(index)
+            if source:
+                retained = {
+                    "previousQuestion": source["question"],
+                    "previousSQL": source["sql"],
+                    "previousPlan": source["plan"],
+                    "previousAnswerStatus": source["status"],
+                    "data": source["rows"][:30],
+                }
+                plan = {**plan, "retained_analytical_context": retained}
+            return {
+                "previousQuestion": detail["question"],
+                "previousSQL": "",
+                "previousPlan": {**plan, "recent_turns": recent_turns},
+                "previousAnswerStatus": detail["status"],
+                "data": rows[:30],
+            }
+
+        # Other successful metadata/tool replies can be useful conversational
+        # context even though they do not have an SQL query. Keep the prior
+        # analysis separately available so a later data follow-up can resume it.
+        source = latest_successful_sql_before(index)
+        if source:
+            plan = {
+                **plan,
+                "retained_analytical_context": {
+                    "previousQuestion": source["question"],
+                    "previousSQL": source["sql"],
+                    "previousPlan": source["plan"],
+                    "previousAnswerStatus": source["status"],
+                    "data": source["rows"][:30],
+                },
+            }
+        return {
+            "previousQuestion": detail["question"],
+            "previousSQL": "",
+            "previousPlan": {**plan, "recent_turns": recent_turns},
+            "previousAnswerStatus": detail["status"],
+            "data": rows[:30],
+        }
+
+    # If the thread contains no successful turn, keep the latest failure for
+    # display while the caller continues to report that no verified result exists.
+    if assistants:
+        index = assistants[-1]
+        detail = turn_details(index)
+        return {
+            "previousQuestion": detail["question"],
+            "previousSQL": "",
+            "previousPlan": {**detail["plan"], "recent_turns": recent_turns},
+            "previousAnswerStatus": detail["status"],
+            "data": [],
+        }
+    return {"previousPlan": {"recent_turns": recent_turns}, "data": []}
 
 
 def remember_response(plan: Any, turns: Any, question: str, answer: str, mode: str) -> Dict[str, Any]:

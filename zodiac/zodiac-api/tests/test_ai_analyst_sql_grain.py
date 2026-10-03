@@ -93,6 +93,29 @@ def test_month_grain_does_not_accept_extra_daily_grouping():
     assert not sql_satisfies_analytical_intent(good.replace("GROUP BY 1", "GROUP BY 1, k.fkdat"), question)
 
 
+@pytest.mark.parametrize("question", [
+    "For the higher-sales country, show monthly billed sales in the same year and currency.",
+    "For the highest-sales country and currency, show monthly billed sales in that same year.",
+])
+def test_superlative_prior_entity_does_not_rank_monthly_followup(question):
+    ops = extract_analytical_operations(question)
+    assert ops["group_by"] == ["month"]
+    assert ops["ranking"] is None
+    sql = (
+        'SELECT SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 6) AS "month", '
+        'SUM(CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "total_billed_sales", '
+        'k."waerk" AS "currency" FROM "VBRK" k '
+        'JOIN "KNA1" c ON LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') = '
+        'LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\') '
+        'WHERE TRIM(CAST(c."land1" AS TEXT)) = \'US\' '
+        'AND SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4) IN (\'2017\') '
+        'AND TRIM(CAST(k."waerk" AS TEXT)) = \'USD\' '
+        'GROUP BY SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 6), k."waerk" '
+        'ORDER BY "month" ASC'
+    )
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
 def test_top_five_requires_requested_limit_even_if_query_is_valid():
     question = "Show the top five countries by billed sales."
     sql = (
@@ -163,6 +186,69 @@ def test_document_ranking_keeps_output_grain_despite_customer_filter():
     assert "requested dimension document missing from result columns" in result_matches_analytical_intent(rows, question)
 
 
+def test_highest_value_billing_documents_select_document_grain():
+    question = (
+        "List the 10 highest-value billing documents issued in calendar year 2017, "
+        "including document ID, invoice date, billed amount, and currency."
+    )
+    ops = extract_analytical_operations(question)
+    req = required_semantics(question)
+
+    assert "document" in ops["group_by"]
+    assert "document" in req["group_by"]
+    assert req["measure"]["aggregation"] == ""
+
+
+def test_referential_highest_invoice_followup_requests_a_customer_time_series():
+    question = (
+        "For the highest-value invoice, show its customer name and that customer's "
+        "monthly billed sales in 2017."
+    )
+    ops = extract_analytical_operations(question)
+    req = required_semantics(question)
+
+    assert set(ops["group_by"]) == {"month", "customer"}
+    assert "document" not in req["group_by"]
+
+    result = try_answer_from_prior_rows(
+        question,
+        [{"billing_document": "0090040381", "customer_id": "0000300286", "customer_name": "Dynamic Industries", "billed_amount": 800000}],
+    )
+    assert result and result["needs_plan_expansion"]
+    assert "by month and customer" in result["expanded_question"]
+    assert "customer ID '0000300286'" in result["expanded_question"]
+
+
+def test_same_customer_period_followup_reuses_explicit_id_from_recent_conversation():
+    question = "For that same customer, show billed sales by month for 2017 in USD."
+    prior = {
+        "recent_turns": [
+            {"role": "user", "content": "For customer ID 0000300286, show monthly billed sales in USD in calendar year 2017."},
+            {"role": "assistant", "content": "The query completed and returned 1 row."},
+        ],
+    }
+    result = try_answer_from_prior_rows(
+        question,
+        [{"month": "201701", "total_billed_sales": 1223400, "currency": "USD"}],
+        prior_plan=prior,
+    )
+
+    assert result and result["needs_plan_expansion"]
+    assert "customer ID '0000300286'" in result["expanded_question"]
+    assert "by month" in result["expanded_question"]
+    assert "2017" in result["expanded_question"] and "USD" in result["expanded_question"]
+
+
+def test_same_customer_period_followup_asks_instead_of_broadening_without_anchor():
+    result = try_answer_from_prior_rows(
+        "For that same customer, show billed sales by month for 2017.",
+        [{"month": "201701", "total_billed_sales": 1223400, "currency": "USD"}],
+    )
+
+    assert result and result["answer_status"] == "CLARIFICATION"
+    assert "customer ID or name" in result["answer"]
+
+
 def test_negative_billing_document_ranking_uses_invoice_rows_not_customer_aggregation(monkeypatch):
     import app.services.adaptive_structured_sql as structured
 
@@ -195,6 +281,26 @@ def test_negative_billing_document_ranking_uses_invoice_rows_not_customer_aggreg
         question,
         sql=sql,
     )
+
+
+def test_same_billing_documents_cannot_be_compared_across_calendar_years():
+    from app.services.analytical_operations import extract_analytical_operations
+    from app.services.semantic_requirements import required_semantics
+
+    question = (
+        "Show the lowest negative billed invoice amounts in calendar year 2000 and compare them "
+        "with the same invoices in calendar year 2001. List billing document numbers by customer "
+        "and include both absolute and percent change."
+    )
+    ops = extract_analytical_operations(question)
+    required = required_semantics(question)
+
+    assert ops["group_by"] == ["document"]
+    assert ops["clarification"]["type"] == "document_period_comparison"
+    assert "one billing date" in ops["clarification"]["message"]
+    assert required["clarification"]["type"] == "document_period_comparison"
+    assert "2000" in required["clarification"]["message"]
+    assert "2001" in required["clarification"]["message"]
 
 
 def test_leading_customer_document_drilldown_reuses_verified_id_period_and_currency():
@@ -250,6 +356,177 @@ def test_country_year_followup_expands_to_verified_country_and_uses_period_templ
     assert "'2013'" in sql and "'2017'" in sql
     assert "'USD'" in sql
     assert sql_satisfies_analytical_intent(sql, question, semantic)
+
+
+def test_country_month_followup_uses_year_qualified_month_bucket_and_passes_precision_validation(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+    from app.services.sap_sql_precision_validator import validate_sql_precision
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "KNA1": {"kunnr", "land1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    question = "Show billed sales by month for country code 'US' in calendar year 2017 in currency USD."
+    semantic = {
+        "time_filter": {
+            "resolved_from_data": True,
+            "years": ["2017"],
+            "date_table": "VBRK",
+            "date_column": "fkdat",
+        },
+    }
+
+    sql = build_dimension_period_sales_sql(question, ["VBRK", "KNA1"], semantic)
+
+    assert sql
+    assert 'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 6) AS "month"' in sql
+    assert "GROUP BY SUBSTRING(TRIM(CAST(k.\"fkdat\" AS TEXT)), 1, 6), k.\"waerk\"" in sql
+    assert "'2017'" in sql and "'US'" in sql and "'USD'" in sql
+    assert sql_satisfies_analytical_intent(sql, question, semantic)
+    validation = validate_sql_precision(
+        sql,
+        {"VBRK": sorted(physical_columns["VBRK"]), "KNA1": sorted(physical_columns["KNA1"])},
+        question=question,
+    )
+    assert validation.is_valid, validation.errors
+
+
+def test_country_month_grouping_uses_customer_country_without_a_single_country_filter(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "KNA1": {"kunnr", "land1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    question = "Show billed sales by customer country and month for calendar year 2017 in USD."
+
+    ops = extract_analytical_operations(question)
+    assert ops["group_by"] == ["month", "country"]
+    sql = build_dimension_period_sales_sql(question, ["VBRK", "KNA1"])
+
+    assert sql
+    assert 'AS "country"' in sql
+    assert 'AS "month"' in sql
+    assert "GROUP BY TRIM(CAST(c.\"land1\" AS TEXT))" in sql
+    assert "'2017'" in sql and "'USD'" in sql
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_multiple_explicit_years_by_year_are_a_series_not_a_two_period_pivot(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {"VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"}}
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    question = "Compare billed sales by calendar year for 2015, 2016, and 2017 in USD."
+    ops = extract_analytical_operations(question)
+
+    assert ops["group_by"] == ["year"]
+    assert ops["period_compare"] is None
+    sql = build_dimension_period_sales_sql(question, [])
+
+    assert sql
+    assert 'AS "year"' in sql
+    assert "fkdat" in sql.lower() and "erdat" not in sql.lower()
+    assert all(f"'{year}'" in sql for year in ("2015", "2016", "2017"))
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_billed_sales_by_currency_uses_billing_header_year_and_currency_grain(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {"VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"}}
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    question = "Show billed sales totals by currency for calendar year 2017."
+
+    sql = build_dimension_period_sales_sql(question, ["VBRK"])
+
+    assert sql
+    assert '"VBRK"' in sql and '"waerk" AS "currency"' in sql
+    assert '"fkdat"' in sql and '"erdat"' not in sql
+    assert "'2017'" in sql and "GROUP BY k.\"waerk\"" in sql
+    assert "'FOR'" not in sql
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_quarterly_billed_sales_use_quarter_buckets_from_billing_date(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "KNA1": {"kunnr", "land1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    question = "Show billed sales by quarter for customer ID '0000300286' in calendar year 2017 in currency USD."
+
+    sql = build_dimension_period_sales_sql(question, ["VBRK", "KNA1"])
+
+    assert sql and 'AS "quarter"' in sql
+    assert "fkdat" in sql.lower() and "-Q" in sql
+    assert "'2017'" in sql and "'USD'" in sql
+    assert "GROUP BY" in sql
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_month_number_bucket_is_valid_only_inside_a_single_fkdat_year():
+    from app.services.sap_sql_precision_validator import validate_sql_precision
+
+    schema = {
+        "VBRK": ["fkdat", "kunag", "netwr", "vbeln", "waerk"],
+        "KNA1": ["kunnr", "land1"],
+    }
+    month_number = 'CAST(SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)) FROM 5 FOR 2) AS INTEGER)'
+    fixed_year = 'SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 1, 4) = \'2017\''
+    single_year_sql = (
+        f'SELECT {month_number} AS "month", SUM(CAST("VBRK"."netwr" AS NUMERIC)) AS "sales" '
+        'FROM "VBRK" WHERE ' + fixed_year + f' GROUP BY {month_number}'
+    )
+    multi_year_sql = single_year_sql.replace(
+        fixed_year,
+        'SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 1, 4) IN (\'2016\', \'2017\')',
+    )
+
+    one_year = validate_sql_precision(
+        single_year_sql, schema, question="Show monthly billed sales for calendar year 2017."
+    )
+    multiple_years = validate_sql_precision(
+        multi_year_sql, schema, question="Show monthly billed sales for calendar years 2016 and 2017."
+    )
+
+    assert one_year.is_valid, one_year.errors
+    assert not multiple_years.is_valid
+    assert any("month bucket derived from FKDAT" in error for error in multiple_years.errors)
 
 
 def test_linked_order_template_uses_document_flow_and_only_prior_document_ids(monkeypatch):

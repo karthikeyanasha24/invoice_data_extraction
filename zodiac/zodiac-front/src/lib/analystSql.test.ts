@@ -31,3 +31,13 @@ it('never fabricates SQL when the service did not return a query', () => {
   assert.equal(analystSqlEvidence({ answer_status: 'CANNOT_ANSWER' }), null);
   assert.equal(analystSqlFields({ generatedSql: { query: sql } }).sql, undefined);
 });
+
+it('shows source SQL for a successful follow-up calculated from validated prior rows', () => {
+  const fields = analystSqlFields({ source_sql: sql });
+  assert.equal(fields.source_sql, sql);
+  assert.deepEqual(analystSqlEvidence({ ...fields, answer_status: 'SUCCESS' }), {
+    sql,
+    label: 'Source SQL · reused result',
+    explanation: 'This query produced the prior validated rows. The follow-up was calculated from those rows; no new database query ran.',
+  });
+});

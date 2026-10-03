@@ -14,8 +14,13 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("zodiac-api.result_first_followup")
 
 _THIS_RESULT = re.compile(
-    r"\b(this result|these results|this list|these rows|in this result|from this result|"
-    r"in the result|from the result|this data|from these)\b",
+    r"\b(this result|that result|these results|this list|these rows|in this result|from this result|"
+    r"in that result|from that result|in the result|from the result|this data|from these)\b",
+    re.I,
+)
+_RESULT_DIFFERENCE = re.compile(
+    r"\b(?:difference|how much (?:higher|lower|more|less)|which .{0,40} higher|"
+    r"higher .{0,40} difference|more than the (?:next|second)|compared? with)\b",
     re.I,
 )
 _APPEARS_MOST = re.compile(
@@ -23,13 +28,11 @@ _APPEARS_MOST = re.compile(
     re.I,
 )
 _FOLLOWUP_HINT = re.compile(
-    r"\b(this|these|those|same|previous|prior|above|one|them)\b",
+    r"\b(this|that|these|those|same|previous|prior|above|one|them)\b",
     re.I,
 )
 _GROWTH_RANK = re.compile(
     r"\b("
-    r"which\s+one|"
-    r"which\s+of\s+(them|these|those)|"
     r"grew\s+(the\s+)?(fastest|most)|"
     r"highest\s+growth|"
     r"fastest\s+growth|"
@@ -39,10 +42,24 @@ _GROWTH_RANK = re.compile(
     re.I,
 )
 _RESULT_RANK = re.compile(
-    r"\b(?:which|what)\b.{0,70}\b(?:highest|lowest|largest|smallest|"
-    r"top|bottom)\b.{0,70}\b(?:that|this|these|those)\s+"
-    r"(?:result|list|rows?|countries?|customers?|products?|materials?)\b",
+    r"\b(?:which|what|show|identify|find)\b"
+    r"(?=.{0,180}\b(?:highest|lowest|largest|smallest|top|bottom)\b)"
+    r"(?=.{0,180}\b(?:that|this|these|those|prior|previous)\s+"
+    r"(?:results?|list|rows?|countries?|customers?|products?|materials?|months?|years?|quarters?)\b)",
     re.I,
+)
+_CONTEXTUAL_RESULT_RANK = re.compile(
+    r"\b(?:those|these|previous|prior|above)\b.{0,120}"
+    r"\b(?:which|what|show|identify|find)\b"
+    r"(?=.{0,180}\b(?:highest|lowest|largest|smallest|top|bottom)\b)",
+    re.I | re.S,
+)
+_IMPLICIT_RESULT_RANK = re.compile(
+    r"\b(?:which|what)\s+(?:of\s+(?:these|those)\s+)?"
+    r"(?:customers?|countries|months?|years?|quarters?|products?|materials?|"
+    r"vendors?|suppliers?|industries?)\b.{0,160}"
+    r"\b(?:highest|lowest|largest|smallest|most|least|top|bottom)\b",
+    re.I | re.S,
 )
 
 _CONCEPT_COLUMNS: Dict[str, Tuple[str, ...]] = {
@@ -53,6 +70,9 @@ _CONCEPT_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "industry": ("industry", "brsch", "brtxt", "sector"),
     "material": ("material", "matnr", "maktx", "product", "material_name", "material_id"),
     "product": ("product", "material", "matnr", "maktx"),
+    "month": ("month", "yyyymm"),
+    "year": ("year", "yyyy"),
+    "quarter": ("quarter",),
     "currency": ("currency", "waerk", "waers"),
     "type": ("type", "auart", "fkart", "vbtyp", "document_type"),
 }
@@ -65,11 +85,18 @@ def is_result_scoped_followup(question: str, *, has_prior_rows: bool) -> bool:
     q = question or ""
     if _THIS_RESULT.search(q):
         return True
+    if _RESULT_DIFFERENCE.search(q) and _FOLLOWUP_HINT.search(q):
+        return True
     if _APPEARS_MOST.search(q) and _FOLLOWUP_HINT.search(q):
         return True
     if _APPEARS_MOST.search(q) and len(q.split()) <= 12:
         return True
-    if _RESULT_RANK.search(q):
+    if _RESULT_RANK.search(q) or _CONTEXTUAL_RESULT_RANK.search(q):
+        return True
+    # A complete-sounding ranking can still be a conversational follow-up:
+    # when a prior result exists, rank its returned dimension and measure
+    # instead of dropping the result and silently broadening the query.
+    if has_prior_rows and _IMPLICIT_RESULT_RANK.search(q):
         return True
     if has_prior_rows and _GROWTH_RANK.search(q):
         return True
@@ -78,7 +105,7 @@ def is_result_scoped_followup(question: str, *, has_prior_rows: bool) -> bool:
 
 def _detect_concept(question: str) -> Optional[str]:
     ql = (question or "").lower()
-    for concept in ("supplier", "vendor", "customer", "country", "industry", "material", "product", "currency", "type"):
+    for concept in ("supplier", "vendor", "customer", "country", "industry", "material", "product", "month", "year", "quarter", "currency", "type"):
         if re.search(rf"\b{re.escape(concept)}s?\b", ql):
             return concept
     return None
@@ -115,7 +142,7 @@ def _find_numeric_column(rows: List[Dict[str, Any]], candidates: Tuple[str, ...]
 def _entity_label_column(rows: List[Dict[str, Any]]) -> Optional[str]:
     if not rows:
         return None
-    for concept in ("customer", "material", "product", "country", "industry", "vendor", "supplier"):
+    for concept in ("customer", "material", "product", "country", "industry", "vendor", "supplier", "month", "year", "quarter"):
         cols = _matching_columns(rows, concept)
         if cols:
             for c in cols:
@@ -135,6 +162,110 @@ def _to_float(v: Any) -> Optional[float]:
         return float(str(v).replace(",", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def _format_result_number(value: float) -> str:
+    """Format a result value without losing meaningful fractional precision."""
+    if value.is_integer():
+        return f"{value:,.0f}"
+    return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+def _compare_prior_result_rows(
+    question: str,
+    rows: List[Dict[str, Any]],
+    prior_plan: Optional[Dict[str, Any]],
+    source_sql: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Answer a comparative follow-up only when prior rows contain compatible values."""
+    q = question or ""
+    if not _RESULT_DIFFERENCE.search(q) or not _FOLLOWUP_HINT.search(q):
+        return None
+    if len(rows) < 2:
+        return {
+            "mode": "clarification",
+            "status": "clarification",
+            "answer_status": "CLARIFICATION",
+            "sql": "",
+            "sql_status": "not_generated",
+            "sql_generation_method": "result_first_comparison_insufficient_rows",
+            "pipeline": "result_first_followup",
+            "rowCount": len(rows),
+            "data": rows,
+            "summary": "The prior result has fewer than two comparable rows, so I can't calculate a difference. Expand the result set to compare entities.",
+            "answer": "The prior result has fewer than two comparable rows to compare.",
+            "charts": [],
+            "query_plan": prior_plan or {},
+            "meta": {"investigation_status": "clarification", "followup": "result_difference"},
+        }
+
+    measure_col = _rank_measure_column(rows)
+    label_col = _entity_label_column(rows)
+    if not measure_col or not label_col:
+        return None
+
+    currency_col = next(
+        (key for key in rows[0] if str(key).lower() in {"currency", "waerk", "waers"}),
+        None,
+    )
+    currencies = {
+        str(row.get(currency_col)).strip()
+        for row in rows
+        if currency_col and row.get(currency_col) not in (None, "")
+    }
+    if len(currencies) > 1:
+        return {
+            "mode": "clarification",
+            "status": "clarification",
+            "answer_status": "CLARIFICATION",
+            "sql": "",
+            "sql_status": "not_generated",
+            "sql_generation_method": "result_first_comparison_currency_mismatch",
+            "pipeline": "result_first_followup",
+            "rowCount": 0,
+            "data": [],
+            "summary": "The prior rows use different currencies, so their amounts can't be compared directly. Choose a currency or request a currency conversion basis.",
+            "answer": "The prior rows use different currencies and need a common comparison currency.",
+            "charts": [],
+            "query_plan": prior_plan or {},
+            "meta": {"investigation_status": "clarification", "followup": "result_difference_currency_mismatch"},
+        }
+
+    comparable = [
+        (row, _to_float(row.get(measure_col)))
+        for row in rows
+        if _to_float(row.get(measure_col)) is not None
+        and row.get(label_col) not in (None, "")
+    ]
+    if len(comparable) < 2:
+        return None
+    comparable.sort(key=lambda pair: pair[1], reverse=True)
+    winner, high = comparable[0]
+    runner_up, low = comparable[1]
+    difference = abs(high - low)
+    currency = next(iter(currencies), "")
+    unit = f" {currency}" if currency else ""
+    summary = (
+        f"{winner.get(label_col)} had higher {measure_col} than {runner_up.get(label_col)} "
+        f"by {_format_result_number(difference)}{unit} "
+        f"({_format_result_number(high)}{unit} vs {_format_result_number(low)}{unit}) in the prior result."
+    )
+    return {
+        "mode": "result_first",
+        "status": "completed",
+        "answer_status": "SUCCESS",
+        "sql": "",
+        "source_sql": source_sql,
+        "sql_generation_method": "result_first_comparison",
+        "pipeline": "result_first_followup",
+        "rowCount": 2,
+        "data": [winner, runner_up],
+        "summary": summary,
+        "answer": summary,
+        "charts": [],
+        "query_plan": prior_plan or {"reused_prior_result": True},
+        "meta": {"investigation_status": "completed", "followup": "result_difference", "source": "prior_validated_result"},
+    }
 
 
 def _rank_measure_column(rows: List[Dict[str, Any]]) -> Optional[str]:
@@ -233,16 +364,38 @@ def _expand_billing_document_followup(
 def _expand_entity_period_followup(
     question: str,
     rows: List[Dict[str, Any]],
+    prior_plan: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Replace a demonstrative entity reference with its verified prior value."""
     q = question or ""
-    if not re.search(r"\bthat\s+country\b", q, re.I) or not re.search(
-        r"\b(?:sales|revenue|billing|billed)\b[\s\S]{0,80}\b(?:by|per|each)\s+year|\byearly\b",
+    period_grain = "month" if re.search(r"\b(monthly|by\s+month|each\s+month|month[- ]by[- ]month)\b", q, re.I) else "year" if re.search(r"\b(yearly|by\s+year|each\s+year|year[- ]by[- ]year)\b", q, re.I) else ""
+    explicit_top_country = bool(re.search(
+        r"\b(?:higher[- ]sales|higher sales|highest[- ]sales|top|leading)\s+country\b|"
+        r"\bcountry\s+with\s+(?:higher|highest|more|most)\s+(?:billed\s+)?sales\b",
         q,
         re.I,
-    ):
+    ))
+    demonstrative_country_series = bool(
+        re.search(r"\bthat\s+country\b", q, re.I)
+        and re.search(
+            r"\b(?:sales|revenue|billing|billed)\b[\s\S]{0,80}\b(?:by|per|each)\s+year|\byearly\b",
+            q,
+            re.I,
+        )
+    )
+    same_period_drilldown = bool(
+        explicit_top_country
+        and period_grain
+        and re.search(r"\b(same|that|those|previous|prior)\s+(?:complete\s+|calendar\s+|full\s+)?years?\b", q, re.I)
+    )
+    if not demonstrative_country_series and not same_period_drilldown:
         return None
     row = next((item for item in rows if isinstance(item, dict)), None)
+    if explicit_top_country:
+        measure_col = _rank_measure_column(rows)
+        ranked = _rank_by_column(rows, measure_col, descending=True) if measure_col else []
+        if ranked:
+            row = ranked[0]
     if not row:
         return None
     keys = {str(key).lower(): key for key in row}
@@ -250,10 +403,41 @@ def _expand_entity_period_followup(
     if not country_col or row.get(country_col) in (None, ""):
         return None
     country = str(row[country_col]).strip().replace("'", "''")
-    expanded = (
-        f"Show billed sales by year for country code '{country}' "
-        "for the last five complete years available in the data"
-    )
+    if same_period_drilldown:
+        plan = prior_plan if isinstance(prior_plan, dict) else {}
+        verified = plan.get("verified_db_context") if isinstance(plan.get("verified_db_context"), dict) else {}
+        if not verified and isinstance(plan.get("query_plan"), dict):
+            nested = plan["query_plan"]
+            verified = nested.get("verified_db_context") if isinstance(nested.get("verified_db_context"), dict) else {}
+        semantic = verified.get("semantic_requirements") if isinstance(verified, dict) else {}
+        time_filter = semantic.get("time_filter") if isinstance(semantic, dict) else {}
+        years = []
+        if isinstance(time_filter, dict) and time_filter.get("resolved_from_data") is True:
+            years = [str(year) for year in (time_filter.get("years") or []) if re.fullmatch(r"\d{4}", str(year))]
+        state = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
+        prior_question = str(
+            plan.get("last_user_question")
+            or state.get("last_user_question")
+            or ""
+        )
+        if not years and isinstance(time_filter, dict) and time_filter.get("type") not in {"latest_data_years", "latest_full_year"}:
+            years = re.findall(r"\b(?:19|20)\d{2}\b", prior_question)
+        # A relative period must be carried forward from verified context. Do
+        # not guess a year from today's date or a generated SQL fragment.
+        if not years:
+            return None
+        years = list(dict.fromkeys(years))
+        metric = "billed sales" if re.search(r"\b(billed|billing|invoice)\b", q, re.I) else "sales"
+        expanded = f"Show {metric} by {period_grain} for country code '{country}'"
+        if len(years) == 1:
+            expanded += f" in calendar year {years[0]}"
+        else:
+            expanded += " in calendar years " + ", ".join(years)
+    else:
+        expanded = (
+            f"Show billed sales by year for country code '{country}' "
+            "for the last five complete years available in the data"
+        )
     currency_col = keys.get("currency") or keys.get("waerk") or keys.get("waers")
     currency = str(row.get(currency_col) or "").strip() if currency_col else ""
     if re.fullmatch(r"[A-Za-z]{3}", currency):
@@ -263,6 +447,131 @@ def _expand_entity_period_followup(
         "needs_plan_expansion": True,
         "missing_concept": "verified_entity_period_series",
         "expanded_question": expanded,
+    }
+
+
+def _expand_customer_period_followup(
+    question: str,
+    rows: List[Dict[str, Any]],
+    prior_plan: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Carry a singular customer reference into a new period query safely."""
+    q = question or ""
+    grain_match = re.search(
+        r"\b(?:by|per|each)\s+(month|quarter|year)s?\b|\b(monthly|quarterly|yearly|annually)\b",
+        q,
+        re.I,
+    )
+    if not grain_match or not re.search(r"\b(?:sales|revenue|billing|billed|turnover)\b", q, re.I):
+        return None
+    customer_reference = bool(
+        re.search(r"\b(?:same|that|this|those|these|previous|prior)\s+customer\b", q, re.I)
+        or re.search(r"\bthat\s+customer(?:'s|’s)\b", q, re.I)
+    )
+    highest_invoice_reference = bool(
+        re.search(r"\b(?:highest|largest|top|maximum)[- ]value\s+(?:billing\s+)?(?:document|invoice)\b", q, re.I)
+    )
+    if not customer_reference and not highest_invoice_reference:
+        return None
+
+    normalized_rows = [
+        {str(key).lower(): value for key, value in row.items()}
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    customer_keys = ("customer_id", "kunag", "kunnr", "customer_number")
+    customer_ids = list(dict.fromkeys(
+        str(next((row.get(key) for key in customer_keys if row.get(key) not in (None, "")), "")).strip()
+        for row in normalized_rows
+        if any(row.get(key) not in (None, "") for key in customer_keys)
+    ))
+    customer_ids = [value for value in customer_ids if value]
+    plan = prior_plan if isinstance(prior_plan, dict) else {}
+    selected_id: Optional[str] = None
+
+    if highest_invoice_reference and normalized_rows:
+        amount_key = next(
+            (key for key in ("billed_amount", "invoice_amount", "total_billed_sales", "total_sales", "amount") if any(_to_float(row.get(key)) is not None for row in normalized_rows)),
+            None,
+        )
+        if amount_key:
+            ranked = sorted(
+                normalized_rows,
+                key=lambda row: _to_float(row.get(amount_key)) if _to_float(row.get(amount_key)) is not None else float("-inf"),
+                reverse=True,
+            )
+            selected_id = next(
+                (
+                    str(next((row.get(key) for key in customer_keys if row.get(key) not in (None, "")), "")).strip()
+                    for row in ranked
+                    if any(row.get(key) not in (None, "") for key in customer_keys)
+                ),
+                None,
+            )
+    if selected_id is None and len(customer_ids) == 1:
+        selected_id = customer_ids[0]
+
+    # Aggregate rows can omit the ID. Recover only an explicit user-provided
+    # identifier from persisted conversational context; never guess from names.
+    if selected_id is None:
+        turns = plan.get("recent_turns") if isinstance(plan.get("recent_turns"), list) else []
+        if not turns and isinstance(plan.get("investigation_state"), dict):
+            turns = plan["investigation_state"].get("recent_turns") or []
+        for turn in reversed(turns):
+            if not isinstance(turn, dict) or turn.get("role") != "user":
+                continue
+            match = re.search(
+                r"\bcustomer\s+(?:id|number)\s*(?:is\s+|=\s*)?['\"]?([A-Za-z0-9_-]+)",
+                str(turn.get("content") or ""),
+                re.I,
+            )
+            if match:
+                selected_id = match.group(1)
+                break
+
+    if selected_id is None:
+        return {
+            "mode": "clarification",
+            "status": "clarification",
+            "answer_status": "CLARIFICATION",
+            "sql": "",
+            "sql_status": "not_generated",
+            "sql_generation_method": "followup_missing_customer_anchor",
+            "pipeline": "result_first_followup",
+            "rowCount": 0,
+            "data": [],
+            "summary": "I can show the requested period totals, but I can't verify which customer you mean from the available results. Please provide the customer ID or name.",
+            "answer": "Which customer should I use? Please provide the customer ID or name.",
+            "charts": [],
+            "query_plan": plan,
+            "meta": {"investigation_status": "clarification", "followup": "missing_customer_anchor"},
+        }
+
+    grain_text = (grain_match.group(1) or grain_match.group(2)).lower()
+    grain = {"monthly": "month", "quarterly": "quarter", "yearly": "year", "annually": "year"}.get(grain_text, grain_text.rstrip("s"))
+    expanded = f"Show billed sales by {grain} for customer ID '{selected_id}'"
+    include_customer_name = bool(re.search(
+        r"\bcustomer\s+name\b|\bname\s+of\s+(?:the\s+)?customer\b",
+        q,
+        re.I,
+    ))
+    if include_customer_name:
+        expanded = f"Show billed sales by {grain} and customer for customer ID '{selected_id}'"
+    years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", q)))
+    if years:
+        expanded += " in calendar year " + ", ".join(years)
+    currency = re.search(r"\bcurrency\s+([A-Z]{3})\b|\bin\s+([A-Z]{3})\b", q)
+    if currency:
+        expanded += " in currency " + (currency.group(1) or currency.group(2))
+    elif len({str(row.get("currency") or row.get("waerk") or "").strip() for row in normalized_rows if row.get("currency") or row.get("waerk")}) == 1:
+        prior_currency = next(str(row.get("currency") or row.get("waerk")).strip() for row in normalized_rows if row.get("currency") or row.get("waerk"))
+        if re.fullmatch(r"[A-Za-z]{3}", prior_currency):
+            expanded += " in currency " + prior_currency.upper()
+    return {
+        "needs_plan_expansion": True,
+        "missing_concept": "customer_period_series",
+        "expanded_question": expanded + ".",
+        "query_plan": plan,
     }
 
 
@@ -326,10 +635,7 @@ def _rank_by_column(rows: List[Dict[str, Any]], col: str, *, descending: bool = 
     return [r for _, r in scored]
 
 
-def _prior_entity_names(rows: List[Dict[str, Any]], limit: int = 8) -> List[str]:
-    col = _entity_label_column(rows)
-    if not col:
-        return []
+def _prior_entity_names(rows: List[Dict[str, Any]], col: str, limit: int = 8) -> List[str]:
     out: List[str] = []
     for row in rows:
         val = row.get(col)
@@ -352,15 +658,25 @@ def expand_growth_followup_question(
     """Rewrite a growth follow-up into a standalone period-growth question scoped to prior entities."""
     if not _GROWTH_RANK.search(question or ""):
         return None
-    names = _prior_entity_names(prior_rows)
+    # A text-valued result field is not evidence of a customer identity. Only
+    # expand growth for a dimension explicitly identified by the result schema.
+    keys = {str(k).lower(): str(k) for k in prior_rows[0]} if prior_rows else {}
+    entity_columns = (
+        ("customers", ("customer_id", "customer_number", "kunnr", "kunag", "customer_name", "customer")),
+        ("materials", ("material_id", "matnr", "material_name", "material", "product_id", "product_name", "product")),
+        ("countries", ("country_code", "land1", "country", "country_name")),
+        ("vendors", ("vendor_id", "supplier_id", "lifnr", "vendor_name", "supplier_name", "vendor", "supplier")),
+    )
+    anchor = next(
+        ((entity, keys[column]) for entity, columns in entity_columns for column in columns if column in keys),
+        None,
+    )
+    if not anchor:
+        return None
+    entity, label_column = anchor
+    names = _prior_entity_names(prior_rows, label_column)
     if not names:
         return None
-    entity = "customers"
-    keys = {str(k).lower() for k in prior_rows[0].keys()} if prior_rows else set()
-    if any("material" in k or "product" in k or "matnr" in k for k in keys):
-        entity = "materials"
-    elif any("country" in k or "land1" in k for k in keys):
-        entity = "countries"
     joined = ", ".join(names[:5])
     years = re.findall(r"\b((?:19|20)\d{2})\b", prior_question or "")
     year_bit = ""
@@ -409,9 +725,15 @@ def try_answer_from_prior_rows(
 ) -> Optional[Dict[str, Any]]:
     rows = [r for r in (prior_rows or []) if isinstance(r, dict)]
     if rows:
-        entity_period = _expand_entity_period_followup(question, rows)
+        comparison = _compare_prior_result_rows(question, rows, prior_plan, source_sql=prior_sql)
+        if comparison:
+            return comparison
+        entity_period = _expand_entity_period_followup(question, rows, prior_plan)
         if entity_period:
             return entity_period
+        customer_period = _expand_customer_period_followup(question, rows, prior_plan)
+        if customer_period:
+            return customer_period
         linked_order = _expand_linked_order_followup(question, rows, prior_plan)
         if linked_order:
             return linked_order
@@ -426,6 +748,8 @@ def try_answer_from_prior_rows(
         not _GROWTH_RANK.search(question or "")
         and not _APPEARS_MOST.search(question or "")
         and not _RESULT_RANK.search(question or "")
+        and not _CONTEXTUAL_RESULT_RANK.search(question or "")
+        and not _IMPLICIT_RESULT_RANK.search(question or "")
     ):
         return None
     artifact = (prior_plan or {}).get("result_artifact") or {}
@@ -483,6 +807,7 @@ def try_answer_from_prior_rows(
                     "status": "completed",
                     "answer_status": "SUCCESS",
                     "sql": "",
+                    "source_sql": prior_sql,
                     "sql_generation_method": "result_first_growth_rank",
                     "pipeline": "result_first_followup",
                     "rowCount": len(ranked),
@@ -506,7 +831,8 @@ def try_answer_from_prior_rows(
             "mode": "result_first_gap",
             "status": "completed",
             "answer_status": "SUCCESS",
-            "sql": prior_sql or "",
+            "sql": "",
+            "source_sql": prior_sql,
             "sql_generation_method": "result_first_needs_growth_sql",
             "pipeline": "result_first_followup",
             "rowCount": 0,
@@ -525,7 +851,11 @@ def try_answer_from_prior_rows(
             "meta": {"investigation_status": "completed", "followup": "needs_growth_sql"},
         }
 
-    if _RESULT_RANK.search(question or ""):
+    if (
+        _RESULT_RANK.search(question or "")
+        or _CONTEXTUAL_RESULT_RANK.search(question or "")
+        or _IMPLICIT_RESULT_RANK.search(question or "")
+    ):
         concept = _detect_concept(question)
         labels = _matching_columns(rows, concept) if concept else []
         measure_col = _rank_measure_column(rows)
@@ -544,22 +874,53 @@ def try_answer_from_prior_rows(
                 "query_plan": prior_plan or {},
             }
         label_col = labels[0]
+        currency_col = next(
+            (key for key in rows[0] if str(key).lower() in {"currency", "waerk", "waers"}),
+            None,
+        )
+        currencies = {
+            str(row.get(currency_col)).strip()
+            for row in ranked
+            if currency_col and row.get(currency_col) not in (None, "")
+        }
+        if len(currencies) > 1:
+            return {
+                "mode": "clarification",
+                "status": "clarification",
+                "answer_status": "CLARIFICATION",
+                "sql": "",
+                "source_sql": prior_sql,
+                "sql_status": "not_generated",
+                "sql_generation_method": "result_first_rank_currency_mismatch",
+                "pipeline": "result_first_followup",
+                "rowCount": 0,
+                "data": [],
+                "summary": "The prior rows use different currencies, so their amounts can't be ranked directly. Choose a currency or request a currency conversion basis.",
+                "answer": "Choose a common currency before ranking the prior amounts.",
+                "charts": [],
+                "query_plan": prior_plan or {},
+            }
         winner = ranked[0]
-        value = winner.get(measure_col)
+        value = _to_float(winner.get(measure_col))
+        winners = [row for row in ranked if _to_float(row.get(measure_col)) == value]
+        labels_text = ", ".join(str(row.get(label_col)) for row in winners)
+        unit = f" {next(iter(currencies))}" if currencies else ""
+        amount = f"{_format_result_number(value)}{unit}"
         summary = (
-            f"{winner.get(label_col)} ranks highest in the prior result by {measure_col} ({value})."
+            f"{labels_text} ranks highest in the prior result by {measure_col} ({amount})."
             if descending
-            else f"{winner.get(label_col)} ranks lowest in the prior result by {measure_col} ({value})."
+            else f"{labels_text} ranks lowest in the prior result by {measure_col} ({amount})."
         )
         return {
             "mode": "result_first",
             "status": "completed",
             "answer_status": "SUCCESS",
-            "sql": prior_sql or "",
+            "sql": "",
+            "source_sql": prior_sql,
             "sql_generation_method": "result_first_rank",
             "pipeline": "result_first_followup",
-            "rowCount": 1,
-            "data": [winner],
+            "rowCount": len(winners),
+            "data": winners,
             "summary": summary,
             "answer": summary,
             "charts": [],
@@ -580,6 +941,7 @@ def try_answer_from_prior_rows(
             "status": "completed",
             "answer_status": "SUCCESS",
             "sql": "",
+            "source_sql": prior_sql,
             "sql_generation_method": "result_first_prior_rows",
             "pipeline": "result_first_followup",
             "rowCount": len(rows),
@@ -598,7 +960,8 @@ def try_answer_from_prior_rows(
             "mode": "result_first_gap",
             "status": "completed",
             "answer_status": "SUCCESS",
-            "sql": prior_sql or "",
+            "sql": "",
+            "source_sql": prior_sql,
             "sql_generation_method": "result_first_missing_dimension",
             "pipeline": "result_first_followup",
             "rowCount": 0,
@@ -633,6 +996,7 @@ def try_answer_from_prior_rows(
         "status": "completed",
         "answer_status": "SUCCESS",
         "sql": "",
+        "source_sql": prior_sql,
         "sql_generation_method": "result_first_frequency",
         "pipeline": "result_first_followup",
         "rowCount": len(ranked),

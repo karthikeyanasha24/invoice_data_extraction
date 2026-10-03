@@ -112,4 +112,109 @@ describe('continuous chat context policy', () => {
     state = updateLastSuccessfulAnalyticalContext(state, 'Meaning of life', CLARIFICATION);
     assert.match(state!.previousSQL, /2004/);
   });
+
+  it('a clarification keeps the last verified analytical result available for the next turn', () => {
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show sales for 2004' },
+      { role: 'assistant', content: 'Sales results', result: SUCCESS_2004 },
+      { role: 'user', content: 'Show monthly sales for the selected customer.' },
+      {
+        role: 'assistant',
+        content: 'Please specify the customer.',
+        result: { ...CLARIFICATION, query_plan: { awaiting: 'customer' } },
+      },
+    ];
+    const context = followupContextForSend(
+      messages,
+      lastSuccessfulAnalyticalContext(messages),
+      false,
+    );
+    const plan = context?.previousPlan as {
+      retained_analytical_context?: LastSuccessfulAnalyticalContext;
+    };
+    assert.equal(plan.retained_analytical_context?.previousSQL, SQL_2004);
+    assert.equal(
+      (plan.retained_analytical_context?.data[0] as { customer_name?: string } | undefined)?.customer_name,
+      'Motomarkt Stuttgart GmbH',
+    );
+  });
+
+  it('a failed drill-down keeps the last successful result for a retry', () => {
+    const comparison = {
+      sql: '',
+      source_sql: SQL_2004,
+      data: [
+        { country: 'US', total_billed_sales: 1_227_978, currency: 'USD' },
+        { country: 'DE', total_billed_sales: 10_000, currency: 'USD' },
+      ],
+      answer_status: 'SUCCESS',
+      mode: 'result_first',
+      query_plan: SUCCESS_2004.query_plan,
+    };
+    const failed = {
+      sql: 'SELECT SUBSTRING(fkdat, 5, 2) AS month FROM VBRK',
+      data: [],
+      answer_status: 'CANNOT_ANSWER',
+      sql_status: 'validation_failed',
+      query_plan: { error: 'sql_validation_failed' },
+    };
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show sales by country' },
+      { role: 'assistant', content: 'Sales results', result: SUCCESS_2004 },
+      { role: 'user', content: 'Which country had higher sales?' },
+      { role: 'assistant', content: 'US had higher sales.', result: comparison },
+      { role: 'user', content: 'Show monthly sales for that country.' },
+      { role: 'assistant', content: 'The analysis could not be completed.', result: failed },
+    ];
+
+    const context = followupContextForSend(
+      messages,
+      lastSuccessfulAnalyticalContext(messages),
+      false,
+    );
+    assert.equal(context?.previousQuestion, 'Which country had higher sales?');
+    assert.equal(context?.previousSQL, SQL_2004);
+    assert.equal((context?.data[0] as { country?: string })?.country, 'US');
+    assert.equal((context?.data[0] as { total_billed_sales?: number })?.total_billed_sales, 1_227_978);
+  });
+
+  it('carries source SQL and derived rows from a successful result-first follow-up', () => {
+    const derived = {
+      sql: '',
+      source_sql: SQL_2004,
+      pipeline: 'result_first_followup',
+      data: [{ country: 'US', total_billed_sales: 1_227_978, currency: 'USD' }],
+      answer_status: 'SUCCESS',
+    };
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show billed sales by country.' },
+      { role: 'assistant', content: 'Sales results', result: SUCCESS_2004 },
+      { role: 'user', content: 'Which country had the highest sales?' },
+      { role: 'assistant', content: 'US had the highest sales.', result: derived },
+    ];
+
+    const context = latestAssistantContext(messages);
+    assert.equal(context?.previousSQL, SQL_2004);
+    assert.deepEqual(context?.data, derived.data);
+    assert.equal(context?.previousQuestion, 'Which country had the highest sales?');
+  });
+
+  it('keeps every row from a result set when a follow-up refers to the same entities', () => {
+    const rows = Array.from({ length: 32 }, (_, index) => ({
+      customer_id: `C${index + 1}`,
+      total_sales: 100 - index,
+    }));
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show the top 32 customers by billed sales.' },
+      {
+        role: 'assistant',
+        content: '32 customers',
+        result: { ...SUCCESS_2004, data: rows },
+      },
+    ];
+
+    const context = lastSuccessfulAnalyticalContext(messages);
+    assert.equal(context?.data.length, 32);
+    assert.equal((context?.data[31] as { customer_id?: string })?.customer_id, 'C32');
+  });
 });

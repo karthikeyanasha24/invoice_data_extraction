@@ -27,12 +27,19 @@ _TX_GRAIN_MARKERS = (
 )
 
 _GROUP_PATTERNS: List[Tuple[str, str]] = [
-    (r"\b(?:one row per|by|per|each)\s+(?:billing\s+)?(?:documents?|invoices?)\b", "document"),
-    (r"\b(by|per|each|for each)\s+months?\b|\bmonthly\b", "month"),
+    (
+        r"\b(?:one row per|by|per|each)\s+(?:billing\s+)?(?:documents?|invoices?)\b|"
+        r"\b(?:top|bottom)\s+(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?"
+        r"(?:billing\s+|billed\s+)?(?:documents?|invoices?)\b|"
+        r"\b(?:highest|lowest)[- ]value\s+(?:billing\s+|billed\s+)?(?:documents?|invoices?)\b",
+        "document",
+    ),
+    (r"\b(by|per|each|for each|and)\s+months?\b|\bmonthly\b", "month"),
     (r"\b(by|per|each|for each)\s+(?:(?:calendar|fiscal|full|complete)\s+)?years?\b|\byearly\b|\bannually\b|\bannual\b|\beach year\b", "year"),
     (r"\b(by|per|each|for each)\s+quarters?\b|\bquarterly\b", "quarter"),
-    (r"\b(by|per|each|for each)\s+countr(?:y|ies)\b", "country"),
-    (r"\b(by|per|each|for each)\s+customers?\b", "customer"),
+    (r"\b(by|per|each|for each)\s+(?:customer\s+)?countr(?:y|ies)\b", "country"),
+    (r"\b(by|per|each|for each|and)\s+customers?\b(?!\s+countr(?:y|ies))|"
+     r"\bcustomer\s+names?\b", "customer"),
     (r"\b(by|per|each|for each)\s+(?:industr(?:y|ies)|sectors?)\b", "industry"),
     (r"\b(by|per|each|for each)\s+(?:materials?|products?)\b", "material"),
     (r"\b(by|per|each|for each)\s+(?:suppliers?|vendors?)\b", "vendor"),
@@ -71,6 +78,15 @@ _PARTITION_EACH = re.compile(
 _WHICH_ENTITY = re.compile(
     r"\b(?:which|what)\s+(countries|country|customers?|clients?|buyers?|materials?|products?|"
     r"suppliers?|vendors?|industr(?:y|ies)|segments?|plants?)\b",
+    re.I,
+)
+_CONTEXTUAL_SUPERLATIVE_ENTITY = re.compile(
+    r"^\s*(?:for|within|among)\s+(?:the\s+)?"
+    r"(?:higher|highest|lower|lowest|top|bottom|leading|best|worst|largest|smallest|most|least)"
+    r"(?:[-\s]+(?:sales|revenue|billed|billing|value|amount|profit|profitable))?\s+"
+    r"(?:sales\s+)?"
+    r"(?:countr(?:y|ies)|customers?|clients?|buyers?|materials?|products?|suppliers?|vendors?|"
+    r"industr(?:y|ies)|segments?|plants?|documents?|invoices?)\b",
     re.I,
 )
 _RELATIVE_PERIODS = [
@@ -470,6 +486,26 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             ops["group_by"] = ["document"]
             group_by = ops["group_by"]
 
+    # In a drill-down such as "For the higher-sales country, show monthly sales",
+    # the superlative selects the antecedent entity; the requested monthly series
+    # is not itself a ranking. Keep actual ranking requests (for example, "top 5
+    # months for the highest-sales country") intact.
+    if (
+        _CONTEXTUAL_SUPERLATIVE_ENTITY.search(ql)
+        and any(grain in group_by for grain in ("month", "quarter", "year"))
+    ):
+        # A leading superlative entity can act as a filter/anchor for the
+        # requested time series ("for the highest-value invoice, show its
+        # customer's monthly sales"). It is not another output grain.
+        if ops.get("ranking"):
+            ops["ranking"] = None
+            ops["limit"] = None
+            ops["order"] = None
+            ops["partition_by"] = []
+        if "document" in group_by:
+            group_by = [grain for grain in group_by if grain != "document"]
+            ops["group_by"] = group_by
+
     if ops.get("group_by") and ops.get("measure_concept") and not ops.get("aggregation"):
         ops["aggregation"] = "SUM"
 
@@ -495,7 +531,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             if "month" not in group_by:
                 group_by.append("month")
                 ops["group_by"] = group_by
-    if re.search(r"\b(compare|versus|vs\.?|better than|worse than)\b", ql):
+    if re.search(r"\b(compar\w*|versus|vs\.?|better than|worse than)\b", ql):
         ops["compare"] = True
     # Polarity/threshold predicates are applied below as generic comparisons.
 
@@ -534,9 +570,13 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         if not ops.get("aggregation"):
             ops["aggregation"] = "SUM"
 
-    if years and len(set(years)) >= 2 and (
+    explicit_year_series = bool(
+        "year" in group_by
+        and re.search(r"\b(?:by|per|each)\s+(?:(?:calendar|fiscal)\s+)?years?\b|\byearly\b", ql)
+    )
+    if years and len(set(years)) >= 2 and not explicit_year_series and (
         re.search(
-            r"\b(growth|increas\w*|decreas\w*|declin\w*|between|versus|vs\.?|compared|"
+            r"\b(growth|increas\w*|decreas\w*|declin\w*|between|versus|vs\.?|compar\w*|"
             r"difference|change|yoy|year[- ]over[- ]year|better|worse|contribut)\b",
             ql,
         )
@@ -663,7 +703,13 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         }
         ops["compare"] = True
         ops["period_compare"] = None
-    elif ops.get("compare") and years and len(set(years)) >= 2 and not ops.get("period_compare"):
+    elif (
+        ops.get("compare")
+        and years
+        and len(set(years)) >= 2
+        and not ops.get("period_compare")
+        and not explicit_year_series
+    ):
         ordered = sorted(set(years))
         ops["period_compare"] = {
             "type": "period_change",
@@ -672,6 +718,29 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             "op": "growth",
             "condition": "increased",
             "calculation": "difference",
+        }
+
+    # A billing document is one dated fact. Comparing the same invoice rows
+    # across two calendar years is undefined, so ask for a comparable business
+    # grain instead of generating an unrelated customer-count query.
+    period = ops.get("period_compare")
+    if (
+        isinstance(period, dict)
+        and "document" in (ops.get("group_by") or [])
+        and re.search(r"\bsame\s+(?:(?:billing|billed)\s+)?(?:documents?|invoices?)\b", ql)
+    ):
+        base = period.get("base_period") if isinstance(period.get("base_period"), dict) else {}
+        compare = period.get("comparison_period") if isinstance(period.get("comparison_period"), dict) else {}
+        year_a = str(base.get("year") or "the first year")
+        year_b = str(compare.get("year") or "the second year")
+        ops["clarification"] = {
+            "type": "document_period_comparison",
+            "entity_grain": "document",
+            "message": (
+                f"Each billing document has one billing date, so the same invoice cannot have separate "
+                f"{year_a} and {year_b} amounts. Should I keep the negative invoice list from {year_a} "
+                f"and compare billed totals for those customers across {year_a} and {year_b}?"
+            ),
         }
 
     if re.search(r"\b(above|over|greater than|higher than)\s+(?:the\s+)?average\b", ql):

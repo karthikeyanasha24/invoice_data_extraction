@@ -24,9 +24,13 @@ _SAP_TEXT_DATE_COLUMNS = frozenset({
     "wadat_ist", "lfdat", "bldat", "valdt",
 })
 
-_EXTRACT_YEAR_PATTERN = re.compile(
-    r"EXTRACT\s*\(\s*YEAR\s+FROM\s+((?:\"[A-Za-z0-9_]+\"\.\"[A-Za-z0-9_]+\"|\"[A-Za-z0-9_]+\"\.[A-Za-z0-9_]+))\s*\)",
-    re.I,
+_QUALIFIED_SQL_COLUMN = r'(?:"[A-Za-z0-9_]+"|[A-Za-z0-9_]+)\s*\.\s*(?:"[A-Za-z0-9_]+"|[A-Za-z0-9_]+)'
+_EXTRACT_TEXT_DATE_PATTERN = re.compile(
+    rf"""EXTRACT\s*\(\s*(?P<part>YEAR|MONTH)\s+FROM\s+
+        (?:CAST\s*\(\s*(?P<cast_ref>{_QUALIFIED_SQL_COLUMN})\s+AS\s+(?:DATE|TIMESTAMP(?:\s+WITHOUT\s+TIME\s+ZONE)?)\s*\)
+        |(?P<plain_ref>{_QUALIFIED_SQL_COLUMN})(?:\s*::\s*(?:DATE|TIMESTAMP(?:\s+WITHOUT\s+TIME\s+ZONE)?))?)
+        \s*\)""",
+    re.I | re.X,
 )
 
 _SQL_FUNCS = (
@@ -236,21 +240,43 @@ def relative_period_predicate(table: str, column: str, relative: str) -> str:
 
 
 def repair_extract_on_text_dates(sql: str) -> str:
-    """Replace EXTRACT(YEAR FROM text_date_col) with SUBSTRING — fixes SAP FKDAT etc."""
+    """Normalize date-part extraction on SAP/text dates without casting YYYYMMDD to DATE."""
     if not sql or "EXTRACT" not in sql.upper():
         return sql
 
     def repl(m: re.Match[str]) -> str:
-        ref = m.group(1)
-        parts = re.findall(r'"([A-Za-z0-9_]+)"', ref)
-        if len(parts) >= 2:
-            return year_filter_expression(parts[0], parts[1])
-        bare = re.match(r'"([A-Za-z0-9_]+)"\.([A-Za-z0-9_]+)', ref, re.I)
-        if bare:
-            return year_filter_expression(bare.group(1), bare.group(2))
-        return f"SUBSTRING(TRIM(CAST({ref} AS TEXT)), 1, 4)"
+        ref = m.group("cast_ref") or m.group("plain_ref")
+        identifiers = re.match(
+            r'\s*(?:"(?P<quoted_table>[A-Za-z0-9_]+)"|(?P<bare_table>[A-Za-z0-9_]+))\s*\.\s*'
+            r'(?:"(?P<quoted_column>[A-Za-z0-9_]+)"|(?P<bare_column>[A-Za-z0-9_]+))\s*$',
+            ref,
+            re.I,
+        )
+        if not identifiers:
+            return m.group(0)
 
-    return _EXTRACT_YEAR_PATTERN.sub(repl, sql)
+        table = identifiers.group("quoted_table") or identifiers.group("bare_table")
+        column = identifiers.group("quoted_column") or identifiers.group("bare_column")
+        ctype = column_type(table, column)
+        if ctype in {"date", "timestamp", "timestamp without time zone", "timestamp with time zone", "timestamptz"}:
+            return m.group(0)
+        is_text_date = column.lower() in _SAP_TEXT_DATE_COLUMNS or ctype in {
+            "text", "varchar", "character varying", "char", "character"
+        }
+        if not is_text_date:
+            return m.group(0)
+
+        text_ref = f"TRIM(CAST({ref} AS TEXT))"
+        start, width = (1, 4) if m.group("part").upper() == "YEAR" else (5, 2)
+        # EXTRACT returns a number, including in predicates and arithmetic.
+        # Preserve that meaning; YYYYMM grouping is built separately by the plan.
+        return f"CAST(NULLIF(SUBSTRING({text_ref}, {start}, {width}), '') AS INTEGER)"
+
+    # SQL-looking text inside a string literal is data, not an expression.
+    return "".join(
+        segment if index % 2 else _EXTRACT_TEXT_DATE_PATTERN.sub(repl, segment)
+        for index, segment in enumerate(re.split(r"('(?:''|[^'])*')", sql))
+    )
 
 
 def _normalize_plan_expressions(plan: StructuredQueryPlan) -> None:
@@ -1388,14 +1414,20 @@ def build_dimension_period_sales_sql(
     tables: List[str],
     semantic: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """Build a verified year series scoped to an explicit prior-result entity."""
+    """Build a verified period series scoped to an explicit prior-result entity."""
     from .semantic_requirements import required_semantics
 
     q = question or ""
     if not re.search(r"\b(?:sales|revenue|billing|billed|turnover)\b", q, re.I):
         return None
-    if not re.search(r"\b(?:by|per|each)\s+years?|\byearly\b", q, re.I):
-        return None
+    if re.search(r"\b(?:by|per|each|and)\s+months?|\bmonthly\b|\bmonth[- ]by[- ]month\b", q, re.I):
+        period_grain = "month"
+    elif re.search(r"\b(?:by|per|each)\s+quarters?|\bquarterly\b", q, re.I):
+        period_grain = "quarter"
+    elif re.search(r"\b(?:by|per|each)\s+(?:(?:calendar|fiscal)\s+)?years?|\byearly\b|\bannually\b", q, re.I):
+        period_grain = "year"
+    else:
+        period_grain = None
     header = resolve_table_name("VBRK") or "VBRK"
     if not has_table(header) or not has_column(header, "netwr"):
         return None
@@ -1409,33 +1441,61 @@ def build_dimension_period_sales_sql(
 
     where: List[str] = []
     joins: List[str] = []
+    select_dims: List[str] = []
+    group_dims: List[str] = []
+    ops = (req.get("semantic") or {}).get("analytical_operations") or {}
+    requested_dims = {
+        str(dim).lower()
+        for dim in (
+            req.get("group_by")
+            or (req.get("semantic") or {}).get("group_by")
+            or ops.get("group_by")
+            or []
+        )
+    }
+    if period_grain is None and "currency" not in requested_dims:
+        return None
     country_match = re.search(r"\bcountry\s+code\s+['\"]?([A-Za-z]{2,3})\b", q, re.I)
     customer_match = re.search(
         r"\bcustomer\s+(?:id|number)\s+(?:is\s+|=\s*)?['\"]?([A-Za-z0-9_-]+)", q, re.I
     )
 
 
-    if country_match:
+    group_country = "country" in requested_dims
+    group_customer = "customer" in requested_dims
+    if country_match or customer_match or group_country or group_customer:
         if not has_table("KNA1") or not has_column(header, "kunag") or not has_column("KNA1", "kunnr") or not has_column("KNA1", "land1"):
             return None
         joins.append(
             'JOIN "KNA1" c ON LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') '
             '= LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')'
         )
-        country = country_match.group(1).upper()
-        where.append(f'TRIM(CAST(c."land1" AS TEXT)) = \'{country}\'')
-    elif customer_match:
-        if not has_column(header, "kunag"):
-            return None
-        customer = customer_match.group(1).replace("'", "''")
-        where.append(f'LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') = LPAD(\'{customer}\', 10, \'0\')')
-    else:
+        if country_match:
+            country = country_match.group(1).upper()
+            where.append(f'TRIM(CAST(c."land1" AS TEXT)) = \'{country}\'')
+        if customer_match:
+            customer = customer_match.group(1).replace("'", "''")
+            where.append(f'LPAD(TRIM(CAST(k."kunag" AS TEXT)), 10, \'0\') = LPAD(\'{customer}\', 10, \'0\')')
+        if group_country:
+            select_dims.append('TRIM(CAST(c."land1" AS TEXT)) AS "country"')
+            group_dims.append('TRIM(CAST(c."land1" AS TEXT))')
+        if group_customer:
+            select_dims.append('TRIM(CAST(c."kunnr" AS TEXT)) AS "customer_id"')
+            group_dims.append('TRIM(CAST(c."kunnr" AS TEXT))')
+            if has_column("KNA1", "name1"):
+                select_dims.append('TRIM(CAST(c."name1" AS TEXT)) AS "customer_name"')
+                group_dims.append('TRIM(CAST(c."name1" AS TEXT))')
+    elif requested_dims.difference({"month", "year", "quarter", "currency"}):
         return None
 
     date_expr = 'TRIM(CAST(k."fkdat" AS TEXT))'
     where.append(f"SUBSTRING({date_expr}, 1, 4) IN ({', '.join(repr(year) for year in years)})")
     currency_col = next((col for col in ("waerk", "waers", "rtcur") if has_column(header, col)), None)
-    currency_match = re.search(r"\bcurrency\s+([A-Za-z]{3})\b", q, re.I)
+    currency_match = re.search(r"\bcurrency\s+([A-Z]{3})\b", q)
+    if not currency_match:
+        # A bare code after "in" is recognizable by its conventional uppercase
+        # spelling; don't consume articles in phrases such as "in the last year".
+        currency_match = re.search(r"\bin\s+(?:currency\s+)?([A-Z]{3})\b", q)
     if currency_col and currency_match:
         currency = currency_match.group(1).upper()
         where.append(f'TRIM(CAST(k."{currency_col}" AS TEXT)) = \'{currency}\'')
@@ -1448,13 +1508,41 @@ def build_dimension_period_sales_sql(
     else:
         currency_select = currency_group = ""
 
-    bucket = f'SUBSTRING({date_expr}, 1, 4)'
+    # Keep month buckets year-qualified (YYYYMM), even when the request is
+    # scoped to one year. This avoids merging January from different years and
+    # satisfies the same FKDAT month-grain guard used by other query paths.
+    bucket_length = 6 if period_grain == "month" else 4
+    bucket = f'SUBSTRING({date_expr}, 1, {bucket_length})' if period_grain in {"month", "year"} else None
+    if period_grain == "quarter":
+        month_expr = f'CAST(SUBSTRING({date_expr}, 5, 2) AS INTEGER)'
+        quarter_num = (
+            f"CASE WHEN {month_expr} BETWEEN 1 AND 3 THEN '1' "
+            f"WHEN {month_expr} BETWEEN 4 AND 6 THEN '2' "
+            f"WHEN {month_expr} BETWEEN 7 AND 9 THEN '3' "
+            f"WHEN {month_expr} BETWEEN 10 AND 12 THEN '4' END"
+        )
+        bucket = f"(SUBSTRING({date_expr}, 1, 4) || '-Q' || {quarter_num})"
+    period_label = period_grain if period_grain else None
     amount_expr = numeric_cast_expr(header, "netwr").replace(f'"{header}".', "k.")
+    select_parts = [
+        *select_dims,
+    ]
+    if bucket and period_label:
+        select_parts.append(f'{bucket} AS "{period_label}"')
+    select_parts.append(f'SUM({amount_expr}) AS "total_billed_sales"')
+    if "currency" in requested_dims and not currency_col:
+        return None
+    if currency_col:
+        select_parts.append(f'k."{currency_col}" AS "currency"')
+    groups = [*group_dims, *([bucket] if bucket else [])]
+    if currency_col:
+        groups.append(f'k."{currency_col}"')
+    order_by = f'"{period_label}" ASC' if period_label else '"currency" ASC'
     return (
-        f'SELECT {bucket} AS "year", SUM({amount_expr}) AS "total_billed_sales"{currency_select}\n'
+        f'SELECT {", ".join(select_parts)}\n'
         f'FROM "{header}" k' + ("\n" + "\n".join(joins) if joins else "") + "\n"
         + "WHERE " + "\n  AND ".join(where) + "\n"
-        + f"GROUP BY {bucket}{currency_group}\nORDER BY \"year\" ASC"
+        + f'GROUP BY {", ".join(groups)}\nORDER BY {order_by}'
     )
 
 
@@ -1518,6 +1606,9 @@ def build_period_compare_sql(
     from .semantic_requirements import required_semantics
 
     req = required_semantics(question, semantic)
+    original_user_question = str(
+        (semantic or {}).get("_original_user_question") or question or ""
+    )
     period = req.get("period_compare")
     if not isinstance(period, dict):
         return None
@@ -1541,6 +1632,12 @@ def build_period_compare_sql(
             y_a, y_b = sorted(set(years))[0], sorted(set(years))[-1]
         else:
             return None
+    # A conversation rewrite can mention a prior query's year (for example,
+    # "the 2017 top customers") alongside the current comparison. The user's
+    # current message is authoritative for the periods being compared.
+    explicit_user_years = extract_question_years(original_user_question)
+    if len(explicit_user_years) >= 2:
+        y_a, y_b = explicit_user_years[-2], explicit_user_years[-1]
     if not has_table("VBRK") or not has_column("VBRK", "netwr") or not has_column("VBRK", "fkdat"):
         return None
 
@@ -1636,6 +1733,48 @@ def build_period_compare_sql(
         "NULLIF(TRIM(CAST(k.\"fkdat\" AS TEXT)), '') IS NOT NULL",
         f"{yexpr} IN ('{y_a}', '{y_b}')",
     ]
+    # A referential follow-up such as "for the same customers returned
+    # previously" must scope the aggregate to verified IDs from that result.
+    # Names and arbitrary model filters are not accepted as entity identifiers.
+    same_customer_scope = bool(
+        re.search(
+            r"\b(?:(?:same|those|these|previous|prior)\s+){1,2}(?:result\s+)?customers?\b|"
+            r"\bcustomers?\s+(?:returned|identified|selected)\s+previously\b",
+            original_user_question,
+            re.I,
+        )
+    )
+    scoped_customer_ids: List[str] = []
+    if same_customer_scope:
+        prior_rows = (semantic or {}).get("prior_result_rows") if isinstance(semantic, dict) else []
+        prior_customer_ids = []
+        for row in prior_rows or []:
+            if not isinstance(row, dict):
+                continue
+            value = next(
+                (
+                    row.get(key)
+                    for key in ("customer_id", "kunnr", "kunag", "customer_number", "sold_to_customer")
+                    if row.get(key) is not None and str(row.get(key)).strip()
+                ),
+                None,
+            )
+            if value is not None:
+                prior_customer_ids.append(str(value).strip())
+        prior_customer_ids = list(dict.fromkeys(prior_customer_ids))
+        customer_col = next((c for c in ("kunag", "kunnr") if has_column(hdr, c)), None)
+        if not prior_customer_ids or not customer_col:
+            return None
+        if len(prior_customer_ids) > 200:
+            # Do not silently truncate a prior-result scope and claim completeness.
+            return None
+        id_expr = f'LPAD(TRIM(CAST(k."{customer_col}" AS TEXT)), 10, \'0\')'
+        id_values = ", ".join(
+            f"LPAD('{value.replace(chr(39), chr(39) * 2)}', 10, '0')"
+            for value in prior_customer_ids
+        )
+        where.append(f"{id_expr} IN ({id_values})")
+        scoped_customer_ids = prior_customer_ids
     period_a = f"SUM(CASE WHEN {yexpr} = '{y_a}' THEN {net} ELSE 0 END)"
     period_b = f"SUM(CASE WHEN {yexpr} = '{y_b}' THEN {net} ELSE 0 END)"
     change = f"({period_b} - {period_a})"
@@ -1644,6 +1783,36 @@ def build_period_compare_sql(
         f'{period_b} AS "period_b"',
         f'{change} AS "change"',
     ])
+    # Keep explicitly requested document identifiers in the selected period's
+    # customer row. A text-only narrative cannot satisfy a request to list the
+    # source billing documents, and the grouping grain remains customer-level.
+    include_fields = (semantic or {}).get("include_fields") if isinstance(semantic, dict) else []
+    include_document_numbers = bool(
+        re.search(r"\b(?:invoice|billing\s+document)\s+numbers?\b", original_user_question, re.I)
+        or any(
+            isinstance(field, dict)
+            and str(field.get("field") or "").lower() in {
+                "invoice_number", "billing_document", "billing_document_number", "document_number"
+            }
+            for field in (include_fields or [])
+        )
+    )
+    if include_document_numbers and has_column(hdr, "vbeln"):
+        base_documents = (
+            f"STRING_AGG(DISTINCT CASE WHEN {yexpr} = '{y_a}' "
+            'THEN TRIM(CAST(k."vbeln" AS TEXT)) END, \', \')'
+        )
+        sel.append(f'{base_documents} AS "invoice_numbers_{y_a}"')
+
+    calculation = str(period.get("calculation") or "").lower()
+    if calculation in {"both", "percentage_change", "percent_change", "percentage"} or re.search(
+        r"\b(percent(?:age)?\s+change|pct\s+change)\b|%\s*change",
+        original_user_question,
+        re.I,
+    ):
+        sel.append(
+            f'ROUND(100.0 * {change} / NULLIF({period_a}, 0), 2) AS "percent_change"'
+        )
     condition = str(period.get("condition") or period.get("op") or "").lower()
     having = None
     ql = (question or "").lower()
@@ -1680,6 +1849,93 @@ def build_period_compare_sql(
             f'ROUND(100.0 * {change} / NULLIF(SUM({change}) OVER (), 0), 2) AS "contribution_pct"'
         )
         lim = min(max(int(lim), 1), 50)
+
+    # A same-entity follow-up describes the entity set returned earlier. Drive
+    # the result from that verified set and left-join period facts so customers
+    # without invoices in either requested period remain visible as 0 / 0.
+    # Put all fact-side predicates inside the aggregate CTE; placing a currency
+    # or period condition in the outer WHERE would turn the LEFT JOIN into an
+    # effective INNER JOIN and silently drop those customers again.
+    if scoped_customer_ids and "customer" in dims and not aggregate_only:
+        explicit_ranking = bool(re.search(
+            r"\b(top|bottom|rank(?:ed|ing)?|highest|lowest|largest|smallest|most|least)\b",
+            original_user_question,
+            re.I,
+        ))
+        if not explicit_ranking:
+            # The previous turn may have been a top-N query. A comparison
+            # follow-up means all returned entities unless the user ranks them
+            # again explicitly.
+            lim = max(1, min(len(scoped_customer_ids), 200))
+        customer_values = ", ".join(
+            "(" + f"LPAD('{value.replace(chr(39), chr(39) * 2)}', 10, '0')" + ")"
+            for value in scoped_customer_ids
+        )
+        customer_expr = f'LPAD(TRIM(CAST(k."{customer_col}" AS TEXT)), 10, \'0\')'
+        fact_select = [
+            f'{customer_expr} AS "customer_id"',
+            f'{period_a} AS "period_a"',
+            f'{period_b} AS "period_b"',
+        ]
+        if include_document_numbers and has_column(hdr, "vbeln"):
+            fact_select.append(
+                f'{base_documents} AS "invoice_numbers_{y_a}"'
+            )
+        fact_sql = (
+            'period_totals AS (\n'
+            f'    SELECT {", ".join(fact_select)}\n'
+            f'    FROM "{hdr}" k\n'
+            f'    WHERE NULLIF(TRIM(CAST(k."fkdat" AS TEXT)), \'\') IS NOT NULL\n'
+            f'      AND {yexpr} IN (\'{y_a}\', \'{y_b}\')\n'
+            f'      AND {customer_expr} IN (SELECT customer_id FROM selected_customers)\n'
+            f'    GROUP BY {customer_expr}\n'
+            ')'
+        )
+        out_select = ['sc.customer_id AS "customer_id"']
+        out_joins = []
+        if has_table("KNA1") and has_column("KNA1", "kunnr"):
+            out_joins.append(
+                'LEFT JOIN "KNA1" c ON LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\') = sc.customer_id'
+            )
+            if has_column("KNA1", "name1"):
+                out_select.append('TRIM(c."name1") AS "customer_name"')
+        period_a_out = 'COALESCE(pt."period_a", 0)'
+        period_b_out = 'COALESCE(pt."period_b", 0)'
+        change_out = f'({period_b_out} - {period_a_out})'
+        out_select.extend([
+            f'{period_a_out} AS "period_a"',
+            f'{period_b_out} AS "period_b"',
+            f'{change_out} AS "change"',
+        ])
+        if include_document_numbers and has_column(hdr, "vbeln"):
+            out_select.append(f'pt."invoice_numbers_{y_a}" AS "invoice_numbers_{y_a}"')
+        if calculation in {"both", "percentage_change", "percent_change", "percentage"} or re.search(
+            r"\b(percent(?:age)?\s+change|pct\s+change)\b|%\s*change",
+            original_user_question,
+            re.I,
+        ):
+            out_select.append(
+                f'ROUND(100.0 * {change_out} / NULLIF({period_a_out}, 0), 2) AS "percent_change"'
+            )
+        if want_contribution:
+            out_select.append(
+                f'ROUND(100.0 * {change_out} / NULLIF(SUM({change_out}) OVER (), 0), 2) AS "contribution_pct"'
+            )
+        scoped_sql = (
+            'WITH selected_customers(customer_id) AS (\n'
+            f'    VALUES {customer_values}\n'
+            '),\n'
+            f'{fact_sql}\n'
+            f'SELECT {", ".join(out_select)}\n'
+            'FROM selected_customers sc\n'
+            + ("\n".join(out_joins) + "\n" if out_joins else "")
+            + 'LEFT JOIN period_totals pt ON pt.customer_id = sc.customer_id\n'
+        )
+        if having:
+            scoped_sql += f'WHERE {change_out} {"< 0" if having.endswith("< 0") else "> 0"}\n'
+        scoped_sql += f'ORDER BY "change" {order_dir}\nLIMIT {max(1, min(int(lim), 200))}'
+        return scoped_sql
+
     sql = (
         f"SELECT {', '.join(sel)}\n"
         + "\n".join(joins) + "\n"
@@ -2564,8 +2820,9 @@ def build_structured_query_plan(
     detail = reg.column_detail_for_selection(tables)
     col_block = "\n".join(f"- {c}" for c in columns)
 
-    raw, provider = analyze_json(
-        "You build a STRUCTURED QUERY PLAN. JSON only. Do NOT output SQL. "
+    try:
+        raw, provider = analyze_json(
+            "You build a STRUCTURED QUERY PLAN. JSON only. Do NOT output SQL. "
         "Separate physical columns (type=column) from SQL expressions (type=expression). "
         "NEVER put function calls like SUBSTRING/EXTRACT/TRIM inside the column field.",
         (
@@ -2591,8 +2848,18 @@ def build_structured_query_plan(
             "- For 'show/list negative sales' return row-level rows (no SUM) with netwr < 0 filter.\n"
             "- For negative sales: filter measure column with operator '<' and value 0.\n"
             "- Include all columns needed to answer the question in select.\n"
-        ),
-    )
+            ),
+        )
+    except Exception as exc:
+        # Semantic defaults and the validated SQL templates below remain the
+        # authority when plan generation is unavailable. An empty model plan
+        # is safe: it contains no guessed tables, columns, or predicates.
+        raw = {}
+        provider = "local_semantic_fallback"
+        logger.warning(
+            "[structured_sql] plan model unavailable; using semantic defaults (%s)",
+            type(exc).__name__,
+        )
     logger.info("[structured_sql] QUERY_PLAN provider=%s keys=%s", provider, list(raw.keys())[:12])
 
     plan = StructuredQueryPlan(
@@ -3518,6 +3785,9 @@ def sanitize_generated_sql(sql: str, question: str = "") -> str:
     out = sanitize_sap_amount_predicates_sql(out)
     if question:
         out = repair_absurd_question_literal_filters(out, question)
+        from .adaptive_nl_sql_hardening import strip_customer_name_filter_from_country_query
+
+        out = strip_customer_name_filter_from_country_query(out, question)
     return sanitize_trim_type_safety_sql(out)
 
 

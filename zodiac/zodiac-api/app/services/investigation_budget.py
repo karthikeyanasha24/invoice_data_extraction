@@ -82,6 +82,7 @@ class InvestigationTimeout(Exception):
 class InvestigationBudget:
     question: str = ""
     request_id: str = ""
+    owner_id: Optional[int] = None
     started_at: float = field(default_factory=time.monotonic)
     started_wall: float = field(default_factory=time.time)
     limit_s: float = HARD_LIMIT_SECONDS
@@ -303,6 +304,7 @@ def begin_investigation(
     question: str = "",
     limit_s: Optional[float] = None,
     request_id: str = "",
+    owner_id: Optional[int] = None,
 ) -> InvestigationBudget:
     rid = (request_id or "").strip() or uuid.uuid4().hex
     limit = HARD_LIMIT_SECONDS if limit_s is None else float(limit_s)
@@ -310,6 +312,7 @@ def begin_investigation(
         existing = _REGISTRY.get(rid)
         if existing is not None and existing.cancelled:
             existing.question = question or existing.question
+            existing.owner_id = owner_id if owner_id is not None else existing.owner_id
             existing.limit_s = max(1.0, limit)
             existing.started_at = time.monotonic()
             existing.started_wall = time.time()
@@ -320,6 +323,7 @@ def begin_investigation(
             budget = InvestigationBudget(
                 question=question or "",
                 request_id=rid,
+                owner_id=owner_id,
                 limit_s=max(1.0, limit),
             )
             _REGISTRY[rid] = budget

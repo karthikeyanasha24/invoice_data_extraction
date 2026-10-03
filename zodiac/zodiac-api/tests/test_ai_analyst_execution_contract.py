@@ -22,6 +22,11 @@ from app.services.investigation_budget import begin_investigation, end_investiga
         "Show the top five customers by billed sales in the latest complete year.",
         'SELECT kunag AS customer, SUM(netwr) AS total_sales FROM "VBRK" GROUP BY kunag ORDER BY total_sales DESC LIMIT 5',
     ),
+    (
+        "For the higher-sales country, show monthly billed sales in the same year and currency.",
+        "Show the top five countries by billed sales in the latest complete year available.",
+        'SELECT country, currency, SUM(netwr) AS billed_sales FROM "VBRK" GROUP BY country, currency ORDER BY billed_sales DESC LIMIT 5',
+    ),
 ])
 def test_drilldown_keeps_the_selected_result_context(question, prior_question, prior_sql):
     prior_plan = extract_query_plan(prior_question).to_dict()

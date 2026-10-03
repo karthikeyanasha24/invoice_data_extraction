@@ -125,7 +125,47 @@ def _strip_exists_subqueries(sql: str) -> str:
     return out
 
 
-def _extract_alias_map(sql: str) -> Dict[str, str]:
+def _outer_query_after_ctes(sql: str) -> str:
+    """Return the main SELECT after a WITH clause for outer-scope join checks."""
+    if not re.search(r"\bWITH\b", sql or "", re.I):
+        return sql or ""
+    depth = 0
+    quote: Optional[str] = None
+    i = 0
+    while i < len(sql):
+        char = sql[i]
+        if quote:
+            if char == quote:
+                if i + 1 < len(sql) and sql[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            i += 1
+            continue
+        if char == "(":
+            depth += 1
+            i += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if depth == 0 and (char.isalpha() or char == "_"):
+            start = i
+            while i < len(sql) and (sql[i].isalnum() or sql[i] == "_"):
+                i += 1
+            if sql[start:i].upper() == "SELECT":
+                return sql[start:]
+            continue
+        i += 1
+    return sql
+
+
+def _extract_alias_map(sql: str, extra_local_rels: Optional[Set[str]] = None) -> Dict[str, str]:
     """
     Build a map of {alias_upper -> table_name} from all FROM/JOIN clauses.
     Correctly rejects SQL keywords (INNER, LEFT, ON, etc.) as aliases so that
@@ -135,6 +175,7 @@ def _extract_alias_map(sql: str) -> Dict[str, str]:
 
     alias_map: Dict[str, str] = {}
     local_rels = {n.upper() for n in local_sql_relation_names(sql)}
+    local_rels.update(n.upper() for n in (extra_local_rels or set()))
     pattern = re.compile(
         r"\b(?:FROM|JOIN)\s+(?:(?:[A-Za-z_][A-Za-z0-9_]*\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"?)"
         r"(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?"
@@ -385,8 +426,8 @@ def validate_sql_precision(
     local_rels = {n.upper() for n in local_sql_relation_names(normalized_sql)}
     alias_map = _extract_alias_map(normalized_sql)
     # Connectivity / join-graph checks ignore EXISTS/NOT EXISTS targets (anti-joins).
-    outer_sql = _strip_exists_subqueries(normalized_sql)
-    outer_alias_map = _extract_alias_map(outer_sql)
+    outer_sql = _strip_exists_subqueries(_outer_query_after_ctes(normalized_sql))
+    outer_alias_map = _extract_alias_map(outer_sql, local_rels)
     tables = sorted(
         {
             table.upper()
@@ -414,11 +455,15 @@ def validate_sql_precision(
         if columns is not None and column.upper() not in columns:
             errors.append(f"Column '{table_name}.{column}' is not available in the SAP schema.")
 
-    used_join_pairs = _extract_join_column_pairs(outer_sql, outer_alias_map)
-    join_pairs_from_clauses = _extract_join_table_pairs_from_clauses(outer_sql, outer_alias_map)
+    # Validate physical joins inside CTEs too, but ignore local CTE-to-CTE and
+    # physical-table-to-CTE links when comparing against SAP's join graph.
+    used_join_pairs = _extract_join_column_pairs(normalized_sql, alias_map)
+    join_pairs_from_clauses = _extract_join_table_pairs_from_clauses(normalized_sql, alias_map)
     allowed_join_pairs = _allowed_join_pairs()
     allowed_edges = allowed_table_edges()
     for table_pair, used_columns in used_join_pairs.items():
+        if table_pair & local_rels:
+            continue
         if table_pair not in allowed_edges:
             pair_name = " <-> ".join(sorted(table_pair))
             errors.append(f"Join edge {pair_name} is not in the approved join graph.")
@@ -441,7 +486,9 @@ def validate_sql_precision(
     # Only outer-query tables participate — EXISTS anti-join targets are intentionally unjoined.
     if len(outer_tables) > 1:
         neighbor: Dict[str, Set[str]] = {t: set() for t in outer_tables}
-        all_pairs_for_connectivity = set(used_join_pairs.keys()) | set(join_pairs_from_clauses)
+        all_pairs_for_connectivity = set(
+            _extract_join_column_pairs(outer_sql, outer_alias_map).keys()
+        ) | _extract_join_table_pairs_from_clauses(outer_sql, outer_alias_map)
         for pair in all_pairs_for_connectivity:
             tlist = sorted(pair)
             if len(tlist) == 2 and tlist[0] in neighbor and tlist[1] in neighbor:
@@ -526,10 +573,33 @@ def validate_sql_precision(
             and re.search(r"\b(monthly|per month|by month|each month|month by month)\b", question_l)
         )
         if month_intent and touches_billing_tables:
+            where_clause = re.split(r"\bwhere\b", sql_l, maxsplit=1)[-1]
+            where_clause = re.split(r"\bgroup\s+by\b", where_clause, maxsplit=1)[0]
+            year_literals = set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", where_clause))
+            single_year_scope = bool("fkdat" in where_clause and len(year_literals) == 1)
+            month_of_year_expr = bool(
+                re.search(
+                    r"substring[\s\S]{0,180}?fkdat[\s\S]{0,100}?(?:,\s*5\s*,\s*2|\bfrom\s+5\s+for\s+2\b)",
+                    sql_l,
+                    re.IGNORECASE,
+                )
+            )
+            grouped_by_month_of_year = bool(
+                month_of_year_expr
+                and re.search(
+                    r"group\s+by[\s\S]{0,400}?substring[\s\S]{0,180}?fkdat[\s\S]{0,100}?(?:,\s*5\s*,\s*2|\bfrom\s+5\s+for\s+2\b)",
+                    sql_l,
+                    re.IGNORECASE,
+                )
+            )
             has_month_bucket_expr = bool(
                 re.search(r"to_char\s*\([^)]*fkdat[^)]*'yyyy[-]?mm'\)", sql_l, re.IGNORECASE)
                 or ("substring" in sql_l and "fkdat" in sql_l and ",1,6" in sql_l.replace(" ", ""))
                 or re.search(r"date_trunc\s*\(\s*'month'[^)]*fkdat", sql_l, re.IGNORECASE)
+                # Month-of-year (MM) is a valid bucket when the data is scoped
+                # to exactly one FKDAT year; for multi-year trends require
+                # YYYYMM so January from different years cannot be combined.
+                or (single_year_scope and month_of_year_expr)
             )
             grouped_by_bucket = bool(
                 re.search(
@@ -537,6 +607,7 @@ def validate_sql_precision(
                     sql_l,
                     re.IGNORECASE,
                 )
+                or (single_year_scope and grouped_by_month_of_year)
             )
             if not (has_month_bucket_expr and grouped_by_bucket):
                 errors.append(

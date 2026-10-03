@@ -84,7 +84,7 @@ _FIELD_TARGET = re.compile(
 )
 _SOURCE_INVENTORY = re.compile(
     r"^\s*(?:which|what|list|show|describe|how\s+many|tell\s+me\s+(?:about\s+)?)\s+"
-    r"(?:(?:me|the|all|connected|available)\s+)*(?:data\s+sources?|databases?|datasets?|connections?)\b.{0,55}"
+    r"(?:(?:me|the|all|connected|available)\s+)*(?:data\s+sources?|database(?!\s+tables?)s?|datasets?|connections?)\b.{0,55}"
     r"\b(?:connected|available|accessible|have|access)\b|"
     r"^\s*(?:which|what|list|show|describe)\s+(?:the\s+)?(?:connected|available)\s+"
     r"(?:data\s+sources?|databases?|datasets?)\b",
@@ -178,6 +178,9 @@ class MetadataPlan:
     confidence: float = 0.8
     list_all: bool = False
     topic_terms: List[str] = field(default_factory=list)
+    list_limit: Optional[int] = None
+    domain_filter: Optional[str] = None
+    include_total_count: bool = False
 
 
 @dataclass
@@ -233,6 +236,17 @@ def _resolve_table_mention(question: str, schema: Dict[str, List[Dict[str, Any]]
     return None
 
 
+def _qualified_field_request(
+    question: str, schema: Dict[str, List[Dict[str, Any]]],
+) -> Optional[Tuple[str, str]]:
+    tables, _ = _schema_index(schema)
+    for match in re.finditer(r'\b([a-z][a-z0-9_]*)\s*\.\s*([a-z][a-z0-9_]*)\b', question or "", re.I):
+        table = tables.get(match.group(1).lower())
+        if table:
+            return table, match.group(2)
+    return None
+
+
 def _search_terms(question: str) -> List[str]:
     q = (question or "").lower()
     # Topic phrases after contain/related/about
@@ -276,6 +290,25 @@ def _search_terms(question: str) -> List[str]:
     return terms[:8]
 
 
+def _requested_list_limit(question: str) -> Optional[int]:
+    number_words = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+        "nineteen": 19, "twenty": 20,
+    }
+    words = "|".join(number_words)
+    match = re.search(rf"\b(?:first|top|last)\s+(\d{{1,3}}|{words})\b", question or "", re.I)
+    if not match:
+        return None
+    raw = match.group(1).lower()
+    try:
+        return max(1, min(int(raw) if raw.isdigit() else number_words[raw], 500))
+    except (KeyError, ValueError):
+        return None
+
+
 def _meaning_tokens(text: str) -> set[str]:
     """Small linguistic normalization shared by query and catalog labels."""
     tokens = set(re.findall(r"[a-z0-9]+", (text or "").lower().replace("_", " ")))
@@ -311,7 +344,7 @@ def _field_request(question: str) -> Tuple[List[str], List[str]]:
     if explicit:
         return _split_topics(explicit.group(1)), []
     pre = re.search(
-        r"\b(?:which|what|show|list)\s+(?:the\s+)?(.+?)\s+(?:fields?|columns?)\b(?:\s+(?:are\s+)?available)?\s+(?:for|in|on|of)\s+(.+?)(?:[?.!]|$)",
+        r"\b(?:which|what|show|list)\s+(?:the\s+)?(.+?)\s+(?:fields?|columns?)\b(?:\s+(?:are\s+)?(?:available|present|defined))?\s+(?:for|in|on|of)\s+(.+?)(?:[?.!]|$)",
         q, re.I,
     )
     if pre and not re.search(r"\b(?:all|exact|physical)\b", pre.group(1), re.I):
@@ -321,10 +354,42 @@ def _field_request(question: str) -> Tuple[List[str], List[str]]:
 
 def _table_topics(question: str) -> List[str]:
     match = re.search(
-        r"\btables?\s+(?:(?:contain|contains|containing|store|stores|have|hold|holds|include|includes)\s+|(?:for|about|with|related\s+to)\s+)(.+?)(?:[?.!]|$)",
+        r"\btables?\s+(?:are\s+)?(?:(?:contain|contains|containing|store|stores|have|hold|holds|include|includes)\s+|(?:for|about|with|related\s+to)\s+)(.+?)(?:[?.!]|$)",
         question or "", re.I,
     )
-    return _split_topics(match.group(1)) if match else _search_terms(question)
+    if match:
+        return _split_topics(match.group(1))
+    # A table subject may precede the catalog noun ("billing tables", "work
+    # center tables") as well as follow it. Extract language, not table names;
+    # the authorized catalog resolves whether that subject exists.
+    modifier = re.search(
+        r"\b(?:(?:which|what|show|list|enumerate|display|give)\s+(?:(?:me|the)\s+)*|"
+        r"how\s+many\s+|(?:count|number)\s+of\s+)(.+?)\s+tables?\b",
+        question or "", re.I,
+    )
+    if modifier:
+        raw = re.sub(r"\b(?:first|top|last)\s+(?:\d+|[a-z]+)\b", "", modifier.group(1), flags=re.I)
+        raw = re.sub(
+            r"\b(?:all|every|the|connected|available|accessible|physical|sap|"
+            r"database|schema|catalog|metadata|domain|total)\b|\b\d+\b",
+            " ", raw, flags=re.I,
+        )
+        topics = _split_topics(raw.replace("-", " "))
+        if topics:
+            return topics
+    return _search_terms(question)
+
+
+def _table_matches_topic(topic: str, table: str, semantics: Dict[str, str]) -> bool:
+    """Match a table's own catalog role or physical name, not incidental joins."""
+    requested = _meaning_tokens(topic)
+    if not requested:
+        return False
+    primary = re.split(r"[.;]", semantics["description"], maxsplit=1)[0]
+    # Metadata descriptions may explicitly exclude another business role.
+    primary = re.split(r"\bnot\b", primary, maxsplit=1, flags=re.I)[0]
+    role = _meaning_tokens(primary + " " + semantics["grain"] + " " + semantics["domain"])
+    return requested <= role or requested <= _meaning_tokens(table)
 
 
 def _table_semantics(table: str) -> Dict[str, str]:
@@ -338,6 +403,7 @@ def _table_semantics(table: str) -> Dict[str, str]:
         "description": str(getattr(meta, "description", "") or ""),
         "domain": str(getattr(meta, "domain", "") or ""),
         "grain": str(getattr(meta, "grain", "") or ""),
+        "important_columns": " ".join(str(column).lower() for column in (getattr(meta, "important_columns", None) or [])),
     }
 
 
@@ -420,6 +486,7 @@ def search_column_meanings(
             primary = re.split(r"[.;]", semantics["description"], maxsplit=1)[0]
             primary_tokens = _meaning_tokens(primary)
             scope_tokens = set().union(*(_meaning_tokens(topic) for topic in plan.topic_terms)) if plan.topic_terms else requested
+            important_columns = set(semantics.get("important_columns", "").split())
             for column in schema[table]:
                 physical_name = str(column["col"])
                 description = mappings.get(physical_name.lower(), "")
@@ -435,7 +502,7 @@ def search_column_meanings(
                 starts_with_target = description.startswith(term.lower())
                 rank = (
                     exact_name, bool(requested) and requested <= label_tokens,
-                    overlap / max(1, len(requested)), scope_overlap,
+                    overlap / max(1, len(requested)), physical_name.lower() in important_columns, scope_overlap,
                     table_relevance, is_primary_grain, starts_with_target,
                     -len(physical_name), overlap / max(1, len(label_tokens)),
                 )
@@ -463,7 +530,13 @@ def is_database_metadata_question(question: str) -> bool:
     # Do not answer them with an unrelated global catalog count/list before the
     # dialogue resolver can inspect the prior turn.
     if _CONTEXTUAL_CATALOG_REFERENCE.search(ql):
-        return False
+        explicit_prior_schema_listing = bool(
+            re.search(r"\b(schema|catalog|data\s+dictionary)\b", ql)
+            and re.search(r"\b(tables?|columns?|fields?)\b", ql)
+            and re.search(r"\b(list|show|display|enumerate|first|top|last)\b", ql)
+        )
+        if not explicit_prior_schema_listing:
+            return False
     if _SOURCE_INVENTORY.search(ql):
         return True
 
@@ -471,6 +544,12 @@ def is_database_metadata_question(question: str) -> bool:
     # the requested capability from analytics to catalog introspection.
     if _BUSINESS_FACT.search(ql) and _ANALYSIS_EXECUTION_CUE.search(ql):
         return False
+
+    if (
+        re.search(r"\b[a-z][a-z0-9_]*\s*\.\s*[a-z][a-z0-9_]*\b", ql)
+        and re.search(r"\b(?:data\s*type|business\s+meaning|meaning|definition|description|describe|explain|what\s+is)\b", ql)
+    ):
+        return True
 
     # Ranking / measure analytics are never metadata.
     if _RANKING_ANALYTICS.search(ql) and not _SCHEMA_ENTITY.search(ql):
@@ -526,6 +605,14 @@ def classify_metadata_operation(
     terms = _search_terms(q)
     if _SOURCE_INVENTORY.search(ql):
         return MetadataPlan(operation=LIST_DATA_SOURCES, confidence=0.96)
+    qualified_field = _qualified_field_request(q, schema_n)
+    if qualified_field:
+        return MetadataPlan(
+            operation=SEARCH_COLUMNS,
+            table_name=qualified_field[0],
+            search_terms=[qualified_field[1]],
+            confidence=0.98,
+        )
     field_targets, scope = _field_request(q)
     if field_targets:
         return MetadataPlan(
@@ -534,6 +621,37 @@ def classify_metadata_operation(
             search_terms=field_targets,
             topic_terms=[] if table else scope,
             confidence=0.95,
+        )
+    # Combined catalog requests such as "how many tables, and list the first
+    # five" return both the live count and the requested name sample. Domain
+    # filtering is resolved against schema metadata rather than a fixed list.
+    table_topics = _table_topics(q)
+    explicit_table_listing = bool(
+        re.search(r"\b(?:list|enumerate|first|top|last)\b", ql)
+        and re.search(r"\btables?\b", ql)
+        and not _SEARCH_CUE.search(ql)
+    )
+    scoped_table_listing = bool(
+        table_topics
+        and re.search(r"\btables?\b", ql)
+        and not re.search(r"\b(?:columns?|fields?)\b", ql)
+        and not _SEARCH_CUE.search(ql)
+    )
+    if explicit_table_listing or scoped_table_listing:
+        domain_filter = None
+        domain_match = re.search(r"\b([a-z][a-z_-]*)[-\s]domain\b", ql)
+        if domain_match:
+            # Keep even an unknown requested domain: dropping it would turn a
+            # no-match answer into an unrelated list of the entire catalog.
+            domain_filter = domain_match.group(1).replace("-", "_")
+        return MetadataPlan(
+            operation=LIST_TABLES,
+            confidence=0.96,
+            list_all=bool(re.search(r"\b(?:all|every|entire|full|complete)\b", ql)),
+            list_limit=_requested_list_limit(q),
+            domain_filter=domain_filter,
+            topic_terms=[] if domain_filter else table_topics,
+            include_total_count=bool(_COUNT_CUE.search(ql)),
         )
     # Named-table describe / list columns
     if table and (
@@ -668,25 +786,77 @@ def execute_metadata_plan(
         )
 
     if op == LIST_TABLES:
-        rows = [{"table": t, "column_count": len(schema_n[t])} for t in tables_sorted]
+        domain_filter = str(getattr(plan, "domain_filter", None) or "").strip().lower()
+        topic_terms = getattr(plan, "topic_terms", None) or []
+        domain_tables = tables_sorted
+        if domain_filter:
+            domain_tables = [
+                t for t in tables_sorted
+                if str(_table_semantics(t).get("domain") or "").lower().replace("-", "_") == domain_filter
+            ]
+        elif topic_terms:
+            domain_tables = [
+                table for table in tables_sorted
+                if any(_table_matches_topic(topic, table, _table_semantics(table)) for topic in topic_terms)
+            ]
+        domain_count = len(domain_tables)
         list_all = bool(getattr(plan, "list_all", False))
-        if list_all or table_count <= 40:
-            # Full list when asked ("all 121") or small schemas.
-            listing = ", ".join(tables_sorted)
-            summary = f"There are {table_count} tables available: {listing}."
+        explicit_limit = getattr(plan, "list_limit", None)
+        if explicit_limit:
+            selected_tables = domain_tables[: max(1, min(int(explicit_limit), 500))]
+        elif list_all or domain_count <= 40:
+            selected_tables = domain_tables
         else:
-            preview = ", ".join(tables_sorted[:20])
-            more = f" (showing 20 of {table_count}; ask to list all {table_count} tables to see every name)"
-            summary = f"There are {table_count} tables available{more}: {preview}."
+            selected_tables = domain_tables[:20]
+        rows = [{"table": t, "column_count": len(schema_n[t])} for t in selected_tables]
+        if domain_filter or topic_terms:
+            for row in rows:
+                semantics = _table_semantics(row["table"])
+                row.update(role=semantics["description"], domain=semantics["domain"], grain=semantics["grain"])
+            scope_label = f"the {domain_filter.replace('_', ' ')} domain" if domain_filter else ", ".join(topic_terms)
+            if not domain_tables:
+                summary = f"No tables in the connected schema clearly match {scope_label} from verified catalog evidence."
+            else:
+                listing = "; ".join(f"{row['table']}: {row['role'] or row['grain'] or row['table']}" for row in rows)
+                summary = (
+                    f"There are {domain_count} connected tables matching {scope_label} "
+                    f"out of {table_count} catalog tables. Verified table matches: {listing}."
+                )
+                if len(rows) < domain_count:
+                    summary += f" Showing {len(rows)} of {domain_count} matches."
+        elif getattr(plan, "include_total_count", False):
+            if domain_filter:
+                summary = (
+                    f"There are {domain_count} tables in the {domain_filter.replace('_', ' ')} domain "
+                    f"out of {table_count} connected tables."
+                )
+            else:
+                summary = f"There are {table_count} tables available in the connected database."
+            if rows:
+                label = "Requested table names" if explicit_limit else "Table names"
+                summary += f" {label}: {', '.join(row['table'] for row in rows)}."
+        elif list_all or domain_count <= 40 or explicit_limit:
+            if domain_filter:
+                summary = f"Tables in the {domain_filter.replace('_', ' ')} domain: {', '.join(row['table'] for row in rows)}."
+            else:
+                summary = f"There are {table_count} tables available: {', '.join(row['table'] for row in rows)}."
+        else:
+            preview = ", ".join(row["table"] for row in rows)
+            more = f" (showing 20 of {domain_count}; ask to list all {domain_count} tables to see every name)"
+            summary = f"There are {domain_count} tables available{more}: {preview}."
         return MetadataResult(
             operation=op,
-            value=tables_sorted,
+            value=[row["table"] for row in rows],
             rows=rows,
             summary=summary,
             evidence={
-                "source": "schema_catalog",
+                "source": "schema_catalog_and_table_metadata" if domain_filter or topic_terms else "schema_catalog",
                 "table_count": table_count,
-                "listed_all": bool(list_all or table_count <= 40),
+                "domain_count": domain_count,
+                "domain": domain_filter or None,
+                "topic_terms": list(topic_terms),
+                "match_count": domain_count,
+                "listed_all": len(rows) == domain_count,
             },
         )
 
@@ -733,7 +903,11 @@ def execute_metadata_plan(
     if op == SEARCH_COLUMNS:
         selected = search_column_meanings(plan, schema_n)
         if selected:
-            labels = [f"{row['matched_term']} → {row['table']}.{row['column']} ({row['meaning']})" for row in selected]
+            labels = [
+                f"{row['matched_term']} → {row['table']}.{row['column']} "
+                f"(type: {row['type']}; meaning: {row['meaning']})"
+                for row in selected
+            ]
             return MetadataResult(
                 operation=op,
                 value=selected,

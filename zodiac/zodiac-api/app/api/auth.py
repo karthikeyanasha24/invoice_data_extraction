@@ -80,6 +80,35 @@ def get_current_user(
         )
     return user
 
+
+def get_authenticated_user_id(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> int:
+    """Validate a signed access token without opening a database connection.
+
+    Use only for lightweight progress/cancel endpoints that separately check
+    the request owner's id. Normal application data endpoints must continue to
+    use ``get_current_user`` so the user record is verified against the DB.
+    """
+    if not credentials or not (credentials.credentials or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = int(payload.get("sub"))
+        if user_id <= 0:
+            raise ValueError("invalid user id")
+        return user_id
+    except (JWTError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
 def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)), db: Session = Depends(get_db)):
     """Optional JWT authentication - returns None if no valid token provided"""
     if not credentials:

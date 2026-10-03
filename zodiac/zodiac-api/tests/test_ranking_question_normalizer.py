@@ -25,6 +25,15 @@ def test_customer_sales_ranking_variants() -> None:
 def test_period_and_limit_preserved() -> None:
     assert N("Which customer had the highest sales in 2004?") == "top customers by sales in 2004"
     assert N("Which top 5 customers had the highest sales?") == "top 5 customers by sales"
+    assert N("Which five countries had the most billed revenue in calendar year 2017?") == "top 5 countries by revenue in 2017"
+    assert N("What are the top twelve customers by sales?") == "top 12 customers by sales"
+
+
+def test_number_word_country_limit_is_not_collapsed_to_top_one() -> None:
+    assert (
+        N("Which five countries had the most billed revenue in calendar year 2017?")
+        == "top 5 countries by revenue in 2017"
+    )
 
 
 def test_country_primary_rewrites_correctly() -> None:

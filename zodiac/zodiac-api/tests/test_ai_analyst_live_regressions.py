@@ -23,11 +23,12 @@ from app.services.adaptive_structured_sql import (
 )
 from app.services.four_stage_db_pipeline import (
     VerifiedDbContext,
+    _resolved_latest_period_note,
     _apply_followup_to_context,
     _contains_unresolved_sql_value,
     _resolve_latest_data_years,
 )
-from app.services.result_first_followup import try_answer_from_prior_rows
+from app.services.result_first_followup import is_result_scoped_followup, try_answer_from_prior_rows
 from app.services.semantic_requirements import required_semantics
 from app.data_catalog.physical import load_physical_schema
 
@@ -42,6 +43,31 @@ def test_specific_sap_field_metadata_returns_matching_columns_only():
     answer = answer_database_metadata(question, load_physical_schema())
     assert answer is not None
     assert {row["column"].lower() for row in answer["data"]} == {"fkdat", "vbeln"}
+
+
+def test_explicit_table_list_and_schema_followup_use_catalog_metadata():
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    question = "How many database tables are connected, and list the first five table names?"
+    schema = load_physical_schema()
+    plan = classify_metadata_operation(question, schema=schema)
+    assert plan is not None
+    assert plan.operation == "LIST_TABLES"
+    assert plan.list_limit == 5
+    assert plan.include_total_count is True
+    answer = answer_database_metadata(question, schema)
+    assert answer is not None
+    assert answer["answer_status"] == "SUCCESS"
+    assert len(answer["data"]) == 5
+    assert "first five" in answer["summary"].lower() or "requested table names" in answer["summary"].lower()
+
+    followup = "From that schema, list just the first five sales-domain table names."
+    assert not is_referential_database_action(followup, has_prior=True)
+    domain_plan = classify_metadata_operation(followup, schema=schema)
+    assert domain_plan is not None
+    assert domain_plan.operation == "LIST_TABLES"
+    assert domain_plan.domain_filter == "sales"
+    assert domain_plan.list_limit == 5
 
 
 def test_table_search_uses_catalog_grain_and_domain_descriptions():
@@ -115,6 +141,34 @@ def test_latest_year_questions_get_dynamic_relative_semantics():
     assert req["date_filter"]["count"] == 2
 
 
+def test_resolved_latest_period_summary_identifies_data_source():
+    ctx = VerifiedDbContext(
+        question="Show sales for the latest complete calendar year.",
+        semantic_requirements={"time_filter": {
+            "relative": "latest_full_year",
+            "years": ["2017"],
+            "resolved_from_data": True,
+            "date_table": "VBRK",
+            "date_column": "FKDAT",
+            "coverage_basis": "calendar period within observed date range",
+        }},
+    )
+    note = _resolved_latest_period_note(ctx)
+    assert "2017 was selected dynamically" in note
+    assert "VBRK.FKDAT" in note
+    assert "completeness check" in note
+
+
+def test_explicit_latest_complete_year_overrides_conflicting_llm_period():
+    question = "Show billed sales for the latest complete year available in the data."
+    req = required_semantics(
+        question,
+        {"time_filter": {"relative": "this_month"}},
+    )
+    assert req["date_filter"]["type"] == "latest_data_years"
+    assert req["date_filter"]["period"] == "latest_full_year"
+
+
 def test_latest_data_year_resolution_uses_schema_meaning_and_verified_years():
     question = "Show billed sales by year for the latest two full years."
     ctx = VerifiedDbContext(
@@ -171,12 +225,134 @@ def test_result_followup_can_rank_a_country_from_prior_rows():
     assert result["data"][0]["country"] == "US"
 
 
+def test_result_followup_calculates_difference_between_prior_rows():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": "1,227,978"},
+        {"country": "DE", "currency": "USD", "total billed sales": "10,000"},
+    ]
+    question = "Which country had higher billed sales in that result, and what was the difference?"
+    prior_sql = 'SELECT "country", SUM("netwr") AS "total billed sales" FROM "VBRK" GROUP BY 1'
+    result = try_answer_from_prior_rows(question, rows, prior_sql=prior_sql)
+    assert is_result_scoped_followup(question, has_prior_rows=True)
+    assert is_referential_database_action(question, has_prior=True)
+    assert result is not None
+    assert result["answer_status"] == "SUCCESS"
+    assert result["sql"] == ""
+    assert result["source_sql"] == prior_sql
+    assert "US had higher" in result["summary"]
+    assert "1,217,978 USD" in result["summary"]
+
+
+def test_result_followup_does_not_subtract_different_currencies():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": "1,200"},
+        {"country": "DE", "currency": "EUR", "total billed sales": "1,000"},
+    ]
+    result = try_answer_from_prior_rows(
+        "What was the difference between those results?", rows
+    )
+    assert result is not None
+    assert result["answer_status"] == "CLARIFICATION"
+    assert "different currencies" in result["summary"]
+
+
+def test_failed_followup_can_restore_client_retained_successful_analysis():
+    from app.api.adaptive_query import _usable_retained_analytical_context
+
+    retained = {
+        "previousQuestion": "Show billed sales by country for calendar year 2017 in USD.",
+        "previousSQL": 'SELECT "country", SUM("netwr") FROM "VBRK" GROUP BY 1',
+        "previousPlan": {
+            "verified_db_context": {
+                "tables": ["VBRK", "KNA1"],
+                "semantic_requirements": {
+                    "time_filter": {"resolved_from_data": True, "years": ["2017"]},
+                },
+            },
+        },
+        "previousAnswerStatus": "SUCCESS",
+        "data": [{"country": "US", "total_billed_sales": 1227978, "currency": "USD"}],
+    }
+
+    # The current assistant response can be an error while the nested retained
+    # anchor still points to a successful, verified analysis.
+    context = _usable_retained_analytical_context({"retained_analytical_context": retained})
+    assert context == retained
+    assert _usable_retained_analytical_context({
+        "retained_analytical_context": {**retained, "previousAnswerStatus": "CANNOT_ANSWER"}
+    }) is None
+
+
+def test_deeper_ranked_country_followup_reuses_verified_period_and_currency():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": "1,227,978"},
+        {"country": "DE", "currency": "USD", "total billed sales": "10,000"},
+    ]
+    prior_plan = {
+        "last_user_question": "Show billed sales for the latest complete calendar year available.",
+        "verified_db_context": {
+            "semantic_requirements": {
+                "time_filter": {
+                    "resolved_from_data": True,
+                    "years": ["2017"],
+                    "type": "latest_data_years",
+                }
+            }
+        },
+    }
+    result = try_answer_from_prior_rows(
+        "For the higher-sales country, show monthly billed sales in the same year and currency.",
+        rows,
+        prior_plan=prior_plan,
+    )
+    assert result and result["needs_plan_expansion"]
+    assert result["expanded_question"] == (
+        "Show billed sales by month for country code 'US' in calendar year 2017 in currency USD."
+    )
+
+
+def test_expanded_country_period_query_reuses_verified_schema_for_sql_generation():
+    question = (
+        "Show billed sales by month for country code 'US' "
+        "in calendar year 2017 in currency USD."
+    )
+    prior = {
+        "verified_db_context": {
+            "tables": ["VBRK", "KNA1"],
+            "columns": ["VBRK.FKDAT", "VBRK.NETWR", "VBRK.WAERK", "KNA1.LAND1"],
+            "joins": [],
+            "relationships": [],
+        }
+    }
+
+    assert _apply_followup_to_context(question, prior) is None
+    context = _apply_followup_to_context(
+        question, {**prior, "result_first_requery": True}
+    )
+    assert context is not None
+    assert set(context.tables) == {"VBRK", "KNA1"}
+    assert context.pipeline_log["followup_requery"] is True
+
+
 def test_followup_routing_distinguishes_recall_from_database_augmentation():
     recall = "Earlier you counted billing documents; what was the count and which table and column did SQL count?"
     augment = "Add the customer and billing date for those documents."
     assert is_prior_turn_discourse(recall, has_prior=True)
     assert not is_referential_database_action(recall, has_prior=True)
     assert is_referential_database_action(augment, has_prior=True)
+
+    implicit_lineage_recall = "What was the count, and which table and column did SQL count?"
+    assert is_prior_turn_discourse(implicit_lineage_recall, has_prior=True)
+    assert not is_referential_database_action(implicit_lineage_recall, has_prior=True)
+
+    prior = {"investigation_state": {"last_sql": 'SELECT COUNT(DISTINCT v."vbeln") FROM "VBAK" v'}}
+    context = _context_block(
+        prior_question="How many sales orders are in the database?",
+        prior_summary="65,720 sales documents in VBAK.",
+        prior_plan=prior,
+        current_question=implicit_lineage_recall,
+    )
+    assert "VBAK" in context and "vbeln" in context
 
 
 def test_database_augmentation_reuses_prior_verified_tables_and_flags_requery():

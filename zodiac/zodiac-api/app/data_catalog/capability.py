@@ -28,9 +28,9 @@ def capability_summary() -> str:
     n = len(sap_business_tables())
     return (
         f"I can answer governed questions across {n} migrated SAP business tables, including {extra}. "
-        "Ask about a business metric and dimension (for example: sales orders by customer in 2004, "
-        "invoices by industry, purchase-order value by vendor). "
-        "Unqualified 'sales' ranking uses billed invoices unless you ask for sales orders."
+        "Ask naturally about a business metric, group it by a supported SAP dimension, and add any "
+        "relevant time period or filters. Specify sales orders or billing documents when you want "
+        "to choose between those sources."
     )
 
 

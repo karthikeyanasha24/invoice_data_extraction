@@ -37,7 +37,57 @@ def test_repair_extract_on_text_fkdat():
     fixed = repair_extract_on_text_dates(bad)
     assert "EXTRACT" not in fixed.upper()
     assert "SUBSTRING" in fixed.upper()
-    assert '"VBRK"."fkdat"' in fixed
+    assert '"VBRK".fkdat' in fixed
+
+
+def test_repair_month_and_year_extracts_on_cast_sap_text_dates():
+    from app.services.adaptive_structured_sql import sanitize_generated_sql
+
+    generated = (
+        'SELECT EXTRACT(MONTH FROM CAST("VBRK"."fkdat" AS DATE)) AS month, '
+        'SUM(CAST("VBRK"."netwr" AS NUMERIC)) AS revenue, "VBRK"."waerk" '
+        'FROM "VBRK" WHERE EXTRACT(YEAR FROM CAST("VBRK"."fkdat" AS DATE)) = 2017 '
+        'AND "VBRK"."waerk" = \'USD\' GROUP BY month, "VBRK"."waerk"'
+    )
+
+    fixed = sanitize_generated_sql(generated, "Show monthly billed sales for calendar year 2017 in USD.")
+
+    assert "EXTRACT(MONTH" not in fixed.upper()
+    assert "EXTRACT(YEAR" not in fixed.upper()
+    assert 'SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 5, 2)' in fixed
+    assert 'SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 1, 4)' in fixed
+    assert "AS INTEGER) = 2017" in fixed
+    assert "AS INTEGER) AS month" in fixed
+
+    from app.services.sap_sql_precision_validator import validate_sql_precision
+
+    validation = validate_sql_precision(
+        fixed,
+        {"VBRK": ["fkdat", "netwr", "waerk"]},
+        question="Show monthly billed sales for calendar year 2017 in USD.",
+    )
+    assert validation.is_valid, validation.errors
+
+
+def test_date_extract_repair_preserves_native_dates_unknown_aliases_and_literals(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    monkeypatch.setattr(structured, "column_type", lambda table, column: "date" if table == "native" else "")
+    sql = (
+        'SELECT EXTRACT(MONTH FROM native.fkdat), EXTRACT(MONTH FROM t.created_at), '
+        '\'EXTRACT(YEAR FROM "VBRK"."fkdat")\' FROM native'
+    )
+    assert structured.repair_extract_on_text_dates(sql) == sql
+
+
+def test_date_extract_repair_preserves_numeric_month_predicate_and_is_idempotent():
+    from app.services.adaptive_structured_sql import repair_extract_on_text_dates
+
+    sql = 'SELECT * FROM "VBRK" WHERE EXTRACT(MONTH FROM "VBRK"."fkdat"::date) = 1'
+    fixed = repair_extract_on_text_dates(sql)
+    assert 'SUBSTRING(TRIM(CAST("VBRK"."fkdat" AS TEXT)), 5, 2)' in fixed
+    assert "AS INTEGER) = 1" in fixed
+    assert repair_extract_on_text_dates(fixed) == fixed
 
 
 def test_build_master_list_customer_names():

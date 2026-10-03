@@ -33,6 +33,14 @@ _ENTITY_MAP = {
     "industry": "industry", "industries": "industry",
     "segment": "industry", "segments": "industry",
 }
+_RANKED_ENTITY = re.compile(
+    r"\b(?:top|bottom|highest|lowest|most|least|largest|smallest|best|worst)\s+"
+    r"(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?"
+    r"(?:(?:billed|billing|sales|revenue|purchase)\s+)?"
+    r"(countries|country|customers?|clients?|buyers?|materials?|products?|"
+    r"suppliers?|vendors?|industr(?:y|ies)|segments?)\b",
+    re.I,
+)
 _DIM_RESULT_KEYS = {
     "country": ("country", "land1", "landx"),
     "customer": ("customer", "customer_id", "customer_name", "kunnr", "kunag", "name1"),
@@ -69,6 +77,19 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
             ops.get("ranking") or re.search(r"\b(most|highest|largest|top|lowest|least)\b", ql)
         ):
             group_by.append(ent)
+
+    # A plural entity directly after a ranking modifier defines the result
+    # grain too ("top five countries by billed sales"). This is derived from
+    # the requested noun and uses the shared entity vocabulary above; no
+    # answer values, tables, or question-specific SQL are embedded here.
+    ranked_entity = _RANKED_ENTITY.search(question or "")
+    if ranked_entity:
+        ent = _ENTITY_MAP.get(ranked_entity.group(1).lower())
+        if ent:
+            if ent not in dims:
+                dims.append(ent)
+            if ent not in group_by:
+                group_by.append(ent)
 
     ranking = sem.get("ranking") if isinstance(sem.get("ranking"), dict) else ops.get("ranking")
     if isinstance(ranking, dict) and not (
@@ -150,15 +171,28 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
     if isinstance(period, dict) and re.search(_decline_cue, ql):
         period = {**period, "op": "decline", "condition": "decreased"}
     clarification = sem.get("clarification") if isinstance(sem.get("clarification"), dict) else ops.get("clarification")
-    if not period and (ops.get("growth") or ops.get("compare")) and not clarification:
+    explicit_year_series = bool(
+        "year" in group_by
+        and re.search(
+            r"\b(?:by|per|each)\s+(?:(?:calendar|fiscal)\s+)?years?\b|\byearly\b|\bannually\b",
+            ql,
+        )
+        and len(set(ops.get("years") or [])) >= 2
+    )
+    if not period and (ops.get("growth") or ops.get("compare")) and not clarification and not explicit_year_series:
         years = list(ops.get("years") or [])
         if len(years) >= 2:
+            direction = (
+                "decline" if re.search(_decline_cue, ql)
+                else "growth" if re.search(r"\b(growth|increas\w*|grew|better)\b", ql)
+                else "compare"
+            )
             period = {
                 "type": "period_change",
                 "base_period": {"year": years[0]},
                 "comparison_period": {"year": years[-1]},
-                "op": "decline" if re.search(_decline_cue, ql) else "growth",
-                "condition": "decreased" if re.search(_decline_cue, ql) else "increased",
+                "op": direction,
+                "condition": "decreased" if direction == "decline" else "increased" if direction == "growth" else None,
             }
         # Without explicit years, do not invent periods — clarification is preferred.
     # Explicit YoY with deferred year resolution must keep period_compare.
@@ -202,7 +236,10 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
             negation = None
 
     tf = sem.get("time_filter") if isinstance(sem.get("time_filter"), dict) else {}
-    relative = tf.get("relative") or ops.get("relative_period")
+    # The user's explicit relative-period wording is authoritative over an LLM
+    # plan that drifted to a different calendar window (for example, treating
+    # "latest complete year" as the current month).
+    relative = ops.get("relative_period") or tf.get("relative")
     # LLM sometimes sets relative=true (boolean) — resolve via named period instead.
     if relative is True or str(relative).lower() in {"true", "1", "yes"}:
         relative = (

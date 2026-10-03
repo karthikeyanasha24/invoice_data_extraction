@@ -114,6 +114,7 @@ def _apply_followup_to_context(
     if not isinstance(prev_ctx, dict) or not prev_ctx.get("tables"):
         return None
     q = (question or "").lower()
+    result_first_requery = prior.get("result_first_requery") is True
     from .adaptive_analyst.understanding import is_referential_database_action
 
     referential_action = is_referential_database_action(question, has_prior=True)
@@ -127,14 +128,14 @@ def _apply_followup_to_context(
             or q.startswith("show the same")
         )
     )
-    if not is_followup:
+    if not is_followup and not result_first_requery:
         from .result_first_followup import is_result_scoped_followup
 
         if is_result_scoped_followup(question, has_prior_rows=True) and prev_ctx.get("tables"):
             is_followup = True
     if referential_action:
         is_followup = True
-    if not is_followup:
+    if not is_followup and not result_first_requery:
         return None
     ctx = VerifiedDbContext(
         question=question,
@@ -142,7 +143,10 @@ def _apply_followup_to_context(
         columns=list(prev_ctx.get("columns") or []),
         joins=list(prev_ctx.get("joins") or []),
         relationships=list(prev_ctx.get("relationships") or []),
-        pipeline_log={"followup_reuse": True, "followup_requery": referential_action},
+        pipeline_log={
+            "followup_reuse": True,
+            "followup_requery": referential_action or result_first_requery,
+        },
     )
     _log_stage(ctx, "PIPELINE_1_TABLE_SELECTION", {"reused": True, "tables": ctx.tables})
     _log_stage(ctx, "PIPELINE_2_COLUMN_SELECTION", {"reused": True, "columns": ctx.columns})
@@ -161,9 +165,10 @@ def extract_semantic_requirements(question: str) -> Dict[str, Any]:
     req: Dict[str, Any] = {}
     provider = "local"
     if budget is None or budget.allow_llm():
-        req, provider = analyze_json(
-            "You extract semantic requirements from business questions. JSON only.",
-            (
+        try:
+            req, provider = analyze_json(
+                "You extract semantic requirements from business questions. JSON only.",
+                (
                 f"Question: {question}\n\n"
                 "Return JSON: {\n"
                 '  "dimensions": ["month"],  // ONLY dimensions needed in the answer rows — not every related entity\n'
@@ -192,10 +197,48 @@ def extract_semantic_requirements(question: str) -> Dict[str, Any]:
                 "dimensions/group_by: only entities the answer must break down by "
                 "(explicit 'by X' / 'which X' / ranking grain). "
                 "A year filter alone is time_filter — do NOT put customer/country/product in dimensions."
-            ),
-        )
+                ),
+            )
+        except Exception as exc:
+            # The language parser below derives generic dimensions, measures,
+            # time windows, rankings, and predicates. Record the fallback so
+            # diagnostics distinguish it from model-backed understanding.
+            provider = "local_schema_semantics_fallback"
+            req = {}
+            logger.warning(
+                "[four_stage] semantic model unavailable; using local parser (%s)",
+                type(exc).__name__,
+            )
     req = merge_semantic_requirements(question, req if isinstance(req, dict) else {})
     req = enrich_semantic_with_requirements(question, req)
+    # The model may add related entities (for example, a country column) to a
+    # one-entity ranking. Keep the requested result grain anchored to the
+    # current question's explicit ranking entity; otherwise SQL can return
+    # customer×country rows and the independent result validator correctly
+    # rejects the mismatch. Preserve other model-derived requirements such as
+    # the measure, dates, currency, and filters.
+    from .semantic_requirements import required_semantics
+
+    explicit = required_semantics(question, {})
+    explicit_ranking = explicit.get("ranking")
+    explicit_dimensions = [
+        str(d).lower()
+        for d in (explicit.get("dimensions") or [])
+        if isinstance(d, str) and d.strip()
+    ]
+    if isinstance(explicit_ranking, dict) and explicit_dimensions:
+        req["dimensions"] = explicit_dimensions
+        req["group_by"] = [
+            str(d).lower()
+            for d in (explicit.get("group_by") or explicit_dimensions)
+            if isinstance(d, str) and d.strip()
+        ]
+        req["ranking"] = explicit_ranking
+        ops = dict(req.get("analytical_operations") or {})
+        ops["group_by"] = list(req["group_by"])
+        ops["ranking"] = explicit_ranking
+        ops["limit"] = explicit_ranking.get("limit")
+        req["analytical_operations"] = ops
     req["_provider"] = provider
     logger.info("[four_stage] SEMANTIC_REQUIREMENTS %s", json.dumps(req, default=str)[:800])
     checkpoint("intent_analysis_done")
@@ -248,6 +291,88 @@ def _dedupe_tables(tables: List[str]) -> List[str]:
     return out
 
 
+def _metadata_table_selection(
+    question: str, ctx: VerifiedDbContext, include_operational: bool
+) -> List[str]:
+    """Choose conservative table candidates from loaded catalog metadata.
+
+    This is used only when model table discovery is unavailable. It selects
+    real schema entries using semantic requirements and column/grain metadata;
+    it never maps a natural-language question to a fixed table list.
+    """
+    from .analytical_operations import table_has_measure_columns, table_is_master
+
+    reg = get_schema_registry()
+    reqs = ctx.semantic_requirements if isinstance(ctx.semantic_requirements, dict) else {}
+    question_scores = {
+        str(table).upper(): (str(table), float(score))
+        for table, score, _reason in reg.score_tables_for_question(
+            question, include_operational=include_operational
+        )
+    }
+    selected: List[str] = []
+
+    # Resolve requested answer dimensions against the catalog. Time grains are
+    # represented by date expressions on the measure table, not extra tables.
+    for concept in reqs.get("dimensions") or []:
+        concept = str(concept or "").strip().lower()
+        if not concept or concept in {"month", "year", "quarter", "currency", "type"}:
+            continue
+        candidates = reg.find_tables_for_concept(
+            concept, include_operational=include_operational, limit=12
+        )
+        candidates = [
+            (table, score)
+            for table, score, _reason in candidates
+            if has_table(table) and reg.table_covers_concept(table, concept)
+        ]
+        candidates.sort(
+            key=lambda pair: (
+                question_scores.get(pair[0].upper(), (pair[0], 0.0))[1],
+                bool(table_is_master(pair[0])),
+                pair[1],
+            ),
+            reverse=True,
+        )
+        if candidates:
+            selected.append(candidates[0][0])
+
+    measure = reqs.get("measure") if isinstance(reqs.get("measure"), dict) else {}
+    concept = str(measure.get("concept") or "").strip().lower()
+    aggregation = str(measure.get("aggregation") or "").upper()
+    if concept and (aggregation in {"SUM", "AVG", "COUNT"} or reqs.get("ranking")):
+        measure_candidates = reg.find_tables_for_concept(
+            concept, include_operational=include_operational, limit=20
+        )
+        measure_candidates = [
+            (table, score)
+            for table, score, _reason in measure_candidates
+            if has_table(table)
+            and table_has_measure_columns(table, concept)
+            and (aggregation == "COUNT" or not table_is_master(table))
+        ]
+        measure_candidates.sort(
+            key=lambda pair: (
+                question_scores.get(pair[0].upper(), (pair[0], 0.0))[1],
+                pair[1],
+            ),
+            reverse=True,
+        )
+        if measure_candidates:
+            selected.append(measure_candidates[0][0])
+
+    # If semantics are sparse, use only the strongest schema-text matches.
+    if not selected:
+        selected.extend(table for table, _score, _reason in reg.score_tables_for_question(
+            question, include_operational=include_operational
+        )[:4])
+
+    selected = _dedupe_tables(selected)
+    # Join edges are catalog relationships, not guessed SQL joins.
+    selected = _dedupe_tables(reg.expand_join_neighbors(selected))
+    return selected[:10]
+
+
 def verify_and_expand_table_coverage(
     question: str,
     ctx: VerifiedDbContext,
@@ -259,8 +384,9 @@ def verify_and_expand_table_coverage(
     reqs = ctx.semantic_requirements or {}
     catalog = reg.lightweight_table_catalog(include_operational=include_operational)
 
-    coverage, provider = analyze_json(
-        "You verify table-set coverage for a business question. JSON only. "
+    try:
+        coverage, provider = analyze_json(
+            "You verify table-set coverage for a business question. JSON only. "
         "Do NOT generate SQL. Select additional tables ONLY from the catalog if needed.",
         (
             f"Question: {question}\n"
@@ -275,8 +401,17 @@ def verify_and_expand_table_coverage(
             "If the question needs billed sales amounts, include the billing ITEM table (often vbrp/VBRP) "
             "not only the billing header (VBRK) or sales order header (VBAK). "
             "Every dimension AND the measure must be covered before complete=true."
-        ),
-    )
+            ),
+        )
+    except Exception as exc:
+        # Subsequent coverage expansion uses table descriptions, business
+        # terms, columns, and join metadata from the live schema registry.
+        coverage = {"coverage": {}, "additional_tables": [], "complete": False}
+        provider = "schema_registry_fallback"
+        logger.warning(
+            "[four_stage] coverage model unavailable; using schema registry (%s)",
+            type(exc).__name__,
+        )
 
     ctx.coverage = coverage.get("coverage") if isinstance(coverage.get("coverage"), dict) else {}
     for item in coverage.get("additional_tables") or []:
@@ -469,8 +604,9 @@ def pipeline1_table_selection(question: str, ctx: VerifiedDbContext) -> None:
     catalog = reg.lightweight_table_catalog(include_operational=include_ops)
     catalog_text = reg.compact_catalog_text(include_operational=include_ops)
 
-    pick, provider = analyze_json(
-        "You are Pipeline 1 — dynamic TABLE DISCOVERY. Return JSON only. "
+    try:
+        pick, provider = analyze_json(
+            "You are Pipeline 1 — dynamic TABLE DISCOVERY. Return JSON only. "
         "Independently decide which tables are required to answer EVERY part of the question. "
         "Do NOT generate SQL. Do NOT select columns. "
         "Select as many tables as needed (1 to N). Tables must exist in the catalog.",
@@ -487,8 +623,15 @@ def pipeline1_table_selection(question: str, ctx: VerifiedDbContext) -> None:
             "sales amounts, or billed quantity — also select the transactional table that holds the measure. "
             "For billed sales/revenue amounts prefer billing header/item tables when present in catalog. "
             "Never invent table names not in the catalog."
-        ),
-    )
+            ),
+        )
+    except Exception as exc:
+        pick = {"selected_tables": _metadata_table_selection(question, ctx, include_ops)}
+        provider = "schema_registry_fallback"
+        logger.warning(
+            "[four_stage] table selection model unavailable; using schema registry (%s)",
+            type(exc).__name__,
+        )
 
     selected: List[str] = []
     for item in pick.get("selected_tables") or []:
@@ -531,8 +674,9 @@ def pipeline2_column_selection(question: str, ctx: VerifiedDbContext) -> None:
     column_text = reg.column_detail_for_selection(ctx.tables)
     suggested_joins = reg.suggested_joins(ctx.tables)
 
-    pick, provider = analyze_json(
-        "You are Pipeline 2 — COLUMN SELECTION ONLY. Return JSON only. "
+    try:
+        pick, provider = analyze_json(
+            "You are Pipeline 2 — COLUMN SELECTION ONLY. Return JSON only. "
         "Select columns from the provided tables. Do NOT generate SQL.",
         (
             f"Question: {question}\n"
@@ -543,8 +687,15 @@ def pipeline2_column_selection(question: str, ctx: VerifiedDbContext) -> None:
             "Return JSON: {\"selected_columns\":[{\"table\":\"\",\"column\":\"\",\"purpose\":\"\"}], "
             "\"joins\":[{\"left_table\":\"\",\"left_column\":\"\",\"right_table\":\"\",\"right_column\":\"\",\"reason\":\"\"}]}. "
             "Select columns for every dimension and the measure in the semantic requirements."
-        ),
-    )
+            ),
+        )
+    except Exception as exc:
+        pick = {"selected_columns": [], "joins": suggested_joins}
+        provider = "schema_registry_fallback"
+        logger.warning(
+            "[four_stage] column selection model unavailable; using schema registry (%s)",
+            type(exc).__name__,
+        )
 
     columns: List[str] = []
     for item in pick.get("selected_columns") or []:
@@ -1317,7 +1468,12 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
             if source.endswith("_template")
             else ctx.semantic_requirements
         )
-        if not sql_satisfies_analytical_intent(out, question, sem_for_check):
+        intent_question = (
+            original_question
+            if source == "period_compare_template" and has_verified_prior_customers
+            else question
+        )
+        if not sql_satisfies_analytical_intent(out, intent_question, sem_for_check):
             _log_stage(
                 ctx,
                 "PIPELINE_3_SQL_REJECTED",
@@ -1328,7 +1484,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
 
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
-    for source, builder in (
+    template_builders = (
         ("linked_sales_orders_template", lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("billing_document_ranking_template", lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_period_sales", lambda: build_dimension_period_sales_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1342,7 +1498,33 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         ("above_average_template", lambda: build_above_average_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("filter_list_template", lambda: build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("document_count_period_template", lambda: build_document_count_by_period_sql(question, ctx.tables, ctx.semantic_requirements)),
-    ):
+    )
+    original_question = str(
+        (ctx.semantic_requirements or {}).get("_original_user_question") or question or ""
+    )
+    has_verified_prior_customers = bool(
+        (ctx.semantic_requirements or {}).get("prior_result_rows")
+        and re.search(
+            r"\b(?:(?:same|those|these|previous|prior)\s+){1,2}(?:result\s+)?customers?\b|"
+            r"\bcustomers?\s+(?:returned|identified|selected)\s+previously\b",
+            original_question,
+            re.I,
+        )
+    )
+    period_compare = (ctx.semantic_requirements or {}).get("period_compare")
+    if has_verified_prior_customers and isinstance(period_compare, dict):
+        # Do not let ranking semantics from the source turn capture a new
+        # period-comparison follow-up before its comparison template runs.
+        period_builder = next(
+            (entry for entry in template_builders if entry[0] == "period_compare_template"),
+            None,
+        )
+        if period_builder:
+            template_builders = (period_builder,) + tuple(
+                entry for entry in template_builders if entry is not period_builder
+            )
+
+    for source, builder in template_builders:
         accepted = _accept(source, builder())
         if accepted:
             return accepted
@@ -1356,7 +1538,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
             plan_obj.tables = list(ctx.tables)
         rendered = render_sql_from_plan(plan_obj)
         if rendered:
-            rendered = sanitize_generated_sql(repair_generated_sql(rendered, question))
+            rendered = sanitize_generated_sql(repair_generated_sql(rendered, question), question)
             plan_viol = validate_query_plan(plan_obj)
             schema_viol = list(_schema_violations(rendered) or [])
             schema_viol.extend(detect_expression_as_column_errors(rendered))
@@ -1423,8 +1605,9 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
 
     reg = get_schema_registry()
     detail = reg.column_detail_for_selection(ctx.tables)
-    sql_text, provider = complete_text(
-        "You are Pipeline 3 — SQL GENERATION ONLY. PostgreSQL SELECT. ```sql block only. "
+    try:
+        sql_text, provider = complete_text(
+            "You are Pipeline 3 — SQL GENERATION ONLY. PostgreSQL SELECT. ```sql block only. "
         "Use ONLY the verified tables, columns, and relationships provided. "
         "CRITICAL: Physical columns use \"TABLE\".\"column\" syntax. "
         "SQL expressions (SUBSTRING, EXTRACT, TRIM, CAST, SUM) must NEVER be quoted as column names. "
@@ -1448,13 +1631,42 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
             f"Prior verified SQL for scope (not the current request): {ctx.prior_sql[:6000]}\n\n"
             f"Validation feedback: {json.dumps({k: v for k, v in ctx.pipeline_log.items() if 'VALIDATION' in k or 'REPAIR' in k}, default=str)[:2000]}\n\n"
             f"{detail}\n\nGenerate SQL."
-        ),
-    )
+            ),
+        )
+    except Exception as exc:
+        _log_stage(
+            ctx,
+            "PIPELINE_3_SQL_GENERATION",
+            {
+                "source": "model_unavailable_no_supported_template",
+                "provider": "unavailable",
+                "error_type": type(exc).__name__,
+            },
+        )
+        return ""
     sql = extract_sql(sql_text) or sql_text.strip()
     sql = repair_generated_sql(sql, question)
-    sql = sanitize_generated_sql(sql)
+    sql = sanitize_generated_sql(sql, question)
     _log_stage(ctx, "PIPELINE_3_SQL_GENERATION", {"provider": provider, "source": "llm_fallback", "sql": sql[:2000]})
     return sql
+
+
+def _resolved_latest_period_note(ctx: VerifiedDbContext) -> str:
+    semantic = ctx.semantic_requirements if isinstance(ctx.semantic_requirements, dict) else {}
+    tf = semantic.get("time_filter") if isinstance(semantic.get("time_filter"), dict) else {}
+    relative = str(tf.get("relative") or "").lower()
+    years = [str(year) for year in tf.get("years") or [] if re.fullmatch(r"(?:19|20)\d{2}", str(year))]
+    if relative not in {"latest_full_year", "latest_two_full_years"} or not tf.get("resolved_from_data") or not years:
+        return ""
+    table = str(tf.get("date_table") or "the selected date field")
+    column = str(tf.get("date_column") or "")
+    field = f"{table}.{column}" if column else table
+    coverage = str(tf.get("coverage_basis") or "verified date coverage")
+    selected = ", ".join(years)
+    return (
+        f"Period selection: {selected} was selected dynamically from connected data using {field}; "
+        f"the completeness check used {coverage}."
+    )
 
 
 def pipeline4_result_analysis(
@@ -1486,18 +1698,50 @@ def pipeline4_result_analysis(
                 "findings": [],
                 "presentation_type": "table" if rows else "none",
             }
-    narrative, provider = analyze_json(
-        "You are Pipeline 4 — RESULT ANALYSIS. JSON only. Use ONLY numbers in the rows. Never invent.",
+    period_note = _resolved_latest_period_note(ctx)
+    try:
+        narrative, provider = analyze_json(
+            "You are Pipeline 4 — RESULT ANALYSIS. JSON only. Use ONLY numbers in the rows. Never invent. "
+        "Treat the supplied period-selection evidence as verified system evidence. If a latest "
+        "period has been resolved, do not claim the year was hard-coded and do not suggest the "
+        "user query max(year) to obtain a latest period; the system already resolved it dynamically.",
         (
             f"Question: {question}\nSQL:\n{sql[:1500]}\n"
             f"Tables: {ctx.tables}\nColumns: {ctx.columns}\n"
+            f"Verified period-selection evidence: {period_note or '(none)'}\n"
             f"Row count: {len(rows)}\nSample: {json.dumps(rows[:12], default=str)[:4000]}\n\n"
             "Return JSON: {\"answer\":\"\",\"summary\":\"\",\"findings\":[], "
             "\"presentation_type\":\"table|bar|line|pie|none\", "
             "\"calculation_explanation\":\"\", \"follow_up_suggestions\":[]}. "
             "If 0 rows: say query succeeded but no matching records — do NOT claim data does not exist globally."
-        ),
-    )
+            ),
+        )
+    except Exception as exc:
+        # A verified SQL result remains useful even if narrative generation is
+        # unavailable. Keep the actual rows and SQL visible; state only what
+        # the execution itself establishes.
+        answer = (
+            "The query completed and returned no matching rows."
+            if not rows
+            else f"The query completed and returned {len(rows)} row(s). See the result table for the verified values."
+        )
+        _log_stage(
+            ctx,
+            "PIPELINE_4_RESULT_ANALYSIS",
+            {
+                "provider": "verified_result_fallback",
+                "row_count": len(rows),
+                "exec_ms": exec_ms,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return {
+            "answer": answer,
+            "summary": answer,
+            "findings": [],
+            "presentation_type": "table" if rows else "none",
+            "follow_up_suggestions": [],
+        }
     _log_stage(
         ctx,
         "PIPELINE_4_RESULT_ANALYSIS",
@@ -1560,6 +1804,30 @@ def _run_four_stage_body(
     if ctx is not None:
         ctx.prior_sql = prior_sql
         ctx.semantic_requirements = extract_semantic_requirements(question)
+        prior_result_rows = (prior_plan or {}).get("prior_result_rows")
+        if isinstance(prior_result_rows, list) and prior_result_rows:
+            ctx.semantic_requirements["prior_result_rows"] = [
+                row for row in prior_result_rows if isinstance(row, dict)
+            ]
+        reused_clarification = (ctx.semantic_requirements or {}).get("clarification")
+        if (
+            isinstance(reused_clarification, dict)
+            and reused_clarification.get("type") == "document_period_comparison"
+        ):
+            message = str(reused_clarification.get("message") or "Please clarify the comparison grain.")
+            return {
+                "error": "clarification_required",
+                "error_kind": "clarification",
+                "error_class": "CLARIFICATION",
+                "detail": [message],
+                "user_message": message,
+                "clarification": reused_clarification,
+                "tables": ctx.tables,
+                "sql": "",
+                "rows": [],
+                "verified_context": ctx.to_dict(),
+                "pipeline_log": ctx.pipeline_log,
+            }
     if ctx is not None and ctx.pipeline_log.get("followup_requery"):
         prior_tables = list(ctx.tables)
         pipeline1_table_selection(question, ctx)
@@ -1603,8 +1871,61 @@ def _run_four_stage_body(
         pipeline2_column_selection(question, ctx)
         pipeline25_query_plan(question, ctx, db)
 
+    original_user_question = str((prior_plan or {}).get("original_user_question") or "").strip()
+    if original_user_question:
+        ctx.semantic_requirements = dict(ctx.semantic_requirements or {})
+        ctx.semantic_requirements["_original_user_question"] = original_user_question
+
+    prior_result_rows = (prior_plan or {}).get("prior_result_rows")
+    prior_result_rows = [row for row in prior_result_rows or [] if isinstance(row, dict)]
+    if prior_result_rows:
+        ctx.semantic_requirements = dict(ctx.semantic_requirements or {})
+        ctx.semantic_requirements["prior_result_rows"] = prior_result_rows
+    if re.search(
+        r"\b(?:(?:same|those|these|previous|prior)\s+){1,2}(?:result\s+)?customers?\b|"
+        r"\bcustomers?\s+(?:returned|identified|selected)\s+previously\b",
+        question or "",
+        re.I,
+    ) and not prior_result_rows:
+        message = (
+            "I can compare the same customers, but the prior result rows are not available in this turn. "
+            "Please resend the customer IDs or rerun the preceding customer analysis."
+        )
+        return {
+            "error": "clarification_required",
+            "error_kind": "clarification",
+            "error_class": "CLARIFICATION",
+            "detail": [message],
+            "user_message": message,
+            "tables": ctx.tables,
+            "sql": "",
+            "rows": [],
+            "verified_context": ctx.to_dict(),
+            "pipeline_log": ctx.pipeline_log,
+        }
+
     if ctx.tables and ctx.columns and not ctx.query_plan:
         pipeline25_query_plan(question, ctx, db)
+
+    document_period_clarification = (ctx.semantic_requirements or {}).get("clarification")
+    if (
+        isinstance(document_period_clarification, dict)
+        and document_period_clarification.get("type") == "document_period_comparison"
+    ):
+        message = str(document_period_clarification.get("message") or "Please clarify the comparison grain.")
+        return {
+            "error": "clarification_required",
+            "error_kind": "clarification",
+            "error_class": "CLARIFICATION",
+            "detail": [message],
+            "user_message": message,
+            "clarification": document_period_clarification,
+            "tables": ctx.tables,
+            "sql": "",
+            "rows": [],
+            "verified_context": ctx.to_dict(),
+            "pipeline_log": ctx.pipeline_log,
+        }
 
     period_clarification = (ctx.semantic_requirements or {}).get("clarification")
     if isinstance(period_clarification, dict) and period_clarification.get("type") == "latest_data_period":
@@ -1694,6 +2015,9 @@ def _run_four_stage_body(
     rows: List[Dict[str, Any]] = []
     exec_error: Optional[str] = None
     for exec_attempt in range(3):
+        # Reapply question-aware safety after each repair branch so an explicit
+        # country drill-down can never regain a customer-name search predicate.
+        sql = sanitize_generated_sql(sql, question)
         if budget is not None and not budget.allow_repair(exec_attempt):
             break
         try:
@@ -1836,9 +2160,12 @@ def _run_four_stage_body(
     from .adaptive_query_repair import validate_monetary_result
     from .investigation_budget import user_safe_pipeline_message
 
-    result_warnings = validate_monetary_result(rows, question)
+    validation_question = str(
+        (ctx.semantic_requirements or {}).get("_original_user_question") or question
+    )
+    result_warnings = validate_monetary_result(rows, validation_question)
     plan_warnings = result_matches_analytical_intent(
-        rows, question, ctx.semantic_requirements, sql=sql
+        rows, validation_question, ctx.semantic_requirements, sql=sql
     )
     semantic_attempt = 0
     while plan_warnings and semantic_attempt < 2:
@@ -1934,7 +2261,7 @@ def _run_four_stage_body(
         try:
             retry_rows = execute_sql(db, retry_sql, question) or []
             retry_warn = result_matches_analytical_intent(
-                retry_rows, question, ctx.semantic_requirements, sql=retry_sql
+                retry_rows, validation_question, ctx.semantic_requirements, sql=retry_sql
             )
             sql, rows = retry_sql, retry_rows
             plan_warnings = retry_warn
@@ -2087,6 +2414,34 @@ def _run_four_stage_body(
         ctx.pipeline_log["investigation_error"] = str(inv_outer)[:300]
 
     narrative = pipeline4_result_analysis(question, sql, rows, ctx, exec_ms=exec_ms)
+    period_note = _resolved_latest_period_note(ctx)
+    if period_note and isinstance(narrative, dict):
+        existing = str(narrative.get("summary") or narrative.get("answer") or "").strip()
+        combined = f"{existing}\n\n{period_note}" if existing else period_note
+        narrative["summary"] = combined
+        narrative["answer"] = combined
+        findings = narrative.get("findings") if isinstance(narrative.get("findings"), list) else []
+        narrative["findings"] = [period_note, *[finding for finding in findings if period_note not in str(finding)]][:8]
+        narrative["calculation_explanation"] = (
+            f"{str(narrative.get('calculation_explanation') or '').strip()} {period_note}"
+        ).strip()
+        suggestions = narrative.get("follow_up_suggestions")
+        if isinstance(suggestions, list):
+            narrative["follow_up_suggestions"] = [
+                suggestion for suggestion in suggestions
+                if not re.search(
+                    r"(?:latest|most recent|complete)\w*.{0,80}(?:max(?:imum)?\s+(?:year|date)|hard[- ]?cod|automatically)|"
+                    r"(?:max(?:imum)?\s+(?:year|date)|hard[- ]?cod).{0,80}(?:latest|most recent|complete)\w*",
+                    str(suggestion),
+                    re.I,
+                )
+            ]
+        ctx.pipeline_log["resolved_period_evidence"] = {
+            "years": (ctx.semantic_requirements.get("time_filter") or {}).get("years", []),
+            "date_table": (ctx.semantic_requirements.get("time_filter") or {}).get("date_table"),
+            "date_column": (ctx.semantic_requirements.get("time_filter") or {}).get("date_column"),
+            "coverage_basis": (ctx.semantic_requirements.get("time_filter") or {}).get("coverage_basis"),
+        }
     if ctx.pipeline_log.get("investigation_evidence_summary") and isinstance(narrative, dict):
         evid = str(ctx.pipeline_log["investigation_evidence_summary"])
         if evid:
@@ -2119,6 +2474,16 @@ def _run_four_stage_body(
             narrative["calculation_explanation"] = (
                 (narrative.get("calculation_explanation") or "") + " " + note
             ).strip()
+    # Ensure fixed investigation/direction summaries also disclose the data-derived
+    # period after any later narrative overrides have been applied.
+    period_note = _resolved_latest_period_note(ctx)
+    if period_note and isinstance(narrative, dict) and period_note not in str(narrative.get("summary") or ""):
+        combined = f"{str(narrative.get('summary') or narrative.get('answer') or '').strip()}\n\n{period_note}".strip()
+        narrative["summary"] = combined
+        narrative["answer"] = combined
+        narrative["calculation_explanation"] = (
+            f"{str(narrative.get('calculation_explanation') or '').strip()} {period_note}"
+        ).strip()
     total_ms = int((time.perf_counter() - t0) * 1000)
     ctx.pipeline_log["total_ms"] = total_ms
     _log_stage(ctx, "FINAL_ANSWER", {"row_count": len(rows), "total_ms": total_ms})

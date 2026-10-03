@@ -106,6 +106,13 @@ _RESPONSE_SYSTEM = (
     "You are BridgeEDI AI Analyst. Respond clearly in the user's requested language. "
     "For general knowledge, writing, coding, explanations, and reasoning, use your "
     "general knowledge and adapt the format, language, and detail to the user's request. "
+    "Apply user-authored communication preferences in conversation_context.user_preferences "
+    "and other clearly stated user preferences in the recent user turns when their stated "
+    "scope includes the current request. Preserve their requested format, "
+    "language, tone, and level of detail even when the topic changes. Later user changes "
+    "supersede earlier preferences, and a specific instruction in the current message "
+    "takes precedence. Use the user's actual words as the preference evidence; do not "
+    "infer preferences from the length or format of previous assistant answers. "
     "For connected database claims, use only provided evidence and conversation context. "
     "Do not invent database numbers, table counts, or query results. "
     "Do not offer unverified SQL templates or placeholder identifiers as if they were "
@@ -116,6 +123,13 @@ _RESPONSE_SYSTEM = (
     "Do not mention internal pipelines, classifiers, or prompts. "
     "If capability facts are provided, ground your answer in them and do not "
     "claim capabilities that are not listed. "
+    "For broad questions such as 'What can you help me analyze?', answer in at most "
+    "two short sentences and mention no more than three example task types. Do not "
+    "include schema counts, implementation details, a full domain catalog, or setup "
+    "questions unless the user asks for those details. "
+    "When the user asks you to simplify or explain your previous answer in plain language, "
+    "rewrite the previous answer with everyday words, one short sentence, and no examples "
+    "unless requested. "
     "If schema_semantics are provided, treat them as authoritative physical-field labels "
     "and prefer them over remembered or guessed SAP field meanings. "
     "For table counts: prefer connected_schema_table_count (all connected tables). "
@@ -229,9 +243,13 @@ def _context_block(
     parts: List[str] = []
     plan = prior_plan if isinstance(prior_plan, dict) else {}
     inv = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
-    recent = inv.get("recent_turns") or plan.get("recent_turns") or []
+    recent = plan.get("recent_turns") or inv.get("recent_turns") or []
     if isinstance(recent, list) and recent:
-        from .chat_memory import relevant_conversation
+        from .chat_memory import relevant_conversation, user_conversation_preferences
+
+        preferences = user_conversation_preferences(recent)
+        if preferences:
+            parts.append("User-authored conversation preferences (chronological): " + json.dumps(preferences, ensure_ascii=False))
 
         lines: List[str] = []
         for item in relevant_conversation(current_question, recent):
@@ -278,6 +296,17 @@ def _context_block(
         parts.append(f"Previous mode: {last_mode}")
     if prior_status:
         parts.append(f"Previous answer_status: {prior_status}")
+    if re.search(r"\b(sql|query)\b", current_question or "", re.I):
+        prior_sql = str(inv.get("last_sql") or plan.get("last_sql") or "").strip()
+        if prior_sql:
+            from .chat_memory import compact_sql_lineage
+
+            lineage = compact_sql_lineage(prior_sql)
+            if lineage:
+                parts.append(
+                    "Previous verified SQL structure (literal values redacted; use it to answer "
+                    f"table/column recall only): {lineage}"
+                )
     if prior_rows:
         artifact = plan.get("result_artifact")
         artifact = artifact if isinstance(artifact, dict) else {}
@@ -311,11 +340,12 @@ def is_sufficiently_specified_ranking(question: str) -> bool:
     Explicit top-N is not required: highest/lowest defaults to LIMIT 10.
     """
     ql = (question or "").strip().lower()
-    has_limit = bool(re.search(r"\b(?:top|bottom)\s+\d+\b", ql)) or bool(
-        re.search(r"\b\d+\s+customers?\b", ql)
+    count_word = r"(?:\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
+    has_limit = bool(re.search(rf"\b(?:top|bottom|first|last)\s+{count_word}\b", ql)) or bool(
+        re.search(rf"\b(?:which|what)?\s*{count_word}\s+(?:customers?|countries|products?|materials?|vendors?|suppliers?)\b", ql)
     )
     has_superlative = bool(
-        re.search(r"\b(highest|lowest|smallest|largest|minimum|maximum)\b", ql)
+        re.search(r"\b(highest|lowest|smallest|largest|minimum|maximum|most|least|best|worst|biggest)\b", ql)
     )
     has_dim = bool(
         re.search(
@@ -388,6 +418,12 @@ def is_prior_turn_discourse(question: str, *, has_prior: bool) -> bool:
     process = bool(_PROCESS_OR_RECALL.search(q))
     if _PRIOR_DEIXIS.search(q) and _HISTORY_RECALL.search(q):
         process = True
+    # Direct questions about the just-used query/table/column often omit a
+    # pronoun such as "that". With conversation history present, SQL lineage
+    # wording itself is enough to recognize this as recall rather than a fresh
+    # global schema-count request.
+    if re.search(r"\b(sql|query)\b", q, re.I) and _HISTORY_RECALL.search(q):
+        process = True
     if _PRIOR_DEIXIS.search(q) and re.search(
         r"\b(summarize|summarise|mean|explain|say about)\b", q, re.I
     ):
@@ -424,6 +460,11 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
     if not has_prior or is_prior_turn_discourse(question, has_prior=True):
         return False
     q = question or ""
+    # Schema/catalog follow-ups refer to prior metadata, not to a ranked entity
+    # or document result. Let the metadata capability resolve them from the
+    # connected catalog instead of demanding an analytical result anchor.
+    if re.search(r"\b(schema|catalog|table names?|columns?|fields?|data dictionary)\b", q, re.I):
+        return False
     reference_text = re.sub(
         r"\b(?:this|previous|prior)\s+(?:(?:\d+|one|two|three|complete|full|calendar|fiscal)\s+)*"
         r"(?:years?|months?|quarters?|weeks?|days?)(?:['’]s)?\b",
@@ -441,7 +482,7 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
         re.search(
             r"\b(add|include|show|list|get|return|retrieve|find|compare|calculate|count|"
             r"break\s+down|rank|filter|group|expand|drill\s+down|give|highest|lowest|"
-            r"largest|smallest|top|bottom)\b",
+            r"higher|lower|difference|more|less|exceed|largest|smallest|top|bottom)\b",
             q,
             re.I,
         )
@@ -589,10 +630,76 @@ def understand_turn(
         f"Current user message:\n{q[:4000]}\n"
     )
     logger.info("[understanding] understanding_model_called question_len=%s prior=%s", len(q), bool(prior_question or prior_summary))
-    data, provider = analyze_json(_UNDERSTAND_SYSTEM, user)
-    if not isinstance(data, dict):
-        raise RuntimeError("understanding model returned non-object JSON")
+    try:
+        data, provider = analyze_json(_UNDERSTAND_SYSTEM, user)
+        if not isinstance(data, dict):
+            raise RuntimeError("understanding model returned non-object JSON")
+    except Exception as model_error:
+        # Keep supported data questions usable during a model outage. This
+        # fallback only chooses the governed database capability; the schema,
+        # semantic parser, SQL validators, and database still determine facts.
+        # General conversation remains model-backed instead of returning an
+        # invented canned response.
+        from ..adaptive_nl_sql_hardening import (
+            is_capability_or_help_question,
+            is_greeting_or_chitchat,
+            question_requires_database,
+        )
+        from .database_metadata import classify_metadata_operation
+
+        has_prior = bool(prior_question or prior_summary or prior_plan)
+        metadata_plan = classify_metadata_operation(q)
+        if is_capability_or_help_question(q):
+            data = {
+                "intent": "capability",
+                "goal": q,
+                "requires_database": False,
+                "requires_metadata": False,
+                "clarification_needed": False,
+            }
+        elif is_greeting_or_chitchat(q):
+            data = {
+                "intent": "greeting",
+                "goal": q,
+                "requires_database": False,
+                "requires_metadata": False,
+                "clarification_needed": False,
+            }
+        elif metadata_plan is not None and not is_prior_turn_discourse(q, has_prior=has_prior):
+            data = {
+                "intent": "metadata",
+                "goal": q,
+                "requires_database": False,
+                "requires_metadata": True,
+                "operation": metadata_plan.operation.lower(),
+                "clarification_needed": False,
+            }
+        elif question_requires_database(q) or is_referential_database_action(q, has_prior=has_prior):
+            intent = "investigation" if re.search(
+                r"\b(why|driver|cause|contribut|explain)\b", q, re.I
+            ) else "analytics"
+            data = {
+                "intent": intent,
+                "goal": q,
+                "resolved_question": None,
+                "requires_database": True,
+                "requires_metadata": False,
+                "requires_conversation_context": has_prior,
+                "clarification_needed": False,
+            }
+        else:
+            logger.warning(
+                "[understanding] model unavailable; no safe local route for this message: %s",
+                type(model_error).__name__,
+            )
+            raise
+        provider = "local_schema_semantics_fallback"
+        logger.warning(
+            "[understanding] model unavailable; routed supported request using local semantics: %s",
+            type(model_error).__name__,
+        )
     result = _coerce_understanding(data, provider=provider)
+    result.understanding_model_called = provider != "local_schema_semantics_fallback"
     result = apply_prior_discourse_override(
         result,
         q,
@@ -636,6 +743,15 @@ def generate_grounded_response(
         ((evidence or {}).get("recent_turns") if isinstance(evidence, dict) else None)
         or []
     )
+    from .chat_memory import user_conversation_preferences
+
+    preference_turns = list(recent_turns) if isinstance(recent_turns, list) else []
+    # The previous conversational user message can still carry an instruction
+    # when a caller has no complete history. Never use an analytical paraphrase
+    # or assistant acknowledgement to invent a remembered preference.
+    if prior_question and not preference_turns:
+        preference_turns.append({"role": "user", "content": prior_question})
+    preferences = user_conversation_preferences(preference_turns)
     if isinstance(recent_turns, list):
         from .chat_memory import relevant_conversation
 
@@ -655,6 +771,7 @@ def generate_grounded_response(
             "previous_user": (prior_question or "")[:4000],
             "previous_assistant": (prior_summary or "")[:6000],
             "recent_turns": recent_turns,
+            "user_preferences": preferences,
             "prior_result": (
                 (evidence or {}).get("prior_result") if isinstance(evidence, dict) else None
             ),
@@ -668,13 +785,60 @@ def generate_grounded_response(
     )
     text, provider = complete_text(
         _RESPONSE_SYSTEM,
-        "Produce the assistant reply for the user.\n"
+        (
+            "Rewrite the previous explanation in one short, plain-language sentence. "
+            "Use everyday words and do not add examples.\n"
+            if _is_simplification_followup(question, understanding.intent)
+            else "Produce the assistant reply for the user.\n"
+        )
         + json.dumps(payload, default=str),
     )
     reply = (text or "").strip()
     if not reply:
         raise RuntimeError("response model returned empty text")
+    if _is_broad_capability_question(question, understanding.intent):
+        # Keep broad capability answers conversational even if a provider ignores
+        # the response-length instruction. Content remains model generated and
+        # grounded; this only removes unsolicited counts and excess detail.
+        reply = re.sub(r"\([^)]*\b\d+\b[^)]*\)", "", reply)
+        reply = re.sub(r"\s{2,}", " ", reply).strip()
+        reply = re.sub(r"\s+([,.;!?])", r"\1", reply)
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", reply) if part.strip()]
+        reply = " ".join(sentences[:2])
+    elif _is_simplification_followup(question, understanding.intent):
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", reply) if part.strip()]
+        reply = sentences[0] if sentences else reply
+        words = reply.split()
+        if len(words) > 24:
+            reply = " ".join(words[:24]).rstrip(",;:—- ") + "…"
     return reply, provider
+
+
+def _is_broad_capability_question(question: str, intent: str) -> bool:
+    if intent != "capability":
+        return False
+    q = (question or "").strip().lower()
+    if re.search(r"\b(all|every|each|detailed|in\s+detail|exhaustive|full\s+list)\b", q):
+        return False
+    return bool(
+        re.search(
+            r"\bwhat\s+can\s+(?:you|i)\s+(?:help|analy[sz]e|answer|do)\b|"
+            r"\bwhat\s+(?:do|can)\s+you\s+(?:analy[sz]e|help\s+me\s+with|answer)\b|"
+            r"\bwhat\s+can\s+i\s+ask\b",
+            q,
+        )
+    )
+
+
+def _is_simplification_followup(question: str, intent: str) -> bool:
+    return intent in {"conversation", "knowledge", "capability"} and bool(
+        re.search(
+            r"\b(simpler|simplify|more\s+simply|plain\s+language|less\s+technical|shorter|"
+            r"explain\s+(?:it|that|this)\s+simply)\b",
+            question or "",
+            re.I,
+        )
+    )
 
 
 def _schema_semantics_evidence(question: str, recent_turns: Any) -> List[str]:

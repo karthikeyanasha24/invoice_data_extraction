@@ -30,6 +30,7 @@ from app.services.adaptive_nl_sql_hardening import (
     sanitize_chart_payloads,
     sql_has_customer_name_filter,
 )
+from app.services.adaptive_structured_sql import sanitize_generated_sql
 from app.services.intent_extractor import _extract_top_n
 from app.services.sap_sql_agent import _lookup_sql_catalog
 
@@ -201,6 +202,30 @@ def test_named_customer_fabricated_vs_real():
     assert "no matching customer" in payload["summary"].lower()
     assert payload["rowCount"] == 0
     assert payload.get("entity_not_found") is True
+
+
+def test_country_code_followup_does_not_receive_customer_name_filter():
+    question = "For the higher-sales country, show monthly billed sales in the same year and currency."
+    assert extract_named_customer(question) is None
+    generated = (
+        'SELECT SUM("VBRK"."netwr") FROM "VBRK" '
+        'LEFT JOIN "KNA1" ON "VBRK"."kunag" = "KNA1"."kunnr" '
+        'WHERE ON."name1" ILIKE \'%US%\' AND "KNA1"."land1" = \'US\''
+    )
+    repaired = repair_generated_sql(generated, question)
+    assert 'ON."name1" ILIKE' not in repaired
+    assert '"KNA1"."land1" = \'US\'' in repaired
+    sanitized = sanitize_generated_sql(generated, question)
+    assert 'ON."name1" ILIKE' not in sanitized
+    assert '"KNA1"."land1" = \'US\'' in sanitized
+
+    unaliased_join = (
+        'SELECT "VBRK"."vbeln" FROM "VBRK" '
+        'JOIN "KNA1" ON "VBRK"."kunag" = "KNA1"."kunnr"'
+    )
+    filtered = inject_customer_name_predicate(unaliased_join, "Motomarkt")
+    assert '"KNA1"."name1" ILIKE' in filtered
+    assert 'ON."name1" ILIKE' not in filtered
 
 
 def test_chart_titles_never_contain_continuation_prompt():

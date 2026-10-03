@@ -66,6 +66,15 @@ def test_finished_investigation_stops_clock_and_reports_failure():
     assert budget.elapsed_s() == before
 
 
+def test_progress_registration_is_bound_to_its_authenticated_owner():
+    budget = begin_investigation(
+        'question', request_id='owned-progress-unit-test', owner_id=42,
+    )
+    assert budget.owner_id == 42
+    assert 'owner_id' not in budget.public_status()
+    end_investigation('cannot_answer')
+
+
 def test_stored_thread_recovers_conversation_and_verified_artifact():
     turns = [
         {'role': 'user', 'content': 'Call me Mira.'},
@@ -78,6 +87,160 @@ def test_stored_thread_recovers_conversation_and_verified_artifact():
     assert context['data'] == [{'n': 7}]
     assert context['previousPlan']['metric'] == 'count'
     assert context['previousPlan']['recent_turns'][0]['content'] == 'Call me Mira.'
+
+
+def test_stored_thread_skips_failed_followup_and_restores_result_first_source_sql():
+    source_sql = 'SELECT country, SUM(netwr) AS billed_sales FROM vbrk GROUP BY country'
+    verified_plan = {
+        'verified_db_context': {
+            'tables': ['VBRK', 'KNA1'],
+            'columns': ['VBRK.NETWR', 'VBRK.FKDAT', 'VBRK.WAERK', 'KNA1.LAND1'],
+            'semantic_requirements': {
+                'time_filter': {'resolved_from_data': True, 'years': ['2017']},
+            },
+        },
+    }
+    turns = [
+        {'role': 'user', 'content': 'Show billed sales by country for 2017.'},
+        {
+            'role': 'assistant', 'content': 'US had the highest billed sales.',
+            'sql_executed': source_sql,
+            'result_rows': [
+                {'country': 'US', 'currency': 'USD', 'billed_sales': 1227978},
+                {'country': 'DE', 'currency': 'USD', 'billed_sales': 10000},
+            ],
+            'key_metrics': {
+                'answer_status': 'SUCCESS', 'mode': 'database_analysis',
+                'query_plan': verified_plan,
+            },
+        },
+        {'role': 'user', 'content': 'Which country had higher billed sales?'},
+        {
+            'role': 'assistant', 'content': 'US was higher than DE.',
+            'sql_executed': '',
+            'result_rows': [
+                {'country': 'US', 'currency': 'USD', 'billed_sales': 1227978},
+                {'country': 'DE', 'currency': 'USD', 'billed_sales': 10000},
+            ],
+            'key_metrics': {
+                'answer_status': 'SUCCESS', 'mode': 'result_first',
+                'query_plan': verified_plan,
+            },
+        },
+        {'role': 'user', 'content': 'Show monthly billed sales for the higher-sales country.'},
+        {
+            'role': 'assistant', 'content': 'Investigation incomplete; no SQL returned.',
+            'sql_executed': '', 'result_rows': [],
+            'key_metrics': {
+                'answer_status': 'CANNOT_ANSWER', 'mode': 'data_limitation',
+                'query_plan': {},
+            },
+        },
+    ]
+
+    context = context_from_stored_turns(turns)
+
+    assert context['previousQuestion'] == 'Which country had higher billed sales?'
+    assert context['previousSQL'] == source_sql
+    assert context['previousAnswerStatus'] == 'SUCCESS'
+    assert context['data'][0]['country'] == 'US'
+    assert context['previousPlan']['verified_db_context']['tables'] == ['VBRK', 'KNA1']
+
+
+def test_stored_metadata_reply_retains_prior_analysis_as_separate_followup_anchor():
+    turns = [
+        {'role': 'user', 'content': 'Show billed sales by country for 2017.'},
+        {
+            'role': 'assistant', 'content': 'US led.',
+            'sql_executed': 'SELECT country, SUM(netwr) FROM vbrk GROUP BY country',
+            'result_rows': [{'country': 'US', 'billed_sales': 100}],
+            'key_metrics': {'answer_status': 'SUCCESS', 'mode': 'database_analysis', 'query_plan': {'verified_db_context': {'tables': ['VBRK']}}},
+        },
+        {'role': 'user', 'content': 'What columns are in VBRK?'},
+        {
+            'role': 'assistant', 'content': 'Here are the VBRK columns.',
+            'sql_executed': '', 'result_rows': [],
+            'key_metrics': {'answer_status': 'SUCCESS', 'mode': 'database_metadata', 'query_plan': {}},
+        },
+    ]
+
+    context = context_from_stored_turns(turns)
+    retained = context['previousPlan']['retained_analytical_context']
+
+    assert context['previousQuestion'] == 'What columns are in VBRK?'
+    assert context['previousSQL'] == ''
+    assert retained['previousSQL'].startswith('SELECT country')
+    assert retained['data'] == [{'country': 'US', 'billed_sales': 100}]
+
+
+def test_api_recovers_failed_context_from_thread_even_with_client_history(monkeypatch):
+    from fastapi import BackgroundTasks
+    from app.api.adaptive_query import _post_query_adaptive_body
+    from app.services import chat_thread_store, adaptive_analyst
+
+    monkeypatch.setenv('OPENAI_API_KEY', 'fake-key')
+    monkeypatch.setenv('ADAPTIVE_ANALYST_ORCHESTRATOR', '1')
+    monkeypatch.setattr(chat_thread_store, 'thread_owner_user_id', lambda *a: 42)
+    source_sql = 'SELECT country, SUM(netwr) AS billed_sales FROM vbrk GROUP BY country'
+    plan = {'verified_db_context': {'tables': ['VBRK', 'KNA1'], 'columns': ['VBRK.NETWR', 'VBRK.FKDAT', 'KNA1.LAND1']}}
+    turns = [
+        {'role': 'user', 'content': 'Show billed sales by country for 2017.'},
+        {'role': 'assistant', 'content': 'US leads.', 'sql_executed': source_sql,
+         'result_rows': [
+             {'country': 'US', 'currency': 'USD', 'billed_sales': 1227978},
+             {'country': 'DE', 'currency': 'USD', 'billed_sales': 10000},
+         ],
+         'key_metrics': {'answer_status': 'SUCCESS', 'mode': 'database_analysis', 'query_plan': plan}},
+        {'role': 'user', 'content': 'Which country had higher billed sales?'},
+        {'role': 'assistant', 'content': 'US was higher than DE.', 'sql_executed': '',
+         'result_rows': [
+             {'country': 'US', 'currency': 'USD', 'billed_sales': 1227978},
+             {'country': 'DE', 'currency': 'USD', 'billed_sales': 10000},
+         ],
+         'key_metrics': {'answer_status': 'SUCCESS', 'mode': 'result_first', 'query_plan': plan}},
+        {'role': 'user', 'content': 'Show monthly billed sales for the higher-sales country.'},
+        {'role': 'assistant', 'content': 'Investigation incomplete.', 'sql_executed': '', 'result_rows': [],
+         'key_metrics': {'answer_status': 'CANNOT_ANSWER', 'mode': 'data_limitation', 'query_plan': {}}},
+    ]
+    monkeypatch.setattr(chat_thread_store, 'load_thread', lambda *a, **k: turns)
+    seen = {}
+
+    def run(question, db, executor, **kwargs):
+        seen['question'] = question
+        seen.update(kwargs)
+        return {'answer_status': 'CLARIFICATION', 'summary': 'Captured recovered context.', 'mode': 'clarification', 'data': [], 'sql': ''}
+
+    monkeypatch.setattr(adaptive_analyst, 'run_adaptive_orchestrator', run)
+    monkeypatch.setattr(adaptive_analyst, 'orchestrator_enabled', lambda: True)
+    result = _post_query_adaptive_body(
+        q='For the higher-sales country, show monthly billed sales in the same year and currency.',
+        original_question='For the higher-sales country, show monthly billed sales in the same year and currency.',
+        tableHint=None,
+        contextData={
+            'previousQuestion': 'Show monthly billed sales for the higher-sales country.',
+            'previousSQL': '', 'previousPlan': {}, 'previousAnswerStatus': 'CANNOT_ANSWER', 'data': [],
+        },
+        overrideSql=None,
+        threadId='ada_retry_thread',
+        investigationId=None,
+        db=MagicMock(),
+        current_user=type('User', (), {'id': 42})(),
+        conversation_history=[
+            {'role': 'user', 'content': 'Show billed sales by country for 2017.'},
+            {'role': 'assistant', 'content': 'US leads.'},
+            {'role': 'user', 'content': 'Which country had higher billed sales?'},
+            {'role': 'assistant', 'content': 'US was higher than DE.', 'mode': 'result_first'},
+            {'role': 'user', 'content': 'For the higher-sales country, show monthly billed sales in the same year and currency.'},
+        ],
+        new_question=False,
+        background_tasks=BackgroundTasks(),
+    )
+
+    assert seen['prior_sql'] == source_sql
+    assert seen['prior_rows'][0]['country'] == 'US'
+    assert seen['prior_rows'][1]['country'] == 'DE'
+    assert seen['prior_plan']['verified_db_context']['tables'] == ['VBRK', 'KNA1']
+    assert result['answer_status'] == 'CLARIFICATION'
 
 
 def test_all_response_types_keep_memory_without_retaining_old_filters():

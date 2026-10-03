@@ -194,7 +194,7 @@ _FACT_REQUEST = re.compile(
 )
 
 _DEFINITION_CUE = re.compile(
-    r"(?xi)^\s*("
+    r"(?xi)^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+)?(?:"
     r"what\s+is|what'?s|whats|what\s+are|what\s+does|what\s+do|"
     r"explain|define|tell\s+me\s+about|describe"
     r")\b"
@@ -343,7 +343,8 @@ def extract_cte_names(sql: str) -> set[str]:
     stripped = re.sub(r"'([^']|'')*'", "''", sql)
     names: set[str] = set()
     for m in re.finditer(
-        r'(?:([A-Za-z_][A-Za-z0-9_]*)|"([^"]+)")\s+AS\s*\(',
+        r'(?:([A-Za-z_][A-Za-z0-9_]*)|"([^"]+)")'
+        r'(?:\s*\([^()]*\))?\s+AS\s*\(',
         stripped,
         flags=re.I,
     ):
@@ -623,6 +624,12 @@ def extract_named_customer(question: str) -> Optional[str]:
     q = (question or "").strip()
     if not q:
         return None
+    # A selected country code (often two letters such as US or DE) is not a
+    # customer name. Do not let a country drill-down acquire a KNA1.NAME1 filter.
+    if re.search(r"\b(countr(?:y|ies)|nation|country\s+code)\b", q, re.I) and not re.search(
+        r"\b(?:customer|client|sold[- ]to)\s+(?:named|called|id|number)\b", q, re.I
+    ):
+        return None
     if _BY_CUSTOMER_DIM.search(q) and not re.search(r"\bfor\s+customer\b", q, re.I):
         return None
     m = re.search(r"""['\"]([^'\"]{2,80})['\"]""", q)
@@ -660,22 +667,33 @@ def inject_customer_name_predicate(sql: str, customer_name: str) -> str:
     elif re.search(r"\bname1\b", sql, re.I):
         pred = f"name1 ILIKE '%{safe}%'"
     else:
-        kn = re.search(r'\b(?:JOIN|FROM)\s+"?KNA1"?\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)', sql, re.I)
+        kn = re.search(
+            r'\b(?:JOIN|FROM)\s+"?KNA1"?\s+(?:AS\s+)?'
+            r'(?!(?:ON|WHERE|LEFT|RIGHT|INNER|FULL|CROSS|JOIN|GROUP|ORDER|LIMIT)\b)'
+            r'([A-Za-z_][A-Za-z0-9_]*)',
+            sql,
+            re.I,
+        )
         if kn:
             pred = f"{kn.group(1)}.\"name1\" ILIKE '%{safe}%'"
         else:
-            m_kunag = re.search(
-                r'\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"?kunag"?',
-                sql,
-                re.I,
-            )
-            if not m_kunag:
-                return sql
-            a = m_kunag.group(1)
-            pred = (
-                f'EXISTS (SELECT 1 FROM "KNA1" _nc WHERE _nc."name1" ILIKE \'%{safe}%\' '
-                f'AND LPAD(TRIM(_nc."kunnr"), 10, \'0\') = LPAD(TRIM({a}."kunag"), 10, \'0\'))'
-            )
+            # The table may have been joined without an alias. Qualify it by
+            # its physical name; never mistake the SQL keyword ON for an alias.
+            if re.search(r'\b(?:JOIN|FROM)\s+"?KNA1"?', sql, re.I):
+                pred = f'"KNA1"."name1" ILIKE \'%{safe}%\''
+            else:
+                m_kunag = re.search(
+                    r'\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"?kunag"?',
+                    sql,
+                    re.I,
+                )
+                if not m_kunag:
+                    return sql
+                a = m_kunag.group(1)
+                pred = (
+                    f'EXISTS (SELECT 1 FROM "KNA1" _nc WHERE _nc."name1" ILIKE \'%{safe}%\' '
+                    f'AND LPAD(TRIM(_nc."kunnr"), 10, \'0\') = LPAD(TRIM({a}."kunag"), 10, \'0\'))'
+                )
     wm = re.search(r"\bWHERE\b", sql, re.I)
     if wm:
         return sql[: wm.end()] + f" {pred} AND" + sql[wm.end():]
@@ -814,6 +832,7 @@ def apply_plan_sql_deltas(sql: str, plan: Any) -> str:
 def apply_ranking_discipline(sql: str, question: str) -> str:
     sql = apply_limit_from_question(sql, question)
     sql = inject_single_currency_filter(sql, question)
+    sql = strip_customer_name_filter_from_country_query(sql, question)
     named = extract_named_customer(question)
     if named:
         sql = inject_customer_name_predicate(sql, named)
@@ -828,10 +847,32 @@ def repair_generated_sql(sql: str, question: str = "") -> str:
     out = inject_lpad_join_keys(out)
     out = inject_sap_date_empty_guards(out, question)
     out = inject_year_filters_from_question(out, question)
+    out = strip_customer_name_filter_from_country_query(out, question)
     named = extract_named_customer(question)
     if named:
         out = inject_customer_name_predicate(out, named)
     out = apply_limit_from_question(out, question)
+    return out
+
+
+def strip_customer_name_filter_from_country_query(sql: str, question: str = "") -> str:
+    """Remove name-search predicates that conflict with an explicit country scope."""
+    if not sql or not re.search(r"\b(countr(?:y|ies)|nation|country\s+code)\b", question or "", re.I):
+        return sql
+    if re.search(r"\b(?:customer|client|sold[- ]to)\s+(?:named|called)\b", question or "", re.I):
+        return sql
+    predicate = (
+        r'(?:(?:[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*")\s*\.\s*)?'
+        r'"?name1"?\s+ILIKE\s+\'(?:(?:\'\')|[^\'])*\''
+    )
+    out = re.sub(r"(\bWHERE\s+)" + predicate + r"\s+AND\s+", r"\1", sql, flags=re.I)
+    out = re.sub(r"\s+AND\s+" + predicate, "", out, flags=re.I)
+    out = re.sub(
+        r"\bWHERE\s+" + predicate + r"(?=\s*(?:GROUP\s+BY|ORDER\s+BY|LIMIT|$))",
+        "",
+        out,
+        flags=re.I,
+    )
     return out
 
 

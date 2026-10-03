@@ -65,11 +65,12 @@ from ..services.ai_query_plan import (
     plan_prompt_directive,
     QueryPlan,
 )
-from ..api.auth import get_current_user
+from ..api.auth import get_authenticated_user_id, get_current_user
 from ..models.user import ZodiacUser
 
 logger = logging.getLogger("zodiac-api.adaptive_query")
 router = APIRouter(tags=["adaptive-query"])
+_MAX_PERSISTED_ANALYST_RESULT_ROWS = 200
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 _CSV_PATH    = Path(__file__).resolve().parent.parent.parent / "tables_columns.csv"
@@ -137,6 +138,27 @@ def _looks_like_schema_structure_question(question: str) -> bool:
             q,
         )
     )
+
+
+def _usable_retained_analytical_context(plan: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return the last verified analysis only when the client retained its evidence."""
+    if not isinstance(plan, dict):
+        return None
+    retained = plan.get("retained_analytical_context")
+    if not isinstance(retained, dict):
+        return None
+    status = str(retained.get("previousAnswerStatus") or "").strip().upper()
+    sql = str(retained.get("previousSQL") or "").strip()
+    previous_plan = retained.get("previousPlan")
+    rows = retained.get("data")
+    if (
+        status not in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}
+        or not re.search(r"\bselect\b", sql, re.I)
+        or not isinstance(previous_plan, dict)
+        or not isinstance(rows, list)
+    ):
+        return None
+    return retained
 
 
 def _extract_known_columns_from_question(question: str) -> List[str]:
@@ -2590,6 +2612,7 @@ async def get_adaptive_chat_history(
     from ..services.chat_thread_store import (
         load_thread, thread_owner_user_id, ensure_chat_tables,
     )
+    from ..services.adaptive_analyst.sql_evidence import sql_evidence_from_stored_turn
 
     tid = (thread_id or "").strip()
     if not tid.startswith("ada_"):
@@ -2616,7 +2639,7 @@ async def get_adaptive_chat_history(
                 stored_row_count = 0
             row_count = max(stored_row_count, len(rows) if isinstance(rows, list) else 0)
             msg["result"] = {
-                "sql": t.get("sql_executed") or "",
+                **sql_evidence_from_stored_turn(t),
                 "data": rows,
                 "charts": t.get("charts") or [],
                 "summary": content,
@@ -2677,6 +2700,7 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
                 "mode": snapshot.get("mode"),
                 "meta": snapshot.get("meta"),
                 "row_count": snapshot.get("row_count"),
+                "sql_evidence": snapshot.get("sql_evidence"),
             },
             query_mode="new",
             action=snapshot.get("pipeline") or "adaptive",
@@ -2705,14 +2729,14 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
 
 
 @router.get("/api/query/adaptive/investigations/{request_id}")
-def get_investigation_status(
+async def get_investigation_status(
     request_id: str,
-    current_user: ZodiacUser = Depends(get_current_user),
+    current_user_id: int = Depends(get_authenticated_user_id),
 ) -> Dict[str, Any]:
     from ..services.investigation_budget import get_investigation
 
     budget = get_investigation(request_id)
-    if budget is None:
+    if budget is None or budget.owner_id != current_user_id:
         return {"request_id": request_id, "status": "unknown", "pipeline_stage": "UNDERSTANDING"}
     return budget.public_status()
 
@@ -2720,10 +2744,13 @@ def get_investigation_status(
 @router.post("/api/query/adaptive/investigations/{request_id}/cancel")
 def cancel_investigation_endpoint(
     request_id: str,
-    current_user: ZodiacUser = Depends(get_current_user),
+    current_user_id: int = Depends(get_authenticated_user_id),
 ) -> Dict[str, Any]:
     from ..services.investigation_budget import cancel_investigation, get_investigation
 
+    budget = get_investigation(request_id)
+    if budget is None or budget.owner_id != current_user_id:
+        return {"cancelled": False, "request_id": request_id, "status": "unknown"}
     ok = cancel_investigation(request_id)
     budget = get_investigation(request_id)
     return {
@@ -2858,17 +2885,50 @@ def _post_query_adaptive_body(
         if owner is not None and owner != user_id:
             raise HTTPException(status_code=403, detail="thread_not_owned")
     memory_turns = recent_conversation(conversation_history)
-    if not new_question and not memory_turns:
+    if not new_question:
         plan_input = (contextData or {}).get("previousPlan") or {}
         plan_input = plan_input if isinstance(plan_input, dict) else {}
         inv_input = plan_input.get("investigation_state") or {}
         inv_input = inv_input if isinstance(inv_input, dict) else {}
-        memory_turns = recent_conversation(plan_input.get("recent_turns") or inv_input.get("recent_turns"))
-        if not memory_turns and thread_id and user_id:
+        if not memory_turns:
+            memory_turns = recent_conversation(
+                plan_input.get("recent_turns") or inv_input.get("recent_turns")
+            )
+
+        context_status = str((contextData or {}).get("previousAnswerStatus") or "").strip().upper()
+        retained_context = _usable_retained_analytical_context(plan_input)
+        context_is_failed = context_status in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED"}
+        context_is_missing = not contextData or not any(
+            (contextData or {}).get(key)
+            for key in ("previousQuestion", "previousSQL", "previousPlan", "data")
+        )
+        # If the browser sent the failed turn as context (older UI bundles can
+        # do this), recover the last successful artifact from this user's own
+        # persisted thread. Do this only for missing/failed context to avoid
+        # adding a database read to normal chat turns.
+        if thread_id and user_id and (context_is_missing or context_is_failed and not retained_context):
             stored = load_thread(db, user_id, thread_id, last_n=80)
             restored_context = context_from_stored_turns(stored)
-            memory_turns = recent_conversation(stored)
-            if not contextData:
+            stored_memory = recent_conversation(stored)
+            merged_memory: List[Dict[str, str]] = []
+            seen_memory: set[tuple[str, str]] = set()
+            for turn in [*stored_memory, *memory_turns]:
+                key = (str(turn.get("role") or ""), str(turn.get("content") or ""))
+                if key in seen_memory:
+                    continue
+                seen_memory.add(key)
+                merged_memory.append(turn)
+            memory_turns = recent_conversation(merged_memory)
+            restored_status = str(restored_context.get("previousAnswerStatus") or "").upper()
+            restored_plan = restored_context.get("previousPlan")
+            restored_anchor = _usable_retained_analytical_context(
+                restored_plan if isinstance(restored_plan, dict) else None
+            )
+            restored_sql = str(restored_context.get("previousSQL") or "").strip()
+            if (
+                restored_status not in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED"}
+                and (re.search(r"\bselect\b", restored_sql, re.I) or restored_anchor or restored_context.get("previousQuestion"))
+            ):
                 contextData = restored_context
     if new_question:
         contextData = None
@@ -2883,7 +2943,11 @@ def _post_query_adaptive_body(
         current_budget,
     )
 
-    inv = begin_investigation(q, request_id=(investigationId or "").strip())
+    inv = begin_investigation(
+        q,
+        request_id=(investigationId or "").strip(),
+        owner_id=int(getattr(current_user, "id", 0) or 0) or None,
+    )
     inv.checkpoint("UNDERSTANDING")
 
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2932,19 +2996,48 @@ def _post_query_adaptive_body(
                     if not isinstance(rows_chk, list):
                         rows_chk = []
                     sql_chk = str(payload.get("sql") or "")
-                    verified_ctx = (payload.get("query_plan") or {}).get("verified_db_context")
+                    query_plan_chk = payload.get("query_plan") or {}
+                    pipeline1_chk = (
+                        query_plan_chk.get("pipeline1")
+                        if isinstance(query_plan_chk, dict) else None
+                    )
+                    # A grounded referential follow-up may be expanded to a
+                    # standalone query (for example, "that customer's monthly
+                    # sales") after resolving the customer from prior verified
+                    # rows. Validate against the actual expanded request; the
+                    # original wording can contain a ranking entity that is no
+                    # longer a requested result dimension after the drill-down.
+                    validation_question = _original_question
+                    if isinstance(pipeline1_chk, dict) and pipeline1_chk.get("is_follow_up"):
+                        rewritten_question = str(pipeline1_chk.get("rewritten_question") or "").strip()
+                        if rewritten_question:
+                            validation_question = rewritten_question
+                    investigation_state_chk = (
+                        query_plan_chk.get("investigation_state")
+                        if isinstance(query_plan_chk, dict) else None
+                    )
+                    if (
+                        str(payload.get("pipeline") or "").lower() == "adaptive_orchestrator"
+                        and isinstance(investigation_state_chk, dict)
+                    ):
+                        executed_question = str(
+                            investigation_state_chk.get("last_user_question") or ""
+                        ).strip()
+                        if executed_question and executed_question != _original_question:
+                            validation_question = executed_question
+                    verified_ctx = query_plan_chk.get("verified_db_context") if isinstance(query_plan_chk, dict) else None
                     verified_semantics = (
                         verified_ctx.get("semantic_requirements")
                         if isinstance(verified_ctx, dict) else None
                     )
                     gate_warn = result_matches_analytical_intent(
-                        rows_chk, _original_question, verified_semantics, sql=sql_chk
+                        rows_chk, validation_question, verified_semantics, sql=sql_chk
                     )
                     gate_warn.extend(
                         answer_consistent_with_rows(
                             str(payload.get("answer") or payload.get("summary") or ""),
                             rows_chk,
-                            _original_question,
+                            validation_question,
                         )
                     )
                     if gate_warn:
@@ -3035,14 +3128,16 @@ def _post_query_adaptive_body(
             end_investigation()
             return payload
         rows = payload.get("data") or payload.get("rows") or []
-        if isinstance(rows, list) and len(rows) > 30:
-            rows = rows[:30]
+        if isinstance(rows, list) and len(rows) > _MAX_PERSISTED_ANALYST_RESULT_ROWS:
+            rows = rows[:_MAX_PERSISTED_ANALYST_RESULT_ROWS]
         charts = payload.get("charts") or []
         sql_to_store = payload.get("sql") or ""
         if payload.get("answer_status") == "CANNOT_ANSWER":
             sql_to_store = ""
             rows = []
             charts = []
+        from ..services.adaptive_analyst.sql_evidence import sql_evidence_from_payload
+
         stored_row_count = payload.get("rowCount")
         if stored_row_count is None:
             stored_row_count = len(result_rows) if isinstance(result_rows, list) else 0
@@ -3057,6 +3152,7 @@ def _post_query_adaptive_body(
                 or ""
             )[:10000],
             "sql": sql_to_store,
+            "sql_evidence": sql_evidence_from_payload(payload),
             "rows": rows if isinstance(rows, list) else [],
             "charts": charts,
             "query_plan": payload.get("query_plan") or payload.get("queryPlan"),
@@ -3176,6 +3272,12 @@ def _post_query_adaptive_body(
     from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
+    from ..services.adaptive_analyst.understanding import is_prior_turn_discourse
+
+    metadata_is_prior_recall = is_prior_turn_discourse(
+        clean_q,
+        has_prior=bool(memory_turns or contextData),
+    )
 
     # DATABASE_METADATA: schema/catalog introspection (not business analytics).
     try:
@@ -3183,15 +3285,17 @@ def _post_query_adaptive_body(
             answer_database_metadata,
             is_database_metadata_question,
         )
-
-        if is_database_metadata_question(clean_q):
+        if is_database_metadata_question(clean_q) and not metadata_is_prior_recall:
             meta_payload = answer_database_metadata(clean_q, schema=_load_schema())
             if meta_payload is not None:
                 return _persist_and_return(meta_payload)
     except Exception as meta_err:
         logger.warning("[adaptive] database_metadata path failed: %s", meta_err)
 
-    if _looks_like_schema_structure_question(clean_q):
+    if _looks_like_schema_structure_question(clean_q) and not is_prior_turn_discourse(
+        clean_q,
+        has_prior=bool(memory_turns or contextData),
+    ):
         return _persist_and_return(_build_schema_structure_payload(clean_q))
 
     # SAT / EDI / Zodiac app tables: answer before the SAP business-signal gate and
@@ -3245,7 +3349,8 @@ def _post_query_adaptive_body(
         prev_status = str(contextData.get("previousAnswerStatus") or "").strip().upper()
         rows_raw = contextData.get("data")
         rows_list = rows_raw if isinstance(rows_raw, list) else []
-        if prev_status == "CANNOT_ANSWER":
+        retained = _usable_retained_analytical_context(prev_plan_dict)
+        if prev_status == "CANNOT_ANSWER" and not retained:
             # Preserve deep analytical chain after governed data-gap turns.
             ac = (prev_plan_dict or {}).get("analytical_context") if isinstance(prev_plan_dict, dict) else None
             if not (isinstance(ac, dict) and ac.get("deep_analysis")):
@@ -3263,30 +3368,25 @@ def _post_query_adaptive_body(
 
         # General conversation is the latest turn, while the last verified
         # analysis remains available as a separate anchor for data follow-ups.
-        retained = (prev_plan_dict or {}).get("retained_analytical_context")
         if isinstance(retained, dict) and not prev_sql:
             retained_sql = str(retained.get("previousSQL") or "").strip()
-            retained_status = str(retained.get("previousAnswerStatus") or "").upper()
             retained_plan = retained.get("previousPlan")
             retained_rows = retained.get("data")
-            if (
-                retained_status not in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CLARIFICATION"}
-                and re.search(r"\bselect\b", retained_sql, re.I)
-            ):
-                outer_plan = prev_plan_dict or {}
-                recent_turns = outer_plan.get("recent_turns")
-                if not isinstance(recent_turns, list):
-                    outer_state = outer_plan.get("investigation_state")
-                    recent_turns = outer_state.get("recent_turns") if isinstance(outer_state, dict) else []
-                prev_q = str(retained.get("previousQuestion") or prev_q)
-                prev_sql = retained_sql
-                prev_status = retained_status or "SUCCESS"
-                rows = retained_rows if isinstance(retained_rows, list) else []
-                rows_list = [row for row in rows if isinstance(row, dict)]
-                prev_plan_dict = {
-                    **(retained_plan if isinstance(retained_plan, dict) else {}),
-                    "recent_turns": recent_turns if isinstance(recent_turns, list) else [],
-                }
+            retained_status = str(retained.get("previousAnswerStatus") or "").upper()
+            outer_plan = prev_plan_dict or {}
+            recent_turns = outer_plan.get("recent_turns")
+            if not isinstance(recent_turns, list):
+                outer_state = outer_plan.get("investigation_state")
+                recent_turns = outer_state.get("recent_turns") if isinstance(outer_state, dict) else []
+            prev_q = str(retained.get("previousQuestion") or prev_q)
+            prev_sql = retained_sql
+            prev_status = retained_status or "SUCCESS"
+            rows = retained_rows if isinstance(retained_rows, list) else []
+            rows_list = [row for row in rows if isinstance(row, dict)]
+            prev_plan_dict = {
+                **(retained_plan if isinstance(retained_plan, dict) else {}),
+                "recent_turns": recent_turns if isinstance(recent_turns, list) else [],
+            }
 
     from ..services.adaptive_analyst.orchestrator import adapt_user_turn
 

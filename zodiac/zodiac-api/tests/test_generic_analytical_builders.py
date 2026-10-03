@@ -5,12 +5,14 @@ from app.services.adaptive_structured_sql import (
     build_above_average_sql,
     build_dimension_ranking_sql,
     build_document_count_by_period_sql,
+    build_dimension_period_sales_sql,
     build_negation_anti_join_sql,
     build_partitioned_topn_sql,
     build_period_compare_sql,
 )
 from app.services.analytical_operations import extract_analytical_operations
 from app.services.plan_satisfaction import sql_satisfies_analytical_intent
+from app.services.semantic_requirements import required_semantics
 
 
 def test_vendor_purchase_ranking_is_generic():
@@ -26,6 +28,71 @@ def test_document_count_by_year():
     assert sql and "GROUP BY" in sql.upper() and "COUNT" in sql.upper()
     assert "SUBSTRING" in sql.upper()
     assert sql_satisfies_analytical_intent(sql, q)
+
+
+def test_top_plural_entity_infers_result_grain_without_model():
+    req = required_semantics(
+        "Show the top five countries by billed sales in the latest complete year available.",
+        {},
+    )
+    assert req["dimensions"] == ["country"]
+    assert req["group_by"] == ["country"]
+    assert req["ranking"]["limit"] == 5
+    assert req["date_filter"]["type"] == "latest_data_years"
+
+
+def test_monthly_country_sales_uses_values_supplied_by_user():
+    question = (
+        "Show billed sales by month for country code 'US' in calendar year 2017 "
+        "in currency USD."
+    )
+    sql = build_dimension_period_sales_sql(question, [])
+    assert sql
+    assert "'US'" in sql
+    assert "'2017'" in sql
+    assert "'USD'" in sql
+    assert '"VBRK"' in sql
+
+
+def test_schema_backed_pipeline_generates_supported_sql_during_model_outage(monkeypatch):
+    from app.services import adaptive_structured_sql, four_stage_db_pipeline
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(four_stage_db_pipeline, "analyze_json", unavailable)
+    monkeypatch.setattr(four_stage_db_pipeline, "complete_text", unavailable)
+    monkeypatch.setattr(adaptive_structured_sql, "analyze_json", unavailable)
+    question = (
+        "Show billed sales by month for country code 'US' in calendar year 2017 "
+        "in currency USD."
+    )
+    context = four_stage_db_pipeline.VerifiedDbContext(question=question)
+    four_stage_db_pipeline.pipeline1_table_selection(question, context)
+    four_stage_db_pipeline.pipeline2_column_selection(question, context)
+    four_stage_db_pipeline.pipeline25_query_plan(question, context, db=None)
+    sql = four_stage_db_pipeline.pipeline3_sql_generation(question, context)
+    assert sql
+    assert "'US'" in sql and "'2017'" in sql and "'USD'" in sql
+
+
+def test_result_analysis_returns_verified_row_count_when_model_is_unavailable(monkeypatch):
+    from app.services import four_stage_db_pipeline
+
+    monkeypatch.setattr(
+        four_stage_db_pipeline,
+        "analyze_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("provider unavailable")),
+    )
+    context = four_stage_db_pipeline.VerifiedDbContext(question="Show billed sales")
+    result = four_stage_db_pipeline.pipeline4_result_analysis(
+        "Show billed sales",
+        'SELECT "VBRK"."netwr" FROM "VBRK"',
+        [{"netwr": "not exposed in fallback prose"}],
+        context,
+    )
+    assert result["summary"] == "The query completed and returned 1 row(s). See the result table for the verified values."
+    assert result["findings"] == []
 
 
 def test_above_average_builder():
@@ -49,6 +116,116 @@ def test_period_decline_has_having():
     sql = build_period_compare_sql(q, [])
     assert sql and "HAVING" in sql.upper() and "2004" in sql and "2005" in sql
     assert sql_satisfies_analytical_intent(sql, q)
+
+
+def test_period_comparison_includes_requested_base_period_documents_and_percent_change(monkeypatch):
+    from app.services import adaptive_structured_sql as structured
+
+    tables = {"VBRK", "KNA1"}
+    columns = {
+        "VBRK": {"vbeln", "netwr", "fkdat", "kunag"},
+        "KNA1": {"kunnr", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in tables)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = (
+        "For the top 32 customers from 2017, compare billed sales between calendar years 2000 and 2001."
+    )
+    semantic = {
+        "period_compare": {
+            "type": "period_change",
+            "base_period": {"year": "2000"},
+            # Simulate the previous turn's year leaking into the LLM plan.
+            "comparison_period": {"year": "2017"},
+            "calculation": "both",
+        },
+        "ranking": {"direction": "DESC", "limit": 32},
+        "include_fields": [{"field": "invoice_number", "year": "2000"}],
+        "_original_user_question": (
+            "For those same customers, compare billed sales in 2000 and 2001 "
+            "and show the 2000 billing document numbers, absolute change, and percentage change."
+        ),
+        "prior_result_rows": [
+            {"customer_id": "CUST-1", "customer_name": "Customer One"},
+            {"customer_id": "CUST-2", "customer_name": "Customer Two"},
+        ],
+    }
+
+    sql = structured.build_period_compare_sql(question, ["VBRK", "KNA1"], semantic)
+
+    assert sql
+    assert 'AS "invoice_numbers_2000"' in sql
+    assert "STRING_AGG(DISTINCT CASE WHEN" in sql
+    assert "= '2000'" in sql
+    assert 'AS "percent_change"' in sql
+    assert 'AS "change"' in sql
+    assert "IN ('2000', '2001')" in sql
+    assert "2017" not in sql
+    assert "LIMIT 2" in sql
+    assert "LPAD('CUST-1', 10, '0')" in sql
+    assert "LPAD('CUST-2', 10, '0')" in sql
+    assert "CUST-3" not in sql
+    assert "WITH selected_customers(customer_id)" in sql
+    assert "LEFT JOIN period_totals" in sql
+    assert 'COALESCE(pt."period_a", 0)' in sql
+    from app.services.ai_native_pipeline import _schema_violations
+    assert not any("unknown table selected_customers" in issue.lower() for issue in _schema_violations(sql))
+    from app.services.sap_sql_precision_validator import validate_sql_precision
+    precision = validate_sql_precision(
+        sql,
+        {
+            "VBRK": ["fkdat", "kunag", "netwr", "vbeln"],
+            "KNA1": ["kunnr", "name1"],
+        },
+        question=semantic["_original_user_question"],
+    )
+    assert precision.is_valid, precision.errors
+
+
+def test_same_customer_period_followup_uses_comparison_template_before_inherited_ranking(monkeypatch):
+    from app.services import adaptive_structured_sql, four_stage_db_pipeline
+    from app.services.four_stage_db_pipeline import VerifiedDbContext
+
+    question = "For those same customers, compare billed sales in 2000 and 2001."
+    checked_questions = []
+    ctx = VerifiedDbContext(
+        question="For the top 32 customers from 2017, compare billed sales in 2000 and 2001.",
+        tables=["VBRK", "KNA1"],
+        semantic_requirements={
+            "_original_user_question": question,
+            "prior_result_rows": [{"customer_id": "CUST-1"}],
+            "period_compare": {"base_period": {"year": "2000"}, "comparison_period": {"year": "2017"}},
+            "ranking": {"direction": "DESC", "limit": 32},
+        },
+    )
+    monkeypatch.setattr(
+        adaptive_structured_sql,
+        "build_period_compare_sql",
+        lambda *_args, **_kwargs: 'SELECT 1 AS "period_a", 2 AS "period_b", 1 AS "change"',
+    )
+    monkeypatch.setattr(
+        adaptive_structured_sql,
+        "build_dimension_ranking_sql",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("inherited ranking ran first")),
+    )
+    monkeypatch.setattr(
+        "app.services.plan_satisfaction.sql_satisfies_analytical_intent",
+        lambda _sql, checked_question, *_args, **_kwargs: (
+            checked_questions.append(checked_question) or True
+        ),
+    )
+
+    sql = four_stage_db_pipeline.pipeline3_sql_generation(ctx.question, ctx)
+
+    assert sql and 'AS "period_a"' in sql
+    assert ctx.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "period_compare_template"
+    assert checked_questions == [question]
 
 
 def test_declined_past_tense_is_decrease_condition():
@@ -117,6 +294,34 @@ def test_vendor_po_ranking_ignores_polluted_negation():
     assert not req.get("negation")
     sql = build_dimension_ranking_sql(q, [])
     assert sql and sql_satisfies_analytical_intent(sql, q, sem)
+
+
+def test_explicit_ranking_grain_overrides_unrequested_model_dimensions(monkeypatch):
+    from app.services import four_stage_db_pipeline
+
+    question = "Show the top 32 customers by billed sales in calendar year 2017 in USD."
+    monkeypatch.setattr(
+        four_stage_db_pipeline,
+        "analyze_json",
+        lambda *_args, **_kwargs: (
+            {
+                "dimensions": ["customer", "country"],
+                "group_by": ["customer", "country"],
+                "measure": {"concept": "revenue", "aggregation": "SUM"},
+                "ranking": {"direction": "DESC", "limit": 32},
+            },
+            "test",
+        ),
+    )
+
+    semantic = four_stage_db_pipeline.extract_semantic_requirements(question)
+
+    assert semantic["dimensions"] == ["customer"]
+    assert semantic["group_by"] == ["customer"]
+    assert semantic["ranking"]["limit"] == 32
+    assert semantic["time_filter"]["value"] == "2017"
+    # Currency filtering remains a separate constraint; it is not an output grain.
+    assert "country" not in semantic["dimensions"]
 
 
 def test_cte_schema_violations_allow_local_relations():

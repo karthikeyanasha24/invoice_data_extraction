@@ -469,6 +469,10 @@ def _run_four_stage_or_legacy_sql(
         from ..four_stage_db_pipeline import run_four_stage_database_query
 
         merged_plan: Dict[str, Any] = dict(prior_plan or {})
+        # Keep the user's exact wording available to SQL builders and result
+        # validators. The follow-up resolver may expand references like
+        # "that country", but its paraphrase must not erase requested fields.
+        merged_plan["original_user_question"] = original
         inv = merged_plan.get("investigation_state")
         if not isinstance(inv, dict):
             merged_plan["investigation_state"] = state.to_dict()
@@ -771,10 +775,10 @@ def run_adaptive_orchestrator(
     preserved_turns: List[Dict[str, Any]] = []
     if isinstance(prior_plan, dict):
         inv_prior = prior_plan.get("investigation_state")
-        if isinstance(inv_prior, dict) and isinstance(inv_prior.get("recent_turns"), list):
-            preserved_turns = list(inv_prior.get("recent_turns") or [])
-        elif isinstance(prior_plan.get("recent_turns"), list):
+        if isinstance(prior_plan.get("recent_turns"), list):
             preserved_turns = list(prior_plan.get("recent_turns") or [])
+        elif isinstance(inv_prior, dict) and isinstance(inv_prior.get("recent_turns"), list):
+            preserved_turns = list(inv_prior.get("recent_turns") or [])
     if adapted.drop_prior and not prior_was_chat and not force_general_chat:
         # Drop analytical SQL/plan — but keep rolling chat turns (ChatGPT memory).
         prior_question = ""
@@ -784,7 +788,11 @@ def run_adaptive_orchestrator(
     state = InvestigationState.from_context(prior_plan, prior_question, prior_sql)
     from .chat_memory import recent_conversation
     preserved_turns = recent_conversation(preserved_turns)
-    if preserved_turns and not state.recent_turns:
+    if preserved_turns and isinstance(prior_plan, dict) and isinstance(prior_plan.get("recent_turns"), list):
+        # The request supplies the latest conversation outside the saved
+        # analytical state; an older nested snapshot must not hide new turns.
+        state.recent_turns = preserved_turns[-40:]
+    elif preserved_turns and not state.recent_turns:
         state.recent_turns = preserved_turns[-40:]
     elif preserved_turns and adapted.drop_prior:
         # Merge: keep preserved history even if a thin plan was rebuilt.
@@ -798,28 +806,6 @@ def run_adaptive_orchestrator(
         state.conversation_id = thread_id
     prior_summary = _prior_summary_from_state(state, prior_plan)
 
-    # A scoped drill-down cannot replace a failed parent analysis with a new,
-    # unrelated ranking. Ask for the missing selection if no verified anchor
-    # exists; retain the conversation so the user can supply it.
-    from .understanding import is_referential_database_action
-
-    if (
-        is_referential_database_action(q, has_prior=True)
-        and not (prior_rows or (prior_sql and prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}))
-    ):
-        msg = (
-            "There is no verified result identifying the entity or documents for this follow-up. "
-            "Specify the customer, country, or document selection, or retry the preceding analysis."
-        )
-        return {
-            "mode": "clarification", "route": "clarification", "status": "clarification",
-            "answer_status": "CLARIFICATION", "type": "clarification",
-            "sql": "", "sql_status": "not_generated", "data": [], "rowCount": 0,
-            "summary": msg, "answer": msg, "keyFindings": [], "charts": [],
-            "suggested_followups": [], "pipeline": "adaptive_orchestrator",
-            "query_plan": {"investigation_state": state.to_dict()},
-        }
-
     from ...data_catalog.source_selector import (
         _ambiguous_sales,
         _explicit_invoice,
@@ -832,6 +818,7 @@ def run_adaptive_orchestrator(
     # Fast path: short greetings = ONE LLM reply (not understand JSON + respond).
     # Still model-generated — not a canned template — ChatGPT-like latency.
     if is_greeting_or_chitchat(q):
+        greeting_fallback = False
         try:
             from .llm_provider import complete_text
             from ..investigation_budget import checkpoint
@@ -849,7 +836,13 @@ def run_adaptive_orchestrator(
             if not reply:
                 raise RuntimeError("response model returned empty text")
         except Exception as greet_err:
-            return technical_understanding_failure(q, greet_err)
+            reply = "Hello! What would you like to explore?"
+            provider = "local_greeting_fallback"
+            greeting_fallback = True
+            logger.warning(
+                "[adaptive-orch] greeting model unavailable; used a no-data greeting: %s",
+                type(greet_err).__name__,
+            )
         state.remember_turn(q, reply, mode="general_chat")
         out = {
             "mode": "general_chat",
@@ -865,7 +858,7 @@ def run_adaptive_orchestrator(
             "keyFindings": [],
             "charts": [],
             "pipeline": "adaptive_orchestrator",
-            "sql_generation_method": "llm_greeting_fast",
+            "sql_generation_method": "connected_catalog_greeting_fallback" if greeting_fallback else "llm_greeting_fast",
             "llm_calls": 1,
             "query_plan": {
                 "investigation_state": {**state.to_dict(), "mode": "general_chat"},
@@ -875,10 +868,10 @@ def run_adaptive_orchestrator(
                 "mode": "general_chat",
                 "failure_class": "SUCCESS",
                 "understanding_model_called": False,
-                "response_model_called": True,
+                "response_model_called": not greeting_fallback,
                 "selected_capability": "greeting",
                 "provider": provider,
-                "fast_path": "greeting_single_llm",
+                "fast_path": "connected_catalog_fallback" if greeting_fallback else "greeting_single_llm",
             },
             "suggested_followups": [
                 "What can you help with?",
@@ -941,10 +934,38 @@ def run_adaptive_orchestrator(
         understanding.clarification_question = None
         intent = "analytics"
 
+    # Structured understanding determines whether business facts are needed.
+    # References and sales vocabulary also occur in explanations or user-supplied
+    # examples, so lexical follow-up cues must not authorize a database route.
+    analytical_turn = understanding.requires_database or intent in {
+        "analytics", "investigation", "clarification",
+    }
+    referential_data_action = analytical_turn and is_referential_database_action(
+        q, has_prior=True,
+    )
+    # A scoped data drill-down needs a verified selection. Perform this check
+    # after understanding so a conversational example needs no result anchor.
+    if (
+        referential_data_action
+        and not (prior_rows or (prior_sql and prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}))
+    ):
+        msg = (
+            "There is no verified result identifying the entity or documents for this follow-up. "
+            "Specify the customer, country, or document selection, or retry the preceding analysis."
+        )
+        return _attach_understanding_meta({
+            "mode": "clarification", "route": "clarification", "status": "clarification",
+            "answer_status": "CLARIFICATION", "type": "clarification",
+            "sql": "", "sql_status": "not_generated", "data": [], "rowCount": 0,
+            "summary": msg, "answer": msg, "keyFindings": [], "charts": [],
+            "suggested_followups": [], "pipeline": "adaptive_orchestrator",
+            "query_plan": {"investigation_state": state.to_dict()},
+        }, understanding)
+
     # Answer a ranking follow-up from the complete, verified prior result when
     # its requested dimension and measure are already present in those rows.
     # If the saved result is only a sample, continue through the query pipeline.
-    if prior_rows:
+    if analytical_turn and prior_rows:
         from ..result_first_followup import try_answer_from_prior_rows
 
         reused = try_answer_from_prior_rows(
@@ -957,10 +978,7 @@ def run_adaptive_orchestrator(
             reused["query_plan"] = {**qp, "investigation_state": state.to_dict()}
             return _attach_understanding_meta(reused, understanding)
 
-    if is_referential_database_action(
-        q,
-        has_prior=bool(prior_rows or prior_question or prior_summary or state.recent_turns),
-    ):
+    if referential_data_action:
         understanding.intent = "analytics"
         understanding.requires_database = True
         understanding.requires_metadata = False
@@ -973,6 +991,7 @@ def run_adaptive_orchestrator(
     if intent in {"conversation", "knowledge", "capability", "greeting"} or (
         force_general_chat and intent not in {"analytics", "investigation", "metadata"}
     ):
+        capability_fallback = False
         try:
             resp_evidence = capability_facts() if intent == "capability" else None
             table_turns: List[Dict[str, Any]] = []
@@ -1027,7 +1046,21 @@ def run_adaptive_orchestrator(
                 evidence=resp_evidence,
             )
         except Exception as resp_err:
-            return technical_understanding_failure(q, resp_err)
+            if intent == "capability":
+                try:
+                    from ...data_catalog.capability import capability_summary
+
+                    reply = capability_summary()
+                    provider = "connected_catalog_fallback"
+                    capability_fallback = True
+                    logger.warning(
+                        "[adaptive-orch] capability response model unavailable; used connected catalog facts: %s",
+                        type(resp_err).__name__,
+                    )
+                except Exception:
+                    return technical_understanding_failure(q, resp_err)
+            else:
+                return technical_understanding_failure(q, resp_err)
         state.remember_turn(q, reply, mode="general_chat")
         out = {
             "mode": "general_chat",
@@ -1043,7 +1076,7 @@ def run_adaptive_orchestrator(
             "keyFindings": [],
             "charts": [],
             "pipeline": "adaptive_orchestrator",
-            "sql_generation_method": "llm_understanding_response",
+            "sql_generation_method": "connected_catalog_capability_fallback" if capability_fallback else "llm_understanding_response",
             "llm_calls": 2,
             "query_plan": {
                 "investigation_state": {
@@ -1057,9 +1090,10 @@ def run_adaptive_orchestrator(
                 "mode": "general_chat",
                 "failure_class": "SUCCESS",
                 "understanding_model_called": True,
-                "response_model_called": True,
+                "response_model_called": not capability_fallback,
                 "selected_capability": intent,
                 "provider": provider,
+                "fallback": "connected_catalog" if capability_fallback else None,
             },
             "suggested_followups": [
                 "How many tables are there?",
@@ -1169,9 +1203,61 @@ def run_adaptive_orchestrator(
         }
         return _attach_understanding_meta(out, understanding)
 
+    # Sales-order counts have a governed source and grain in the connected SAP
+    # catalog. Use that source-aware read-only capability directly so generic
+    # SQL generation cannot turn a scalar count into an invalid GROUP BY.
+    try:
+        from ...data_catalog.source_selector import select_source
+        from ..sales_order_analysis import try_sales_order_analysis
+        from ..plan_satisfaction import sql_satisfies_analytical_intent
+
+        source_spec = select_source(q, prior_plan=prior_plan if isinstance(prior_plan, dict) else None)
+        if source_spec.route == "sales_order" and source_spec.metric == "sales_order_count":
+            order_count = try_sales_order_analysis(q, source_spec, db, execute_sql)
+            if order_count and sql_satisfies_analytical_intent(str(order_count.get("sql") or ""), q):
+                summary = str(order_count.get("summary") or order_count.get("answer") or "")
+                sql = str(order_count.get("sql") or "")
+                state.last_sql = sql[:8000]
+                memory_summary = summary
+                if sql:
+                    from .chat_memory import compact_sql_lineage
+
+                    lineage = compact_sql_lineage(sql)
+                    if lineage:
+                        memory_summary = f"{summary}\nVerified SQL structure: {lineage}"
+                state.remember_turn(q, memory_summary, mode="database_analysis")
+                plan = order_count.get("query_plan") if isinstance(order_count.get("query_plan"), dict) else {}
+                order_count["query_plan"] = {
+                    **plan,
+                    "last_mode": "database_analysis",
+                    "investigation_state": state.to_dict(),
+                    "understanding": understanding.to_public_dict(),
+                }
+                order_count["mode"] = "database_analysis"
+                order_count["route"] = "database"
+                order_count["pipeline"] = "governed_sales_order_count"
+                order_count["meta"] = {
+                    **(order_count.get("meta") if isinstance(order_count.get("meta"), dict) else {}),
+                    "selected_capability": "sales_order_count",
+                }
+                return _attach_understanding_meta(order_count, understanding)
+    except Exception as source_error:
+        logger.info("[adaptive-orch] source-aware count path skipped: %s", type(source_error).__name__)
+
     # analytics / investigation → existing governed SQL pipeline
     adapted = AdaptedTurn("query", q, drop_prior=adapted.drop_prior, is_fragment=adapted.is_fragment)
-    skip_p1_clarify = not adapted.is_fragment or bool(understanding.resolved_question)
+    # Intent and missing-detail checks have already run in the understanding
+    # stage. Do not call the older SQL pipeline's second LLM clarifier for a
+    # classified database request; it repeats the decision and made short,
+    # referential follow-ups fail whenever that model endpoint was unavailable.
+    skip_p1_clarify = (
+        not adapted.is_fragment
+        or bool(understanding.resolved_question)
+        or (
+            intent in {"analytics", "investigation"}
+            and not understanding.clarification_needed
+        )
+    )
     if skip_p1_clarify:
         p1 = {
             "question_type": "database_question",
@@ -1258,11 +1344,24 @@ def run_adaptive_orchestrator(
                 resolved = expanded
                 q = expanded
                 p1 = {**(p1 or {}), "rewritten_question": expanded, "is_follow_up": True}
+                # This standalone wording was derived from the validated prior
+                # result. Tell the SQL pipeline to carry forward its verified
+                # schema context while it reselects columns for the new grain.
+                prior_plan = {
+                    **(prior_plan if isinstance(prior_plan, dict) else {}),
+                    "result_first_requery": True,
+                }
                 _log_stage("FOLLOWUP_PLAN_EXPANSION", {"expanded": expanded[:200]})
 
     # The four-stage pipeline repairs the specific failed requirements within
     # the request budget. Repeating discovery from scratch loses that diagnosis
     # and adds model calls without changing the requested analytical plan.
+    if prior_rows and isinstance(prior_plan, dict):
+        # Keep the verified result rows available to the SQL builder for
+        # referential filters such as "the same customers". The builder only
+        # uses these rows when the follow-up explicitly references prior
+        # entities; unrelated questions ignore them.
+        prior_plan = {**prior_plan, "prior_result_rows": prior_rows}
     p2 = _run_four_stage_or_legacy_sql(
         resolved, q, p1, state, db, execute_sql,
         use_sap=use_sap, get_sap_session=get_sap_session,
@@ -1372,7 +1471,8 @@ def run_adaptive_orchestrator(
             from ..investigation_budget import user_safe_pipeline_message
 
             err_u = str(p2.get("error") or "").upper()
-            if "SQL_VALIDATION" in err_u or p2.get("error") == "sql_validation_failed":
+            is_sql_validation_error = p2.get("error") in {"sql_validation_failed", "unsafe_grain"}
+            if "SQL_VALIDATION" in err_u or is_sql_validation_error:
                 failure_class = "SQL_VALIDATION_FAILED"
             elif p2.get("error") == "sql_execution_failed":
                 failure_class = "TOOL_FAILURE"
@@ -1387,6 +1487,22 @@ def run_adaptive_orchestrator(
             msg = user_safe_pipeline_message(
                 "technical" if failure_class in {"TECHNICAL_ERROR", "SYSTEM_FAILURE", "TOOL_FAILURE", "MODEL_FAILURE"} else "repair_failed"
             )
+            if is_sql_validation_error:
+                raw_details = p2.get("detail")
+                if isinstance(raw_details, list):
+                    diagnostics = "; ".join(
+                        str(item).strip() for item in raw_details
+                        if str(item).strip()
+                    )[:600]
+                else:
+                    diagnostics = str(raw_details or "").strip()[:600]
+                if diagnostics:
+                    msg = (
+                        "The generated query was blocked by schema or SQL validation before execution. "
+                        f"Validation detail: {diagnostics}"
+                    )
+            elif p2.get("error"):
+                msg = f"The analysis stopped before producing a verified result (pipeline status: {p2['error']})."
             err_class = str(p2.get("error_class") or "").lower()
             if failure_class == "TOOL_FAILURE" and err_class in {"timeout", "db_unavailable", "connection"}:
                 msg = "I couldn't complete the database analysis because the data service is temporarily unavailable."
@@ -1415,7 +1531,8 @@ def run_adaptive_orchestrator(
             "sql_status": (
                 "result_validation_failed" if p2.get("error") == "semantic_mismatch"
                 else "execution_failed" if p2.get("error") == "sql_execution_failed"
-                else "validation_failed" if p2.get("sql") else "not_generated"
+                else "validation_failed" if p2.get("error") in {"sql_validation_failed", "unsafe_grain"}
+                else "not_executed" if p2.get("sql") else "not_generated"
             ),
             "data": [],
             "rowCount": 0,

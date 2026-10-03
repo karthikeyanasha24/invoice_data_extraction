@@ -194,6 +194,28 @@ def test_greeting_uses_llm_not_canned(mock_llm, monkeypatch):
     assert "Hi there! How can I help you today?" != (out.get("summary") or "")
 
 
+def test_greeting_has_plain_fallback_when_model_providers_are_unavailable(monkeypatch):
+    from app.services.adaptive_analyst import llm_provider as lp
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(lp, "complete_text", unavailable)
+    out = run_adaptive_orchestrator(
+        "Hi",
+        MagicMock(),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no sql")),
+        use_sap=False,
+    )
+
+    assert out["mode"] == "general_chat"
+    assert out["answer_status"] == "SUCCESS"
+    assert out["summary"] == "Hello! What would you like to explore?"
+    assert out["meta"]["provider"] == "local_greeting_fallback"
+    assert out["meta"]["response_model_called"] is False
+    assert not out.get("sql")
+
+
 def test_capability_facts_are_structured_not_paragraph():
     facts = capability_facts()
     assert "available_capabilities" in facts
@@ -328,6 +350,61 @@ def test_understanding_failure_is_not_metric_clarification():
     assert "business metric" not in (payload.get("summary") or "").lower()
 
 
+def test_supported_database_request_routes_through_local_semantics_when_model_is_down(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(und, "analyze_json", unavailable)
+    result = und.understand_turn(
+        "Show billed sales by month for country code US in calendar year 2017 in currency USD.",
+        capability_context={},
+    )
+    assert result.intent == "analytics"
+    assert result.requires_database is True
+    assert result.understanding_model_called is False
+    assert result.provider == "local_schema_semantics_fallback"
+
+
+def test_capability_question_uses_connected_catalog_when_models_are_unavailable(monkeypatch):
+    from app.data_catalog import capability as catalog_capability
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(und, "analyze_json", unavailable)
+    monkeypatch.setattr(und, "complete_text", unavailable)
+    monkeypatch.setattr(und, "capability_facts", lambda: {})
+    monkeypatch.setattr(
+        catalog_capability,
+        "capability_summary",
+        lambda: "The connected catalog exposes billing and customer records.",
+    )
+
+    result = run_adaptive_orchestrator(
+        "What kinds of questions can you help me answer about this SAP data?",
+        MagicMock(),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no sql")),
+        use_sap=False,
+        force_general_chat=True,
+    )
+
+    assert result["mode"] == "general_chat"
+    assert result["answer_status"] == "SUCCESS"
+    assert result["summary"] == "The connected catalog exposes billing and customer records."
+    assert result["meta"]["response_model_called"] is False
+    assert result["meta"]["fallback"] == "connected_catalog"
+    assert not result.get("sql")
+
+
+def test_general_message_is_not_misrouted_to_database_when_model_is_down(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(und, "analyze_json", unavailable)
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        und.understand_turn("Could you explain what an invoice is?", capability_context={})
+
+
 def test_ranking_specifier_is_exported_for_orchestrator():
     """Live ImportError: orchestrator imported a name that was never on GitHub."""
     from app.services.adaptive_analyst.understanding import is_sufficiently_specified_ranking
@@ -335,7 +412,48 @@ def test_ranking_specifier_is_exported_for_orchestrator():
     q = "show me the lowest sales for the year 2000 by country customer and product"
     assert is_sufficiently_specified_ranking(q)
     assert is_sufficiently_specified_ranking("top 5 customers by billed sales")
+    assert is_sufficiently_specified_ranking(
+        "Which five countries had the most billed revenue in calendar year 2017?"
+    )
     assert not is_sufficiently_specified_ranking("hai")
+
+
+def test_broad_capability_reply_is_shortened_without_hardcoded_answer(monkeypatch):
+    monkeypatch.setattr(
+        und,
+        "complete_text",
+        lambda _system, _user: (
+            "I can help with SAP analysis (121 connected tables and 83 business tables). "
+            "I use governed SQL for data questions. Here are many more details.",
+            "test",
+        ),
+    )
+    reply, provider = und.generate_grounded_response(
+        "What can you help me analyze?",
+        TurnUnderstanding(intent="capability", goal="Explain capabilities"),
+    )
+    assert provider == "test"
+    assert "121" not in reply
+    assert "many more details" not in reply
+    assert reply.count(".") <= 2
+
+
+def test_simplification_followup_is_concise(monkeypatch):
+    monkeypatch.setattr(
+        und,
+        "complete_text",
+        lambda _system, _user: (
+            "Governed SQL means running queries inside a managed system that enforces who can access data, applies standardized rules and transformations, and logs lineage so results are reproducible and auditable. For example, it can restrict salary access to HR users.",
+            "test",
+        ),
+    )
+    reply, _provider = und.generate_grounded_response(
+        "Explain that in simpler terms.",
+        TurnUnderstanding(intent="conversation", goal="Simplify previous explanation"),
+        prior_summary="Governed SQL means queries follow access rules and common definitions.",
+    )
+    assert len(reply.split()) <= 24
+    assert "For example" not in reply
 
 
 def test_process_question_about_table_list_is_conversation_not_metadata():

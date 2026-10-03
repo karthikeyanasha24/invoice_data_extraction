@@ -8,11 +8,14 @@
  * Production bundle marker: continuous_chat_v1
  */
 export const ADAPTIVE_CONTEXT_POLICY = 'continuous_chat_v1';
+// Preserve the full default Top-N result for follow-ups that refer to its entities.
+const MAX_PRIOR_RESULT_ROWS = 200;
 
 export type AdaptiveAnswerStatus = string;
 
 export type AdaptiveQueryResultLike = {
   sql?: string;
+  pipeline?: string;
   data?: unknown[];
   query_plan?: unknown;
   queryPlan?: unknown;
@@ -51,6 +54,18 @@ function precedingUserQuestion(messages: AdaptiveChatMessage[], assistantIndex: 
   return '';
 }
 
+function withRetainedAnalyticalContext(
+  planValue: unknown,
+  messages: AdaptiveChatMessage[],
+): unknown {
+  const retained = lastSuccessfulAnalyticalContext(messages);
+  if (!retained) return planValue;
+  const plan = planValue && typeof planValue === 'object'
+    ? planValue as Record<string, unknown>
+    : {};
+  return { ...plan, retained_analytical_context: retained };
+}
+
 export function isGeneralChatResult(
   result: AdaptiveQueryResultLike | null | undefined,
 ): boolean {
@@ -59,8 +74,19 @@ export function isGeneralChatResult(
   if (BLOCKED_STATUSES.has(status)) return false;
   const mode = String(result.mode || result.route || '').toLowerCase();
   if (mode === 'general_chat' || mode === 'general') return true;
+  if (mode || String(result.pipeline || '').toLowerCase() === 'result_first_followup') return false;
   const sql = String(result.sql || '').trim();
-  return status === 'SUCCESS' && !sql;
+  return status === 'SUCCESS' && !sql && !(Array.isArray(result.data) && result.data.length > 0);
+}
+
+function isDerivedAnalyticalResult(
+  result: AdaptiveQueryResultLike | null | undefined,
+): boolean {
+  if (!result || BLOCKED_STATUSES.has(answerStatusOf(result))) return false;
+  const mode = String(result.mode || '').toLowerCase();
+  const pipeline = String(result.pipeline || '').toLowerCase();
+  return answerStatusOf(result) === 'SUCCESS'
+    && (mode === 'result_first' || pipeline === 'result_first_followup');
 }
 
 export function lastGeneralChatContext(
@@ -101,7 +127,22 @@ export function lastSuccessfulAnalyticalContext(
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant' || !isSuccessfulAnalyticalResult(message.result)) {
-      continue;
+      if (message.role !== 'assistant' || !isDerivedAnalyticalResult(message.result)) continue;
+      const result = message.result!;
+      const source = lastSuccessfulAnalyticalContext(messages.slice(0, i));
+      const sourcePlan = source?.previousPlan && typeof source.previousPlan === 'object'
+        ? source.previousPlan as Record<string, unknown>
+        : {};
+      const resultPlan = result.query_plan || result.queryPlan;
+      return {
+        previousQuestion: precedingUserQuestion(messages, i),
+        previousSQL: source?.previousSQL || '',
+        previousPlan: resultPlan && typeof resultPlan === 'object'
+          ? { ...sourcePlan, ...(resultPlan as Record<string, unknown>) }
+          : sourcePlan,
+        previousAnswerStatus: answerStatusOf(result) || 'SUCCESS',
+        data: Array.isArray(result.data) ? result.data.slice(0, MAX_PRIOR_RESULT_ROWS) : [],
+      };
     }
     const result = message.result!;
     const sql = String(result.sql || '').trim();
@@ -110,7 +151,7 @@ export function lastSuccessfulAnalyticalContext(
       previousSQL: sql,
       previousPlan: result.query_plan || result.queryPlan || null,
       previousAnswerStatus: answerStatusOf(result) || 'SUCCESS',
-      data: Array.isArray(result.data) ? result.data.slice(0, 20) : [],
+      data: Array.isArray(result.data) ? result.data.slice(0, MAX_PRIOR_RESULT_ROWS) : [],
     };
   }
   return null;
@@ -130,7 +171,7 @@ export function updateLastSuccessfulAnalyticalContext(
     previousSQL: sql,
     previousPlan: result!.query_plan || result!.queryPlan || null,
     previousAnswerStatus: answerStatusOf(result!) || 'SUCCESS',
-    data: Array.isArray(result!.data) ? result!.data.slice(0, 20) : [],
+    data: Array.isArray(result!.data) ? result!.data.slice(0, MAX_PRIOR_RESULT_ROWS) : [],
   };
 }
 
@@ -146,9 +187,12 @@ export function lastPendingClarificationContext(
     return {
       previousQuestion: precedingUserQuestion(messages, i),
       previousSQL: '',
-      previousPlan: message.result?.query_plan || message.result?.queryPlan || {
-        awaiting_sales_choice: /sales order/i.test(message.content || '') && /billed|invoice/i.test(message.content || ''),
-      },
+      previousPlan: withRetainedAnalyticalContext(
+        message.result?.query_plan || message.result?.queryPlan || {
+          awaiting_sales_choice: /sales order/i.test(message.content || '') && /billed|invoice/i.test(message.content || ''),
+        },
+        messages,
+      ),
       previousAnswerStatus: 'CLARIFICATION',
       data: [],
     };
@@ -189,11 +233,17 @@ export function latestAssistantContext(
         data: [],
       };
     }
+    if (isDerivedAnalyticalResult(result)) {
+      return lastSuccessfulAnalyticalContext(messages.slice(0, i + 1));
+    }
     if (status === 'CLARIFICATION') {
+      const priorPlan = result.query_plan || result.queryPlan || null;
       return {
         previousQuestion,
         previousSQL: '',
-        previousPlan: result.query_plan || result.queryPlan || null,
+        // A clarification about a follow-up must not erase the last verified
+        // analysis. The API can restore this saved context on the next turn.
+        previousPlan: withRetainedAnalyticalContext(priorPlan, messages),
         previousAnswerStatus: 'CLARIFICATION',
         data: [],
       };
@@ -205,7 +255,7 @@ export function latestAssistantContext(
         previousSQL: sql,
         previousPlan: result.query_plan || result.queryPlan || null,
         previousAnswerStatus: status || 'SUCCESS',
-        data: Array.isArray(result.data) ? result.data.slice(0, 20) : [],
+        data: Array.isArray(result.data) ? result.data.slice(0, MAX_PRIOR_RESULT_ROWS) : [],
       };
     }
     // Metadata / other SUCCESS without SQL
@@ -215,10 +265,12 @@ export function latestAssistantContext(
         previousSQL: String(result.sql || '').trim(),
         previousPlan: result.query_plan || result.queryPlan || { last_mode: String(result.mode || 'general') },
         previousAnswerStatus: 'SUCCESS',
-        data: Array.isArray(result.data) ? result.data.slice(0, 20) : [],
+        data: Array.isArray(result.data) ? result.data.slice(0, MAX_PRIOR_RESULT_ROWS) : [],
       };
     }
-    return null;
+    // Failed / cancelled turns do not erase a prior successful result. Keep
+    // walking back until a usable assistant turn supplies context.
+    continue;
   }
   return null;
 }
