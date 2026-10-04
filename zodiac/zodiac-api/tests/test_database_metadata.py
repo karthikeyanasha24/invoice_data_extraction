@@ -291,6 +291,22 @@ def test_new_top_customer_question_is_not_inferred_as_a_selected_reference():
     assert not is_referential_database_action("Show the top five customers by billed sales.", has_prior=True)
 
 
+def test_local_possessive_in_invoice_question_is_not_mistaken_for_chat_followup():
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    question = (
+        "Show the 10 lowest billed invoices in 2000. For each invoice, "
+        "compare its linked sales order amount in 2000 and 2001."
+    )
+    assert not is_referential_database_action(question, has_prior=True)
+
+    # A possessive that refers to a selected result remains a follow-up.
+    assert is_referential_database_action(
+        "For the highest-ranked material, show its sales by month in that year.",
+        has_prior=True,
+    )
+
+
 @pytest.mark.parametrize("question", [
     "Show this year's billed sales.",
     "Show sales in the previous year.",

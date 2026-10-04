@@ -470,6 +470,18 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
         r"(?:years?|months?|quarters?|weeks?|days?)(?:['’]s)?\b",
         "", q, flags=re.I,
     )
+    # A possessive can point to an entity introduced in the *same* sentence,
+    # rather than to a prior chat result (for example, "for each invoice ...
+    # its linked order"). Keep the possessive follow-up cue for other cases,
+    # but remove it when a nearby quantified business entity supplies the
+    # antecedent. Other explicit cues such as "those documents" still apply.
+    reference_text = re.sub(
+        r"\b(?:each|every|per)\s+(?:of\s+)?(?:the\s+)?"
+        r"[\w'-]+(?:\s+[\w'-]+){0,2}\b[^.!?]{0,240}\b(?:its|their)\b",
+        lambda match: re.sub(r"\b(?:its|their)\b", "", match.group(0), flags=re.I),
+        reference_text,
+        flags=re.I,
+    )
     refers_to_prior = bool(
         re.search(r"\b(this|these|those|that|same|above|previous|prior|earlier|its|their)\b", reference_text, re.I)
         or re.search(

@@ -940,8 +940,12 @@ def run_adaptive_orchestrator(
     analytical_turn = understanding.requires_database or intent in {
         "analytics", "investigation", "clarification",
     }
+    has_verified_prior_result = bool(prior_rows) or (
+        bool(re.search(r"\bselect\b", prior_sql or "", re.I))
+        and prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}
+    )
     referential_data_action = analytical_turn and is_referential_database_action(
-        q, has_prior=True,
+        q, has_prior=has_verified_prior_result,
     )
     # A scoped data drill-down needs a verified selection. Perform this check
     # after understanding so a conversational example needs no result anchor.
