@@ -42,3 +42,5 @@ converted/
 
 # Legacy tracked bytecode path (keep ignore)
 zodiac/zodiac-api/app/schemas/__pycache__/user.cpython-311.pyc
+.vercel
+.env*.local

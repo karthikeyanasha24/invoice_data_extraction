@@ -1,0 +1,16 @@
+.pytest_cache/
+**/.pytest_cache/
+__pycache__/
+**/__pycache__/
+.mypy_cache/
+**/.mypy_cache/
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+.git/
+.cursor/
+.env
+.env.*
+**/.env
+**/.env.*

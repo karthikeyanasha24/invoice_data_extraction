@@ -963,6 +963,7 @@ def build_dimension_ranking_sql(
     gb: List[str] = []
     joins: List[str] = []
     where: List[str] = []
+    currency_rank = False
 
     if use_line:
         from_clause = f'FROM "{line}" p'
@@ -1054,12 +1055,22 @@ def build_dimension_ranking_sql(
                 return None
         currency_field = str(getattr(metric_def, "currency_field", None) or "").strip()
         currency_match = re.fullmatch(r"(?:vk|k)\.([A-Za-z_][A-Za-z0-9_]*)", currency_field, re.I)
-        if currency_match:
-            currency_col = currency_match.group(1).lower()
+        currency_col = (
+            currency_match.group(1).lower()
+            if currency_match
+            else next(
+                (column for column in ("waerk", "waers", "rtcur") if has_column(hdr, column)),
+                None,
+            )
+        )
+        if measure not in {"invoice_count", "quantity"} and not currency_col:
+            return None
+        if currency_col:
             if not has_column(hdr, currency_col):
                 return None
             sel.append(f'k."{currency_col}" AS "currency"')
             gb.append(f'k."{currency_col}"')
+            currency_rank = measure not in {"invoice_count", "quantity"}
         alias = "total_sales" if metric_def.name == "revenue" else metric_def.name
         sel.append(f'({formula}) AS "{alias}"')
     elif measure == "invoice_count":
@@ -1079,6 +1090,18 @@ def build_dimension_ranking_sql(
         amount_qual, amount_tbl = ("p", line) if use_line else ("k", hdr)
         if not has_column(amount_tbl, "netwr"):
             return None
+        currency_col = next(
+            (column for column in ("waerk", "waers", "rtcur") if has_column(hdr, column)),
+            None,
+        )
+        if not currency_col:
+            # A monetary ranking without a currency key cannot safely compare
+            # groups. Let the caller report the missing schema evidence.
+            return None
+        if not any('AS "currency"' in column for column in sel):
+            sel.append(f'k."{currency_col}" AS "currency"')
+            gb.append(f'k."{currency_col}"')
+        currency_rank = True
         sel.append(
             f'SUM(CAST(NULLIF(TRIM(CAST({amount_qual}."netwr" AS TEXT)), \'\') AS NUMERIC)) '
             'AS "total_sales"'
@@ -1097,8 +1120,29 @@ def build_dimension_ranking_sql(
     if where:
         sql += "\nWHERE " + "\n  AND ".join(where)
     sql += f"\nGROUP BY {', '.join(gb)}"
-    sql += f'\nORDER BY "{alias}" {direction} NULLS LAST'
-    sql += f"\nLIMIT {max(1, min(int(limit), 500))}"
+    safe_limit = max(1, min(int(limit), 500))
+    if currency_rank:
+        # Amounts in different currencies are not comparable. Keep all currency
+        # values in the result, and apply the requested top-N independently
+        # inside each currency instead of silently ranking mixed amounts.
+        sql = (
+            'WITH grouped AS (\n'
+            + "\n".join("  " + line for line in sql.splitlines())
+            + '\n), ranked AS (\n'
+            '  SELECT grouped.*, ROW_NUMBER() OVER (\n'
+            '    PARTITION BY grouped."currency" '
+            f'ORDER BY grouped."{alias}" {direction} NULLS LAST\n'
+            '  ) AS "rank_within_currency"\n'
+            '  FROM grouped\n'
+            ')\n'
+            'SELECT * FROM ranked\n'
+            f'WHERE "rank_within_currency" <= {safe_limit}\n'
+            'ORDER BY "currency", "rank_within_currency"\n'
+            f'LIMIT {safe_limit} * (SELECT COUNT(DISTINCT "currency") FROM grouped)'
+        )
+    else:
+        sql += f'\nORDER BY "{alias}" {direction} NULLS LAST'
+        sql += f"\nLIMIT {safe_limit}"
     return sql.strip()
 
 
@@ -1594,6 +1638,202 @@ def build_linked_sales_orders_sql(
         f'= LPAD(TRIM(CAST(o."vbeln" AS TEXT)), 10, \'0\')\n'
         f'WHERE LPAD(TRIM(CAST(f."vbeln" AS TEXT)), 10, \'0\') IN ({id_list})\n'
         'ORDER BY "billing_document", "linked_sales_order"'
+    )
+
+
+def build_linked_order_period_comparison_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Rank a billing-document cohort, then compare its linked orders by year.
+
+    This builder is intentionally schema-gated: it only emits SQL when the
+    billing, document-flow, order, date, amount, and currency fields needed to
+    make the requested comparison are present in the verified catalog.
+    """
+    from .semantic_requirements import required_semantics
+
+    q = question or ""
+    if not re.search(r"\b(?:linked|related)\b[\s\S]{0,50}\bsales\s+orders?\b|\bsales\s+orders?\b[\s\S]{0,50}\b(?:linked|related)\b", q, re.I):
+        return None
+    if not re.search(r"\b(?:invoice|billing\s+document)\b", q, re.I):
+        return None
+
+    req = required_semantics(question, semantic)
+    if "document" not in [str(g).lower() for g in (req.get("group_by") or [])]:
+        return None
+    period = req.get("period_compare") if isinstance(req.get("period_compare"), dict) else {}
+
+    def _period_year(key: str) -> Optional[str]:
+        raw = period.get(key)
+        if isinstance(raw, dict):
+            raw = raw.get("year") or raw.get("start")
+        value = str(raw or "")[:4]
+        return value if re.fullmatch(r"\d{4}", value) else None
+
+    year_a, year_b = _period_year("base_period"), _period_year("comparison_period")
+    years = extract_question_years(question)
+    if not year_a or not year_b:
+        if len(years) < 2:
+            return None
+        year_a, year_b = years[0], years[-1]
+    if year_a == year_b:
+        return None
+
+    required = {
+        "VBRK": ("vbeln", "netwr", "waerk"),
+        "VBFA": ("vbeln", "vbelv"),
+        "VBAK": ("vbeln", "netwr", "waerk", "erdat"),
+    }
+    if any(
+        not has_table(table) or any(not has_column(table, column) for column in columns)
+        for table, columns in required.items()
+    ):
+        return None
+
+    invoice_table = resolve_table_name("VBRK") or "VBRK"
+    flow_table = resolve_table_name("VBFA") or "VBFA"
+    order_table = resolve_table_name("VBAK") or "VBAK"
+    customer_col = next(
+        (column for column in ("kunag", "kunnr") if has_column(invoice_table, column)),
+        None,
+    )
+    if not customer_col:
+        return None
+
+    invoice_date_alias, invoice_date_col = "k", "fkdat"
+    invoice_joins: List[str] = []
+    invoice_year_start = f"{year_a}0101"
+    invoice_year_end = f"{int(year_a) + 1:04d}0101"
+    if re.search(r"\bposting\s+date\b", q, re.I):
+        # VBRK.FKDAT is billing date, not financial posting date. Resolve the
+        # latter through the accounting document only when its full key exists.
+        if not all(
+            has_table(table)
+            and has_column(table, column)
+            for table, column in (
+                (invoice_table, "belnr"), (invoice_table, "gjahr"), (invoice_table, "bukrs"),
+                ("BKPF", "belnr"), ("BKPF", "gjahr"), ("BKPF", "bukrs"), ("BKPF", "budat"),
+            )
+        ):
+            return None
+        bkpf = resolve_table_name("BKPF") or "BKPF"
+        invoice_date_alias, invoice_date_col = "fi", "budat"
+        invoice_joins.append(
+            f'JOIN "{bkpf}" fi ON fi."belnr" = k."belnr" '
+            'AND fi."gjahr" = k."gjahr" AND fi."bukrs" = k."bukrs"'
+        )
+    elif not has_column(invoice_table, "fkdat"):
+        return None
+
+    # Calendar scope for the selected negative-invoice cohort is the first
+    # comparison year. The second year applies to linked sales-order creation
+    # dates, not to those same invoices (an invoice has only one date/value).
+    invoice_date_expr = f'TRIM(CAST({invoice_date_alias}."{invoice_date_col}" AS TEXT))'
+    invoice_amount = 'CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC)'
+    order_date_expr = 'TRIM(CAST(l."linked_order_date" AS TEXT))'
+    order_amount = 'CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), \'\') AS NUMERIC)'
+    rank = req.get("ranking") if isinstance(req.get("ranking"), dict) else {}
+    try:
+        limit = int(rank.get("limit") or extract_ranking_limit(question, default=10))
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 500))
+
+    select = [
+        'k."vbeln" AS "_billing_document_key"',
+        'TRIM(CAST(k."vbeln" AS TEXT)) AS "billing_document"',
+        f'{invoice_date_expr} AS "invoice_date"',
+        f'TRIM(CAST(k."{customer_col}" AS TEXT)) AS "customer_id"',
+        f'{invoice_amount} AS "invoice_amount"',
+        'TRIM(CAST(k."waerk" AS TEXT)) AS "currency"',
+    ]
+    invoice_joins.extend([
+        f'LEFT JOIN "KNA1" c ON k."{customer_col}" = c."kunnr"'
+    ] if has_table("KNA1") and has_column("KNA1", "kunnr") else [])
+    if has_table("KNA1") and has_column("KNA1", "kunnr") and has_column("KNA1", "name1"):
+        select.append('TRIM(CAST(c."name1" AS TEXT)) AS "customer_name"')
+
+    invoice_predicates = [
+        f'{invoice_date_expr} >= \'{invoice_year_start}\'',
+        f'{invoice_date_expr} < \'{invoice_year_end}\'',
+        f'{invoice_amount} < 0',
+        'NULLIF(TRIM(CAST(k."waerk" AS TEXT)), \'\') IS NOT NULL',
+    ]
+    currency_match = re.search(r"\bcurrency\s+([A-Za-z]{3})\b", q, re.I)
+    if currency_match:
+        invoice_predicates.append(
+            f'UPPER(TRIM(CAST(k."waerk" AS TEXT))) = \'{currency_match.group(1).upper()}\''
+        )
+
+    customer_join_sql = "\n".join(invoice_joins)
+    candidate_cte = (
+        'invoice_cohort AS (\n'
+        f'  SELECT {", ".join(select)}\n'
+        f'  FROM "{invoice_table}" k\n'
+        + (f'{customer_join_sql}\n' if customer_join_sql else "")
+        + '  WHERE ' + '\n    AND '.join(invoice_predicates) + '\n'
+        + f'  ORDER BY "invoice_amount" ASC, "billing_document" ASC\n  LIMIT {limit}\n'
+        + ')'
+    )
+
+    order_year_a = (
+        f'({order_date_expr} >= \'{year_a}0101\' AND '
+        f'{order_date_expr} < \'{int(year_a) + 1:04d}0101\')'
+    )
+    order_year_b = (
+        f'({order_date_expr} >= \'{year_b}0101\' AND '
+        f'{order_date_expr} < \'{int(year_b) + 1:04d}0101\')'
+    )
+    order_currency_match = (
+        'UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency")'
+    )
+    linked_cte = (
+        'linked_orders AS (\n'
+        '  SELECT DISTINCT i."billing_document", o."vbeln" AS "linked_order_key", '
+        'TRIM(CAST(o."vbeln" AS TEXT)) AS "linked_sales_order", '
+        'o."erdat" AS "linked_order_date", o."netwr" AS "linked_order_amount", '
+        'o."waerk" AS "linked_order_currency"\n'
+        '  FROM invoice_cohort i\n'
+        f'  JOIN "{flow_table}" f ON f."vbeln" = i."_billing_document_key"\n'
+        f'  JOIN "{order_table}" o ON o."vbeln" = f."vbelv"\n'
+        ')'
+    )
+    periods_cte = (
+        'order_periods AS (\n'
+        '  SELECT l."billing_document", '
+        'STRING_AGG(DISTINCT l."linked_sales_order", \', \' ORDER BY l."linked_sales_order") AS "linked_sales_orders", '
+        f'COUNT(DISTINCT CASE WHEN {order_year_a} AND {order_currency_match} THEN l."linked_order_key" END) AS "linked_order_count_{year_a}", '
+        f'SUM(CASE WHEN {order_year_a} AND {order_currency_match} THEN {order_amount} END) AS "order_amount_{year_a}", '
+        f'COUNT(DISTINCT CASE WHEN {order_year_b} AND {order_currency_match} THEN l."linked_order_key" END) AS "linked_order_count_{year_b}", '
+        f'SUM(CASE WHEN {order_year_b} AND {order_currency_match} THEN {order_amount} END) AS "order_amount_{year_b}", '
+        f'COUNT(DISTINCT CASE WHEN ({order_year_a} OR {order_year_b}) AND NOT ({order_currency_match}) THEN l."linked_order_key" END) AS "currency_mismatch_order_count"\n'
+        '  FROM linked_orders l\n'
+        '  JOIN invoice_cohort i ON i."billing_document" = l."billing_document"\n'
+        f'  WHERE ({order_year_a} OR {order_year_b})\n'
+        '  GROUP BY l."billing_document"\n'
+        ')'
+    )
+    change_expr = f'(p."order_amount_{year_b}" - p."order_amount_{year_a}")'
+    pct_expr = (
+        f'ROUND(({change_expr}) / NULLIF(ABS(p."order_amount_{year_a}"), 0) * 100, 2)'
+    )
+    customer_name_result = (
+        'i."customer_name", '
+        if has_table("KNA1") and has_column("KNA1", "kunnr") and has_column("KNA1", "name1")
+        else ""
+    )
+    return (
+        'WITH ' + candidate_cte + ',\n' + linked_cte + ',\n' + periods_cte + '\n'
+        'SELECT i."billing_document", i."customer_id", ' + customer_name_result +
+        'i."invoice_date", i."invoice_amount", i."currency", p."linked_sales_orders", '
+        f'p."linked_order_count_{year_a}", p."order_amount_{year_a}", '
+        f'p."linked_order_count_{year_b}", p."order_amount_{year_b}", p."currency_mismatch_order_count", '
+        f'{change_expr} AS "absolute_change", {pct_expr} AS "percent_change"\n'
+        'FROM invoice_cohort i\n'
+        'LEFT JOIN order_periods p ON p."billing_document" = i."billing_document"\n'
+        'ORDER BY i."customer_id", i."invoice_amount" ASC, i."billing_document"'
     )
 
 

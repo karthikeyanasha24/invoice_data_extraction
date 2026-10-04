@@ -21,6 +21,8 @@ export type AdaptiveQueryResultLike = {
   queryPlan?: unknown;
   answer_status?: AdaptiveAnswerStatus;
   answerStatus?: AdaptiveAnswerStatus;
+  summary?: string;
+  answer?: string;
   mode?: string;
   route?: string;
 };
@@ -178,26 +180,99 @@ export function updateLastSuccessfulAnalyticalContext(
 export function lastPendingClarificationContext(
   messages: AdaptiveChatMessage[],
 ): LastSuccessfulAnalyticalContext | null {
+  const failedStatuses = new Set(['CANNOT_ANSWER', 'ERROR', 'TIMEOUT', 'CANCELLED']);
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant') continue;
-    if (answerStatusOf(message.result) !== 'CLARIFICATION') {
+    const status = answerStatusOf(message.result);
+    const recoveredCurrency = recoverLegacyCurrencyClarification(messages, i);
+    if (status === 'CLARIFICATION') {
+      const originalPlan = message.result?.query_plan || message.result?.queryPlan || {
+        awaiting_sales_choice: /sales order/i.test(message.content || '') && /billed|invoice/i.test(message.content || ''),
+      };
+      const recoveredPlan = recoveredCurrency?.previousPlan && typeof recoveredCurrency.previousPlan === 'object'
+        ? recoveredCurrency.previousPlan as Record<string, unknown>
+        : {};
+      const clarificationPlan = originalPlan && typeof originalPlan === 'object'
+        ? originalPlan as Record<string, unknown>
+        : {};
+      return {
+        previousQuestion: precedingUserQuestion(messages, i),
+        previousSQL: '',
+        previousPlan: withRetainedAnalyticalContext(
+          recoveredCurrency?.previousAnswerStatus === 'CLARIFICATION'
+            ? { ...clarificationPlan, pending_clarification: recoveredPlan.pending_clarification }
+            : clarificationPlan,
+          messages,
+        ),
+        previousAnswerStatus: 'CLARIFICATION',
+        data: [],
+      };
+    }
+    // Older persisted turns may not contain answer_status/query_plan because
+    // they were saved before clarification metadata was added. Recover a
+    // currency choice only when the assistant wording asks for one AND the
+    // preceding verified result actually contains multiple currency values.
+    if (recoveredCurrency) return recoveredCurrency;
+    // A failed attempt to answer the clarification must not erase the user's
+    // pending choice. A later successful assistant turn does close it.
+    if (!failedStatuses.has(status)) {
       return null;
     }
-    return {
-      previousQuestion: precedingUserQuestion(messages, i),
-      previousSQL: '',
-      previousPlan: withRetainedAnalyticalContext(
-        message.result?.query_plan || message.result?.queryPlan || {
-          awaiting_sales_choice: /sales order/i.test(message.content || '') && /billed|invoice/i.test(message.content || ''),
-        },
-        messages,
-      ),
-      previousAnswerStatus: 'CLARIFICATION',
-      data: [],
-    };
   }
   return null;
+}
+
+function recoverLegacyCurrencyClarification(
+  messages: AdaptiveChatMessage[],
+  assistantIndex: number,
+): LastSuccessfulAnalyticalContext | null {
+  const message = messages[assistantIndex];
+  if (!message || message.role !== 'assistant') return null;
+  const content = [message.content, message.result?.summary, message.result?.answer]
+    .filter((part): part is string => typeof part === 'string')
+    .join(' ');
+  const asksForCurrency =
+    /\b(?:choose|select|specify|pick|confirm)\b.{0,100}\bcurrenc(?:y|ies)\b/i.test(content)
+    || /\bcurrenc(?:y|ies)\b.{0,100}\b(?:choose|select|specify|pick|confirm)\b/i.test(content)
+    || /\b(?:multiple|different|mixed)\s+currenc(?:y|ies)\b.{0,120}\b(?:cannot|can't|need|please)\b/i.test(content);
+  if (!asksForCurrency) return null;
+
+  const sourceMessages = messages.slice(0, assistantIndex);
+  const source = lastSuccessfulAnalyticalContext(sourceMessages);
+  if (!source || source.data.length === 0) return null;
+  const firstRow = source.data.find((row) => row && typeof row === 'object') as Record<string, unknown> | undefined;
+  if (!firstRow) return null;
+  const currencyColumn = Object.keys(firstRow).find((column) =>
+    /^(?:currency|currency_code|waerk|waers)$/i.test(column.trim()),
+  );
+  if (!currencyColumn) return null;
+  const currencies = new Set(source.data
+    .map((row) => row && typeof row === 'object'
+      ? String((row as Record<string, unknown>)[currencyColumn] ?? '').trim().toUpperCase()
+      : '')
+    .filter(Boolean));
+  if (currencies.size < 2) return null;
+
+  const question = precedingUserQuestion(messages, assistantIndex);
+  const existingPlan = message.result?.query_plan || message.result?.queryPlan;
+  const plan = existingPlan && typeof existingPlan === 'object'
+    ? existingPlan as Record<string, unknown>
+    : {};
+  return {
+    previousQuestion: question,
+    previousSQL: '',
+    previousPlan: withRetainedAnalyticalContext({
+      ...plan,
+      pending_clarification: {
+        kind: 'currency_ambiguity',
+        question,
+        currency_column: currencyColumn,
+      },
+    }, sourceMessages),
+    previousAnswerStatus: 'CLARIFICATION',
+    data: [],
+  };
 }
 
 /** Context from the most recent assistant turn — continuous chat default. */
@@ -283,8 +358,8 @@ export function followupContextForSend(
   if (isNewQuestion) return null;
   // ChatGPT-style: always prefer the latest assistant turn.
   const context = (
-    latestAssistantContext(messages)
-    || lastPendingClarificationContext(messages)
+    lastPendingClarificationContext(messages)
+    || latestAssistantContext(messages)
     || lastGeneralChatContext(messages)
     || buildFollowupContextData(analytical, false)
   );

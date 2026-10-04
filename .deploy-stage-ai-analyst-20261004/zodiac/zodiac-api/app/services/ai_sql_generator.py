@@ -1,0 +1,109 @@
+from typing import Any, Dict, List
+
+from openai import OpenAI
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from .schema_context_builder import build_schema_context
+from .sql_generation_sanitizers import prepare_sql_for_sqlalchemy_text_execution
+
+
+client = OpenAI()
+
+
+def generate_sql(question: str) -> str:
+    """
+    Use the OpenAI API to generate a SELECT-only PostgreSQL query
+    based on the current schema and a natural-language question.
+    """
+    schema_context = build_schema_context(question=question)
+
+    prompt = f"""
+You are a PostgreSQL expert working with SAP billing data.
+
+Generate a SQL query for the user question below.
+
+CRITICAL DATA QUALITY RULES (these are NOT optional — they reflect proven bugs in the database):
+
+1. YEAR FILTERING — NEVER use GJAHR for year filtering.
+   The column VBRK.gjahr contains '0000' for ALL rows — it is completely unreliable.
+   ALWAYS use VBRK.fkdat (billing date, stored as YYYYMMDD text) for year filtering:
+     Correct:  WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
+     Wrong:    WHERE r.gjahr = '2000'   ← will ALWAYS return 0 rows
+
+2. NETWR IS TEXT — the column vbrp.netwr is stored as TEXT, not numeric.
+   ALWAYS cast it using ANSI CAST() syntax:
+     CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)
+   Never use SUM(v.netwr) directly — it will fail or silently return NULL.
+
+3. NEGATIVE SALES vs LOWEST SALES — do not mix these.
+   "Negative sales" / credit memos = line items WHERE amount < 0 (always CAST netwr to NUMERIC).
+   "Lowest sales" = ranked totals ORDER BY amount ASC LIMIT N, with NO netwr < 0 filter.
+   WRONG (returns 0 rows — no year has a negative TOTAL):
+     HAVING SUM(CAST(NULLIF(TRIM(CAST(v."netwr" AS TEXT)), '') AS NUMERIC)) < 0
+
+4. JOIN RULE — always join with LPAD to handle leading-zero differences:
+     ON LPAD(TRIM(v."vbeln"), 10, '0') = LPAD(TRIM(r."vbeln"), 10, '0')
+
+   For customer joins, also normalize IDs the same way:
+     ON LPAD(TRIM(r."kunag"), 10, '0') = LPAD(TRIM(k."kunnr"), 10, '0')
+
+5. TABLE CASING — uppercase SAP tables need double quotes in PostgreSQL:
+     "VBRK"  "KNA1"  "MAKT"
+   Exception: vbrp (lowercase, no quotes needed)
+
+6. INVOICE TOTAL VALUE LOGIC — for invoice-level totals and "zero/negative invoice value"
+   use VBRK.NETWR first (header value). Do NOT classify an invoice as zero by checking
+   only VBRP line values; VBRP is for product/line-item analysis and may contain zero lines
+   even when VBRK.NETWR is non-zero.
+
+7. CUSTOMER INVOICE LISTING — for questions like "invoices for customer Siemens",
+   use VBRK as the base table, LEFT JOIN KNA1 for customer name filtering, and use
+   VBRK.NETWR as invoice_amount. Do NOT aggregate VBRP unless the user explicitly asks
+   for line items, products, or item-level totals.
+
+Other rules:
+- Use ONLY the tables and columns listed in the schema.
+- PostgreSQL syntax only (LIMIT not TOP, :: for cast, ILIKE for case-insensitive).
+- SELECT queries ONLY (no INSERT/UPDATE/DELETE/DDL).
+- Always include LIMIT 50 unless the question asks for aggregates/totals.
+- Always ORDER BY the main metric DESC or ASC depending on context.
+
+Schema:
+{schema_context}
+
+Question:
+{question}
+
+Return ONLY the SQL. No explanation, no markdown.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+
+    sql = (response.choices[0].message.content or "").strip()
+    return sql
+
+
+def run_sql(db: Session, sql: str) -> List[Dict[str, Any]]:
+    """
+    Execute a generated SQL query safely against the given SQLAlchemy Session.
+    Only SELECT statements are allowed.
+    """
+    lowered = sql.strip().lower()
+    if not lowered.startswith("select"):
+        raise ValueError("Only SELECT statements are allowed")
+
+    # Basic safety: reject obviously dangerous keywords
+    forbidden = [" update ", " delete ", " insert ", " drop ", " alter ", " truncate "]
+    if any(k in lowered for k in forbidden):
+        raise ValueError("Refusing to execute potentially dangerous SQL")
+
+    safe_sql = prepare_sql_for_sqlalchemy_text_execution(sql)
+    result = db.execute(text(safe_sql)).mappings().all()
+    return [dict(row) for row in result]
+
+

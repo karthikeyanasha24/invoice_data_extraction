@@ -486,6 +486,22 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             ops["group_by"] = ["document"]
             group_by = ops["group_by"]
 
+        # An explicit request for invoice/document identifiers is a row-grain
+        # request even when the ranking words describe the amount ("lowest
+        # negative sales") and the identifier appears later in the prompt.
+        # Keep this separate from an invoice count or an aggregate by customer.
+        asks_for_document_identifier = bool(
+            re.search(
+                r"\b(?:billing\s+)?(?:documents?|invoices?)\s+"
+                r"(?:numbers?|ids?|identifiers?)\b|"
+                r"\b(?:document|invoice)\s+(?:numbers?|ids?|identifiers?)\b",
+                ql,
+            )
+        )
+        if asks_for_document_identifier:
+            ops["group_by"] = ["document"]
+            group_by = ops["group_by"]
+
     # In a drill-down such as "For the higher-sales country, show monthly sales",
     # the superlative selects the antecedent entity; the requested monthly series
     # is not itself a ranking. Keep actual ranking requests (for example, "top 5

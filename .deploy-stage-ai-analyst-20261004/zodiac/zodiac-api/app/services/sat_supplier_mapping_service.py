@@ -1,0 +1,385 @@
+"""
+SAT Supplier Mapping Service
+Manages RFC to SAP G/L Account mappings.
+"""
+import logging
+from typing import List, Optional, Dict
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+
+from ..models.sat_supplier_account_mapping import SATSupplierAccountMapping
+
+logger = logging.getLogger("zodiac-api.sat_supplier_mapping")
+
+# Use openpyxl directly (lightweight, works on Vercel)
+try:
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ openpyxl not available - Excel upload feature will be disabled")
+    OPENPYXL_AVAILABLE = False
+
+
+class SATSupplierMappingService:
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def parse_csv_mapping_file(self, file_content: bytes) -> List[Dict]:
+        """
+        Parse CSV file containing supplier RFC to G/L account mappings.
+        CSV is lighter and works everywhere (no dependencies).
+        """
+        try:
+            import csv
+            from io import StringIO
+            
+            # Decode bytes to string
+            csv_string = file_content.decode('utf-8-sig')  # utf-8-sig handles BOM
+            csv_file = StringIO(csv_string)
+            
+            # Read CSV
+            reader = csv.DictReader(csv_file)
+            
+            # Get and normalize headers
+            if not reader.fieldnames:
+                raise ValueError("CSV file is empty or has no headers")
+            
+            normalized_headers = self._normalize_column_names(reader.fieldnames)
+            
+            logger.info(f"📊 CSV columns: {normalized_headers}")
+            
+            # Validate required columns
+            required = ['rfc', 'cta']
+            missing = [col for col in required if col not in normalized_headers]
+            if missing:
+                raise ValueError(f"Missing required columns: {missing}")
+            
+            # Create mapping from original headers to normalized
+            header_map = dict(zip(reader.fieldnames, normalized_headers))
+            
+            # Parse rows
+            mappings = []
+            for row_idx, row in enumerate(reader, start=2):
+                try:
+                    # Normalize the row keys
+                    normalized_row = {header_map[k]: v for k, v in row.items()}
+                    
+                    # Helper to get value safely
+                    def get_val(col_name, default=None):
+                        val = normalized_row.get(col_name, default)
+                        return val if val and val.strip() else default
+                    
+                    # Get RFC (required)
+                    rfc = str(get_val('rfc', '')).strip().upper()
+                    if not rfc or rfc in ['NONE', 'NAN', '']:
+                        continue
+                    
+                    # Get GL Account (required)
+                    gl_account = str(get_val('cta', '')).strip()
+                    if not gl_account:
+                        continue
+                    
+                    mapping = {
+                        'supplier_rfc': rfc,
+                        'sap_gl_account': gl_account,
+                        'account_description': str(get_val('ctas', '')) if get_val('ctas') else None,
+                        'is_active': self._parse_boolean(get_val('is_active', 'true')),
+                        'company_code': str(get_val('company_co', '')).strip() if get_val('company_co') else None,
+                        'fiscal_year': int(get_val('fisc_yr', 0)) if get_val('fisc_yr') else None,
+                        'currency': str(get_val('curr', 'MXN')).strip().upper(),
+                        'opening_balance': float(get_val('open_bal', 0.0)) if get_val('open_bal') else 0.0,
+                        'credit_amount': float(get_val('cred', 0.0)) if get_val('cred') else 0.0,
+                        'debit_amount': float(get_val('debe', 0.0)) if get_val('debe') else 0.0,
+                        'closing_balance': float(get_val('clos_bal', 0.0)) if get_val('clos_bal') else 0.0
+                    }
+                    
+                    mappings.append(mapping)
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Skipping row {row_idx} due to error: {e}")
+                    continue
+            
+            logger.info(f"✅ Parsed {len(mappings)} mappings from CSV")
+            return mappings
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to parse CSV file: {e}")
+            raise ValueError(f"Failed to parse CSV file: {str(e)}")
+    
+    def parse_excel_mapping_file(self, file_content: bytes) -> List[Dict]:
+        """
+        Parse Excel file containing supplier RFC to G/L account mappings.
+        Expected columns: RFC, CTA (G/L Account), CTAS (Description), IS_ACTIVE
+        New columns: COMPANY_CO, FISC_YR, CURR, OPEN_BAL, CRED, DEBE, CLOS_BAL
+        
+        Uses openpyxl directly (lightweight, works on Vercel).
+        """
+        if not OPENPYXL_AVAILABLE:
+            raise ImportError("openpyxl library is required for Excel file parsing but is not installed")
+        
+        try:
+            from io import BytesIO
+            
+            # Load Excel file with openpyxl
+            workbook = load_workbook(filename=BytesIO(file_content), read_only=True)
+            sheet = workbook.active
+            
+            # Get headers from first row
+            headers = []
+            for cell in sheet[1]:
+                headers.append(str(cell.value).strip() if cell.value else "")
+            
+            # Normalize column names
+            normalized_headers = self._normalize_column_names(headers)
+            
+            logger.info(f"📊 Excel columns: {normalized_headers}")
+            
+            # Validate required columns
+            required = ['rfc', 'cta']
+            missing = [col for col in required if col not in normalized_headers]
+            if missing:
+                raise ValueError(f"Missing required columns: {missing}")
+            
+            # Create column index mapping
+            col_map = {norm: idx for idx, norm in enumerate(normalized_headers)}
+            
+            # Convert rows to list of dicts
+            mappings = []
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                try:
+                    # Helper function to get cell value safely
+                    def get_val(col_name, default=None):
+                        if col_name in col_map:
+                            val = row[col_map[col_name]]
+                            return val if val is not None else default
+                        return default
+                    
+                    # Get RFC (required)
+                    rfc = str(get_val('rfc', '')).strip().upper()
+                    if not rfc or rfc == 'NONE' or rfc == 'NAN':
+                        continue
+                    
+                    # Get GL Account (required)
+                    gl_account = str(get_val('cta', '')).strip()
+                    if not gl_account:
+                        continue
+                    
+                    mapping = {
+                        'supplier_rfc': rfc,
+                        'sap_gl_account': gl_account,
+                        'account_description': str(get_val('ctas', '')) if get_val('ctas') else None,
+                        'is_active': self._parse_boolean(get_val('is_active', True)),
+                        # New fields
+                        'company_code': str(get_val('company_co', '')).strip() if get_val('company_co') else None,
+                        'fiscal_year': int(get_val('fisc_yr', 0)) if get_val('fisc_yr') else None,
+                        'currency': str(get_val('curr', 'MXN')).strip().upper(),
+                        'opening_balance': float(get_val('open_bal', 0.0)) if get_val('open_bal') is not None else 0.0,
+                        'credit_amount': float(get_val('cred', 0.0)) if get_val('cred') is not None else 0.0,
+                        'debit_amount': float(get_val('debe', 0.0)) if get_val('debe') is not None else 0.0,
+                        'closing_balance': float(get_val('clos_bal', 0.0)) if get_val('clos_bal') is not None else 0.0
+                    }
+                    
+                    mappings.append(mapping)
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Skipping row {row_idx} due to error: {e}")
+                    continue
+            
+            workbook.close()
+            logger.info(f"✅ Parsed {len(mappings)} mappings from Excel")
+            return mappings
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to parse Excel file: {e}")
+            raise ValueError(f"Failed to parse Excel file: {str(e)}")
+    
+    def _normalize_column_names(self, columns):
+        """Normalize column names to lowercase and remove spaces."""
+        normalized = []
+        for col in columns:
+            col_lower = str(col).lower().strip()
+            # Map common variations
+            if col_lower in ['rfc', 'supplier_rfc', 'vendor_rfc']:
+                normalized.append('rfc')
+            elif col_lower in ['cta', 'gl_account', 'sap_gl_account', 'account', 'gl_acc']:
+                normalized.append('cta')
+            elif col_lower in ['ctas', 'description', 'account_description']:
+                normalized.append('ctas')
+            elif col_lower in ['is_active', 'active', 'status']:
+                normalized.append('is_active')
+            elif col_lower in ['company_co', 'company_code', 'companyco']:
+                normalized.append('company_co')
+            elif col_lower in ['fisc_yr', 'fiscal_year', 'fiscyr']:
+                normalized.append('fisc_yr')
+            elif col_lower in ['curr', 'currency']:
+                normalized.append('curr')
+            elif col_lower in ['open_bal', 'opening_balance', 'openbal']:
+                normalized.append('open_bal')
+            elif col_lower in ['cred', 'credit', 'credit_amount']:
+                normalized.append('cred')
+            elif col_lower in ['debe', 'debit', 'debit_amount']:
+                normalized.append('debe')
+            elif col_lower in ['clos_bal', 'closing_balance', 'closbal']:
+                normalized.append('clos_bal')
+            else:
+                normalized.append(col_lower)
+        return normalized
+    
+    def _parse_boolean(self, value) -> bool:
+        """Parse boolean from various formats."""
+        if value is None or value == '':
+            return True
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.lower() in ['true', 'yes', '1', 'active', 'y']
+        return True
+    
+    def bulk_upsert_mappings(self, mappings: List[Dict]) -> Dict[str, int]:
+        """
+        Bulk insert or update supplier mappings.
+        Returns counts of created, updated, and skipped records.
+        """
+        created = 0
+        updated = 0
+        skipped = 0
+        
+        for mapping_data in mappings:
+            try:
+                rfc = mapping_data['supplier_rfc']
+                
+                # Check if mapping exists
+                existing = self.db.query(SATSupplierAccountMapping).filter(
+                    SATSupplierAccountMapping.supplier_rfc == rfc
+                ).first()
+                
+                if existing:
+                    # Update
+                    existing.sap_gl_account = mapping_data['sap_gl_account']
+                    existing.account_description = mapping_data.get('account_description')
+                    existing.is_active = mapping_data.get('is_active', True)
+                    # Update new fields
+                    existing.company_code = mapping_data.get('company_code')
+                    existing.fiscal_year = mapping_data.get('fiscal_year')
+                    existing.currency = mapping_data.get('currency', 'MXN')
+                    existing.opening_balance = mapping_data.get('opening_balance', 0.0)
+                    existing.credit_amount = mapping_data.get('credit_amount', 0.0)
+                    existing.debit_amount = mapping_data.get('debit_amount', 0.0)
+                    existing.closing_balance = mapping_data.get('closing_balance', 0.0)
+                    updated += 1
+                else:
+                    # Create
+                    new_mapping = SATSupplierAccountMapping(
+                        supplier_rfc=rfc,
+                        sap_gl_account=mapping_data['sap_gl_account'],
+                        account_description=mapping_data.get('account_description'),
+                        is_active=mapping_data.get('is_active', True),
+                        is_default=False,
+                        # New fields
+                        company_code=mapping_data.get('company_code'),
+                        fiscal_year=mapping_data.get('fiscal_year'),
+                        currency=mapping_data.get('currency', 'MXN'),
+                        opening_balance=mapping_data.get('opening_balance', 0.0),
+                        credit_amount=mapping_data.get('credit_amount', 0.0),
+                        debit_amount=mapping_data.get('debit_amount', 0.0),
+                        closing_balance=mapping_data.get('closing_balance', 0.0)
+                    )
+                    self.db.add(new_mapping)
+                    created += 1
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to process mapping for {mapping_data.get('supplier_rfc')}: {e}")
+                skipped += 1
+                continue
+        
+        self.db.commit()
+        
+        logger.info(f"✅ Bulk upsert complete: {created} created, {updated} updated, {skipped} skipped")
+        return {"created": created, "updated": updated, "skipped": skipped}
+    
+    def get_mapping_by_rfc(self, supplier_rfc: str) -> Optional[SATSupplierAccountMapping]:
+        """Get mapping for a specific supplier RFC."""
+        return self.db.query(SATSupplierAccountMapping).filter(
+            SATSupplierAccountMapping.supplier_rfc == supplier_rfc.upper(),
+            SATSupplierAccountMapping.is_active == True
+        ).first()
+    
+    def get_all_mappings(self, active_only: bool = False, skip: int = 0, limit: int = 100) -> Dict:
+        """Get all supplier mappings."""
+        query = self.db.query(SATSupplierAccountMapping)
+        
+        if active_only:
+            query = query.filter(SATSupplierAccountMapping.is_active == True)
+        
+        total = query.count()
+        mappings = query.order_by(
+            SATSupplierAccountMapping.supplier_rfc
+        ).offset(skip).limit(limit).all()
+        
+        return {
+            "total": total,
+            "mappings": [
+                {
+                    "id": m.id,
+                    "supplier_rfc": m.supplier_rfc,
+                    "sap_gl_account": m.sap_gl_account,
+                    "account_description": m.account_description,
+                    "is_active": m.is_active,
+                    "is_default": m.is_default,
+                    # New fields
+                    "company_code": m.company_code,
+                    "fiscal_year": m.fiscal_year,
+                    "currency": m.currency,
+                    "opening_balance": float(m.opening_balance) if m.opening_balance else 0.0,
+                    "credit_amount": float(m.credit_amount) if m.credit_amount else 0.0,
+                    "debit_amount": float(m.debit_amount) if m.debit_amount else 0.0,
+                    "closing_balance": float(m.closing_balance) if m.closing_balance else 0.0,
+                    # Timestamps
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "updated_at": m.updated_at.isoformat() if m.updated_at else None
+                }
+                for m in mappings
+            ]
+        }
+    
+    def delete_mapping(self, mapping_id: int) -> bool:
+        """Delete a supplier mapping."""
+        mapping = self.db.query(SATSupplierAccountMapping).filter(
+            SATSupplierAccountMapping.id == mapping_id
+        ).first()
+        
+        if not mapping:
+            return False
+        
+        # Don't allow deleting default mapping
+        if mapping.is_default:
+            raise ValueError("Cannot delete default mapping")
+        
+        self.db.delete(mapping)
+        self.db.commit()
+        return True
+    
+    def get_or_create_default_mapping(self) -> Optional[SATSupplierAccountMapping]:
+        """Get or create the default G/L account mapping."""
+        default = self.db.query(SATSupplierAccountMapping).filter(
+            SATSupplierAccountMapping.is_default == True
+        ).first()
+        
+        if not default:
+            # Create default mapping
+            default = SATSupplierAccountMapping(
+                supplier_rfc='DEFAULT',
+                sap_gl_account='9999999999',
+                account_description='Default unmapped supplier account',
+                is_active=True,
+                is_default=True
+            )
+            self.db.add(default)
+            self.db.commit()
+            self.db.refresh(default)
+            logger.info("✅ Created default supplier mapping")
+        
+        return default
+

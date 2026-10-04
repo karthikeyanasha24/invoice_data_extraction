@@ -1326,6 +1326,7 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         build_partitioned_topn_sql,
         build_period_compare_sql,
         build_period_sales_sql,
+        build_linked_order_period_comparison_sql,
         build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
@@ -1333,6 +1334,7 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
     )
 
     for builder in (
+        lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
@@ -1373,12 +1375,23 @@ def _apply_currency_if_needed(question: str, sql: str, ctx: VerifiedDbContext, d
         resolve_currency_strategy,
         requests_unfiltered_currency_scope,
         sql_aggregates_monetary_values,
+        sql_groups_currency_dimension,
         sql_has_currency_handling,
         strip_currency_filter_predicates,
     )
 
     explicit_currency = extract_currency_from_question(question)
     unfiltered_currency_scope = requests_unfiltered_currency_scope(question)
+    # SQL templates and model output can already project and group by currency.
+    # Preserve that verified result grain instead of inferring a second currency
+    # column from whichever unrelated table happened to rank first in metadata.
+    if not explicit_currency and sql_groups_currency_dimension(sql):
+        return sql
+
+    # Prefer currency columns on tables actually used by this query. Context
+    # selection can include other candidate headers (for example orders) that
+    # are not part of an invoice query's FROM/JOIN graph.
+    currency_tables = _dedupe_tables([*_tables_referenced_in_sql(sql), *ctx.tables])
     has_filter = sql_has_currency_handling(sql) and re.search(
         r"\b(?:waerk|waers|rtcur|hwaer|curr|currency)\b\"?\s*(?:=|<>|!=|\bIN\s*\()",
         sql,
@@ -1396,7 +1409,7 @@ def _apply_currency_if_needed(question: str, sql: str, ctx: VerifiedDbContext, d
 
     if explicit_currency and not unfiltered_currency_scope:
         explicit_strategy = resolve_currency_strategy(
-            db, tables=ctx.tables, question=question, semantic=ctx.semantic_requirements
+            db, tables=currency_tables, question=question, semantic=ctx.semantic_requirements
         )
         if explicit_strategy:
             patched = apply_currency_strategy_to_sql(sql, explicit_strategy)
@@ -1411,7 +1424,7 @@ def _apply_currency_if_needed(question: str, sql: str, ctx: VerifiedDbContext, d
     if not sql_aggregates_monetary_values(sql):
         return sql
     strategy = resolve_currency_strategy(
-        db, tables=ctx.tables, question=question, semantic=ctx.semantic_requirements
+        db, tables=currency_tables, question=question, semantic=ctx.semantic_requirements
     )
     if not strategy:
         return sql
@@ -1456,6 +1469,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         build_partitioned_topn_sql,
         build_period_compare_sql,
         build_period_sales_sql,
+        build_linked_order_period_comparison_sql,
         build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
@@ -1515,6 +1529,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
     template_builders = (
+        ("linked_order_period_comparison_template", lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_sales_orders_template", lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("billing_document_ranking_template", lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_period_sales", lambda: build_dimension_period_sales_sql(question, ctx.tables, ctx.semantic_requirements)),

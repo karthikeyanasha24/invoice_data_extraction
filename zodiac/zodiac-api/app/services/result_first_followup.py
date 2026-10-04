@@ -392,12 +392,56 @@ def _expand_entity_period_followup(
         return None
     row = next((item for item in rows if isinstance(item, dict)), None)
     if explicit_top_country:
+        currency_key = next(
+            (
+                key for key in (row or {})
+                if str(key).strip().lower().replace("_", " ") in {"currency", "document currency", "billing currency"}
+            ),
+            None,
+        )
+        currencies = {
+            str(item.get(currency_key) or "").strip().upper()
+            for item in rows
+            if currency_key and str(item.get(currency_key) or "").strip()
+        }
+        if len(currencies) > 1:
+            plan = dict(prior_plan) if isinstance(prior_plan, dict) else {}
+            plan["pending_clarification"] = {
+                "kind": "currency_ambiguity",
+                "question": q,
+                "currency_column": currency_key,
+                "currency_values": sorted(currencies),
+            }
+            return {
+                "mode": "clarification",
+                "status": "clarification",
+                "answer_status": "CLARIFICATION",
+                "sql": "",
+                "sql_status": "not_generated",
+                "sql_generation_method": "followup_ambiguous_currency",
+                "pipeline": "result_first_followup",
+                "rowCount": 0,
+                "data": [],
+                "summary": (
+                    "The prior ranking contains multiple currencies, so the sales amounts "
+                    "cannot identify one higher-sales country across the whole result. "
+                    "Choose a currency to continue; I can then reuse the prior year and show its monthly sales."
+                ),
+                "answer": "Which currency should I use for the country ranking and monthly breakdown?",
+                "query_plan": plan,
+                "meta": {
+                    "investigation_status": "clarification",
+                    "followup": "currency_ambiguity",
+                    "currencies": sorted(currencies),
+                },
+            }
         measure_col = _rank_measure_column(rows)
         ranked = _rank_by_column(rows, measure_col, descending=True) if measure_col else []
         if ranked:
             row = ranked[0]
     if not row:
         return None
+
     keys = {str(key).lower(): key for key in row}
     country_col = next((keys[name] for name in ("country", "land1", "country_code") if name in keys), None)
     if not country_col or row.get(country_col) in (None, ""):
@@ -449,6 +493,154 @@ def _expand_entity_period_followup(
         "expanded_question": expanded,
     }
 
+
+def resolve_pending_currency_clarification(
+    reply: str,
+    prior_rows: Optional[List[Dict[str, Any]]],
+    prior_plan: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Resolve a currency reply against a pending, result-backed clarification.
+
+    The selected currency, winning entity, and period all come from the prior
+    verified rows and plan. A bare reply such as ``USD`` therefore resumes the
+    exact requested drill-down without asking the language model to reconstruct
+    the missing context from a one-word message.
+    """
+    plan = prior_plan if isinstance(prior_plan, dict) else {}
+    pending = plan.get("pending_clarification")
+    rows = [row for row in (prior_rows or []) if isinstance(row, dict)]
+    if not isinstance(pending, dict) or pending.get("kind") != "currency_ambiguity" or not rows:
+        return None
+
+    currency_col = str(pending.get("currency_column") or "")
+    if currency_col not in rows[0]:
+        currency_cols = _matching_columns(rows, "currency")
+        currency_col = currency_cols[0] if currency_cols else ""
+    if not currency_col:
+        return None
+
+    available = {
+        str(row.get(currency_col) or "").strip().upper()
+        for row in rows
+        if str(row.get(currency_col) or "").strip()
+    }
+    reply_text = (reply or "").strip().upper()
+    selected = [
+        value for value in available
+        if re.search(rf"(?<![A-Z0-9]){re.escape(value)}(?![A-Z0-9])", reply_text)
+    ]
+    if len(selected) != 1:
+        return None
+    currency = selected[0]
+    currency_rows = [
+        row for row in rows
+        if str(row.get(currency_col) or "").strip().upper() == currency
+    ]
+    if not currency_rows:
+        return None
+
+    rank_col = next(
+        (
+            key for key in currency_rows[0]
+            if "rank" in str(key).lower()
+        ),
+        None,
+    )
+    if rank_col:
+        ranked = _rank_by_column(currency_rows, str(rank_col), descending=False)
+        if ranked:
+            best_rank = _to_float(ranked[0].get(rank_col))
+            leaders = [row for row in ranked if _to_float(row.get(rank_col)) == best_rank]
+        else:
+            leaders = []
+    else:
+        leaders = []
+
+    measure_col = _rank_measure_column(currency_rows)
+    if not leaders and measure_col:
+        ranked = _rank_by_column(currency_rows, measure_col, descending=True)
+        if ranked:
+            best_measure = _to_float(ranked[0].get(measure_col))
+            leaders = [row for row in ranked if _to_float(row.get(measure_col)) == best_measure]
+    elif len(leaders) > 1 and measure_col:
+        ranked = _rank_by_column(leaders, measure_col, descending=True)
+        if ranked:
+            best_measure = _to_float(ranked[0].get(measure_col))
+            leaders = [row for row in ranked if _to_float(row.get(measure_col)) == best_measure]
+    if len(leaders) != 1:
+        return None
+
+    country_cols = _matching_columns(currency_rows, "country")
+    country_col = next(
+        (key for key in country_cols if str(key).strip().lower() in {"country", "country_code", "land1"}),
+        country_cols[0] if country_cols else None,
+    )
+    country = str(leaders[0].get(country_col) or "").strip() if country_col else ""
+    if not country:
+        return None
+
+    years: List[str] = []
+    pending_question = str(pending.get("question") or "").strip()
+    prior_questions = [
+        str(plan.get("last_user_question") or ""),
+        str((plan.get("investigation_state") or {}).get("last_user_question") or "")
+        if isinstance(plan.get("investigation_state"), dict) else "",
+    ]
+    for candidate in (plan, plan.get("verified_db_context"), plan.get("verified_context"), plan.get("query_plan")):
+        if not isinstance(candidate, dict):
+            continue
+        semantic = candidate.get("semantic_requirements")
+        if not isinstance(semantic, dict):
+            continue
+        time_filter = semantic.get("time_filter")
+        if not isinstance(time_filter, dict):
+            continue
+        for year in time_filter.get("years") or []:
+            text = str(year).strip()
+            if re.fullmatch(r"\d{4}", text) and text not in years:
+                years.append(text)
+    if not years:
+        for source in prior_questions:
+            for year in re.findall(r"\b(?:19|20)\d{2}\b", source):
+                if year not in years:
+                    years.append(year)
+    if len(years) != 1:
+        return None
+
+    expanded = pending_question
+    country_patterns = (
+        r"\b(?:the\s+)?(?:higher|highest|top|leading)[-\s]+sales\s+country\b",
+        r"\b(?:the\s+)?country\s+with\s+(?:the\s+)?(?:higher|highest|most|more)\s+(?:billed\s+)?sales\b",
+    )
+    country_literal = country.replace("'", "''")
+    for pattern in country_patterns:
+        expanded, count = re.subn(
+            pattern,
+            f"country code '{country_literal}'",
+            expanded,
+            count=1,
+            flags=re.I,
+        )
+        if count:
+            break
+    if expanded == pending_question:
+        return None
+    expanded = re.sub(
+        r"\b(?:same|that|those|previous|prior|the)\s+(?:(?:complete|calendar|full)\s+)?year\b",
+        f"calendar year {years[0]}",
+        expanded,
+        flags=re.I,
+    )
+    expanded = re.sub(
+        r"\b(?:and\s+)?(?:(?:same|that|those|previous|prior|the)\s+)?currency\b",
+        f"in currency {currency}",
+        expanded,
+        flags=re.I,
+    )
+    expanded = re.sub(r"\bin\s+the\s+calendar\s+year\b", "in calendar year", expanded, flags=re.I)
+    if re.search(r"\b(?:same|that|those|previous|prior)\s+(?:year|currency)\b", expanded, re.I):
+        return None
+    return re.sub(r"\s+", " ", expanded).strip()
 
 def _expand_customer_period_followup(
     question: str,

@@ -49,8 +49,18 @@ _BUSINESS_FACT = re.compile(
 )
 
 _RANKING_ANALYTICS = re.compile(
-    r"\b(top\s+\d+|highest|lowest|biggest|most|least)\b.{0,40}\b"
-    r"(customer|customers|product|products|vendor|vendors|country|region)\b",
+    # Accept written quantities (e.g. "top five") as well as digits. A
+    # ranking remains an analytical request when the user asks for a result
+    # field such as currency; that output wording is not schema introspection.
+    r"\b(top\s+(?:\d+|[a-z]+)|highest|lowest|biggest|most|least)\b.{0,60}\b"
+    r"(customer|customers|product|products|vendor|vendors|countr(?:y|ies)|regions?)\b",
+    re.I,
+)
+_DIRECT_SCHEMA_REQUEST = re.compile(
+    r"\b(?:how\s+many|count(?:\s+of)?|what|which|list|enumerate|describe|"
+    r"show\s+(?:me\s+)?(?:all|available|connected|the\s+)?|tell\s+me\s+)"
+    r".{0,35}\b(?:tables?|columns?|fields?|schema|catalog|metadata|entities|"
+    r"data\s+sources?|datasets?)\b",
     re.I,
 )
 
@@ -551,8 +561,10 @@ def is_database_metadata_question(question: str) -> bool:
     ):
         return True
 
-    # Ranking / measure analytics are never metadata.
-    if _RANKING_ANALYTICS.search(ql) and not _SCHEMA_ENTITY.search(ql):
+    # Do not route an analytical ranking to the schema catalog just because
+    # the requested output says to show a value "as a field". Require a direct
+    # catalog question before the schema noun takes precedence.
+    if _RANKING_ANALYTICS.search(ql) and not _DIRECT_SCHEMA_REQUEST.search(ql):
         return False
 
     has_entity = bool(_SCHEMA_ENTITY.search(ql))

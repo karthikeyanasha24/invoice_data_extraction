@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.services.adaptive_currency_strategy import (
     apply_currency_strategy_to_sql,
@@ -11,6 +11,7 @@ from app.services.adaptive_currency_strategy import (
     resolve_currency_strategy,
     requests_unfiltered_currency_scope,
     strip_currency_filter_predicates,
+    sql_groups_currency_dimension,
     CurrencyStrategy,
 )
 
@@ -198,6 +199,61 @@ def test_unfiltered_currency_followup_keeps_year_and_groups_currency():
     assert "2017" in grouped
     assert 'k."waerk"' in grouped
     assert re.search(r"GROUP BY[^\n]*waerk", grouped, re.I)
+
+
+def test_currency_dimension_detector_recognizes_grouped_currency_inside_cte():
+    sql = (
+        'WITH grouped AS (SELECT TRIM(c."land1") AS "country", '
+        'k."waerk" AS "currency", SUM(k."netwr") AS "total_sales" '
+        'FROM "VBRK" k JOIN "KNA1" c ON c."kunnr" = k."kunag" '
+        'GROUP BY TRIM(c."land1"), k."waerk") '
+        'SELECT grouped."country", grouped."currency", grouped."total_sales" FROM grouped'
+    )
+    assert sql_groups_currency_dimension(sql)
+
+
+def test_pipeline_preserves_existing_currency_grouping_without_reinferring_table():
+    from app.services.four_stage_db_pipeline import VerifiedDbContext, _apply_currency_if_needed
+
+    question = (
+        "Show the top five countries by billed sales in calendar year 2017, "
+        "with billing currency shown as a field. Do not filter to one currency."
+    )
+    sql = (
+        'WITH grouped AS (SELECT TRIM(c."land1") AS "country", '
+        'k."waerk" AS "currency", SUM(k."netwr") AS "total_sales" '
+        'FROM "VBRK" k JOIN "KNA1" c ON c."kunnr" = k."kunag" '
+        'WHERE SUBSTRING(k."fkdat", 1, 4) = \'2017\' '
+        'GROUP BY TRIM(c."land1"), k."waerk") '
+        'SELECT grouped."country", grouped."currency", grouped."total_sales" FROM grouped'
+    )
+    ctx = VerifiedDbContext(
+        question=question,
+        tables=["KNA1", "VBAK", "VBRK"],
+        semantic_requirements={"measure": {"concept": "sales", "aggregation": "SUM"}},
+    )
+    db = MagicMock()
+    with patch(
+        "app.services.adaptive_currency_strategy.resolve_currency_strategy",
+        side_effect=AssertionError("already-grouped SQL must not be mutated"),
+    ):
+        fixed = _apply_currency_if_needed(question, sql, ctx, db)
+    assert fixed == sql
+
+
+def test_pipeline_prioritizes_tables_referenced_by_query_for_currency_strategy():
+    from unittest.mock import patch
+
+    from app.services.four_stage_db_pipeline import VerifiedDbContext, _apply_currency_if_needed
+
+    question = "Show billed sales by country in currency EUR."
+    sql = 'SELECT SUM(k."netwr") AS billed_sales FROM "VBRK" k GROUP BY k."kunag"'
+    ctx = VerifiedDbContext(question=question, tables=["VBAK", "KNA1", "VBRK"])
+    with patch(
+        "app.services.adaptive_currency_strategy.resolve_currency_strategy", return_value=None
+    ) as resolve:
+        _apply_currency_if_needed(question, sql, ctx, MagicMock())
+    assert resolve.call_args.kwargs["tables"][:1] == ["VBRK"]
 
 
 def test_pipeline_replaces_generated_currency_filter_with_user_scope():

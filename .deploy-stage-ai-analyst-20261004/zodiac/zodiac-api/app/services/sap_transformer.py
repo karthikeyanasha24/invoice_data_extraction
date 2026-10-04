@@ -1,0 +1,536 @@
+"""
+SAP Transformer Service
+Transforms SAT canonical merged documents into SAP ECC XML format.
+Also transforms to client's JSON format for bulk sending.
+"""
+import logging
+from typing import Dict, List, Any
+from decimal import Decimal
+from datetime import datetime
+from sqlalchemy.orm import Session
+from ..models.sat_canonical_merged import SATCanonicalMerged
+from ..models.sat_simple_merged import SATSimpleMerged
+from ..models.sat_document import SATDocument
+from ..models.sat_supplier_account_mapping import SATSupplierAccountMapping
+
+logger = logging.getLogger("zodiac-api.sap_transformer")
+
+
+class SAPTransformer:
+    """Transform canonical documents to SAP XML format"""
+    
+    def __init__(self, db: Session = None):
+        self.db = db
+    
+    def _to_float(self, value) -> float:
+        """Safely convert any value to float"""
+        if value is None or value == '':
+            return 0.0
+        try:
+            # Handle string conversion
+            if isinstance(value, str):
+                # Remove any currency symbols, commas, etc.
+                cleaned = value.replace(',', '').replace('$', '').strip()
+                return float(cleaned)
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+    
+    def _clean_numeric(self, value, precision: int = 2) -> float:
+        """Convert numeric value to clean float with specified precision"""
+        return round(self._to_float(value), precision)
+    
+    def _datetime_to_iso(self, dt: datetime = None) -> str:
+        """Convert datetime to ISO 8601 format: YYYY-MM-DDTHH:MM:SS"""
+        if dt is None:
+            dt = datetime.utcnow()
+        # Return ISO format with 'Z' suffix for UTC
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    def _get_supplier_mapping(self, supplier_rfc: str):
+        """Fetch supplier account mapping from database"""
+        if not self.db:
+            return None
+        try:
+            return self.db.query(SATSupplierAccountMapping).filter(
+                SATSupplierAccountMapping.supplier_rfc == supplier_rfc.upper(),
+                SATSupplierAccountMapping.is_active == True
+            ).first()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to fetch mapping for {supplier_rfc}: {e}")
+            return None
+    
+    def _extract_items_from_cfdi(self, sat_doc, doc_type: str, subtotal_val: float, tax_amount: float) -> List[Dict]:
+        """
+        Extract actual items/concepts from CFDI XML.
+        Returns a list of item dictionaries with proper product descriptions.
+        """
+        items = []
+        
+        try:
+            if not sat_doc.xml_content:
+                # Fallback to basic item if no XML
+                return self._create_fallback_item(sat_doc, doc_type, subtotal_val, tax_amount)
+            
+            from lxml import etree
+            
+            # Parse XML
+            root = etree.fromstring(sat_doc.xml_content.encode('utf-8'))
+            
+            # Get namespace
+            ns = root.nsmap.get(None, '')
+            namespace = {'cfdi': ns} if ns else {}
+            
+            # Find Conceptos node
+            conceptos_path = './/cfdi:Conceptos/cfdi:Concepto' if ns else './/Conceptos/Concepto'
+            conceptos = root.findall(conceptos_path, namespace)
+            
+            if not conceptos:
+                # Try without namespace
+                conceptos = root.findall('.//Concepto')
+            
+            if conceptos:
+                # Extract each concept
+                for idx, concepto in enumerate(conceptos, start=1):
+                    clave_prod_serv = concepto.get('ClaveProdServ', '')
+                    no_identificacion = concepto.get('NoIdentificacion', '')
+                    cantidad = self._to_float(concepto.get('Cantidad', '1'))
+                    clave_unidad = concepto.get('ClaveUnidad', '')
+                    unidad = concepto.get('Unidad', '')
+                    descripcion = concepto.get('Descripcion', 'Product')
+                    valor_unitario = self._to_float(concepto.get('ValorUnitario', '0'))
+                    importe = self._to_float(concepto.get('Importe', '0'))
+                    descuento = self._to_float(concepto.get('Descuento', '0'))
+                    
+                    # Extract tax info from this concept
+                    impuestos = concepto.find('.//cfdi:Impuestos' if ns else './/Impuestos', namespace)
+                    traslados = []
+                    if impuestos is not None:
+                        traslados_node = impuestos.find('.//cfdi:Traslados' if ns else './/Traslados', namespace)
+                        if traslados_node is not None:
+                            traslados = traslados_node.findall('.//cfdi:Traslado' if ns else './/Traslado', namespace)
+                    
+                    # Get first tax (usually IVA)
+                    tax_rate = 0.16
+                    tax_base = importe
+                    tax_amt = 0.0
+                    if traslados:
+                        first_tax = traslados[0]
+                        tax_rate = self._to_float(first_tax.get('TasaOCuota', '0.16'))
+                        tax_base = self._to_float(first_tax.get('Base', str(importe)))
+                        tax_amt = self._to_float(first_tax.get('Importe', '0'))
+                    
+                    item = {
+                        "MANDT": "",
+                        "DS_UUID": sat_doc.cfdi_uuid,
+                        "DOCUMENT_TYPE": doc_type,
+                        "DOC_NUMBER": sat_doc.folio or "",
+                        "DOC_ITEM_NO": str(idx),
+                        "AMOUNT": 0,
+                        "PRODUCTID": no_identificacion or clave_prod_serv,
+                        "DESCRIPTION": descripcion,  # ✅ Actual product description!
+                        "PRODUCTSERVICECODE": clave_prod_serv,
+                        "QUANTITY": round(cantidad, 3),
+                        "TAXOBJECT": "",
+                        "UNITCODE": clave_unidad,
+                        "UNITDESCRIPTION": unidad,
+                        "UNITPRICE": self._clean_numeric(valor_unitario),
+                        "LINEAMOUNT": self._clean_numeric(importe),
+                        "TAXTYPE": "",
+                        "TAXRATE": round(tax_rate, 2),
+                        "BASEAMOUNT": self._clean_numeric(tax_base),
+                        "TAXAMOUNT": self._clean_numeric(tax_amt)
+                    }
+                    items.append(item)
+            
+            if not items:
+                # No concepts found, use fallback
+                return self._create_fallback_item(sat_doc, doc_type, subtotal_val, tax_amount)
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to extract items from CFDI {sat_doc.cfdi_uuid}: {e}")
+            # Fallback to basic item
+            return self._create_fallback_item(sat_doc, doc_type, subtotal_val, tax_amount)
+        
+        return items
+    
+    def _create_fallback_item(self, sat_doc, doc_type: str, subtotal_val: float, tax_amount: float) -> List[Dict]:
+        """Create a single fallback item when XML parsing fails or no concepts found"""
+        return [{
+            "MANDT": "",
+            "DS_UUID": sat_doc.cfdi_uuid,
+            "DOCUMENT_TYPE": doc_type,
+            "DOC_NUMBER": sat_doc.folio or "",
+            "DOC_ITEM_NO": "1",
+            "AMOUNT": 0,
+            "PRODUCTID": "",
+            "DESCRIPTION": f"Document {sat_doc.folio or sat_doc.cfdi_uuid[:8]}",
+            "PRODUCTSERVICECODE": "",
+            "QUANTITY": 1.000,
+            "TAXOBJECT": "",
+            "UNITCODE": "",
+            "UNITDESCRIPTION": "",
+            "UNITPRICE": self._clean_numeric(subtotal_val),
+            "LINEAMOUNT": self._clean_numeric(subtotal_val),
+            "TAXTYPE": "",
+            "TAXRATE": 0.16,
+            "BASEAMOUNT": self._clean_numeric(subtotal_val),
+            "TAXAMOUNT": self._clean_numeric(tax_amount)
+        }]
+    
+    def transform_canonical_to_sap_xml(self, canonical: SATCanonicalMerged) -> str:
+        """
+        Transform a canonical merged document to SAP XML format.
+        Returns XML string ready to send to SAP.
+        """
+        try:
+            # Fetch linked documents to get CFDI details
+            cfdi_details = []
+            if self.db and canonical.linked_document_ids:
+                linked_docs = self.db.query(SATDocument).filter(
+                    SATDocument.id.in_([str(doc_id) for doc_id in canonical.linked_document_ids])
+                ).all()
+                
+                # Build detailed CFDI list with types
+                for doc in linked_docs:
+                    cfdi_details.append({
+                        'UUID': doc.cfdi_uuid,
+                        'TYPE': doc.doc_type,
+                        'TOTAL': str(doc.total) if doc.total else '0.00',
+                        'CURRENCY': doc.moneda or 'MXN',
+                        'DATE': doc.fecha.isoformat() if doc.fecha else ''
+                    })
+            
+            # Build invoice data dictionary
+            invoice_data = {
+                'INVOICE': {
+                    'COMPANY_CODE': canonical.company_code or 'MX01',
+                    'VENDOR_RFC': canonical.vendor_rfc,
+                    'VENDOR_NAME': canonical.vendor_name or '',
+                    'FISCAL_YEAR': str(canonical.fiscal_year),
+                    'FISCAL_PERIOD': str(canonical.fiscal_period).zfill(2),
+                    'CURRENCY': canonical.currency or 'MXN',
+                    'TOTAL_INVOICES': str(canonical.total_invoices or '0.00'),
+                    'TOTAL_CREDITS': str(canonical.total_credits or '0.00'),
+                    'TOTAL_PAYMENTS': str(canonical.total_payments or '0.00'),
+                    'NET_AMOUNT': str(canonical.net_amount or '0.00'),
+                    'GL_ACCOUNT': canonical.sap_gl_account or '',
+                    'PAYMENT_METHOD': canonical.payment_method or 'PPD',
+                    'CFDI_UUIDS': ','.join(canonical.cfdi_uuids or []),
+                    'CFDI_DETAILS': cfdi_details,  # Add detailed CFDI info
+                    'RELATED_UUIDS': ','.join(canonical.related_cfdi_uuids or []),
+                    'DOCUMENT_COUNT': str(len(canonical.linked_document_ids or [])),
+                    'PORTAL_REF_ID': str(canonical.id)
+                }
+            }
+            
+            # Convert to XML
+            xml = self._dict_to_xml(invoice_data)
+            
+            logger.info(f"✅ Transformed canonical {canonical.id} to SAP XML ({len(xml)} bytes)")
+            return xml
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to transform canonical to SAP XML: {e}")
+            raise
+    
+    def _dict_to_xml(self, data: Dict, root_name: str = 'SAP_CANONICAL_DOCUMENT') -> str:
+        """Convert dictionary to XML string"""
+        xml_parts = [f'<?xml version="1.0" encoding="UTF-8"?>']
+        xml_parts.append(f'<{root_name}>')
+        
+        for key, value in data.items():
+            if isinstance(value, dict):
+                xml_parts.append(f'  <{key}>')
+                for sub_key, sub_value in value.items():
+                    # Handle CFDI_DETAILS as a list of CFDI elements
+                    if sub_key == 'CFDI_DETAILS' and isinstance(sub_value, list):
+                        xml_parts.append(f'    <{sub_key}>')
+                        for cfdi in sub_value:
+                            xml_parts.append(f'      <CFDI>')
+                            for cfdi_key, cfdi_val in cfdi.items():
+                                xml_parts.append(f'        <{cfdi_key}>{self._escape_xml(str(cfdi_val))}</{cfdi_key}>')
+                            xml_parts.append(f'      </CFDI>')
+                        xml_parts.append(f'    </{sub_key}>')
+                    elif isinstance(sub_value, list):
+                        # Handle other lists (if any)
+                        xml_parts.append(f'    <{sub_key}>')
+                        for item in sub_value:
+                            xml_parts.append(f'      <ITEM>{self._escape_xml(str(item))}</ITEM>')
+                        xml_parts.append(f'    </{sub_key}>')
+                    else:
+                        xml_parts.append(f'    <{sub_key}>{self._escape_xml(str(sub_value))}</{sub_key}>')
+                xml_parts.append(f'  </{key}>')
+            else:
+                xml_parts.append(f'  <{key}>{self._escape_xml(str(value))}</{key}>')
+        
+        xml_parts.append(f'</{root_name}>')
+        return '\n'.join(xml_parts)
+    
+    def _escape_xml(self, text: str) -> str:
+        """Escape special XML characters"""
+        return (text
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;')
+                .replace('"', '&quot;')
+                .replace("'", '&apos;'))
+    
+    def transform_canonical_to_sap_format(self, canonical: SATCanonicalMerged) -> List[Dict[str, Any]]:
+        """
+        Transform canonical document to client's JSON format.
+        Returns a list of documents (one canonical document).
+        Follows format from client's 'multiplefiles' example.
+        """
+        try:
+            # Fetch supplier mapping data
+            mapping = self._get_supplier_mapping(canonical.vendor_rfc)
+            
+            # Fetch linked documents to build items
+            items = []
+            if self.db and canonical.linked_document_ids:
+                linked_docs = self.db.query(SATDocument).filter(
+                    SATDocument.id.in_([str(doc_id) for doc_id in canonical.linked_document_ids])
+                ).all()
+                
+                for idx, doc in enumerate(linked_docs, 1):
+                    # Convert string fields to floats safely
+                    doc_subtotal = self._to_float(doc.subtotal)
+                    doc_total = self._to_float(doc.total)
+                    doc_tax = doc_total - doc_subtotal
+                    
+                    item = {
+                        "DS_UUID": doc.cfdi_uuid,
+                        "DOCUMENT_TYPE": "C",  # Canonical
+                        "DOC_NUMBER": doc.folio or "",
+                        "DOC_ITEM_NO": str(idx),
+                        "AMOUNT": 0,
+                        "PRODUCTID": "",
+                        "DESCRIPTION": f"{doc.doc_type} - {doc.serie}-{doc.folio}",
+                        "PRODUCTSERVICECODE": "",
+                        "QUANTITY": 1.000,
+                        "TAXOBJECT": "",
+                        "UNITCODE": "",
+                        "UNITDESCRIPTION": "",
+                        "UNITPRICE": self._clean_numeric(doc_total),
+                        "LINEAMOUNT": self._clean_numeric(doc_total),
+                        "TAXTYPE": "",
+                        "TAXRATE": 0.16,
+                        "BASEAMOUNT": self._clean_numeric(doc_subtotal),
+                        "TAXAMOUNT": self._clean_numeric(doc_tax)
+                    }
+                    items.append(item)
+            
+            # Build canonical document in client's format
+            doc = {
+                "DS_UUID": str(canonical.id),
+                "DOCUMENT_TYPE": "C",  # C for Canonical
+                "DOC_NUMBER": f"{canonical.fiscal_year}{canonical.fiscal_period:02d}",
+                "VERSION": "4.0",
+                "ISSUE_DATETIME": self._datetime_to_iso(),  # ISO format
+                "DOC_SERIES": f"CANONICAL_{canonical.fiscal_year}",
+                "CURRENCY": canonical.currency or "MXN",
+                "EXCHANGE_RATE": 1.00000,  # 5 decimals like client's example
+                "SUBTOTAL_AMOUNT": self._clean_numeric(canonical.net_amount or 0),
+                "TOTAL_AMOUNT": self._clean_numeric(canonical.net_amount or 0),
+                "PAYMENT_METHOD_CODE": "99",
+                "PAYMENT_METHOD": canonical.payment_method or "PPD",
+                "PAYMENT_CONDITION": "",
+                "PLACE_OF_ISSUE_ZIP": "",
+                "EXPORT_INDICATOR": "01",
+                "DIGITAL_CERTIFICATE": "",
+                "CERTIFICATE_NUMBER": "",
+                "ISSUER_NAME": canonical.vendor_name or "",
+                "ISSUER_TAX_ID": canonical.vendor_rfc,
+                "ISSUER_TAX_REGION": "601",
+                "RECEIVER_NAME": "",
+                "RECEIVER_TAX_ID": "",
+                "RECEIVER_CFDI_USER": "G03",
+                "RECEIVER_TAX_ZIP": "",
+                "RECEIVER_TAX_REGION": "601",
+                "PAYMENT_AMOUNT": 0,
+                "PAYMENT_CURRENCY": "",
+                "TOTAL_TRANSFERRED": self._clean_numeric(0),
+                "TAX_TYPE": "VAT",
+                "TAX_CODE": "",
+                "TAX_RATE": 0.16,
+                "TAX_BASE_AMOUNT": self._clean_numeric(canonical.net_amount or 0),
+                "TAX_AMOUNT": 0,
+                "TAX_RATE_TYPE": "RATE",
+                "CERT_PROVIDER_TAX": "",
+                "DS_STAMP_DATETIME": self._datetime_to_iso(),  # ISO format
+                "DS_SAT_CERT_NUMBER": "",
+                "DS_CFDI_SEAL": "",
+                # New mapping fields
+                "COMPANY_CODE": mapping.company_code if mapping else "",
+                "GL_ACCOUNT": mapping.sap_gl_account if mapping else canonical.sap_gl_account or "",
+                "FISCAL_YEAR": mapping.fiscal_year if mapping else canonical.fiscal_year,
+                "CURRENCY_MAPPING": mapping.currency if mapping else canonical.currency or "MXN",
+                "OPENING_BALANCE": self._clean_numeric(mapping.opening_balance if mapping else 0),
+                "CREDIT_AMOUNT": self._clean_numeric(mapping.credit_amount if mapping else 0),
+                "DEBIT_AMOUNT": self._clean_numeric(mapping.debit_amount if mapping else 0),
+                "CLOSING_BALANCE": self._clean_numeric(mapping.closing_balance if mapping else 0),
+                "ITEMS": items
+            }
+            
+            return [doc]  # Return as list (canonical = 1 document)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to transform canonical to SAP format: {e}")
+            raise
+    
+    def transform_simple_to_sap_format(self, simple: SATSimpleMerged) -> List[Dict[str, Any]]:
+        """
+        Transform simple merged document to client's JSON format.
+        Returns a list of documents (all individual CFDI documents).
+        Follows format from client's 'multiplefiles' example.
+        """
+        try:
+            documents = []
+            
+            # Fetch all linked documents
+            if self.db and simple.cfdi_uuids:
+                linked_docs = self.db.query(SATDocument).filter(
+                    SATDocument.cfdi_uuid.in_(simple.cfdi_uuids)
+                ).all()
+                
+                for sat_doc in linked_docs:
+                    # Fetch supplier mapping data for each document
+                    mapping = self._get_supplier_mapping(sat_doc.supplier_rfc or "")
+                    
+                    # Map doc_type to client's format (handle both single letter and full names)
+                    doc_type_map = {
+                        # Single letter codes from CFDI
+                        'I': 'I',  # Invoice
+                        'E': 'C',  # Credit Note (Egreso) -> C in client format
+                        'P': 'P',  # Payment
+                        'T': 'I',  # Traslado -> I
+                        'N': 'I',  # Nomina -> I
+                        # Full names from database
+                        'INVOICE': 'I',
+                        'CREDIT_NOTE': 'C',
+                        'PAYMENT': 'P',
+                        'TRANSFER': 'I',
+                        'PAYROLL': 'I',
+                        'UNKNOWN': 'I'
+                    }
+                    doc_type = doc_type_map.get(sat_doc.doc_type, 'I')
+                    
+                    # Safely convert all string fields to proper types FIRST
+                    subtotal_val = self._to_float(sat_doc.subtotal)
+                    total_val = self._to_float(sat_doc.total)
+                    tipo_cambio_val = self._to_float(sat_doc.tipo_cambio) if sat_doc.tipo_cambio else 1.0
+                    tax_amount = total_val - subtotal_val
+                    
+                    # Extract items/concepts from CFDI XML
+                    items = self._extract_items_from_cfdi(sat_doc, doc_type, subtotal_val, tax_amount)
+                    
+                    # Extract additional fields from XML
+                    payment_condition = ""
+                    lugar_expedicion = ""
+                    exportacion = "01"
+                    uso_cfdi = "G03"
+                    domicilio_fiscal_receptor = ""
+                    payment_amount = 0
+                    payment_currency = ""
+                    
+                    try:
+                        if sat_doc.xml_content:
+                            from lxml import etree
+                            xml_root = etree.fromstring(sat_doc.xml_content.encode('utf-8'))
+                            
+                            # Extract from root attributes
+                            payment_condition = xml_root.get('CondicionesDePago', '')
+                            lugar_expedicion = xml_root.get('LugarExpedicion', '')
+                            exportacion = xml_root.get('Exportacion', '01')
+                            
+                            # Get namespace
+                            xml_ns = xml_root.nsmap.get(None, '')
+                            namespace = {'cfdi': xml_ns} if xml_ns else {}
+                            
+                            # Extract Receptor info
+                            receptor = xml_root.find('.//cfdi:Receptor' if xml_ns else './/Receptor', namespace)
+                            if receptor is not None:
+                                uso_cfdi = receptor.get('UsoCFDI', 'G03')
+                                domicilio_fiscal_receptor = receptor.get('DomicilioFiscalReceptor', '')
+                            
+                            # For payment documents, extract payment details
+                            if doc_type == 'P':
+                                pago_ns = xml_root.nsmap.get('pago20', '')
+                                if pago_ns:
+                                    pago_namespace = {'pago20': pago_ns}
+                                    pago = xml_root.find('.//pago20:Pago', pago_namespace)
+                                    if pago is not None:
+                                        payment_amount = self._to_float(pago.get('Monto', '0'))
+                                        payment_currency = pago.get('MonedaP', sat_doc.moneda or 'MXN')
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to extract additional XML fields: {e}")
+                    
+                    # Format date and time for SAP (separate fields)
+                    issue_date = sat_doc.fecha if sat_doc.fecha else datetime.utcnow()
+                    dates_str = issue_date.strftime("%Y-%m-%d")  # YYYY-MM-DD
+                    times_str = issue_date.strftime("%H:%M:%S")  # HH:MM:SS
+                    
+                    doc = {
+                        "MANDT": "",
+                        "DS_UUID": sat_doc.cfdi_uuid,
+                        "DOCUMENT_TYPE": doc_type,
+                        "DOC_NUMBER": sat_doc.folio or "",
+                        "VERSION": "4.0",
+                        "ISSUE_DATETIME": self._datetime_to_iso(sat_doc.fecha) if sat_doc.fecha else self._datetime_to_iso(),
+                        "DOC_SERIES": sat_doc.serie or "",
+                        "CURRENCY": sat_doc.moneda or "MXN",
+                        "EXCHANGE_RATE": round(tipo_cambio_val, 5),  # 5 decimals: 19.48000
+                        "SUBTOTAL_AMOUNT": self._clean_numeric(subtotal_val),
+                        "TOTAL_AMOUNT": self._clean_numeric(total_val),
+                        "PAYMENT_METHOD_CODE": sat_doc.forma_pago or "99",
+                        "PAYMENT_METHOD": sat_doc.metodo_pago or "PPD",
+                        "PAYMENT_CONDITION": payment_condition,
+                        "PLACE_OF_ISSUE_ZIP": lugar_expedicion,
+                        "EXPORT_INDICATOR": exportacion,
+                        "DIGITAL_CERTIFICATE": "",
+                        "CERTIFICATE_NUMBER": "",
+                        "ISSUER_NAME": sat_doc.supplier_name or "",
+                        "ISSUER_TAX_ID": sat_doc.supplier_rfc or "",
+                        "ISSUER_TAX_REGION": "601",
+                        "RECEIVER_NAME": sat_doc.receiver_name or "",
+                        "RECEIVER_TAX_ID": sat_doc.receiver_rfc or "",
+                        "RECEIVER_CFDI_USER": uso_cfdi,
+                        "RECEIVER_TAX_ZIP": domicilio_fiscal_receptor,
+                        "RECEIVER_TAX_REGION": "601",
+                        "PAYMENT_AMOUNT": self._clean_numeric(payment_amount),
+                        "PAYMENT_CURRENCY": payment_currency,
+                        "TOTAL_TRANSFERRED": self._clean_numeric(0),
+                        "TAX_TYPE": "VAT",
+                        "TAX_CODE": "",
+                        "TAX_RATE": 0.16,
+                        "TAX_BASE_AMOUNT": self._clean_numeric(subtotal_val),
+                        "TAX_AMOUNT": self._clean_numeric(tax_amount),
+                        "TAX_RATE_TYPE": "RATE",
+                        "CERT_PROVIDER_TAX": "",
+                        "DS_STAMP_DATETIME": self._datetime_to_iso(),
+                        "DS_SAT_CERT_NUMBER": "",
+                        "DS_CFDI_SEAL": "",
+                        # Mapping fields from supplier account mapping
+                        "COMPANY_CODE": mapping.company_code if mapping else "",
+                        "GL_ACC": mapping.sap_gl_account if mapping else "",
+                        "FISC_YR": mapping.fiscal_year if mapping else 0,
+                        "CURR": mapping.currency if mapping else "",
+                        "OPEN_BALANCE": self._clean_numeric(mapping.opening_balance if mapping else 0),
+                        "CREDIT": self._clean_numeric(mapping.credit_amount if mapping else 0),
+                        "DEBIT": self._clean_numeric(mapping.debit_amount if mapping else 0),
+                        "CLOS_BALANCE": self._clean_numeric(mapping.closing_balance if mapping else 0),
+                        "CODAGROUP": mapping.account_description if mapping else "",
+                        "DATES": dates_str,
+                        "TIMES": times_str,
+                        "ITEMS": items
+                    }
+                    
+                    documents.append(doc)
+            
+            return documents  # Return list of all documents
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to transform simple to SAP format: {e}")
+            raise
+

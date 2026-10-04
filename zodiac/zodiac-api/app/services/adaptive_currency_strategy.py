@@ -269,6 +269,54 @@ def sql_has_currency_handling(sql: str) -> bool:
     return any(c in s for c in CURRENCY_COLUMNS)
 
 
+def sql_groups_currency_dimension(sql: str) -> bool:
+    """Whether SQL selects and groups by a currency dimension in the same query scope.
+
+    A generated ranking may already group by currency inside a CTE. Treat that as
+    authoritative so later currency inference does not inject another currency
+    column from an unrelated candidate table.
+    """
+    source = sql or ""
+    currency_ref = re.compile(
+        r"(?<![A-Za-z0-9_])(?:waerk|waers|rtcur|hwaer|curr|currency)(?![A-Za-z0-9_])",
+        re.I,
+    )
+
+    group_matches = list(re.finditer(r"\bGROUP\s+BY\b", source, re.I))
+    for group in group_matches:
+        depth = _sql_depth(source, group.start())
+        # Locate the SELECT and FROM belonging to this GROUP BY scope. This
+        # avoids mistaking an unrelated nested query for a projected dimension.
+        selects = [
+            match for match in re.finditer(r"\bSELECT\b", source[: group.start()], re.I)
+            if _sql_depth(source, match.start()) == depth
+        ]
+        if not selects:
+            continue
+        select = selects[-1]
+        from_match = re.search(r"\bFROM\b", source[select.end() : group.start()], re.I)
+        if not from_match:
+            continue
+        projection = source[select.end() : select.end() + from_match.start()]
+        if not currency_ref.search(projection):
+            continue
+
+        boundary = len(source)
+        for match in re.finditer(
+            r"\)|\b(?:HAVING|ORDER\s+BY|LIMIT|UNION|EXCEPT|INTERSECT)\b",
+            source[group.end() :],
+            re.I,
+        ):
+            position = group.end() + match.start()
+            if _sql_depth(source, position) == depth:
+                boundary = position
+                break
+        grouping = source[group.end() : boundary]
+        if currency_ref.search(grouping):
+            return True
+    return False
+
+
 _CURRENCY_COLUMN_REF = (
     r"(?:(?:\"?[A-Za-z_][A-Za-z0-9_]*\"?)\s*\.\s*)?"
     r"\"?(?:waerk|waers|rtcur|hwaer|curr|currency)\"?"

@@ -1,0 +1,28 @@
+{
+  "_comment": "Premium analysis queries with full joins. Can be triggered by button or intent. LLM can adapt dimensions/filters.",
+  "analyses": [
+    {
+      "id": "profit_margin_by_product",
+      "name": "Profit Margin Analysis",
+      "description": "Revenue vs cost of goods (VBRP + CKIS) with margin % by product",
+      "trigger_keywords": ["profit margin", "margin analysis", "margin by product", "product margin", "profitability", "revenue vs cost", "gross margin", "contribution margin", "how are profit margins calculated"],
+      "trigger_patterns": ["margin", "profitability", "revenue minus cost", "cogs", "cost of goods"],
+      "tables": ["vbrp", "VBRK", "MAKT", "CKIS"],
+      "join_graph": "VBRP.vbeln=VBRK.vbeln; VBRP.matnr=MAKT.matnr; VBRP.matnr=CKIS.matnr (cost subquery)",
+      "base_sql": "SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, COALESCE(c.total_cost, 0) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0) AS margin, CASE WHEN SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) > 0 THEN ROUND(100.0 * (SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - COALESCE(c.total_cost, 0)) / SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)), 2) ELSE NULL END AS margin_pct FROM vbrp v LEFT JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN MAKT m ON v.matnr = m.matnr AND (m.spras = 'E' OR m.spras IS NULL) LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) AS total_cost FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY v.matnr, m.maktx, c.total_cost ORDER BY margin DESC NULLS LAST LIMIT 100",
+      "adaptable_dimensions": ["product", "customer", "plant", "year"],
+      "formula": "Margin = Revenue - COGS; Margin % = (Revenue - COGS) / Revenue * 100"
+    },
+    {
+      "id": "profit_margin_by_customer",
+      "name": "Profit Margin by Customer",
+      "description": "Revenue vs cost by customer (VBRP + VBRK + KNA1 + CKIS)",
+      "trigger_keywords": ["margin by customer", "customer profitability", "customer margin", "profit by customer"],
+      "tables": ["vbrp", "VBRK", "KNA1", "MAKT", "CKIS"],
+      "base_sql": "SELECT vk.kunag AS customer_number, k.name1 AS customer_name, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) AS revenue, SUM(COALESCE(c.cost_per_unit, 0) * CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS cost, SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) - SUM(COALESCE(c.cost_per_unit, 0) * CAST(NULLIF(TRIM(v.fkimg), '') AS NUMERIC)) AS margin FROM vbrp v JOIN VBRK vk ON TRIM(v.vbeln) = TRIM(vk.vbeln) LEFT JOIN KNA1 k ON vk.kunag = k.kunnr LEFT JOIN (SELECT matnr, SUM(CAST(COALESCE(wertn, 0) AS NUMERIC)) / NULLIF(SUM(CAST(COALESCE(menge, 1) AS NUMERIC)), 0) AS cost_per_unit FROM CKIS GROUP BY matnr) c ON v.matnr = c.matnr WHERE CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC) IS NOT NULL GROUP BY vk.kunag, k.name1 ORDER BY margin DESC NULLS LAST LIMIT 100",
+      "formula": "Margin = Revenue - (unit cost * quantity)"
+    }
+  ],
+  "margin_semantic_context": "Revenue: VBRP.NETWR (billing item net value). Cost: CKIS.WERTN (cost estimate) or MBEW.STPRS*VBRP.FKIMG. Join VBRP to VBRK on VBELN; VBRP to MAKT on MATNR; VBRP to CKIS/KEKO on MATNR. Margin = Revenue - COGS. Margin % = (Revenue - COGS)/Revenue*100."
+}
+

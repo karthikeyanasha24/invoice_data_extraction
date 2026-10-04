@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from unittest.mock import MagicMock, patch
 
 from app.services.adaptive_analyst.chat_memory import compact_sql_lineage, relevant_conversation
@@ -7,6 +8,7 @@ from app.services.adaptive_analyst.database_metadata import (
     SEARCH_COLUMNS,
     answer_database_metadata,
     classify_metadata_operation,
+    is_database_metadata_question,
 )
 from app.services.adaptive_analyst.understanding import (
     _context_block,
@@ -20,6 +22,7 @@ from app.services.adaptive_structured_sql import (
     StructuredQueryPlan,
     _apply_period_compare_fields,
     build_dimension_ranking_sql,
+    build_linked_order_period_comparison_sql,
 )
 from app.services.four_stage_db_pipeline import (
     VerifiedDbContext,
@@ -28,8 +31,13 @@ from app.services.four_stage_db_pipeline import (
     _contains_unresolved_sql_value,
     _resolve_latest_data_years,
 )
-from app.services.result_first_followup import is_result_scoped_followup, try_answer_from_prior_rows
+from app.services.result_first_followup import (
+    is_result_scoped_followup,
+    resolve_pending_currency_clarification,
+    try_answer_from_prior_rows,
+)
 from app.services.semantic_requirements import required_semantics
+from app.services.plan_satisfaction import sql_satisfies_analytical_intent, result_matches_analytical_intent
 from app.data_catalog.physical import load_physical_schema
 
 
@@ -124,7 +132,162 @@ def test_explicit_top_five_wins_over_llm_top_ten():
         req["semantic"],
     )
     assert sql is not None
-    assert sql.rstrip().endswith("LIMIT 5")
+    assert 'PARTITION BY grouped."currency"' in sql
+    assert '"rank_within_currency" <= 5' in sql
+
+
+def test_top_five_country_currency_ranking_is_not_currency_filtered():
+    question = (
+        "Show me the top five countries by billed sales in calendar year 2017, "
+        "with billing currency shown as a field. Do not assume or filter to a "
+        "currency unless needed to keep amounts comparable."
+    )
+    sql = build_dimension_ranking_sql(question, ["VBRK", "KNA1"])
+    assert sql
+    assert 'AS "country"' in sql
+    assert 'AS "currency"' in sql
+    assert 'GROUP BY TRIM(c."land1"), k."waerk"' in sql
+    assert "= '2017'" in sql
+    assert 'PARTITION BY grouped."currency"' in sql
+    assert '"rank_within_currency" <= 5' in sql
+    assert not re.search(r'\."(?:waerk|waers|rtcur)"\s*=\s*\'[A-Z]{3}\'', sql, re.I)
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_currency_partitioned_top_n_result_allows_up_to_n_per_currency():
+    question = (
+        "Show the top five countries by billed sales in calendar year 2017, "
+        "with billing currency shown as a field. Do not filter to one currency."
+    )
+    sql = build_dimension_ranking_sql(question, ["VBRK", "KNA1"])
+    assert sql
+    rows = [
+        {"country": country, "currency": currency, "total_sales": value}
+        for currency, entries in {
+            "USD": [("US", 100), ("CA", 90), ("MX", 80), ("BR", 70)],
+            "EUR": [("DE", 120), ("FR", 110), ("IT", 100)],
+        }.items()
+        for country, value in entries
+    ]
+    assert result_matches_analytical_intent(rows, question, sql=sql) == []
+
+    rows.extend(
+        {"country": f"US{i}", "currency": "USD", "total_sales": 1}
+        for i in range(5)
+    )
+    assert "currency-partitioned top-n exceeded limit 5" in result_matches_analytical_intent(
+        rows, question, sql=sql
+    )
+
+
+def test_output_field_word_does_not_route_business_ranking_to_schema_metadata():
+    question = (
+        "Show the top five countries by billed sales in calendar year 2017, "
+        "with billing currency shown as a field. Do not filter to one currency. "
+        "Show the SQL."
+    )
+    assert not is_database_metadata_question(question)
+    assert is_database_metadata_question("Which field stores the billing document number?")
+
+
+def test_country_ranking_template_wins_in_sql_pipeline_with_noisy_llm_plan(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "KNA1": {"kunnr", "land1", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = (
+        "Show the top five countries by billed sales in calendar year 2017, "
+        "with billing currency shown as a field; do not filter to one currency."
+    )
+    noisy_plan = {
+        "dimensions": ["customer"],
+        "group_by": ["customer"],
+        "measure": {"concept": "revenue", "aggregation": "SUM"},
+        "ranking": {"direction": "DESC", "limit": 10},
+    }
+    ctx = VerifiedDbContext(
+        question=question,
+        tables=list(physical_columns),
+        semantic_requirements=required_semantics(question, noisy_plan),
+    )
+    from app.services.four_stage_db_pipeline import pipeline3_sql_generation
+
+    sql = pipeline3_sql_generation(question, ctx)
+    assert sql
+    assert ctx.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "dimension_ranking_template"
+    assert 'AS "country"' in sql and 'AS "currency"' in sql
+    assert 'AS "total_sales"' in sql
+    assert 'PARTITION BY grouped."currency"' in sql
+    assert "= '2017'" in sql
+    assert not re.search(r'\."(?:waerk|waers|rtcur)"\s*=\s*\'[A-Z]{3}\'', sql, re.I)
+
+
+def test_linked_order_comparison_keeps_invoice_rows_and_uses_verified_posting_date(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"vbeln", "netwr", "waerk", "kunag", "belnr", "gjahr", "bukrs"},
+        "VBFA": {"vbeln", "vbelv"},
+        "VBAK": {"vbeln", "netwr", "waerk", "erdat"},
+        "BKPF": {"belnr", "gjahr", "bukrs", "budat"},
+        "KNA1": {"kunnr", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = (
+        "Show the ten most negative billed invoices in 2000, compare 2000 with 2001, "
+        "use invoice posting date, list billing document numbers first based on customer, "
+        "and compare the linked sales orders for those invoices in 2000 vs 2001."
+    )
+    noisy_plan = {
+        "dimensions": ["customer"],
+        "group_by": ["customer"],
+        "measure": {"concept": "revenue", "aggregation": "SUM"},
+        "ranking": {"direction": "ASC", "limit": 10},
+    }
+    assert required_semantics(question, noisy_plan)["group_by"] == ["document"]
+    sql = build_linked_order_period_comparison_sql(
+        question, list(physical_columns), noisy_plan
+    )
+    assert sql
+    assert 'JOIN "BKPF" fi' in sql
+    assert 'fi."belnr" = k."belnr"' in sql
+    assert 'TRIM(CAST(fi."budat" AS TEXT)) >= \'20000101\'' in sql
+    assert 'TRIM(CAST(fi."budat" AS TEXT)) < \'20010101\'' in sql
+    assert "< 0" in sql
+    assert 'AS "billing_document"' in sql
+    assert 'AS "order_amount_2000"' in sql
+    assert 'AS "order_amount_2001"' in sql
+    assert 'AS "currency_mismatch_order_count"' in sql
+    assert 'AS "absolute_change"' in sql
+    assert 'AS "percent_change"' in sql
+    assert 'UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency")' in sql
+    assert "GROUP BY l.\"billing_document\"" in sql
+    assert "LIMIT 10" in sql
+    assert sql_satisfies_analytical_intent(sql, question)
+    rows = [{
+        "billing_document": "1", "customer_id": "2", "customer_name": "Example",
+        "invoice_date": "20000101", "invoice_amount": -10, "currency": "USD",
+        "order_amount_2000": 20, "order_amount_2001": 25,
+        "absolute_change": 5, "percent_change": 25,
+    }]
+    assert result_matches_analytical_intent(rows, question, sql=sql) == []
 
 
 def test_latest_year_questions_get_dynamic_relative_semantics():
@@ -254,6 +417,103 @@ def test_result_followup_does_not_subtract_different_currencies():
     assert result is not None
     assert result["answer_status"] == "CLARIFICATION"
     assert "different currencies" in result["summary"]
+
+
+def test_higher_country_followup_asks_for_currency_when_prior_ranking_mixes_currencies():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": 1200},
+        {"country": "DE", "currency": "EUR", "total billed sales": 1000},
+    ]
+    result = try_answer_from_prior_rows(
+        "For the higher-sales country, show monthly billed sales in the same year and currency.",
+        rows,
+        prior_plan={
+            "verified_db_context": {
+                "semantic_requirements": {
+                    "time_filter": {"resolved_from_data": True, "years": ["2017"]}
+                }
+            }
+        },
+    )
+    assert result
+    assert result["answer_status"] == "CLARIFICATION"
+    assert result["sql"] == ""
+    assert result["meta"]["followup"] == "currency_ambiguity"
+    assert "Which currency" in result["answer"]
+
+
+def test_currency_clarification_resumes_followup_from_verified_ranking():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": 1227978, "rank within currency": 1},
+        {"country": "DE", "currency": "USD", "total billed sales": 10000, "rank within currency": 2},
+        {"country": "EG", "currency": "EUR", "total billed sales": 22081, "rank within currency": 1},
+        {"country": "DE", "currency": "EUR", "total billed sales": 3890, "rank within currency": 2},
+    ]
+    prior_plan = {
+        "last_user_question": "Show the top countries by billed sales for calendar year 2017, by currency.",
+        "verified_db_context": {
+            "semantic_requirements": {
+                "time_filter": {"resolved_from_data": True, "years": ["2017"]}
+            }
+        },
+    }
+    clarification = try_answer_from_prior_rows(
+        "For the higher-sales country, show monthly billed sales in the same year and currency.",
+        rows,
+        prior_plan=prior_plan,
+    )
+    assert clarification and clarification["answer_status"] == "CLARIFICATION"
+    assert clarification["query_plan"]["pending_clarification"]["kind"] == "currency_ambiguity"
+
+    # The clarification turn retains the successful source analysis separately;
+    # API context restoration merges its pending marker back into that plan.
+    retained_plan = {
+        **prior_plan,
+        "pending_clarification": clarification["query_plan"]["pending_clarification"],
+    }
+    resumed = resolve_pending_currency_clarification("USD", rows, retained_plan)
+    assert resumed == (
+        "For country code 'US', show monthly billed sales in calendar year 2017 in currency USD."
+    )
+
+
+def test_currency_clarification_does_not_guess_on_invalid_currency_or_tied_leader():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": 100, "rank within currency": 1},
+        {"country": "DE", "currency": "USD", "total billed sales": 100, "rank within currency": 1},
+        {"country": "FR", "currency": "EUR", "total billed sales": 90, "rank within currency": 1},
+    ]
+    pending = {
+        "pending_clarification": {
+            "kind": "currency_ambiguity",
+            "question": "For the higher-sales country, show monthly billed sales in the same year and currency.",
+            "currency_column": "currency",
+        },
+        "last_user_question": "Show top countries by sales for calendar year 2017.",
+        "verified_db_context": {
+            "semantic_requirements": {
+                "time_filter": {"resolved_from_data": True, "years": ["2017"]}
+            }
+        },
+    }
+    assert resolve_pending_currency_clarification("JPY", rows, pending) is None
+    assert resolve_pending_currency_clarification("USD", rows, pending) is None
+
+
+def test_currency_clarification_requires_a_verified_year():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": 100, "rank within currency": 1},
+        {"country": "DE", "currency": "EUR", "total billed sales": 90, "rank within currency": 1},
+    ]
+    pending = {
+        "pending_clarification": {
+            "kind": "currency_ambiguity",
+            "question": "For the higher-sales country, show monthly billed sales in the same year and currency.",
+            "currency_column": "currency",
+        },
+        "last_user_question": "Show top countries by billed sales for the latest complete year.",
+    }
+    assert resolve_pending_currency_clarification("USD", rows, pending) is None
 
 
 def test_failed_followup_can_restore_client_retained_successful_analysis():

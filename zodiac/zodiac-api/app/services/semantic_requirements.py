@@ -67,6 +67,25 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         if g not in dims:
             dims.append(g)
 
+    # A requested invoice/document identifier defines the output rows. A
+    # customer mentioned as a sorting or descriptive dimension must not turn
+    # those rows into customer-level totals (including when an LLM plan added
+    # customer to group_by).
+    document_identifier_output = bool(
+        re.search(
+            r"\b(?:billing\s+)?(?:documents?|invoices?)\s+(?:numbers?|ids?|identifiers?)\b|"
+            r"\b(?:document|invoice)\s+(?:numbers?|ids?|identifiers?)\b|"
+            r"\bone\s+row\s+per\s+(?:billing\s+)?(?:document|invoice)\b",
+            ql,
+        )
+    )
+    if document_identifier_output and (ops.get("ranking") or "document" in group_by):
+        group_by = ["document"]
+        if "document" not in dims:
+            dims.append("document")
+        if re.search(r"\bcustomer\b", ql) and "customer" not in dims:
+            dims.append("customer")
+
     # "Which country/customer/..." implies that entity is a ranking/group dimension.
     m = _ENTITY_WHICH.search(question or "")
     if m:

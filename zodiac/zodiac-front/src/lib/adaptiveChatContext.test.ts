@@ -139,6 +139,102 @@ describe('continuous chat context policy', () => {
     );
   });
 
+  it('a failed reply attempt preserves an unanswered clarification and its source rows', () => {
+    const clarification = {
+      ...CLARIFICATION,
+      query_plan: {
+        pending_clarification: {
+          kind: 'currency_ambiguity',
+          question: 'For the higher-sales country, show monthly billed sales in the same year and currency.',
+          currency_column: 'currency',
+        },
+      },
+    };
+    const failed = {
+      sql: '',
+      data: [],
+      answer_status: 'CANNOT_ANSWER',
+      mode: 'data_limitation',
+      query_plan: { failure: 'unsupported_followup' },
+    };
+    const messages: AdaptiveChatMessage[] = [
+      { role: 'user', content: 'Show top countries by billed sales in 2017 by currency.' },
+      { role: 'assistant', content: 'Country sales', result: SUCCESS_2004 },
+      { role: 'user', content: 'For the higher-sales country, show monthly billed sales in the same year and currency.' },
+      { role: 'assistant', content: 'Which currency should I use?', result: clarification },
+      { role: 'user', content: 'USD' },
+      { role: 'assistant', content: 'No matching tables were found.', result: failed },
+    ];
+
+    const context = followupContextForSend(
+      messages,
+      lastSuccessfulAnalyticalContext(messages),
+      false,
+    );
+    const plan = context?.previousPlan as {
+      pending_clarification?: { kind?: string };
+      retained_analytical_context?: LastSuccessfulAnalyticalContext;
+    };
+    assert.equal(context?.previousAnswerStatus, 'CLARIFICATION');
+    assert.equal(plan.pending_clarification?.kind, 'currency_ambiguity');
+    assert.equal(plan.retained_analytical_context?.previousSQL, SQL_2004);
+    assert.equal(plan.retained_analytical_context?.data.length, 1);
+  });
+
+  it('recovers a legacy currency clarification from its wording and verified multi-currency rows', () => {
+    const sourceRows = [
+      { country: 'US', currency: 'USD', total_sales: 1200, rank: 1 },
+      { country: 'DE', currency: 'USD', total_sales: 900, rank: 2 },
+      { country: 'DE', currency: 'EUR', total_sales: 300, rank: 1 },
+    ];
+    const legacyClarification = {
+      sql: '',
+      data: [],
+      // Some stored turns have clarification status but no pending plan marker.
+      answer_status: 'SUCCESS',
+      mode: 'clarification',
+    };
+    const failed = {
+      sql: '',
+      data: [],
+      answer_status: 'CANNOT_ANSWER',
+      mode: 'data_limitation',
+    };
+    const makeMessages = (answerStatus: string): AdaptiveChatMessage[] => [
+      { role: 'user', content: 'Show top countries by billed sales in 2017 by currency.' },
+      {
+        role: 'assistant',
+        content: 'The query completed and returned 3 rows.',
+        result: { ...SUCCESS_2004, data: sourceRows },
+      },
+      { role: 'user', content: 'For the higher-sales country, show monthly billed sales in the same year and currency.' },
+      {
+        role: 'assistant',
+        content: 'The prior ranking contains multiple currencies, so amounts cannot be compared directly. Choose a currency to continue.',
+        result: { ...legacyClarification, answer_status: answerStatus },
+      },
+      { role: 'user', content: 'USD' },
+      { role: 'assistant', content: 'No matching tables were found.', result: failed },
+    ];
+
+    for (const answerStatus of ['CLARIFICATION', 'SUCCESS']) {
+      const messages = makeMessages(answerStatus);
+      const context = followupContextForSend(
+        messages,
+        lastSuccessfulAnalyticalContext(messages),
+        false,
+      );
+      const plan = context?.previousPlan as {
+        pending_clarification?: { kind?: string; currency_column?: string };
+        retained_analytical_context?: LastSuccessfulAnalyticalContext;
+      };
+      assert.equal(context?.previousAnswerStatus, 'CLARIFICATION');
+      assert.equal(plan.pending_clarification?.kind, 'currency_ambiguity');
+      assert.equal(plan.pending_clarification?.currency_column, 'currency');
+      assert.equal(plan.retained_analytical_context?.data.length, 3);
+    }
+  });
+
   it('a failed drill-down keeps the last successful result for a retry', () => {
     const comparison = {
       sql: '',

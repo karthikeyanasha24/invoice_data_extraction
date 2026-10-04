@@ -597,8 +597,39 @@ def result_matches_analytical_intent(
     if ranking and isinstance(ranking, dict) and ranking.get("limit"):
         try:
             lim = int(ranking["limit"])
+            currency_rank = re.search(
+                r'ROW_NUMBER\s*\(\s*\)\s*OVER\s*\(\s*PARTITION\s+BY\s+'
+                r'[^)]*\b(?:waerk|waers|rtcur|hwaer|curr|currency)\b[^)]*\)\s+'
+                r'AS\s+"?([A-Za-z_][A-Za-z0-9_]*)"?',
+                sql or "",
+                re.I | re.S,
+            )
+            currency_rank_limit = None
+            if currency_rank:
+                rank_alias = re.escape(currency_rank.group(1))
+                limit_match = re.search(
+                    rf'\bWHERE\s+"?{rank_alias}"?\s*<=\s*(\d+)', sql or "", re.I
+                )
+                if limit_match:
+                    currency_rank_limit = int(limit_match.group(1))
+
             if not partition_by and len(rows) > lim:
-                warnings.append("ranking limit was not applied")
+                if currency_rank_limit == lim:
+                    currency_key = next(
+                        (key for key in rows[0].keys() if str(key).lower() == "currency"),
+                        None,
+                    )
+                    if currency_key is None:
+                        warnings.append("currency-partitioned ranking omitted currency from results")
+                    else:
+                        counts = Counter(
+                            str(row.get(currency_key) if isinstance(row, dict) else "")
+                            for row in rows
+                        )
+                        if any(count > lim for count in counts.values()):
+                            warnings.append(f"currency-partitioned top-n exceeded limit {lim}")
+                else:
+                    warnings.append("ranking limit was not applied")
         except (TypeError, ValueError):
             pass
     if partition_by:
