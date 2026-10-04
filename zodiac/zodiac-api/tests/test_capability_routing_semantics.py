@@ -250,7 +250,9 @@ def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -
         ("Show me the growth.", {"CLARIFICATION"}),
         ("How much?", {"CLARIFICATION"}),
         ("How many tables are there?", {"SUCCESS"}),
-        ("Show top 5 customers by billing revenue.", {"SUCCESS", "CANNOT_ANSWER", "CLARIFICATION"}),
+        # The mock DB has no rows; a clean NO_DATA response is a valid query
+        # completion and still verifies the route avoids an unbound-local 500.
+        ("Show top 5 customers by billing revenue.", {"SUCCESS", "NO_DATA", "CANNOT_ANSWER", "CLARIFICATION"}),
     ]
     for q, allowed in cases:
         out = aq._post_query_adaptive_body(

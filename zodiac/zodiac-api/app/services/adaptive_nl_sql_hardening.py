@@ -544,22 +544,15 @@ def apply_limit_from_question(sql: str, question: str) -> str:
 
 
 def extract_requested_currency(question: str) -> Optional[str]:
-    q = (question or "").upper()
-    for code in ("EUR", "USD", "GBP", "INR", "JPY", "CHF"):
-        if re.search(rf"\b{code}\b", q):
-            return code
-    if re.search(r"\beuro|\beur\b|€", (question or ""), re.I):
-        return "EUR"
-    if re.search(r"\bdollar|\busd\b|\$", (question or ""), re.I):
-        return "USD"
-    return None
+    from .adaptive_currency_strategy import extract_currency_from_question
+
+    return extract_currency_from_question(question)
 
 
 def ranking_wants_single_currency(question: str) -> bool:
-    q = (question or "").lower()
-    if re.search(r"\b(each currency|by currency|per currency|all currencies|mixed currency)\b", q):
-        return False
-    return extract_requested_limit(question) is not None
+    # A result limit does not authorize silently selecting the most common
+    # currency. Only an explicit currency in the user's request permits a filter.
+    return extract_requested_currency(question) is not None
 
 
 def inject_year_filters_from_question(sql: str, question: str) -> str:
@@ -590,17 +583,23 @@ def inject_year_filters_from_question(sql: str, question: str) -> str:
     return sql.rstrip().rstrip(";") + f" WHERE {expr}"
 
 
-def inject_single_currency_filter(sql: str, question: str, default: str = "EUR") -> str:
+def inject_single_currency_filter(sql: str, question: str) -> str:
     if not sql:
         return sql
     explicit = extract_requested_currency(question)
-    if not ranking_wants_single_currency(question) and not explicit:
+    from .adaptive_currency_strategy import (
+        requests_unfiltered_currency_scope,
+        strip_currency_filter_predicates,
+    )
+
+    if requests_unfiltered_currency_scope(question):
+        return strip_currency_filter_predicates(sql)
+    if not explicit:
         return sql
     if not re.search(r"\bwaerk\b", sql, re.I):
         return sql
-    if re.search(r"waerk\s*=", sql, re.I):
-        return sql
-    code = explicit or default
+    sql = strip_currency_filter_predicates(sql)
+    code = explicit
     m = re.search(r'\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"?waerk"?', sql, re.I)
     alias = m.group(1) if m else None
     cond = f'{alias}."waerk" = \'{code}\'' if alias else f"waerk = '{code}'"
@@ -767,7 +766,24 @@ def inject_industry_name_filter(sql: str, industry: str) -> str:
 def strip_industry_ilike_filters(sql: str) -> str:
     if not sql:
         return sql
-    return _BRTXT_ILIKE.sub("", sql)
+    literal = r"'(?:''|[^'])*'"
+    predicate = rf'[A-Za-z_][\w]*\."brtxt"\s+ILIKE\s+{literal}'
+    # Handle the predicate when it was inserted as the first WHERE term too.
+    out = re.sub(
+        rf'(\bWHERE\s+){predicate}\s+AND\b',
+        r"\1",
+        sql,
+        count=1,
+        flags=re.I,
+    )
+    out = re.sub(
+        rf'\bWHERE\s+{predicate}(?=\s*(?:GROUP\s+BY|HAVING|ORDER\s+BY|LIMIT|$))',
+        " ",
+        out,
+        count=1,
+        flags=re.I,
+    )
+    return _BRTXT_ILIKE.sub("", out)
 
 
 def rewrite_sales_metric_to_invoice_count(sql: str) -> str:
@@ -816,6 +832,28 @@ def apply_plan_sql_deltas(sql: str, plan: Any) -> str:
     elif any(str(d).startswith("remove_filter:industry") for d in delta_ops):
         out = strip_industry_ilike_filters(out)
 
+    currency_removed = any(str(d).startswith("remove_filter:currency") for d in delta_ops)
+    currency_filter = str((getattr(plan, "filters", {}) or {}).get("currency") or "").strip()
+    if currency_removed:
+        from .adaptive_currency_strategy import strip_currency_filter_predicates
+
+        out = strip_currency_filter_predicates(out)
+    if (currency_removed or "currency" in (getattr(plan, "dimensions", []) or [])) and not currency_filter:
+        from .adaptive_currency_strategy import find_currency_column, inject_currency_group_by_sql
+
+        referenced_tables = [
+            match.group(1).replace('"', "")
+            for match in re.finditer(
+                r'\b(?:FROM|JOIN)\s+("?[A-Za-z_][A-Za-z0-9_]*"?)', out, re.I
+            )
+        ]
+        currency_table = next(
+            (table for table in referenced_tables if find_currency_column(table)),
+            None,
+        )
+        if currency_table and re.search(r"\b(?:netwr|dmbtr|wrbtr|rmwwr|wavwr)\b", out, re.I):
+            out = inject_currency_group_by_sql(out, currency_table, find_currency_column(currency_table) or "")
+
     metric = str(getattr(plan, "metric", "") or "")
     if metric == "count":
         out = rewrite_sales_metric_to_invoice_count(out)
@@ -831,7 +869,40 @@ def apply_plan_sql_deltas(sql: str, plan: Any) -> str:
 
 def apply_ranking_discipline(sql: str, question: str) -> str:
     sql = apply_limit_from_question(sql, question)
-    sql = inject_single_currency_filter(sql, question)
+    from .adaptive_currency_strategy import (
+        find_currency_column,
+        inject_currency_group_by_sql,
+        requests_unfiltered_currency_scope,
+        strip_currency_filter_predicates,
+    )
+
+    explicit_currency = extract_requested_currency(question)
+    unfiltered_scope = requests_unfiltered_currency_scope(question)
+    monetary_aggregation = bool(
+        re.search(r"\b(?:SUM|AVG|MAX|MIN)\s*\(", sql, re.I)
+        and re.search(r"\b(?:netwr|dmbtr|wrbtr|rmwwr|wavwr)\b", sql, re.I)
+    )
+    if unfiltered_scope or (not explicit_currency and monetary_aggregation):
+        sql = strip_currency_filter_predicates(sql)
+    elif explicit_currency:
+        sql = inject_single_currency_filter(sql, question)
+
+    if (unfiltered_scope or (not explicit_currency and monetary_aggregation)) and re.search(
+        r"\b(?:netwr|dmbtr|wrbtr|rmwwr|wavwr)\b", sql, re.I
+    ):
+        referenced_tables = [
+            match.group(1).replace('"', "")
+            for match in re.finditer(
+                r'\b(?:FROM|JOIN)\s+("?[A-Za-z_][A-Za-z0-9_]*"?)', sql, re.I
+            )
+        ]
+        currency_table = next(
+            (table for table in referenced_tables if find_currency_column(table)),
+            None,
+        )
+        currency_column = find_currency_column(currency_table) if currency_table else None
+        if currency_table and currency_column:
+            sql = inject_currency_group_by_sql(sql, currency_table, currency_column)
     sql = strip_customer_name_filter_from_country_query(sql, question)
     named = extract_named_customer(question)
     if named:

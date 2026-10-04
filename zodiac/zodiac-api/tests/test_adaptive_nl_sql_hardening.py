@@ -33,6 +33,7 @@ from app.services.adaptive_nl_sql_hardening import (
 from app.services.adaptive_structured_sql import sanitize_generated_sql
 from app.services.intent_extractor import _extract_top_n
 from app.services.sap_sql_agent import _lookup_sql_catalog
+from app.services.ai_query_plan import QueryPlan, apply_followup_delta, compose_nl_from_plan
 
 EVAL_PATH = Path(__file__).resolve().parent.parent / "app" / "tests" / "generative_ai_eval_cases.json"
 
@@ -267,7 +268,7 @@ def test_top_n_and_single_currency_on_catalog_and_fast_path_helpers():
     assert "LIMIT 5" in ranked.upper().replace("LIMIT  5", "LIMIT 5")
     assert "LIMIT 20" not in ranked.upper()
     assert "waerk" in ranked.lower()
-    assert "EUR" in ranked
+    assert not re.search(r"waerk\"?\s*=\s*'EUR'", ranked, re.I)
 
     mixed_ok = inject_single_currency_filter(_CATALOG_TOP_CUSTOMERS_SQL, "top customers by currency")
     assert "waerk =" not in mixed_ok.lower()
@@ -280,7 +281,7 @@ def test_top_n_and_single_currency_on_catalog_and_fast_path_helpers():
     assert "EUR" in explicit_eur
     explicit_usd = inject_single_currency_filter(_CATALOG_TOP_CUSTOMERS_SQL, "highest sales USD")
     assert "USD" in explicit_usd
-    assert ranking_wants_single_currency("five biggest customers") is True
+    assert ranking_wants_single_currency("five biggest customers") is False
     assert ranking_wants_single_currency("highest sales for the year 2005 with customer and industry") is False
 
     catalog_sql = _lookup_sql_catalog(q)
@@ -378,7 +379,8 @@ def test_compose_nl_and_followup_sql_deltas():
     plan5 = merge_followup_plan(prev_q, "Now show the top 5", sql, plan.to_dict())
     sql5 = apply_plan_sql_deltas(sql, plan5)
     assert re.search(r"LIMIT\s+5", sql5, re.I)
-    assert "EUR" in sql5
+    assert not re.search(r"waerk\"?\s*=\s*'EUR'", sql5, re.I)
+    assert "waerk" in sql5.lower()
 
     plan_cmp = merge_followup_plan(prev_q, "Compare with 2003", sql5, plan5.to_dict())
     sql_cmp = apply_plan_sql_deltas(sql5, plan_cmp)
@@ -567,11 +569,44 @@ def test_highest_2004_and_2005_do_not_force_default_eur():
     assert not re.search(r"waerk\"?\s*=\s*'EUR'", s2004, re.I)
     assert not re.search(r"waerk\"?\s*=\s*'EUR'", s2005, re.I)
     top5 = apply_ranking_discipline(_CATALOG_TOP_CUSTOMERS_SQL, "five biggest customers")
-    assert re.search(r"waerk\"?\s*=\s*'EUR'", top5, re.I)
+    assert not re.search(r"waerk\"?\s*=\s*'EUR'", top5, re.I)
     eur = inject_single_currency_filter(_CATALOG_TOP_CUSTOMERS_SQL, "highest sales EUR")
     usd = inject_single_currency_filter(_CATALOG_TOP_CUSTOMERS_SQL, "highest sales USD")
     assert re.search(r"waerk\"?\s*=\s*'EUR'", eur, re.I)
     assert re.search(r"waerk\"?\s*=\s*'USD'", usd, re.I)
+
+
+def test_currency_scope_expansion_keeps_prior_year_and_ranking_and_removes_filter():
+    previous = QueryPlan(
+        metric="sales",
+        dimensions=["country"],
+        filters={"years": ["2017"], "currency": "USD"},
+        operation="top",
+        limit=5,
+    )
+    question = (
+        "For the original ranking, show top 5 country and currency pairs "
+        "in the same year; do not apply a currency filter."
+    )
+    merged = apply_followup_delta(previous, question)
+    assert merged.filters.get("years") == ["2017"]
+    assert "currency" not in merged.filters
+    assert "currency" in merged.dimensions
+    assert merged.limit == 5
+    assert "remove_filter:currency" in merged.delta_ops
+
+    prior_sql = (
+        'SELECT k."land1" AS country, k."waerk" AS currency, SUM(k."netwr") AS total_sales '
+        'FROM "VBRK" k WHERE k."waerk" = \'USD\' '
+        'AND SUBSTRING(k."fkdat", 1, 4) = \'2017\' '
+        'GROUP BY k."land1", k."waerk" ORDER BY total_sales DESC LIMIT 5'
+    )
+    expanded = apply_plan_sql_deltas(prior_sql, merged)
+    assert "USD" not in expanded
+    assert "2017" in expanded
+    assert "waerk" in expanded.lower()
+    rebuilt = compose_nl_from_plan(merged)
+    assert "2017" in rebuilt and "currency" in rebuilt.lower()
 
 
 def test_empty_rows_pass_dimension_validation():

@@ -1367,15 +1367,45 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
 def _apply_currency_if_needed(question: str, sql: str, ctx: VerifiedDbContext, db: Session) -> str:
     from .adaptive_currency_strategy import (
         apply_currency_strategy_to_sql,
+        extract_currency_from_question,
         is_monetary_aggregation_question,
         repair_table_qualifier_mismatch,
         resolve_currency_strategy,
+        requests_unfiltered_currency_scope,
         sql_aggregates_monetary_values,
         sql_has_currency_handling,
+        strip_currency_filter_predicates,
     )
 
-    if sql_has_currency_handling(sql) and re.search(r"\bwaerk\s*=|\bwaers\s*=", sql, re.I):
-        return repair_table_qualifier_mismatch(sql, "VBRK")
+    explicit_currency = extract_currency_from_question(question)
+    unfiltered_currency_scope = requests_unfiltered_currency_scope(question)
+    has_filter = sql_has_currency_handling(sql) and re.search(
+        r"\b(?:waerk|waers|rtcur|hwaer|curr|currency)\b\"?\s*(?:=|<>|!=|\bIN\s*\()",
+        sql,
+        re.I,
+    )
+
+    # Generated SQL sometimes adds a currency predicate that the user never
+    # asked for. Remove it before applying the scoped currency strategy; model
+    # output is not evidence that this filter belongs in the investigation.
+    if unfiltered_currency_scope or (has_filter and not explicit_currency):
+        sql = strip_currency_filter_predicates(sql)
+    elif has_filter and explicit_currency:
+        # Replace a model-selected code with the code actually requested.
+        sql = strip_currency_filter_predicates(sql)
+
+    if explicit_currency and not unfiltered_currency_scope:
+        explicit_strategy = resolve_currency_strategy(
+            db, tables=ctx.tables, question=question, semantic=ctx.semantic_requirements
+        )
+        if explicit_strategy:
+            patched = apply_currency_strategy_to_sql(sql, explicit_strategy)
+            patched = repair_table_qualifier_mismatch(patched, explicit_strategy.currency_table)
+            for tbl in ctx.tables:
+                patched = repair_table_qualifier_mismatch(patched, tbl)
+            ctx.pipeline_log["currency_note"] = explicit_strategy.note
+            return patched
+
     if not is_monetary_aggregation_question(question, ctx.semantic_requirements):
         return sql
     if not sql_aggregates_monetary_values(sql):

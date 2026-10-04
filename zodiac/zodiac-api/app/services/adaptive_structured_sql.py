@@ -948,15 +948,14 @@ def build_dimension_ranking_sql(
     if metric_def and metric_def.status != "supported":
         # Never reinterpret a known-but-unavailable metric as sales.
         return None
-    metric_tables = {
-        (resolve_table_name(t) or t).upper()
-        for t in (getattr(metric_def, "base_tables", ()) or ())
-    }
-    use_line = (
-        dimension == "material"
-        or measure == "quantity"
-        or "VBRP" in metric_tables
+    # Choose the fact grain from the requested result, not from a metric's
+    # broad set of possible source tables. Unqualified billed-sales rankings
+    # by customer/country/industry use one VBRK header amount per invoice;
+    # material and explicitly item-level views use VBRP line amounts.
+    asks_item_grain = bool(
+        re.search(r"\b(?:line[- ]items?|item[- ]level|billing[- ]items?|per item)\b", q)
     )
+    use_line = dimension == "material" or measure == "quantity" or asks_item_grain
     if use_line and not has_table("vbrp"):
         return None
 
@@ -1030,7 +1029,16 @@ def build_dimension_ranking_sql(
         # MetricDef formulas are curated and schema-backed. Adapt their logical
         # billing aliases to this query's aliases, then group by the metric's
         # currency field so rankings never combine unlike currencies.
-        formula = metric_def.formula_sql
+        # The general revenue metric is line-grain, but invoice/customer/country
+        # rankings need the billing document total so they agree with monthly
+        # and invoice-level follow-ups. Product and explicitly item-level
+        # requests continue to use the line-grain metric formula.
+        if metric_def.name == "revenue" and not use_line:
+            formula = (
+                'SUM(CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC))'
+            )
+        else:
+            formula = metric_def.formula_sql
         alias_map = {"v": "p", "vk": "k"} if use_line else {"vk": "k"}
         for source_alias, sql_alias in alias_map.items():
             formula = re.sub(

@@ -358,6 +358,27 @@ def apply_followup_delta(previous: QueryPlan, followup_question: str) -> QueryPl
                 base.delta_ops.append("remove_dimension:all")
 
     new_filters = _extract_filters(ql, original)
+    unfiltered_currency_scope = bool(re.search(
+        r"\b(?:all\s+currencies|all\s+currency(?:\s+codes)?|currency\s+pairs?|"
+        r"by\s+currency|per\s+currency|each\s+currency|every\s+currency|"
+        r"without\s+(?:a\s+)?currency\s+filter|no\s+currency\s+filter|"
+        r"do\s+not\s+(?:apply|use|add)\s+(?:a\s+)?currency\s+filter|"
+        r"don['’]?t\s+(?:apply|use|add)\s+(?:a\s+)?currency\s+filter|"
+        r"remove\s+(?:the\s+)?currency\s+filter|clear\s+(?:the\s+)?currency\s+filter)\b",
+        original,
+        re.I,
+    ))
+    if unfiltered_currency_scope:
+        # Expanding a currency scope must query all currencies again, retain
+        # the rest of the saved plan, and expose currency as a comparable grain.
+        new_filters.pop("currency", None)
+        base.filters.pop("currency", None)
+        dims.add("currency")
+        if "remove_filter:currency" not in base.delta_ops:
+            base.delta_ops.append("remove_filter:currency")
+        if "currency" not in base.dimensions:
+            base.delta_ops.append("ensure_dimension:currency")
+        changed = True
     for k, v in new_filters.items():
         if k == "years" and (any(t in ql for t in _OP_COMPARE) or "compare" in ql):
             # Defer year merge to the compare block below
@@ -547,7 +568,7 @@ def compose_nl_from_plan(plan: QueryPlan) -> str:
         else:
             parts.append("for years " + " and ".join(years))
 
-    dims = [d for d in (plan.dimensions or []) if d not in ("year", "month", "currency")]
+    dims = [d for d in (plan.dimensions or []) if d not in ("year", "month")]
     if dims:
         parts.append("with " + " and ".join(dims))
 

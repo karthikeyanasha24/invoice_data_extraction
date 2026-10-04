@@ -474,6 +474,62 @@ def test_billed_sales_by_currency_uses_billing_header_year_and_currency_grain(mo
     assert sql_satisfies_analytical_intent(sql, question)
 
 
+def test_country_sales_ranking_uses_invoice_header_amount_for_monthly_consistency(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "vbrp": {"vbeln", "posnr", "matnr", "netwr", "fkimg"},
+        "KNA1": {"kunnr", "land1", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in {t.upper() for t in physical_columns})
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in next(
+            (cols for name, cols in physical_columns.items() if name.upper() == table.upper()), set()
+        ),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: "vbrp" if table.lower() == "vbrp" else table.upper())
+
+    sql = build_dimension_ranking_sql(
+        "Show the top five countries by billed sales in calendar year 2017.",
+        ["VBRK", "vbrp", "KNA1"],
+    )
+
+    assert sql
+    assert 'FROM "VBRK" k' in sql
+    assert 'SUM(CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC))' in sql
+    assert 'FROM "vbrp" p' not in sql
+    assert "'2017'" in sql
+    assert "LIMIT 5" in sql
+
+
+def test_product_sales_ranking_keeps_billing_item_grain(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "vbrp": {"vbeln", "posnr", "matnr", "netwr", "fkimg"},
+        "MAKT": {"matnr", "maktx", "spras"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in {t.upper() for t in physical_columns})
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in next(
+            (cols for name, cols in physical_columns.items() if name.upper() == table.upper()), set()
+        ),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: "vbrp" if table.lower() == "vbrp" else table.upper())
+
+    sql = build_dimension_ranking_sql("Show the top five products by billed sales.", ["VBRK", "vbrp"])
+
+    assert sql
+    assert 'FROM "vbrp" p' in sql
+    assert "SUM(CAST(NULLIF" in sql and 'p."netwr"' in sql
+
+
 def test_quarterly_billed_sales_use_quarter_buckets_from_billing_date(monkeypatch):
     import app.services.adaptive_structured_sql as structured
 

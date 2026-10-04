@@ -29,6 +29,21 @@ _RANKING_CUES = re.compile(
     re.I,
 )
 
+_UNFILTERED_CURRENCY_CUES = re.compile(
+    r"\b(?:all\s+currencies|all\s+currency(?:\s+codes)?|"
+    r"currency\s+pairs?|by\s+currency|per\s+currency|each\s+currency|"
+    r"every\s+currency|without\s+(?:a\s+)?currency\s+filter|"
+    r"no\s+currency\s+filter|do\s+not\s+(?:apply|use|add)\s+(?:a\s+)?currency\s+filter|"
+    r"don['’]?t\s+(?:apply|use|add)\s+(?:a\s+)?currency\s+filter|"
+    r"remove\s+(?:the\s+)?currency\s+filter|clear\s+(?:the\s+)?currency\s+filter)\b",
+    re.I,
+)
+
+
+def requests_unfiltered_currency_scope(question: str) -> bool:
+    """Whether the user explicitly requests a multi-currency breakdown."""
+    return bool(_UNFILTERED_CURRENCY_CUES.search(question or ""))
+
 
 @dataclass
 class CurrencyStrategy:
@@ -71,7 +86,23 @@ def find_currency_context(tables: List[str]) -> Optional[Tuple[str, str]]:
 
 
 def extract_currency_from_question(question: str) -> Optional[str]:
-    q = (question or "").upper()
+    raw = question or ""
+    # Accept any syntactically explicit three-letter ISO-style code instead
+    # of limiting explicit user requests to a hand-maintained code list.
+    explicit = re.search(
+        r"\b(?:currency(?:\s+code)?|denominated\s+in)\s+([A-Za-z]{3})\b",
+        raw,
+        re.I,
+    )
+    if explicit:
+        return explicit.group(1).upper()
+    # A code following "in" is unambiguous when the user types it in its
+    # conventional uppercase form (this avoids mistaking "in the" for THE).
+    explicit = re.search(r"\bin\s+([A-Z]{3})\b", raw)
+    if explicit:
+        return explicit.group(1).upper()
+
+    q = raw.upper()
     for code in ("EUR", "USD", "GBP", "CAD", "INR", "JPY", "CHF", "AUD", "MXN", "BRL"):
         if re.search(rf"\b{code}\b", q):
             return code
@@ -125,6 +156,16 @@ def resolve_currency_strategy(
     dist = probe_currency_distribution(db, table, col)
     explicit = extract_currency_from_question(question)
 
+    if requests_unfiltered_currency_scope(question):
+        return CurrencyStrategy(
+            mode="group_by",
+            currency_table=table,
+            currency_column=col,
+            multi_currency=len(dist) > 1,
+            distribution=dist,
+            note="Currency restrictions removed; include currency as a result dimension.",
+        )
+
     if explicit:
         return CurrencyStrategy(
             mode="filter",
@@ -158,55 +199,8 @@ def resolve_currency_strategy(
             note=f"Single currency in data ({codes[0]}); auto-filtered.",
         )
 
-    total = sum(int(r.get("row_count") or 0) for r in dist)
-    top = dist[0]
-    top_code = str(top.get("currency") or "").strip()
-    top_pct = (int(top.get("row_count") or 0) / total) if total else 0.0
-
-    q = (question or "").lower()
-    if "by currency" in q or "per currency" in q or "each currency" in q:
-        return CurrencyStrategy(
-            mode="group_by",
-            currency_table=table,
-            currency_column=col,
-            multi_currency=True,
-            distribution=dist,
-            note="Ranking grouped by currency as requested.",
-        )
-
-    # Dominant currency — safe to filter for ranking questions
-    if top_pct >= 0.70 and top_code:
-        return CurrencyStrategy(
-            mode="filter",
-            currency_table=table,
-            currency_column=col,
-            filter_currency=top_code,
-            multi_currency=True,
-            distribution=dist,
-            note=(
-                f"Multiple currencies exist; auto-filtered to dominant currency {top_code} "
-                f"({top_pct:.0%} of records). Amounts are not mixed across currencies."
-            ),
-        )
-
-    # Ranking / Top-N must not GROUP BY currency — that multiplies rows past the limit
-    # and can collapse ranking dimensions into a currency-only aggregate.
-    if is_monetary_ranking_question(question, semantic):
-        code = top_code or (codes[0] if codes else None)
-        if code:
-            return CurrencyStrategy(
-                mode="filter",
-                currency_table=table,
-                currency_column=col,
-                filter_currency=code,
-                multi_currency=True,
-                distribution=dist,
-                note=(
-                    f"Ranking filtered to leading currency {code} to avoid mixed-currency "
-                    f"comparison. Ask 'by currency' for a per-currency breakdown."
-                ),
-            )
-
+    # Never choose a currency based on frequency for a monetary comparison.
+    # Currency is part of the result grain so amounts remain comparable.
     return CurrencyStrategy(
         mode="group_by",
         currency_table=table,
@@ -272,7 +266,178 @@ def _is_filter_list_semantic(semantic: Dict[str, Any]) -> bool:
 
 def sql_has_currency_handling(sql: str) -> bool:
     s = (sql or "").lower()
-    return any(c in s for c in ("waerk", "waers", "rtcur", "hwaer"))
+    return any(c in s for c in CURRENCY_COLUMNS)
+
+
+_CURRENCY_COLUMN_REF = (
+    r"(?:(?:\"?[A-Za-z_][A-Za-z0-9_]*\"?)\s*\.\s*)?"
+    r"\"?(?:waerk|waers|rtcur|hwaer|curr|currency)\"?"
+)
+_CURRENCY_LITERAL = r"'(?:''|[^'])*'"
+
+
+def _sql_depth(sql: str, end: int) -> int:
+    depth = 0
+    quote: Optional[str] = None
+    i = 0
+    while i < end:
+        ch = sql[i]
+        if quote:
+            if ch == quote:
+                if i + 1 < end and sql[i + 1] == quote:
+                    i += 1
+                else:
+                    quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        i += 1
+    return depth
+
+
+def _split_and_terms(condition: str) -> List[str]:
+    """Split an SQL condition at AND operators outside quotes/parentheses."""
+    terms: List[str] = []
+    start = 0
+    depth = 0
+    quote: Optional[str] = None
+    i = 0
+    while i < len(condition):
+        ch = condition[i]
+        if quote:
+            if ch == quote:
+                if i + 1 < len(condition) and condition[i + 1] == quote:
+                    i += 1
+                else:
+                    quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and condition[i:i + 3].upper() == "AND":
+            before = condition[i - 1] if i else " "
+            after = condition[i + 3] if i + 3 < len(condition) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                terms.append(condition[start:i].strip())
+                start = i + 3
+                i += 2
+        i += 1
+    terms.append(condition[start:].strip())
+    return [term for term in terms if term]
+
+
+def _is_currency_filter_term(term: str) -> bool:
+    candidate = term.strip()
+    while candidate.startswith("(") and candidate.endswith(")"):
+        # Remove a wrapper only when it encloses the entire term.
+        if _sql_depth(candidate, len(candidate)) != 0:
+            break
+        candidate = candidate[1:-1].strip()
+    column = _CURRENCY_COLUMN_REF
+    values = rf"(?:{_CURRENCY_LITERAL}(?:\s*,\s*{_CURRENCY_LITERAL})*)"
+    comparison = rf"(?:=|<>|!=)\s*{_CURRENCY_LITERAL}"
+    simple = re.compile(rf"^\s*(?:{column})\s*(?:{comparison}|IN\s*\(\s*{values}\s*\))\s*$", re.I)
+    cast = re.compile(
+        rf"^\s*TRIM\s*\(\s*CAST\s*\(\s*{column}\s+AS\s+(?:TEXT|VARCHAR(?:\s*\(\s*\d+\s*\))?)\s*\)\s*\)\s*(?:{comparison}|IN\s*\(\s*{values}\s*\))\s*$",
+        re.I,
+    )
+    return bool(simple.fullmatch(candidate) or cast.fullmatch(candidate))
+
+
+def strip_currency_filter_predicates(sql: str) -> str:
+    """Remove simple currency equality/IN predicates while preserving other WHERE scope.
+
+    Only top-level AND terms that consist solely of a currency comparison are
+    removed. Predicates mixed with OR or other expressions are left untouched
+    because rewriting them could broaden the query incorrectly.
+    """
+    if not sql:
+        return sql
+
+    # Work from right to left so edits to a nested WHERE never shift an earlier one.
+    where_positions: List[Tuple[int, int, int]] = []
+    quote: Optional[str] = None
+    depth = 0
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if quote:
+            if ch == quote:
+                if i + 1 < len(sql) and sql[i + 1] == quote:
+                    i += 1
+                else:
+                    quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch.isalpha() or ch == "_":
+            start = i
+            while i + 1 < len(sql) and (sql[i + 1].isalnum() or sql[i + 1] == "_"):
+                i += 1
+            word = sql[start:i + 1].upper()
+            if word == "WHERE":
+                where_positions.append((start, i + 1, depth))
+        i += 1
+
+    replacements: List[Tuple[int, int, str]] = []
+    for where_start, where_end, where_depth in where_positions:
+        # Find the end of this WHERE expression at its own query nesting level.
+        quote = None
+        depth = where_depth
+        i = where_end
+        clause_start: Optional[int] = None
+        while i < len(sql):
+            ch = sql[i]
+            if quote:
+                if ch == quote:
+                    if i + 1 < len(sql) and sql[i + 1] == quote:
+                        i += 1
+                    else:
+                        quote = None
+            elif ch in "'\"":
+                quote = ch
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                if depth == where_depth:
+                    clause_start = i
+                    break
+                depth = max(0, depth - 1)
+            elif depth == where_depth and (ch.isalpha() or ch == "_"):
+                start = i
+                while i + 1 < len(sql) and (sql[i + 1].isalnum() or sql[i + 1] == "_"):
+                    i += 1
+                word = sql[start:i + 1].upper()
+                if word in {"GROUP", "HAVING", "ORDER", "LIMIT", "UNION", "RETURNING"}:
+                    clause_start = start
+                    break
+            i += 1
+        if clause_start is None:
+            clause_start = len(sql)
+
+        condition = sql[where_end:clause_start]
+        terms = _split_and_terms(condition)
+        remaining = [term for term in terms if not _is_currency_filter_term(term)]
+        if len(remaining) == len(terms):
+            continue
+        if remaining:
+            replacement = " WHERE " + " AND ".join(remaining) + " "
+            replacements.append((where_start, clause_start, replacement))
+        else:
+            replacements.append((where_start, clause_start, " "))
+
+    out = sql
+    for start, end, replacement in reversed(replacements):
+        out = out[:start] + replacement + out[end:]
+    return out
 
 
 def resolve_table_qualifier_in_sql(sql: str, table: str) -> str:
@@ -458,18 +623,6 @@ def apply_currency_strategy_to_sql(sql: str, strategy: CurrencyStrategy) -> str:
         return inject_currency_filter_sql(
             sql, strategy.currency_table, strategy.currency_column, strategy.filter_currency
         )
-    # Never collapse a ranking query to currency-only via GROUP BY injection.
-    if re.search(
-        r"\b(vendor_id|customer_id|material_id|country|industry|supplier|lifnr|kunnr|matnr)\b",
-        sql or "",
-        re.I,
-    ) and re.search(r"\b(ORDER\s+BY|LIMIT\s+\d+)\b", sql or "", re.I):
-        if strategy.filter_currency or (strategy.distribution and strategy.distribution[0].get("currency")):
-            code = strategy.filter_currency or str(strategy.distribution[0].get("currency") or "").strip()
-            if code:
-                return inject_currency_filter_sql(
-                    sql, strategy.currency_table, strategy.currency_column, code
-                )
     return inject_currency_group_by_sql(sql, strategy.currency_table, strategy.currency_column)
 
 
@@ -503,6 +656,33 @@ def enrich_plan_with_currency_strategy(
         or (f.type == "expression" and "waerk" in f.expression.lower())
         for f in plan.filters
     )
+    if requests_unfiltered_currency_scope(question):
+        strategy = resolve_currency_strategy(
+            db, tables=tables or plan.tables, question=question, semantic=semantic
+        )
+        if not strategy:
+            return None
+        plan.filters = [
+            f for f in plan.filters
+            if not (
+                (f.type == "column" and f.column.lower() in CURRENCY_COLUMNS)
+                or (f.type == "expression" and re.search(r"\b(?:waerk|waers|rtcur|hwaer|curr|currency)\b", f.expression, re.I))
+            )
+        ]
+        tbl, col = strategy.currency_table, strategy.currency_column
+        if not any(
+            pf.type == "column" and pf.column.lower() == col.lower()
+            for pf in plan.select
+        ):
+            plan.select.append(PlanField(type="column", table=tbl, column=col, alias="currency", purpose="currency"))
+        if not any(
+            pf.type == "column" and pf.column.lower() == col.lower()
+            for pf in plan.group_by
+        ):
+            plan.group_by.append(PlanField(type="column", table=tbl, column=col))
+        plan.semantic_requirements = dict(plan.semantic_requirements or {})
+        plan.semantic_requirements["_currency_strategy"] = strategy.to_dict()
+        return strategy
     if has_currency or has_currency_filter:
         return None
 
