@@ -173,6 +173,12 @@ def prune_plan_for_aggregation(plan: StructuredQueryPlan) -> None:
 
 
 def _needs_plan_aggregation(plan: StructuredQueryPlan) -> bool:
+    from .sql_structure import has_group_aggregate
+
+    if any(pf.type == "expression" and has_group_aggregate(pf.expression) for pf in plan.select):
+        return True
+    if plan.period_compare or isinstance((plan.semantic_requirements or {}).get("period_compare"), dict):
+        return True
     sem = plan.semantic_requirements or {}
     if isinstance(sem.get("ranking"), dict):
         return True

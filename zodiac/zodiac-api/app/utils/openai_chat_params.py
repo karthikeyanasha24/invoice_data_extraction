@@ -11,7 +11,7 @@ def _openai_strict_chat_completion_model_id(model: Optional[str]) -> bool:
     m = (model or "").strip().lower()
     if not m:
         return False
-    if "gpt-5" in m:
+    if "gpt-5" in m or "gpt-6" in m:
         return True
     for p in ("o1", "o3", "o4"):
         if m.startswith(p):
@@ -61,7 +61,7 @@ def langchain_openai_temperature_kwargs(model: Optional[str], temperature: float
     return {"temperature": float(temperature)}
 
 
-def openai_completion_limit_kwargs(model: Optional[str], limit: int) -> Dict[str, Any]:
+def openai_completion_limit_kwargs(model: Optional[str], limit: int, *, reasoning_effort: Optional[str] = None) -> Dict[str, Any]:
     """Args for ``OpenAI().chat.completions.create`` output token cap.
 
     Reasoning models (gpt-5 / o-series) spend hidden reasoning tokens BEFORE the
@@ -75,7 +75,9 @@ def openai_completion_limit_kwargs(model: Optional[str], limit: int) -> Dict[str
     n = max(1, int(limit))
     if model_requires_max_completion_tokens(model):
         kwargs: Dict[str, Any] = {"max_completion_tokens": max(n + 1600, n * 2)}
-        effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
+        effort = (reasoning_effort or os.getenv("OPENAI_REASONING_EFFORT", "low")).strip().lower()
+        if "gpt-6" in (model or "").lower() and effort in {"none", "minimal"}:
+            effort = "low"
         if effort not in ("off", "none", ""):
             kwargs["reasoning_effort"] = effort
         return kwargs

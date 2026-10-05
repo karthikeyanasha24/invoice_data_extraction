@@ -240,6 +240,15 @@ def adapt_user_turn(
     if _force_general_chat(q):
         return AdaptedTurn("chat", q)
 
+    from .pending_analysis import pending_analysis_context
+
+    if pending_analysis_context(prior_plan, prior_question, prior_status):
+        # The understanding model distinguishes new requests from answers.
+        # A capability detector also matches choices such as a currency or
+        # grouping preference, so it cannot safely erase the pending goal.
+        # Do not replace it with a canned sales ranking or a fresh fragment.
+        return AdaptedTurn("query", q, drop_prior=False, is_fragment=True)
+
     awaiting_sales = _awaiting_sales_choice(prior_plan, prior_question)
     from .understanding import is_referential_database_action
     from ..result_first_followup import is_result_scoped_followup
@@ -326,7 +335,7 @@ def _human_findings(
             continue
         if text.startswith("(") and text.endswith(")"):
             continue
-        cleaned.append(text[:400])
+        cleaned.append(text)
         if len(cleaned) >= 8:
             break
     if cleaned:
@@ -704,8 +713,13 @@ def run_adaptive_orchestrator(
     # discard the last verified database result. The client carries that result
     # separately so a later data follow-up can still use its rows and SQL.
     outer_plan = prior_plan if isinstance(prior_plan, dict) else {}
+    from .pending_analysis import pending_analysis_context, pending_analysis_plan
+
+    pending_request = pending_analysis_context(outer_plan, prior_question, prior_status)
+    if pending_request:
+        prior_plan = {**outer_plan, "pending_analysis": pending_request}
     retained = outer_plan.get("retained_analytical_context")
-    if isinstance(retained, dict) and not (prior_sql or "").strip():
+    if isinstance(retained, dict) and not (prior_sql or "").strip() and not pending_request:
         retained_sql = str(retained.get("previousSQL") or "").strip()
         retained_status = str(retained.get("previousAnswerStatus") or "").upper()
         retained_plan = retained.get("previousPlan")
@@ -885,6 +899,7 @@ def run_adaptive_orchestrator(
         analytics_clarification_payload,
         capability_facts,
         generate_grounded_response,
+        has_same_turn_entity_antecedent,
         is_referential_database_action,
         is_sufficiently_specified_ranking,
         understand_turn,
@@ -902,9 +917,25 @@ def run_adaptive_orchestrator(
             capability_context=capability_facts(),
         )
     except Exception as understand_err:
-        return technical_understanding_failure(q, understand_err)
+        failure = technical_understanding_failure(q, understand_err)
+        if pending_request:
+            failure["query_plan"]["pending_analysis"] = pending_request
+        return failure
 
     intent = understanding.intent
+    if pending_request and understanding.turn_relation == "new_request":
+        # Keep the conversation for recall, but close the pending analysis on
+        # a topic change. Its schema, filters and grain must not leak into the
+        # unrelated request just because the pre-model adapter kept context.
+        prior_question = ""
+        prior_sql = ""
+        prior_rows = []
+        prior_plan = {"recent_turns": state.recent_turns}
+        state = InvestigationState.from_context(prior_plan)
+        if thread_id:
+            state.conversation_id = thread_id
+        adapted = AdaptedTurn("query", q, drop_prior=True, is_fragment=False)
+        pending_request = None
     # The model can over-classify business-count questions as schema metadata.
     # Route to governed analytics whenever the question requires business rows
     # and the generic schema detector says it is not a catalog request.
@@ -940,22 +971,52 @@ def run_adaptive_orchestrator(
     analytical_turn = understanding.requires_database or intent in {
         "analytics", "investigation", "clarification",
     }
+    answers_pending_request = bool(
+        pending_request
+        and understanding.turn_relation == "clarification_answer"
+        and understanding.context_source == "pending_request"
+    )
+    request_scoped_continuation = answers_pending_request or bool(
+        understanding.turn_relation == "followup"
+        and understanding.context_source == "prior_request"
+        and (prior_question or any(turn.get("role") == "user" for turn in state.recent_turns))
+    )
+    if request_scoped_continuation and not understanding.clarification_needed:
+        resolved_request = str(understanding.resolved_question or "").strip()
+        if not resolved_request or re.search(
+            r"\bSELECT\b[\s\S]*\bFROM\b|^\s*(?:WITH|UPDATE|DELETE|INSERT)\b|```",
+            resolved_request, re.I,
+        ):
+            # A classified continuation without a complete natural-language
+            # goal must not execute its fragment or accept model-written SQL.
+            failure = technical_understanding_failure(q, ValueError("Unresolved request continuation"))
+            if pending_request:
+                failure["query_plan"]["pending_analysis"] = pending_request
+            return failure
     has_verified_prior_result = bool(prior_rows) or (
         bool(re.search(r"\bselect\b", prior_sql or "", re.I))
         and prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}
     )
-    referential_data_action = analytical_turn and is_referential_database_action(
-        q, has_prior=has_verified_prior_result,
+    # Detect referential analytics wording even when the earlier turn has no
+    # verified result. That case needs a clarification instead of letting the
+    # SQL planner guess what "that country" / "same year" refers to. This is
+    # gated on the model's analytical intent so conversational examples that
+    # happen to mention sales remain on the chat path.
+    locally_anchored_reference = has_same_turn_entity_antecedent(q)
+    referential_data_action = analytical_turn and (
+        (understanding.context_source == "prior_result" and not locally_anchored_reference)
+        or is_referential_database_action(q, has_prior=True)
     )
     # A scoped data drill-down needs a verified selection. Perform this check
     # after understanding so a conversational example needs no result anchor.
     if (
         referential_data_action
+        and not request_scoped_continuation
         and not (prior_rows or (prior_sql and prior_status.upper() in {"SUCCESS", "NO_DATA", "SUCCESS_EMPTY"}))
     ):
         msg = (
             "There is no verified result identifying the entity or documents for this follow-up. "
-            "Specify the customer, country, or document selection, or retry the preceding analysis."
+            "Specify the customer, country, document, or other selection, or retry the preceding analysis."
         )
         return _attach_understanding_meta({
             "mode": "clarification", "route": "clarification", "status": "clarification",
@@ -963,13 +1024,13 @@ def run_adaptive_orchestrator(
             "sql": "", "sql_status": "not_generated", "data": [], "rowCount": 0,
             "summary": msg, "answer": msg, "keyFindings": [], "charts": [],
             "suggested_followups": [], "pipeline": "adaptive_orchestrator",
-            "query_plan": {"investigation_state": state.to_dict()},
+            "query_plan": {"investigation_state": state.to_dict(), "requires_result_anchor": True},
         }, understanding)
 
     # Answer a ranking follow-up from the complete, verified prior result when
     # its requested dimension and measure are already present in those rows.
     # If the saved result is only a sample, continue through the query pipeline.
-    if analytical_turn and prior_rows:
+    if analytical_turn and prior_rows and not request_scoped_continuation:
         from ..result_first_followup import try_answer_from_prior_rows
 
         reused = try_answer_from_prior_rows(
@@ -982,7 +1043,7 @@ def run_adaptive_orchestrator(
             reused["query_plan"] = {**qp, "investigation_state": state.to_dict()}
             return _attach_understanding_meta(reused, understanding)
 
-    if referential_data_action:
+    if referential_data_action and not request_scoped_continuation:
         understanding.intent = "analytics"
         understanding.requires_database = True
         understanding.requires_metadata = False
@@ -1183,6 +1244,7 @@ def run_adaptive_orchestrator(
             **qp,
             "investigation_state": {**state.to_dict(), "mode": "clarification"},
             "last_mode": "clarification",
+            "pending_analysis": pending_analysis_plan(q, understanding, pending_request),
         }
         return _attach_understanding_meta(clar, understanding)
 
@@ -1279,7 +1341,8 @@ def run_adaptive_orchestrator(
     )
     if (
         rewritten_followup and not is_sql_rewrite
-        and adapted.is_fragment and (prior_sql or prior_rows)
+        and (adapted.is_fragment or request_scoped_continuation or understanding.turn_relation == "followup")
+        and (prior_sql or prior_rows or request_scoped_continuation)
         and intent in {"analytics", "investigation"}
     ):
         p1["rewritten_question"] = rewritten_followup
@@ -1732,7 +1795,7 @@ def run_adaptive_orchestrator(
         },
         "calculation": {
             "source": ", ".join(tables),
-            "definition": state.metric or "As selected by database intelligence",
+            "definition": p3.get("calculation_explanation") or state.metric or "See executed SQL",
             "aggregation": "See SQL",
             "period": state.time_period or "Not specified",
             "grain": (p2.get("pick") or {}).get("grain") or "",

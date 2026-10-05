@@ -281,12 +281,16 @@ def repair_extract_on_text_dates(sql: str) -> str:
 
 def _normalize_plan_expressions(plan: StructuredQueryPlan) -> None:
     """Normalize date expressions and remove duplicate select/filter entries."""
+    from .sql_structure import qualify_expression
+
     for pf in plan.select + plan.group_by:
         if pf.type == "expression" and pf.expression:
-            pf.expression = repair_extract_on_text_dates(pf.expression)
+            pf.expression = qualify_expression(repair_extract_on_text_dates(pf.expression), plan.tables)
     for flt in plan.filters:
         if flt.type == "expression" and flt.expression:
-            flt.expression = repair_extract_on_text_dates(flt.expression)
+            prefix = "__HAVING__ " if flt.expression.startswith("__HAVING__") else ""
+            body = flt.expression.replace("__HAVING__", "", 1).strip() if prefix else flt.expression
+            flt.expression = prefix + qualify_expression(repair_extract_on_text_dates(body), plan.tables)
 
     # SELECT aliases are unavailable in WHERE/HAVING in PostgreSQL. The model
     # may name a verified transformation and then use that name as a field;
@@ -1657,7 +1661,7 @@ def build_linked_order_period_comparison_sql(
     q = question or ""
     if not re.search(r"\b(?:linked|related)\b[\s\S]{0,50}\bsales\s+orders?\b|\bsales\s+orders?\b[\s\S]{0,50}\b(?:linked|related)\b", q, re.I):
         return None
-    if not re.search(r"\b(?:invoice|billing\s+document)\b", q, re.I):
+    if not re.search(r"\b(?:invoices?|billing\s+documents?)\b", q, re.I):
         return None
 
     req = required_semantics(question, semantic)
@@ -1727,9 +1731,15 @@ def build_linked_order_period_comparison_sql(
     elif not has_column(invoice_table, "fkdat"):
         return None
 
-    # Calendar scope for the selected negative-invoice cohort is the first
-    # comparison year. The second year applies to linked sales-order creation
-    # dates, not to those same invoices (an invoice has only one date/value).
+    # An explicit request for independently ranked invoice periods needs both
+    # cohorts. A base-year selection followed by an order comparison keeps its
+    # original single invoice cohort.
+    cohort_scope = (semantic or {}).get("invoice_cohort_scope")
+    each_invoice_period = cohort_scope == "each_period" if cohort_scope in {"each_period", "base_period"} else bool(re.search(
+        r"\b(?:each|both|per)\s+(?:calendar\s+)?(?:years?|periods?)\b|"
+        r"\b(?:independently|separately|separate)\b[\s\S]{0,100}\b(?:invoices?|billing\s+documents?)\b",
+        q, re.I,
+    ))
     invoice_date_expr = f'TRIM(CAST({invoice_date_alias}."{invoice_date_col}" AS TEXT))'
     invoice_amount = 'CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC)'
     order_date_expr = 'TRIM(CAST(l."linked_order_date" AS TEXT))'
@@ -1777,6 +1787,21 @@ def build_linked_order_period_comparison_sql(
         + f'  ORDER BY "invoice_amount" ASC, "billing_document" ASC\n  LIMIT {limit}\n'
         + ')'
     )
+    if each_invoice_period:
+        scoped_predicates = [
+            f"SUBSTRING({invoice_date_expr}, 1, 4) IN ('{year_a}', '{year_b}')",
+            *invoice_predicates[2:],
+        ]
+        candidate_cte = (
+            'invoice_candidates AS (\n'
+            f'  SELECT {", ".join(select)}, SUBSTRING({invoice_date_expr}, 1, 4) AS "invoice_year", '
+            f'ROW_NUMBER() OVER (PARTITION BY SUBSTRING({invoice_date_expr}, 1, 4), k."waerk" '
+            f'ORDER BY {invoice_amount} ASC, k."vbeln" ASC) AS "invoice_rank"\n'
+            f'  FROM "{invoice_table}" k\n'
+            + (f'{customer_join_sql}\n' if customer_join_sql else '')
+            + '  WHERE ' + '\n    AND '.join(scoped_predicates) + '\n),\n'
+            + f'invoice_cohort AS (SELECT * FROM invoice_candidates WHERE "invoice_rank" <= {limit})'
+        )
 
     order_year_a = (
         f'({order_date_expr} >= \'{year_a}0101\' AND '
@@ -1789,21 +1814,42 @@ def build_linked_order_period_comparison_sql(
     order_currency_match = (
         'UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency")'
     )
-    linked_cte = (
-        'linked_orders AS (\n'
-        '  SELECT DISTINCT i."billing_document", o."vbeln" AS "linked_order_key", '
+    linked_projection = (
+        'i."billing_document", o."vbeln" AS "linked_order_key", '
         'TRIM(CAST(o."vbeln" AS TEXT)) AS "linked_sales_order", '
         'o."erdat" AS "linked_order_date", o."netwr" AS "linked_order_amount", '
-        'o."waerk" AS "linked_order_currency"\n'
+        'o."waerk" AS "linked_order_currency"'
+    )
+    linked_query = (
+        f'  SELECT DISTINCT {linked_projection}\n'
         '  FROM invoice_cohort i\n'
         f'  JOIN "{flow_table}" f ON f."vbeln" = i."_billing_document_key"\n'
         f'  JOIN "{order_table}" o ON o."vbeln" = f."vbelv"\n'
+    )
+    # The item order reference and document flow are independent verified
+    # relationships. UNION deduplicates orders reached through both routes.
+    if has_table("vbrp") and all(has_column("vbrp", col) for col in ("vbeln", "aubel")):
+        item_table = resolve_table_name("vbrp") or "vbrp"
+        linked_query += (
+            '  UNION\n'
+            f'  SELECT DISTINCT {linked_projection}\n'
+            '  FROM invoice_cohort i\n'
+            f'  JOIN "{item_table}" b ON b."vbeln" = i."_billing_document_key"\n'
+            f'  JOIN "{order_table}" o ON o."vbeln" = b."aubel"\n'
+        )
+    linked_cte = (
+        'linked_orders AS (\n'
+        + linked_query +
         ')'
     )
     periods_cte = (
         'order_periods AS (\n'
-        '  SELECT l."billing_document", '
+        '  SELECT l."billing_document", i."currency", '
         'STRING_AGG(DISTINCT l."linked_sales_order", \', \' ORDER BY l."linked_sales_order") AS "linked_sales_orders", '
+        'COUNT(DISTINCT l."linked_order_key") AS "linked_order_count_all_periods", '
+        'MIN(l."linked_order_date") AS "earliest_linked_order_date", '
+        'MAX(l."linked_order_date") AS "latest_linked_order_date", '
+        f'COUNT(DISTINCT CASE WHEN NOT ({order_year_a} OR {order_year_b}) THEN l."linked_order_key" END) AS "linked_order_count_outside_comparison", '
         f'COUNT(DISTINCT CASE WHEN {order_year_a} AND {order_currency_match} THEN l."linked_order_key" END) AS "linked_order_count_{year_a}", '
         f'SUM(CASE WHEN {order_year_a} AND {order_currency_match} THEN {order_amount} END) AS "order_amount_{year_a}", '
         f'COUNT(DISTINCT CASE WHEN {order_year_b} AND {order_currency_match} THEN l."linked_order_key" END) AS "linked_order_count_{year_b}", '
@@ -1811,8 +1857,7 @@ def build_linked_order_period_comparison_sql(
         f'COUNT(DISTINCT CASE WHEN ({order_year_a} OR {order_year_b}) AND NOT ({order_currency_match}) THEN l."linked_order_key" END) AS "currency_mismatch_order_count"\n'
         '  FROM linked_orders l\n'
         '  JOIN invoice_cohort i ON i."billing_document" = l."billing_document"\n'
-        f'  WHERE ({order_year_a} OR {order_year_b})\n'
-        '  GROUP BY l."billing_document"\n'
+        '  GROUP BY l."billing_document", i."currency"\n'
         ')'
     )
     change_expr = f'(p."order_amount_{year_b}" - p."order_amount_{year_a}")'
@@ -1827,13 +1872,17 @@ def build_linked_order_period_comparison_sql(
     return (
         'WITH ' + candidate_cte + ',\n' + linked_cte + ',\n' + periods_cte + '\n'
         'SELECT i."billing_document", i."customer_id", ' + customer_name_result +
+        ('i."invoice_year", i."invoice_rank", ' if each_invoice_period else '') +
         'i."invoice_date", i."invoice_amount", i."currency", p."linked_sales_orders", '
+        'p."linked_order_count_all_periods", p."earliest_linked_order_date", p."latest_linked_order_date", '
+        'p."linked_order_count_outside_comparison", '
         f'p."linked_order_count_{year_a}", p."order_amount_{year_a}", '
         f'p."linked_order_count_{year_b}", p."order_amount_{year_b}", p."currency_mismatch_order_count", '
         f'{change_expr} AS "absolute_change", {pct_expr} AS "percent_change"\n'
         'FROM invoice_cohort i\n'
         'LEFT JOIN order_periods p ON p."billing_document" = i."billing_document"\n'
-        'ORDER BY i."customer_id", i."invoice_amount" ASC, i."billing_document"'
+        'ORDER BY ' + ('i."invoice_year", ' if each_invoice_period else '') +
+        'i."customer_id", i."invoice_amount" ASC, i."billing_document"'
     )
 
 
@@ -1981,6 +2030,17 @@ def build_period_compare_sql(
         "NULLIF(TRIM(CAST(k.\"fkdat\" AS TEXT)), '') IS NOT NULL",
         f"{yexpr} IN ('{y_a}', '{y_b}')",
     ]
+    comparison = req.get("comparison")
+    measure_predicate = None
+    if isinstance(comparison, dict):
+        operator = str(comparison.get("operator") or "")
+        value = comparison.get("value")
+        if operator in {"<", "<=", ">", ">=", "=", "!=", "<>"} and isinstance(value, (int, float)) and not isinstance(value, bool):
+            import math
+
+            if math.isfinite(value):
+                where.append(f"{net} {operator} {value}")
+                measure_predicate = (operator, value)
     # A referential follow-up such as "for the same customers returned
     # previously" must scope the aggregate to verified IDs from that result.
     # Names and arbitrary model filters are not accepted as entity identifiers.
@@ -2092,6 +2152,20 @@ def build_period_compare_sql(
         or (req.get("contribution") if isinstance(req, dict) else False)
         or re.search(r"\b(contribut\w*|why\s+did|what\s+caused)\b", ql)
     )
+    order_field = "change"
+    if ranking and not having and not want_contribution:
+        rank_metric = str(ranking.get("metric") or ranking.get("measure") or "").lower()
+        if not any(term in rank_metric for term in ("change", "growth", "difference", "decline")):
+            order_field = "period_a"
+            order_dir = str(ranking.get("direction") or "DESC").upper()
+    # The ranked baseline cohort must actually exist in the baseline period.
+    # Comparison-only entities cannot enter the ranking through CASE ELSE 0.
+    baseline_rank = bool(ranking and order_field == "period_a")
+    baseline_count = f"COUNT(CASE WHEN {yexpr} = '{y_a}' THEN 1 END)"
+    baseline_having = [f"{baseline_count} > 0"] if baseline_rank else []
+    if baseline_rank and measure_predicate:
+        op, threshold = measure_predicate
+        baseline_having.append(f"{period_a} {op} {threshold}")
     if want_contribution:
         sel.append(
             f'ROUND(100.0 * {change} / NULLIF(SUM({change}) OVER (), 0), 2) AS "contribution_pct"'
@@ -2125,6 +2199,8 @@ def build_period_compare_sql(
             f'{period_a} AS "period_a"',
             f'{period_b} AS "period_b"',
         ]
+        if baseline_rank:
+            fact_select.append(f'{baseline_count} AS "_base_period_count"')
         if include_document_numbers and has_column(hdr, "vbeln"):
             fact_select.append(
                 f'{base_documents} AS "invoice_numbers_{y_a}"'
@@ -2179,9 +2255,17 @@ def build_period_compare_sql(
             + ("\n".join(out_joins) + "\n" if out_joins else "")
             + 'LEFT JOIN period_totals pt ON pt.customer_id = sc.customer_id\n'
         )
+        scoped_filters = []
         if having:
-            scoped_sql += f'WHERE {change_out} {"< 0" if having.endswith("< 0") else "> 0"}\n'
-        scoped_sql += f'ORDER BY "change" {order_dir}\nLIMIT {max(1, min(int(lim), 200))}'
+            scoped_filters.append(f'{change_out} {"< 0" if having.endswith("< 0") else "> 0"}')
+        if baseline_rank:
+            scoped_filters.append('pt."_base_period_count" > 0')
+            if measure_predicate:
+                op, threshold = measure_predicate
+                scoped_filters.append(f"{period_a_out} {op} {threshold}")
+        if scoped_filters:
+            scoped_sql += "WHERE " + " AND ".join(scoped_filters) + "\n"
+        scoped_sql += f'ORDER BY "{order_field}" {order_dir}\nLIMIT {max(1, min(int(lim), 200))}'
         return scoped_sql
 
     sql = (
@@ -2190,9 +2274,10 @@ def build_period_compare_sql(
         + "WHERE " + "\n  AND ".join(where) + "\n"
         + f"GROUP BY {', '.join(gb)}\n"
     )
-    if having:
-        sql += f"HAVING {having}\n"
-    sql += f'ORDER BY "change" {order_dir}\nLIMIT {max(1, min(int(lim), 200))}'
+    having_parts = ([having] if having else []) + baseline_having
+    if having_parts:
+        sql += "HAVING " + " AND ".join(having_parts) + "\n"
+    sql += f'ORDER BY "{order_field}" {order_dir}\nLIMIT {max(1, min(int(lim), 200))}'
     return sql
 
 
@@ -2202,6 +2287,7 @@ def build_partitioned_topn_sql(
     semantic: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Generic partitioned Top-N (e.g. top 5 customers in each country / plant)."""
+    from .analytical_sql_safety import canonicalize_text_joins
     from .semantic_requirements import required_semantics
 
     req = required_semantics(question, semantic)
@@ -2249,7 +2335,7 @@ def build_partitioned_topn_sql(
             + f"  AND NULLIF(TRIM(CAST(p.\"matnr\" AS TEXT)), '') IS NOT NULL\n"
             + f"GROUP BY {gb}"
         )
-        return (
+        return canonicalize_text_joins(
             f"SELECT * FROM (\n"
             f"  SELECT inner_q.*, ROW_NUMBER() OVER ("
             f"PARTITION BY \"plant\" ORDER BY \"{alias}\" {direction}"
@@ -2313,7 +2399,7 @@ def build_partitioned_topn_sql(
         )
         order_field = "total_sales"
 
-    return (
+    return canonicalize_text_joins(
         f"SELECT * FROM (\n"
         f"  SELECT inner_q.*, ROW_NUMBER() OVER ("
         f"PARTITION BY \"country\" ORDER BY \"{order_field}\" {direction}"
@@ -3298,17 +3384,26 @@ def _apply_period_compare_fields(plan: StructuredQueryPlan, semantic: Dict[str, 
 
     # Keep dimension columns; replace measure aggregates with period compare fields.
     kept: List[PlanField] = []
+    from .sql_structure import expressions_equivalent
+
     for pf in plan.select:
         is_measure = (
             pf.purpose == "measure"
             or (pf.type == "column" and (pf.column or "").lower() in {"netwr", "dmbtr", "wrbtr", "fkimg"})
             or (pf.type == "expression" and re.search(r"\b(SUM|AVG)\s*\(", pf.expression or "", re.I))
         )
-        is_year = (pf.alias or "").lower() == "year" or (pf.purpose or "").lower() == "year"
+        is_year = (
+            (pf.alias or "").lower() == "year" or (pf.purpose or "").lower() == "year"
+            or pf.type == "expression" and expressions_equivalent(pf.expression, year_expr)
+        )
         if is_measure or is_year:
             continue
         kept.append(pf)
     plan.select = kept + change_fields
+    plan.group_by = [
+        field for field in plan.group_by
+        if not (field.type == "expression" and expressions_equivalent(field.expression, year_expr))
+    ]
 
     condition = str(period.get("condition") or period.get("op") or "").lower()
     if condition in {"increased", "growth", "increase"}:
@@ -3337,12 +3432,27 @@ def _apply_period_compare_fields(plan: StructuredQueryPlan, semantic: Dict[str, 
                 )
             )
 
+    # A single-period model filter must not suppress the comparison period.
+    # Rewrite only this date's year restrictions, preserving all other filters.
+    from .sql_structure import widen_year_predicate
+
+    for flt in plan.filters:
+        if flt.type == "expression" and flt.expression and not flt.expression.startswith("__HAVING__"):
+            flt.expression = widen_year_predicate(flt.expression, year_expr, [y_a, y_b])
+
     # Scope years in WHERE so indexes / scanners stay bounded
     year_scope = f"{year_expr} IN ('{y_a}', '{y_b}')"
     if not any(year_scope in (f.expression or "") for f in plan.filters):
         plan.filters.append(PlanFilter(type="expression", expression=year_scope, operator="IN", value=None))
 
-    plan.order_by = [{"field": change_alias, "direction": "DESC" if "increas" in condition or condition == "growth" else "ASC"}]
+    ranking = plan.ranking or semantic.get("ranking")
+    if isinstance(ranking, dict) and not condition:
+        # A base-period sales ranking is different from a ranking of changes.
+        metric = str(ranking.get("metric") or ranking.get("measure") or "").lower()
+        sort_field = change_alias if any(term in metric for term in ("change", "growth", "difference")) else "period_a"
+        plan.order_by = [{"field": sort_field, "direction": str(ranking.get("direction") or "DESC").upper()}]
+    else:
+        plan.order_by = [{"field": change_alias, "direction": "DESC" if "increas" in condition or condition == "growth" else "ASC"}]
     if not plan.limit:
         plan.limit = 50
 
@@ -3446,7 +3556,7 @@ def _apply_semantic_defaults(plan: StructuredQueryPlan, semantic: Dict[str, Any]
             plan.select.insert(0, PlanField(type="expression", expression=expr, alias="month", purpose="dimension"))
         if not any(g.alias == "month" or (g.type == "expression" and g.expression == expr) for g in plan.group_by):
             plan.group_by.append(PlanField(type="expression", expression=expr, alias="month", purpose="dimension"))
-    if date_col and ("year" in group_by_dims or "year" in dimensions) and "month" not in group_by_dims:
+    if date_col and not plan.period_compare and ("year" in group_by_dims or "year" in dimensions) and "month" not in group_by_dims:
         expr = year_filter_expression(date_col[0], date_col[1])
         if not any(s.alias == "year" for s in plan.select):
             plan.select.insert(0, PlanField(type="expression", expression=expr, alias="year", purpose="dimension"))
@@ -3623,6 +3733,8 @@ def validate_query_plan(plan: StructuredQueryPlan) -> List[str]:
 def _validate_expression_refs(expr: str, allowed_tables: List[str]) -> List[str]:
     """Ensure expression references only verified table.column pairs."""
     errors: List[str] = []
+    if re.search(r"\bSELECT\b", re.sub(r"'(?:''|[^'])*'", "", expr), re.I):
+        errors.append("structured expressions cannot introduce nested query scopes; regenerate the query plan")
     allowed = {resolve_table_name(t) or t for t in allowed_tables}
     literal_free = re.sub(r"'(?:''|[^'])*'", "", expr)
     reference_pattern = r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'
@@ -3635,7 +3747,7 @@ def _validate_expression_refs(expr: str, allowed_tables: List[str]) -> List[str]
     keywords = set(_SQL_FUNCS) | {
         "AS", "TEXT", "NUMERIC", "DECIMAL", "INTEGER", "INT", "BIGINT", "SMALLINT", "REAL", "DOUBLE", "PRECISION",
         "VARCHAR", "CHAR", "CHARACTER", "VARYING", "DATE", "TIMESTAMP", "TIMESTAMPTZ", "TIME", "ZONE", "WITHOUT",
-        "DISTINCT", "FROM", "IN", "IS", "NOT", "NULL", "AND", "OR", "LIKE", "ILIKE", "BETWEEN", "TRUE", "FALSE",
+        "DISTINCT", "FROM", "FOR", "IN", "IS", "NOT", "NULL", "AND", "OR", "LIKE", "ILIKE", "BETWEEN", "TRUE", "FALSE",
         "YEAR", "MONTH", "QUARTER", "DAY", "WEEK", "CURRENT_DATE", "CURRENT_TIMESTAMP", "INTERVAL", "OVER",
         "PARTITION", "BY", "ORDER", "ASC", "DESC", "NULLS", "FIRST", "LAST", "FILTER", "WHERE", "__HAVING__",
     }
@@ -3678,6 +3790,13 @@ def _render_filter(flt: PlanFilter) -> str:
 
 
 def _needs_aggregation(plan: StructuredQueryPlan) -> bool:
+    from .sql_structure import has_group_aggregate
+
+    # Projection semantics take precedence over a row-list classification.
+    if any(pf.type == "expression" and has_group_aggregate(pf.expression) for pf in plan.select):
+        return True
+    if plan.period_compare or isinstance(plan.semantic_requirements.get("period_compare"), dict):
+        return True
     if _is_filter_list_question(plan.semantic_requirements, plan.question):
         return False
     measure = plan.semantic_requirements.get("measure") if isinstance(plan.semantic_requirements.get("measure"), dict) else {}
@@ -4036,7 +4155,11 @@ def sanitize_generated_sql(sql: str, question: str = "") -> str:
         from .adaptive_nl_sql_hardening import strip_customer_name_filter_from_country_query
 
         out = strip_customer_name_filter_from_country_query(out, question)
-    return sanitize_trim_type_safety_sql(out)
+    from .analytical_sql_safety import canonicalize_text_joins
+
+    # The four-stage planner validates candidates before the shared executor.
+    # Bound language lookups here as well so valid repairs pass that boundary.
+    return canonicalize_text_joins(sanitize_trim_type_safety_sql(out))
 
 
 def repair_bare_time_grain_aliases(sql: str) -> str:

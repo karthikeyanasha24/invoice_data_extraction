@@ -325,9 +325,36 @@ def _parse_join_rule_pairs(rule_sql: str) -> Set[frozenset[str]]:
     return pairs
 
 
-@lru_cache(maxsize=1)
-def _allowed_join_pairs() -> Dict[frozenset[str], Set[frozenset[str]]]:
-    return allowed_join_column_pairs()
+def _allowed_join_pairs(tables: Optional[List[str]] = None) -> Dict[frozenset[str], Set[frozenset[str]]]:
+    return allowed_join_column_pairs(tables)
+
+
+def _billing_year_date_semantics(question: str) -> Tuple[List[str], str]:
+    """Resolve the requested billing date concept through configured column hints."""
+    question_l = (question or "").lower()
+    semantic = "posting date" if re.search(r"\b(posting|posted|accounting)\b", question_l) else "billing date"
+    hints = _load_schema_ai_config().get("column_semantic_hints") or {}
+    matching = [
+        str(column).upper()
+        for column, description in hints.items()
+        if str(column).upper() in SAP_DATE_COLUMNS
+        and semantic in str(description).lower()
+    ]
+    if not matching:
+        # Keep the check schema-driven if a configured hint is missing or renamed.
+        matching = [
+            str(column).upper()
+            for column, description in hints.items()
+            if str(column).upper() in SAP_DATE_COLUMNS
+            and "date" in str(description).lower()
+        ]
+    return matching, semantic
+
+
+def _has_year_filter_for_date_column(sql: str, column: str, year: str) -> bool:
+    from .sql_structure import has_date_year_predicate
+
+    return has_date_year_predicate(sql, column, year)
 
 
 def _normalize_sap_date_filters(sql: str) -> Tuple[str, List[str]]:
@@ -422,6 +449,10 @@ def validate_sql_precision(
 
     from .adaptive_nl_sql_hardening import local_sql_relation_names
 
+    from .sql_structure import sql_structure_errors
+
+    errors.extend(sql_structure_errors(normalized_sql, question or ""))
+
     schema_upper = {table.upper(): {col.upper() for col in cols} for table, cols in (schema or {}).items()}
     local_rels = {n.upper() for n in local_sql_relation_names(normalized_sql)}
     alias_map = _extract_alias_map(normalized_sql)
@@ -459,8 +490,11 @@ def validate_sql_precision(
     # physical-table-to-CTE links when comparing against SAP's join graph.
     used_join_pairs = _extract_join_column_pairs(normalized_sql, alias_map)
     join_pairs_from_clauses = _extract_join_table_pairs_from_clauses(normalized_sql, alias_map)
-    allowed_join_pairs = _allowed_join_pairs()
-    allowed_edges = allowed_table_edges()
+    # Validate against configured rules plus inferred joins only among tables
+    # that actually appear in this statement. Building every possible table
+    # pair here caused query validation to scale quadratically with the schema.
+    allowed_join_pairs = _allowed_join_pairs(tables)
+    allowed_edges = allowed_table_edges(tables)
     for table_pair, used_columns in used_join_pairs.items():
         if table_pair & local_rels:
             continue
@@ -552,14 +586,14 @@ def validate_sql_precision(
         )
         if needs_fkdat_year_enforcement:
             year = year_match.group(1)
-            fkdat_year_ok = bool(
-                re.search(r"fkdat[^;]{0,260}(?:19|20)\d{2}", sql_l, re.IGNORECASE)
-                or re.search(r"substring\s*\([^)]*fkdat[^)]*1\s*,\s*4[^)]*\)\s*=\s*'" + re.escape(year) + r"'", sql_l, re.IGNORECASE)
-                or re.search(r"fkdat\s+between\s*'" + re.escape(year) + r"\d{4}'\s+and\s*'" + re.escape(year) + r"\d{4}'", sql_l, re.IGNORECASE)
+            billing_date_columns, date_semantic = _billing_year_date_semantics(question_l)
+            date_filter_ok = any(
+                _has_year_filter_for_date_column(sql_l, column, year)
+                for column in billing_date_columns
             )
-            if not fkdat_year_ok:
+            if not date_filter_ok:
                 errors.append(
-                    f"Year-scoped billing query must include FKDAT year predicate for {year} (e.g. SUBSTRING(TRIM(r.fkdat),1,4) = '{year}')."
+                    f"Year-scoped billing query must include a {date_semantic} predicate for {year}."
                 )
 
         # Month intent guard: "by month/monthly/per month" requires month bucket aggregation.

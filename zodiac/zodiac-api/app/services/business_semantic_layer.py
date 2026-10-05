@@ -7,6 +7,7 @@ Does not invent joins or metrics. Unsupported requests must surface as data gaps
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, List, Optional, Set
 
 
@@ -270,7 +271,11 @@ METRICS: Dict[str, MetricDef] = {
     "gross_profit": MetricDef(
         name="gross_profit",
         description="Revenue minus invoice document cost (WAVWR)",
-        aliases=("gross profit", "profit", "highest profit", "lowest profit", "profitability"),
+        aliases=(
+            "gross profit", "gross profits", "profit", "profits", "profitable",
+            "most profitable", "highest profit", "highest profits", "lowest profit",
+            "lowest profits", "profitability",
+        ),
         status="supported",
         formula_sql=(
             "SUM(CAST(NULLIF(TRIM(v.netwr), '') AS NUMERIC)) "
@@ -536,15 +541,31 @@ def resolve_metric(term: str) -> Optional[MetricDef]:
         return METRICS[key]
     if t in METRICS:
         return METRICS[t]
+    # Normalize common inflections and ranking adjectives before catalog lookup.
+    # This keeps the ontology independent of a fixed set of complete questions.
+    normalized = re.sub(r"\b(?:highest|top|most|best|lowest|bottom|least|worst)\b", " ", t)
+    normalized = re.sub(r"\b(?:the|a|an|by|with|for|show|list|rank|ranking)\b", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if normalized:
+        normalized_key = normalized.replace(" ", "_")
+        if normalized_key in METRICS:
+            return METRICS[normalized_key]
     # Exact alias match first (avoid "net profit" matching gross "profit")
     for m in METRICS.values():
-        if t == m.name or t in m.aliases:
+        if t == m.name or t in m.aliases or normalized in m.aliases:
             return m
-    # Phrase containment only for longer aliases (>= 5 chars)
-    for m in METRICS.values():
-        for a in m.aliases:
-            if len(a) >= 5 and (a in t or t in a):
-                return m
+    # Prefer the most specific alias first: "net profit" must resolve to its
+    # unavailable metric rather than the shorter "profit" alias for gross profit.
+    candidates = sorted(
+        ((a, m) for m in METRICS.values() for a in m.aliases if len(a) >= 5),
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
+    for alias, metric in candidates:
+        if re.search(rf"\b{re.escape(alias)}\b", normalized) or re.search(
+            rf"\b{re.escape(normalized)}\b", alias
+        ):
+            return metric
     return None
 
 

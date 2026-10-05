@@ -39,6 +39,19 @@ def test_explanatory_followup_is_not_replaced_with_canned_row_reuse():
     assert try_answer_from_prior_rows('Explain what this result means for the business', [{'customer': 'A', 'sales': 12}]) is None
 
 
+@pytest.mark.parametrize('question', [
+    'Use first invoices to compare and then compare with sales orders relevant to those linked invoices',
+    'Compare with deliveries relevant to those linked invoices',
+    'Compare those customers with their purchase orders',
+    'Compare the prior products with inventory balances',
+])
+def test_request_for_additional_facts_is_not_replaced_with_difference_of_prior_rows(question):
+    from app.services.result_first_followup import try_answer_from_prior_rows
+    rows = [{'customer_id': 'A', 'currency': 'USD', 'period_a': -10, 'period_b': -8, 'change': 2},
+            {'customer_id': 'B', 'currency': 'USD', 'period_a': -5, 'period_b': -4, 'change': 1}]
+    assert try_answer_from_prior_rows(question, rows) is None
+
+
 def test_incomplete_result_sample_cannot_establish_full_result_frequency():
     from app.services.result_first_followup import try_answer_from_prior_rows
     answer = try_answer_from_prior_rows('Which supplier appears most in this result?', [{'supplier': 'A'}], prior_plan={'result_artifact': {'truncated': True, 'row_count': 1000}})
@@ -260,8 +273,10 @@ def test_memory_excludes_unknown_roles_and_bounds_prompt_size():
 
 
 def test_failed_provider_is_skipped_temporarily_and_recovers(monkeypatch):
+    monkeypatch.setenv('AI_ANALYST_ALLOW_PROVIDER_FALLBACK', 'true')
     from app.services import ai_native_pipeline as provider
     monkeypatch.setattr(provider, '_PROVIDER_FAILURE_UNTIL', {})
+    monkeypatch.setenv('AI_PROVIDER_FAILURE_COOLDOWN_SECONDS', '60')
     monkeypatch.setattr(provider, '_google_key', lambda: 'fake-google')
     monkeypatch.setattr(provider, '_openai_key', lambda: 'fake-openai')
     monkeypatch.setenv('AI_CHAT_PROVIDER', 'gemini')
@@ -293,6 +308,7 @@ def test_current_question_is_not_lost_when_memory_is_large(monkeypatch):
 
 
 def test_empty_model_output_falls_back_instead_of_becoming_a_canned_answer(monkeypatch):
+    monkeypatch.setenv('AI_ANALYST_ALLOW_PROVIDER_FALLBACK', 'true')
     from app.services import ai_native_pipeline as provider
     monkeypatch.setattr(provider, '_PROVIDER_FAILURE_UNTIL', {})
     monkeypatch.setattr(provider, '_openai_key', lambda: 'fake-openai')

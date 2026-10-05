@@ -54,7 +54,8 @@ def _google_key() -> str:
 
 
 def _openai_model() -> str:
-    return os.getenv("AI_NATIVE_OPENAI_MODEL") or os.getenv("AI_FAST_MODEL") or "gpt-4o-mini"
+    from .analyst_model_policy import analyst_openai_model
+    return analyst_openai_model()
 
 
 def _gemini_model() -> str:
@@ -142,6 +143,7 @@ def _openai_chat(system: str, user: str, *, json_mode: bool = False) -> str:
     from openai import OpenAI
     from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
     from .investigation_budget import current_budget
+    from .analyst_model_policy import analyst_output_limit, analyst_reasoning_effort
 
     budget = current_budget()
     cap = float(os.getenv("AI_LLM_CALL_TIMEOUT_SECONDS") or "30")
@@ -158,14 +160,15 @@ def _openai_chat(system: str, user: str, *, json_mode: bool = False) -> str:
             {"role": "user", "content": user},
         ],
         **openai_chat_temperature_kwargs(model, 0.1),
-        **openai_completion_limit_kwargs(model, int(
-            (os.getenv("AI_JSON_MAX_TOKENS") or "1500") if json_mode
-            else (os.getenv("AI_RESPONSE_MAX_TOKENS") or "3000")
-        )),
+        **openai_completion_limit_kwargs(
+            model, analyst_output_limit(json_mode), reasoning_effort=analyst_reasoning_effort()
+        ),
     }
-    if json_mode and not str(model).lower().startswith("gpt-5"):
+    if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
     resp = client.chat.completions.create(**kwargs)
+    if resp.choices[0].finish_reason == "length":
+        raise RuntimeError("Model output exceeded its token budget; no partial answer was accepted")
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -232,15 +235,30 @@ def _provider_available(provider: str) -> bool:
 
 
 def _provider_failed(provider: str, error: BaseException) -> None:
+    # A single slow request does not make the provider unavailable for the
+    # answer stage or the next turn. Quota/configuration outages still cool down.
+    if isinstance(error, TimeoutError) or type(error).__name__ in {
+        "APITimeoutError", "ReadTimeout", "ConnectTimeout", "WriteTimeout", "PoolTimeout",
+    }:
+        return
     # Recover automatically after transient, configuration, and quota failures;
     # do not try the same broken provider at every stage of one investigation.
-    seconds = 300 if _is_openai_quota(error) or _is_gemini_quota(error) else 60
+    try:
+        transient_cooldown = max(
+            0.0,
+            float(os.getenv("AI_PROVIDER_FAILURE_COOLDOWN_SECONDS") or "180"),
+        )
+    except ValueError:
+        transient_cooldown = 180.0
+    seconds = max(300.0, transient_cooldown) if (
+        _is_openai_quota(error) or _is_gemini_quota(error)
+    ) else transient_cooldown
     _PROVIDER_FAILURE_UNTIL[_provider_identity(provider)] = time.monotonic() + seconds
 
 
 def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, str]:
-    """Return (text, provider). Prefer Gemini for chat speed when configured;
-    always fall back to the other provider on quota/rate-limit failures.
+    """Return (text, provider) using the selected provider.
+    Cross-provider fallback is allowed only when explicitly configured.
     """
     from .investigation_budget import current_budget
 
@@ -253,7 +271,7 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
         budget.checkpoint("llm_call")
 
     prefer = (os.getenv("AI_CHAT_PROVIDER") or os.getenv("AI_LLM_PROVIDER") or "").strip().lower()
-    prefer_gemini = prefer in {"gemini", "google"} or (
+    prefer_gemini = prefer in {"gemini", "google"} or (not prefer and
         os.getenv("AI_PREFER_GEMINI", "").strip().lower() in {"1", "true", "yes"}
     )
     last_err: Optional[BaseException] = None
@@ -274,7 +292,7 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
                 raise
             last_err = exc
             _provider_failed("gemini", exc)
-            logger.warning("[ai-native] Gemini failed (%s); trying OpenAI", type(exc).__name__)
+            logger.warning("[ai-native] Gemini failed (%s)", type(exc).__name__)
             return None
 
     def _try_openai() -> Optional[Tuple[str, str]]:
@@ -293,21 +311,22 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
                 raise
             last_err = exc
             _provider_failed("openai", exc)
-            logger.warning("[ai-native] OpenAI failed (%s); trying Gemini", type(exc).__name__)
+            logger.warning("[ai-native] OpenAI failed (%s)", type(exc).__name__)
             return None
 
+    allow_fallback = os.getenv("AI_ANALYST_ALLOW_PROVIDER_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
     if prefer_gemini:
         result = _try_gemini()
         if result is not None:
             return result
-        result = _try_openai()
+        result = _try_openai() if allow_fallback else None
         if result is not None:
             return result
     else:
         result = _try_openai()
         if result is not None:
             return result
-        result = _try_gemini()
+        result = _try_gemini() if allow_fallback else None
         if result is not None:
             return result
 
@@ -387,11 +406,18 @@ def _extract_sql_table_refs(sql: str) -> List[str]:
     return refs
 
 
-def _schema_violations(sql: str) -> List[str]:
+def _schema_violations(sql: str, question: str = "") -> List[str]:
     from .adaptive_nl_sql_hardening import local_sql_relation_names
 
     local_rels = {n.upper() for n in local_sql_relation_names(sql)}
-    bad: List[str] = []
+    from .sql_structure import sql_structure_errors
+
+    bad: List[str] = sql_structure_errors(sql, question)
+    if question:
+        from .plan_satisfaction import sql_satisfies_analytical_intent
+
+        if not sql_satisfies_analytical_intent(sql, question):
+            bad.append("SQL does not satisfy the requested analytical grain, filters, ranking, or period comparison")
     for t in _extract_sql_table_refs(sql):
         if t.upper() in local_rels:
             continue
@@ -403,6 +429,15 @@ def _schema_violations(sql: str) -> List[str]:
         if has_table(table) and not has_column(table, col):
             bad.append(f"unknown column {table}.{col}")
     return bad[:12]
+
+
+def _prepare_sql_candidate(raw: str, question: str) -> str:
+    from .sql_generation_sanitizers import sanitize_generated_sap_sql
+
+    sql = extract_sql(raw)
+    if not sql:
+        return ""
+    return _safe_select(sanitize_generated_sap_sql(repair_generated_sql(sql, question), question)) or ""
 
 
 def run_ai_native_pipeline(
@@ -519,6 +554,9 @@ def run_ai_native_pipeline(
         "Return SQL in a ```sql block only. SELECT only. LIMIT 100 unless an aggregate. "
         "Quote SAP tables. CAST text numerics. Do not join VBAK.vbeln = VBRK.vbeln. "
         "Do not join billing NETWR with EKPO/VBFA/MBEW in the same SUM."
+        " Text lookups must not multiply facts or consume repeated ranking slots. "
+        "A fixed document date cannot belong to two disjoint periods for the same document identity. "
+        "Compare a stable entity across periods, or use an explicit linked-document cohort."
     )
     sql_user = (
         f"Question: {restated}\nOriginal: {q}\n"
@@ -530,9 +568,7 @@ def run_ai_native_pipeline(
     )
     sql_raw, p4 = llm_text(sql_system, sql_user)
     providers.append(p4)
-    sql = extract_sql(sql_raw)
-    sql = repair_generated_sql(sql, restated) if sql else ""
-    sql = _safe_select(sql) or ""
+    sql = _prepare_sql_candidate(sql_raw, restated)
     stages["sql_draft"] = sql[:2000]
 
     if not sql:
@@ -545,18 +581,18 @@ def run_ai_native_pipeline(
             "Rewrite using one fact grain only.",
         )
         providers.append(p4b)
-        sql = _safe_select(repair_generated_sql(extract_sql(retry), restated)) or ""
+        sql = _prepare_sql_candidate(retry, restated)
         if not sql or sql_has_unsafe_monetary_fanout(sql):
             return None
-    violations = _schema_violations(sql)
+    violations = _schema_violations(sql, q)
     if violations:
         retry, p4c = llm_text(
             sql_system,
-            sql_user + "\n\nSchema errors:\n- " + "\n- ".join(violations) + "\nFix the SQL.",
+            sql_user + "\n\nAnalytical/schema validation errors:\n- " + "\n- ".join(violations) + "\nFix the SQL without dropping the requested comparison or changing the requested grain.",
         )
         providers.append(p4c)
-        sql = _safe_select(repair_generated_sql(extract_sql(retry), restated)) or ""
-        if not sql or _schema_violations(sql):
+        sql = _prepare_sql_candidate(retry, restated)
+        if not sql or _schema_violations(sql, q):
             return None
 
     sess = db
@@ -574,8 +610,8 @@ def run_ai_native_pipeline(
             sql_user + f"\n\nPostgreSQL error:\n{str(exc)[:500]}\nFix the SQL.",
         )
         providers.append(p4d)
-        sql = _safe_select(repair_generated_sql(extract_sql(retry), restated)) or ""
-        if not sql:
+        sql = _prepare_sql_candidate(retry, restated)
+        if not sql or _schema_violations(sql, q):
             return None
         try:
             rows = execute_sql(sess, sql, restated)

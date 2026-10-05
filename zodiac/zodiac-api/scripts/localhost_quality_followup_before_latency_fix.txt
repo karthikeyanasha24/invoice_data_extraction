@@ -1,0 +1,390 @@
+Browser tab: 3, Title: "AI Analyst · BridgeEDI", URL: "http://localhost:3000/dashboard/ai".
+The following is a diff from the previous accessibility tree with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 414-421
+~			186 button Clear chat
++						414 text -12.19
++						415 text -2.63
++						416 text -0.28
++						417 text -10.19
++						418 text -14.98
++						419 text 0
++						420 text 2
++						421 text -12.35
++						422 text 0.28
++				423 image
++				424 image
++				425 text What we found
++				426 text The query completed and returned 10 row(s). See the result table for the verified values.
++				427 text 📉
++				428 heading First, independently select the 10 lowest negative…, Value: 4
++					429 text First, independently select the 10 lowest negative…
++				430 text invoice amount over time
++				431 button AREA, Help: Switch to Area
++					432 image
++					433 text AREA
++				434 button BAR, Help: Switch to Bar
++					435 image
++					436 text BAR
++				437 button LINE, Help: Switch to Line
++					438 image
++					439 text LINE
++				440 button TABLE, Help: Switch to Table
++					441 image
++					442 text TABLE
++				443 button Download
++					444 image
++				445 container
++					446 text 2000-12-19
++					447 text 2000-12-19
++					448 text 2000-12-12
++					449 text 2000-12-07
++					450 text 2000-12-11
++					451 text -8
++					452 text -6
++					453 text -4
++					454 text -2
++					455 text 0
++				456 text 10  row s AREA
++				457 image
++				458 text Governed analysis · 10 rows
++				459 search text field (settable) Filter table rows
++				460 button Export CSV
++				461 table
++					462 row
++						463 cell
++							464 button billing document
++						465 cell
++							466 button customer id
++						467 cell
++							468 button customer name
++						469 cell
++							470 button invoice date
++						471 cell
++							472 button invoice amount
++						473 cell
++							474 button currency
++						475 cell
++							476 button linked sales orders
++						477 cell
++							478 button linked order count 2000
++						479 cell
++							480 button order amount 2000
++						481 cell
++							482 button linked order count 2001
++						483 cell
++							484 button order amount 2001
++						485 cell
++							486 button currency mismatch order count
++						487 cell
++							488 button absolute change
++						489 cell
++							490 button percent change
++					491 row
++						492 cell
++							493 text 0090023171
++						494 cell
++							495 text R110
++						496 cell
++							497 text SB Warenhaus R110
++						498 cell
++							499 text 19 Dec 2000
++						500 cell
++							501 text -0.83
++						502 cell
++							503 text DEM
++						504 cell
++							505 text —
++						506 cell
++							507 text —
++						508 cell
++							509 text —
++						510 cell
++							511 text —
++						512 cell
++							513 text —
++						514 cell
++							515 text —
++						516 cell
++							517 text —
++						518 cell
++							519 text —
++					520 row
++						521 cell
++							522 text 0090023172
++						523 cell
++							524 text R110
++						525 cell
++							526 text SB Warenhaus R110
++						527 cell
++							528 text 19 Dec 2000
++						529 cell
++							530 text -0.83
++						531 cell
++							532 text DEM
++						533 cell
++							534 text —
++						535 cell
++							536 text —
++						537 cell
++							538 text —
++						539 cell
++							540 text —
++						541 cell
++							542 text —
++						543 cell
++							544 text —
++						545 cell
++							546 text —
++						547 cell
++							548 text —
++					549 row
++						550 cell
++							551 text 0090023173
++						552 cell
++							553 text R110
++						554 cell
++							555 text SB Warenhaus R110
++						556 cell
++							557 text 19 Dec 2000
++						558 cell
++							559 text -0.83
++						560 cell
++							561 text DEM
++						562 cell
++							563 text —
++						564 cell
++							565 text —
++						566 cell
++							567 text —
++						568 cell
++							569 text —
++						570 cell
++							571 text —
++						572 cell
++							573 text —
++						574 cell
++							575 text —
++						576 cell
++							577 text —
++					578 row
++						579 cell
++							580 text 0090023134
++						581 cell
++							582 text R111
++						583 cell
++							584 text SB Warenhaus R111
++						585 cell
++							586 text 12 Dec 2000
++						587 cell
++							588 text -4.83
++						589 cell
++							590 text DEM
++						591 cell
++							592 text —
++						593 cell
++							594 text —
++						595 cell
++							596 text —
++						597 cell
++							598 text —
++						599 cell
++							600 text —
++						601 cell
++							602 text —
++						603 cell
++							604 text —
++						605 cell
++							606 text —
++					607 row
++						608 cell
++							609 text 0090023135
++						610 cell
++							611 text R111
++						612 cell
++							613 text SB Warenhaus R111
++						614 cell
++							615 text 12 Dec 2000
++						616 cell
++							617 text -4.83
++						618 cell
++							619 text DEM
++						620 cell
++							621 text —
++						622 cell
++							623 text —
++						624 cell
++							625 text —
++						626 cell
++							627 text —
++						628 cell
++							629 text —
++						630 cell
++							631 text —
++						632 cell
++							633 text —
++						634 cell
++							635 text —
++					636 row
++						637 cell
++							638 text 0090023176
++						639 cell
++							640 text R111
++						641 cell
++							642 text SB Warenhaus R111
++						643 cell
++							644 text 19 Dec 2000
++						645 cell
++							646 text -0.83
++						647 cell
++							648 text DEM
++						649 cell
++							650 text —
++						651 cell
++							652 text —
++						653 cell
++							654 text —
++						655 cell
++							656 text —
++						657 cell
++							658 text —
++						659 cell
++							660 text —
++						661 cell
++							662 text —
++						663 cell
++							664 text —
++					665 row
++						666 cell
++							667 text 0090023127
++						668 cell
++							669 text R111
++						670 cell
++							671 text SB Warenhaus R111
++						672 cell
++							673 text 07 Dec 2000
++						674 cell
++							675 text -0.65
++						676 cell
++							677 text DEM
++						678 cell
++							679 text —
++						680 cell
++							681 text —
++						682 cell
++							683 text —
++						684 cell
++							685 text —
++						686 cell
++							687 text —
++						688 cell
++							689 text —
++						690 cell
++							691 text —
++						692 cell
++							693 text —
++					694 row
++						695 cell
++							696 text 0090023128
++						697 cell
++							698 text R111
++						699 cell
++							700 text SB Warenhaus R111
++						701 cell
++							702 text 07 Dec 2000
++						703 cell
++							704 text -0.65
++						705 cell
++							706 text DEM
++						707 cell
++							708 text —
++						709 cell
++							710 text —
++						711 cell
++							712 text —
++						713 cell
++							714 text —
++						715 cell
++							716 text —
++						717 cell
++							718 text —
++						719 cell
++							720 text —
++						721 cell
++							722 text —
++					723 row
++						724 cell
++							725 text 0090023130
++						726 cell
++							727 text R111
++						728 cell
++							729 text SB Warenhaus R111
++						730 cell
++							731 text 11 Dec 2000
++						732 cell
++							733 text -0.2
++						734 cell
++							735 text DEM
++						736 cell
++							737 text —
++						738 cell
++							739 text —
++						740 cell
++							741 text —
++						742 cell
++							743 text —
++						744 cell
++							745 text —
++						746 cell
++							747 text —
++						748 cell
++							749 text —
++						750 cell
++							751 text —
++					752 row
++						753 cell
++							754 text 0090023131
++						755 cell
++							756 text R111
++						757 cell
++							758 text SB Warenhaus R111
++						759 cell
++							760 text 11 Dec 2000
++						761 cell
++							762 text -0.2
++						763 cell
++							764 text DEM
++						765 cell
++							766 text —
++						767 cell
++							768 text —
++						769 cell
++							770 text —
++						771 cell
++							772 text —
++						773 cell
++							774 text —
++						775 cell
++							776 text —
++						777 cell
++							778 text —
++						779 cell
++							780 text —
++				781 button (collapsed) How this was calculated, Secondary Actions: Expand
++					782 text How this was calculated
++					783 image
++				784 button View SQL sources · 10 rows
++					785 image
++					786 text View SQL sources
++					787 text ·
++					788 text 10
++					789 text  rows
++					790 image
++				791 button (collapsed) Description: Expand SQL query, Secondary Actions: Expand
++					792 image
++					793 text Executed SQL
++					794 text Expand SQL
++					795 image
++			796 text entry area (settable)
+~			181 button (disabled) Send question
++				797 image
+The focused UI element is 0 AXWebArea AI Analyst · BridgeEDI, URL: localhost:3000/dashboard/ai

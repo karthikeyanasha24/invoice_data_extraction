@@ -171,16 +171,27 @@ def extract_semantic_requirements(question: str) -> Dict[str, Any]:
                 (
                 f"Question: {question}\n\n"
                 "Return JSON: {\n"
-                '  "dimensions": ["month"],  // ONLY dimensions needed in the answer rows — not every related entity\n'
-                '  "group_by": ["month"],\n'
-                '  "measure": {"concept":"sales|revenue|quantity|count|sales_order|...","aggregation":"SUM|COUNT|none|..."},\n'
-                '  "condition": {"measure_operator":"<|>|=|<=|>=","measure_value":0},\n'
-                '  "time_filter": {"concept":"year|month|date","value":"2000","relative":"last_month"},\n'
-                '  "ranking": {"direction":"DESC|ASC","limit":1},\n'
-                '  "period_compare": {"type":"period_change","base_period":{"year":"2004"},"comparison_period":{"year":"2005"},"condition":"increased"},\n'
-                '  "negation": {"required":"purchase_order","forbidden":"invoice"},\n'
+                '  "dimensions": [],\n'
+                '  "group_by": [],\n'
+                '  "measure": {"concept":null,"aggregation":null},\n'
+                '  "condition": null,\n'
+                '  "time_filter": null,\n'
+                '  "ranking": null,\n'
+                '  "period_compare": null,\n'
+                '  "invoice_cohort_scope": null,\n'
+                '  "negation": null,\n'
                 '  "filters": []\n'
                 "}\n"
+                "Populate only requirements actually requested. Never copy example values into the question. "
+                "For a numeric condition use measure_operator and measure_value. "
+                "For time filters use concept and value, or relative when requested. "
+                "For ranking use direction and limit, plus partition_by when ranking independently per group. "
+                "When the question selects invoices independently in each compared year, set invoice_cohort_scope to each_period. "
+                "When it selects a single invoice cohort in the first/base year for a follow-up comparison, set it to base_period. "
+                "For a comparison use type period_change, base_period and comparison_period containing the requested year, "
+                "and calculation difference or the requested percentage. A neutral comparison has no increase/decrease condition. "
+                "Negation is null unless the user asks for entities that have one document type and lack another. "
+                "Instructions not to rank unrelated entities or not to double-count are not anti-join requirements. "
                 "Interpret 'by month/year/country/customer' as group_by dimensions — the result MUST be one row per group, never a single grand total. "
                 "Interpret 'top N' / 'highest' as ranking with ORDER BY measure DESC and LIMIT. "
                 "Interpret 'top N per/in each X' as ranking.partition_by = [X], NOT a global LIMIT. "
@@ -394,13 +405,14 @@ def verify_and_expand_table_coverage(
             f"Currently selected tables: {ctx.tables}\n\n"
             f"Full table catalog ({len(catalog)} tables, descriptions only):\n"
             f"{reg.compact_catalog_text(include_operational=include_operational)}\n\n"
-            "Return JSON: {\"coverage\":{\"country\":true,\"customer\":true,\"industry\":true,\"sales\":true}, "
+            "Return JSON: {\"coverage\":{}, "
             "\"missing_concepts\":[], "
             "\"additional_tables\":[{\"table\":\"\",\"reason\":\"\"}], "
             "\"complete\": true}. "
             "If the question needs billed sales amounts, include the billing ITEM table (often vbrp/VBRP) "
             "not only the billing header (VBRK) or sales order header (VBAK). "
-            "Every dimension AND the measure must be covered before complete=true."
+            "Populate coverage only with concepts required by this request. "
+            "Every requested dimension AND the measure must be covered before complete=true."
             ),
         )
     except Exception as exc:
@@ -597,7 +609,11 @@ def pipeline1_table_selection(question: str, ctx: VerifiedDbContext) -> None:
     reg = get_schema_registry()
     include_ops = _question_needs_operational_tables(question)
 
-    ctx.semantic_requirements = extract_semantic_requirements(question)
+    # Requery follow-ups already extracted requirements for this current turn
+    # before checking continuation. Repeating the model call adds latency and
+    # can replace the agreed scope with a conflicting second interpretation.
+    if not ctx.semantic_requirements:
+        ctx.semantic_requirements = extract_semantic_requirements(question)
     if budget is not None:
         budget.checkpoint("SELECTING_TABLES")
 
@@ -681,7 +697,7 @@ def pipeline2_column_selection(question: str, ctx: VerifiedDbContext) -> None:
         (
             f"Question: {question}\n"
             f"Selected tables: {ctx.tables}\n"
-            f"Column metadata:\n{json.dumps(col_meta)}\n\n"
+            f"Column metadata (table: [name, type, important]):\n{json.dumps({table: [[c['name'], c['type'], c['important']] for c in cols] for table, cols in col_meta.items()}, separators=(',', ':'))}\n\n"
             f"{column_text}\n\n"
             f"Suggested joins from registry: {json.dumps(suggested_joins)}\n\n"
             "Return JSON: {\"selected_columns\":[{\"table\":\"\",\"column\":\"\",\"purpose\":\"\"}], "
@@ -765,6 +781,15 @@ def pipeline25_query_plan(question: str, ctx: VerifiedDbContext, db: Optional[Se
 
     # Resolve relative YoY years from data when the plan requires two periods without literals.
     _resolve_relative_period_years(question, ctx, db)
+
+    # These renderers already have precedence over model plans. Check that
+    # route first instead of generating a model plan that will be discarded.
+    # The same intent, schema, currency, execution and result gates still run.
+    if pipeline3_sql_generation(question, ctx, templates_only=True):
+        _log_stage(ctx, "QUERY_PLAN", {"source": "verified_semantic_renderer", "model_required": False})
+        return
+    if budget is not None:
+        budget.checkpoint("query_planning")
 
     plan = build_structured_query_plan(
         question,
@@ -1156,7 +1181,7 @@ def _enrich_plan_for_missing_semantics(plan, req: Dict[str, Any], question: str,
         plan.semantic_requirements["time_filter"] = tf
         # Invoice/list relative-date questions must not force SUM aggregation.
         measure = plan.semantic_requirements.get("measure") if isinstance(plan.semantic_requirements.get("measure"), dict) else {}
-        if str(measure.get("aggregation") or "").upper() in {"SUM", "AVG"} and re.search(
+        if not plan.period_compare and str(measure.get("aggregation") or "").upper() in {"SUM", "AVG"} and re.search(
             r"\b(show|list|display|from last|from this)\b", question or "", re.I
         ):
             if not re.search(r"\b(top|highest|total|sum|rank)\b", question or "", re.I):
@@ -1193,6 +1218,9 @@ def _validate_sql_against_context(sql: str, ctx: VerifiedDbContext, db: Session)
     if budget is not None:
         budget.checkpoint("VALIDATING_SQL")
     errors = list(_schema_violations(sql) or [])
+    from .sql_structure import sql_structure_errors
+
+    errors.extend(sql_structure_errors(sql, ctx.question))
     if _contains_unresolved_sql_value(sql):
         errors.append("SQL contains an unresolved placeholder instead of a verified value")
     errors.extend(detect_expression_as_column_errors(sql))
@@ -1450,7 +1478,7 @@ def _template_sql(ctx: VerifiedDbContext, question: str, source: str, sql: str) 
     return out
 
 
-def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
+def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates_only: bool = False) -> str:
     from .investigation_budget import current_budget
     from .plan_satisfaction import sql_satisfies_analytical_intent
     from .adaptive_structured_sql import (
@@ -1478,28 +1506,25 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
     )
 
     budget = current_budget()
-    if budget is not None:
+    if budget is not None and not templates_only:
         budget.checkpoint("sql_generation")
 
     def _accept(source: str, sql: Optional[str]) -> Optional[str]:
         if not sql:
             return None
         out = sanitize_generated_sql(sql, question)
-        # Reject invalid grain: window + GROUP BY aggregate in the same SELECT level.
-        if (
-            re.search(r"\bROW_NUMBER\s*\(", out, re.I)
-            and re.search(r"\bGROUP\s+BY\b", out, re.I)
-            and not re.search(r"\)\s*(?:AS\s+\w+\s*)?(?:ranked|q\b)", out, re.I)
-            and out.upper().find("ROW_NUMBER") < out.upper().find("FROM")
-        ):
-            # Window appears in outermost select alongside grouping — invalid PG grain.
-            if not re.search(r"SELECT\s+\*\s+FROM\s*\(", out, re.I):
-                _log_stage(
-                    ctx,
-                    "PIPELINE_3_SQL_REJECTED",
-                    {"source": source, "reason": "window_and_group_same_level", "sql": out[:500]},
-                )
-                return None
+        # Validate each SELECT scope. A ranking window in one CTE and grouped
+        # amounts in another are valid; text positions cannot establish grain.
+        from .sql_structure import sql_structure_errors
+
+        structure_errors = sql_structure_errors(out, question)
+        if structure_errors:
+            _log_stage(
+                ctx,
+                "PIPELINE_3_SQL_REJECTED",
+                {"source": source, "reason": "invalid_sql_structure", "errors": structure_errors, "sql": out[:500]},
+            )
+            return None
         # First-class templates: validate against question-derived semantics only.
         # LLM semantic pollution (spurious currency/group_by dims) must not reject
         # correct deterministic templates in favor of broken free-form SQL.
@@ -1573,6 +1598,9 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         accepted = _accept(source, builder())
         if accepted:
             return accepted
+
+    if templates_only:
+        return ""
 
     # Primary path: render from the validated structured query plan
     if ctx.query_plan:
@@ -1663,7 +1691,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext) -> str:
         "Never invent document/customer IDs or use placeholder values, ellipses, or template markers. "
         "For a follow-up, preserve the prior query's verified scope or use it as a subquery; if the scope cannot be preserved, ask for clarification. "
         "Do not invent tables. Do not add restrictive date filters unless the question asks for a period. "
-        "For show/list/filter questions (e.g. negative sales in a year): return ROW-LEVEL rows — NO SUM(), NO GROUP BY. "
+        "For show/list/filter questions without a period comparison: return ROW-LEVEL rows — NO SUM(), NO GROUP BY. For period comparisons, use a consistent grain and aggregate both requested periods; never exclude the comparison period in WHERE. "
         "If the plan has group_by (month/year/customer/...): SELECT the group expression AND the measure, GROUP BY the group expression. Never return a single grand total. "
         "Ranking questions: GROUP BY dimensions, ORDER BY metric DESC, LIMIT from question (default 10).",
         (
@@ -1714,6 +1742,52 @@ def _resolved_latest_period_note(ctx: VerifiedDbContext) -> str:
     )
 
 
+def _verified_result_fallback(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Give useful, evidence-bounded narration when the answer model is unavailable."""
+    if not rows:
+        message = "The query completed and returned no matching rows."
+        return {"answer": message, "summary": message, "findings": [], "presentation_type": "none"}
+
+    row_count = len(rows)
+    keys = {str(key).strip().lower().replace(" ", "_"): key for key in rows[0]}
+    order_id_cols = [
+        key for normalized, key in keys.items()
+        if "linked" in normalized and "order" in normalized
+        and not any(token in normalized for token in ("count", "date", "amount", "currency"))
+    ]
+    has_invoice_context = any(token in keys for token in ("billing_document", "invoice_number", "billing_document_number"))
+    no_verified_order_ids = bool(order_id_cols) and all(
+        not any(str(row.get(col) or "").strip() for col in order_id_cols)
+        for row in rows
+    )
+    if has_invoice_context and no_verified_order_ids:
+        period_cols = [
+            str(key) for key in rows[0]
+            if re.search(r"(?:order|sales_order).*amount|amount.*(?:order|sales_order)", str(key), re.I)
+        ]
+        years: List[str] = []
+        for col in period_cols:
+            for year in re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", col):
+                if year not in years:
+                    years.append(year)
+        period_text = f" for {', '.join(years)}" if years else " for the requested periods"
+        message = (
+            f"The query returned {row_count} invoice row(s), but no verified linked sales-order IDs were found. "
+            f"Linked-order amounts{period_text}, absolute change, and percent change cannot be calculated from these matches. "
+            "Blank order fields mean no relationship was verified; they do not mean zero sales."
+        )
+        return {
+            "answer": message,
+            "summary": message,
+            "findings": [message],
+            "presentation_type": "table",
+            "follow_up_suggestions": [],
+        }
+
+    message = f"The query completed and returned {row_count} row(s). See the result table for the verified values."
+    return {"answer": message, "summary": message, "findings": [], "presentation_type": "table"}
+
+
 def pipeline4_result_analysis(
     question: str,
     sql: str,
@@ -1744,32 +1818,23 @@ def pipeline4_result_analysis(
                 "presentation_type": "table" if rows else "none",
             }
     period_note = _resolved_latest_period_note(ctx)
+    from .analyst_result_evidence import RESULT_ANALYSIS_SYSTEM, result_evidence
+    from .analyst_model_policy import analyst_model_task
     try:
-        narrative, provider = analyze_json(
-            "You are Pipeline 4 — RESULT ANALYSIS. JSON only. Use ONLY numbers in the rows. Never invent. "
-        "Treat the supplied period-selection evidence as verified system evidence. If a latest "
-        "period has been resolved, do not claim the year was hard-coded and do not suggest the "
-        "user query max(year) to obtain a latest period; the system already resolved it dynamically.",
-        (
-            f"Question: {question}\nSQL:\n{sql[:1500]}\n"
-            f"Tables: {ctx.tables}\nColumns: {ctx.columns}\n"
-            f"Verified period-selection evidence: {period_note or '(none)'}\n"
-            f"Row count: {len(rows)}\nSample: {json.dumps(rows[:12], default=str)[:4000]}\n\n"
-            "Return JSON: {\"answer\":\"\",\"summary\":\"\",\"findings\":[], "
-            "\"presentation_type\":\"table|bar|line|pie|none\", "
-            "\"calculation_explanation\":\"\", \"follow_up_suggestions\":[]}. "
-            "If 0 rows: say query succeeded but no matching records — do NOT claim data does not exist globally."
-            ),
-        )
+        with analyst_model_task("answer"):
+            narrative, provider = analyze_json(RESULT_ANALYSIS_SYSTEM, json.dumps({
+                "question": question,
+                "tables": ctx.tables,
+                "verified_period_selection": period_note or None,
+                "execution_evidence": result_evidence(sql, rows, ctx.semantic_requirements),
+            }, default=str, ensure_ascii=False))
+        if not isinstance(narrative, dict) or not str(narrative.get("answer") or narrative.get("summary") or "").strip():
+            raise ValueError("Answer model returned no explanation")
     except Exception as exc:
         # A verified SQL result remains useful even if narrative generation is
         # unavailable. Keep the actual rows and SQL visible; state only what
         # the execution itself establishes.
-        answer = (
-            "The query completed and returned no matching rows."
-            if not rows
-            else f"The query completed and returned {len(rows)} row(s). See the result table for the verified values."
-        )
+        fallback = _verified_result_fallback(rows)
         _log_stage(
             ctx,
             "PIPELINE_4_RESULT_ANALYSIS",
@@ -1780,13 +1845,7 @@ def pipeline4_result_analysis(
                 "error_type": type(exc).__name__,
             },
         )
-        return {
-            "answer": answer,
-            "summary": answer,
-            "findings": [],
-            "presentation_type": "table" if rows else "none",
-            "follow_up_suggestions": [],
-        }
+        return fallback
     _log_stage(
         ctx,
         "PIPELINE_4_RESULT_ANALYSIS",
@@ -2063,6 +2122,13 @@ def _run_four_stage_body(
         # Reapply question-aware safety after each repair branch so an explicit
         # country drill-down can never regain a customer-name search predicate.
         sql = sanitize_generated_sql(sql, question)
+        from .sql_structure import sql_structure_errors
+
+        structure_errors = sql_structure_errors(sql, question)
+        if structure_errors:
+            exec_error = "; ".join(structure_errors)
+            _log_stage(ctx, "SQL_STRUCTURE_REJECTED", {"errors": structure_errors})
+            break
         if budget is not None and not budget.allow_repair(exec_attempt):
             break
         try:

@@ -44,12 +44,13 @@ def _clean_identifier(value: str) -> str:
 def _parse_join_rule_pairs(rule_sql: str) -> Set[frozenset[str]]:
     pairs: Set[frozenset[str]] = set()
     eq_pattern = re.compile(
-        r'([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)',
+        r'"?[A-Za-z_][A-Za-z0-9_]*"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?'
+        r'\s*=\s*"?[A-Za-z_][A-Za-z0-9_]*"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?',
         re.IGNORECASE,
     )
     for m in eq_pattern.finditer(rule_sql or ""):
-        left_col = _clean_identifier(m.group(2)).upper()
-        right_col = _clean_identifier(m.group(4)).upper()
+        left_col = _clean_identifier(m.group(1)).upper()
+        right_col = _clean_identifier(m.group(2)).upper()
         if left_col and right_col:
             pairs.add(frozenset({left_col, right_col}))
     return pairs
@@ -318,12 +319,12 @@ def is_low_confidence_adaptive_edge(edge: JoinEdge) -> bool:
     return "adaptive_inferred_low" in role
 
 
-def preferred_join_graph(include_low_confidence: bool = False) -> List[JoinEdge]:
+def preferred_join_graph(include_low_confidence: bool = False, tables: Optional[List[str]] = None) -> List[JoinEdge]:
     """
     Preferred planning graph for deterministic join routing.
     By default excludes low-confidence adaptive edges and keeps explicit/high/medium first.
     """
-    edges = list(load_join_graph())
+    edges = join_graph_for_tables(tables) if tables else list(load_join_graph())
     if not include_low_confidence:
         edges = [e for e in edges if not is_low_confidence_adaptive_edge(e)]
     def _sort_key(e: JoinEdge) -> Tuple[int, float, str, str, str]:
@@ -395,8 +396,7 @@ def _build_adaptive_join_edges() -> List[JoinEdge]:
 
 
 @lru_cache(maxsize=1)
-def load_join_graph() -> List[JoinEdge]:
-    global _join_graph_mode_logged
+def _load_configured_join_graph() -> List[JoinEdge]:
     path = _service_root() / "schema_ai_config.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -404,7 +404,6 @@ def load_join_graph() -> List[JoinEdge]:
         data = {}
 
     out: List[JoinEdge] = []
-    explicit_pairs: Set[frozenset[str]] = set()
     for rule in (data.get("join_rules") or []):
         left = _clean_identifier(str(rule.get("left") or "")).upper()
         right = _clean_identifier(str(rule.get("right") or "")).upper()
@@ -418,50 +417,99 @@ def load_join_graph() -> List[JoinEdge]:
         elif "master" in note.lower():
             role = "lookup"
         out.append(JoinEdge(left_table=left, right_table=right, on_template=on_t, role=role))
-        explicit_pairs.add(frozenset({left, right}))
 
-    # Add adaptive inferred edges for broader SAP + app coverage.
-    # Keep explicit rules first in list (priority), but also keep inferred alternatives
-    # for the same pair so the graph can adapt to more query variants.
-    for e in _build_adaptive_join_edges():
-        pair = frozenset({e.left_table, e.right_table})
-        if pair in explicit_pairs:
-            e = JoinEdge(
-                left_table=e.left_table,
-                right_table=e.right_table,
-                on_template=e.on_template,
-                role=f"{e.role}_secondary",
-                cardinality=e.cardinality,
+    return out
+
+
+def _schema_columns_for_tables(tables: Set[str]) -> Dict[str, Set[str]]:
+    """Read columns only for requested tables; do not construct a global join graph."""
+    idx = build_canonical_schema_index(include_non_sap=True)
+    out: Dict[str, Set[str]] = {}
+    for requested in tables:
+        table = idx.get_table(requested)
+        if table:
+            out[table.name.upper()] = {
+                str(column.name or "").upper()
+                for column in (table.columns or [])
+                if column and column.name
+            }
+    return out
+
+
+@lru_cache(maxsize=256)
+def _adaptive_edges_for_table_set(table_names: Tuple[str, ...]) -> Tuple[JoinEdge, ...]:
+    """Infer join candidates on demand for the small set of tables in a query."""
+    requested = {name.upper() for name in table_names if name}
+    if len(requested) < 2:
+        return ()
+    configured = _load_configured_join_graph()
+    configured_pairs = {frozenset({e.left_table, e.right_table}) for e in configured}
+    table_cols = _schema_columns_for_tables(requested)
+    ordered = sorted(table_cols)
+    out: List[JoinEdge] = []
+    for i, left in enumerate(ordered):
+        for right in ordered[i + 1:]:
+            if frozenset({left, right}) in configured_pairs:
+                continue
+            templates = _infer_on_templates_for_tables(
+                _quoted_table_identifier(left),
+                _quoted_table_identifier(right),
+                table_cols[left],
+                table_cols[right],
             )
-        out.append(e)
+            for template in templates:
+                confidence = _confidence_for_template(template)
+                # Keep only useful inferred candidates; weak shared fields such as
+                # client/company context alone are not a safe join path.
+                if confidence < 1.5:
+                    continue
+                role = "adaptive_inferred_high" if confidence >= 3.0 else "adaptive_inferred_medium"
+                out.append(JoinEdge(left, right, template, role, f"conf:{confidence}"))
+    return tuple(out)
+
+
+def join_graph_for_tables(tables: Optional[List[str]] = None, *, include_adaptive: bool = True) -> List[JoinEdge]:
+    """Return configured edges plus schema-inferred edges among the requested tables."""
+    requested = tuple(sorted({str(t).strip().strip('"').upper() for t in (tables or []) if t}))
+    configured = _load_configured_join_graph()
+    if not requested:
+        return list(configured)
+    requested_set = set(requested)
+    edges = [e for e in configured if e.left_table in requested_set and e.right_table in requested_set]
+    if include_adaptive:
+        edges.extend(_adaptive_edges_for_table_set(requested))
+    return edges
+
+
+@lru_cache(maxsize=1)
+def load_join_graph() -> List[JoinEdge]:
+    """Return configured relationships only; adaptive joins are inferred per query."""
+    global _join_graph_mode_logged
+    out = _load_configured_join_graph()
     if not _join_graph_mode_logged:
-        mode = _adaptive_mode()
-        adaptive_count = sum(1 for e in out if (e.role or "").startswith("adaptive_inferred"))
         logger.info(
-            "Join graph mode active: %s (total_edges=%d, adaptive_edges=%d)",
-            mode,
+            "Join graph configured edges loaded (edges=%d; adaptive inference is query-scoped)",
             len(out),
-            adaptive_count,
         )
         _join_graph_mode_logged = True
     return out
 
 
-@lru_cache(maxsize=1)
-def allowed_table_edges() -> Set[frozenset[str]]:
-    return {frozenset({e.left_table, e.right_table}) for e in load_join_graph()}
+def allowed_table_edges(tables: Optional[List[str]] = None) -> Set[frozenset[str]]:
+    edges = join_graph_for_tables(tables) if tables else load_join_graph()
+    return {frozenset({e.left_table, e.right_table}) for e in edges}
 
 
-@lru_cache(maxsize=1)
-def allowed_join_column_pairs() -> Dict[frozenset[str], Set[frozenset[str]]]:
+def allowed_join_column_pairs(tables: Optional[List[str]] = None) -> Dict[frozenset[str], Set[frozenset[str]]]:
     allowed: Dict[frozenset[str], Set[frozenset[str]]] = {}
-    for e in load_join_graph():
+    edges = join_graph_for_tables(tables) if tables else load_join_graph()
+    for e in edges:
         key = frozenset({e.left_table, e.right_table})
         allowed.setdefault(key, set()).update(_parse_join_rule_pairs(e.on_template))
     return allowed
 
 
-def join_hints_for_tables(tables: List[str]) -> str:
+def join_hints_for_tables(tables: List[str], *, include_adaptive: bool = True) -> str:
     if not tables:
         return ""
     table_set = {str(t).upper() for t in tables}
@@ -490,7 +538,7 @@ def join_hints_for_tables(tables: List[str]) -> str:
         if role:
             role_lines.append(f"- {t}: {role}")
     matching_edges: List[JoinEdge] = []
-    for e in load_join_graph():
+    for e in join_graph_for_tables(tables, include_adaptive=include_adaptive):
         if e.left_table in table_set and e.right_table in table_set:
             matching_edges.append(e)
     def _edge_priority(e: JoinEdge) -> Tuple[int, float]:
@@ -526,7 +574,7 @@ def tables_linked_to_graph(tables: List[str]) -> bool:
     uniq = sorted({str(t).upper() for t in (tables or []) if t})
     if len(uniq) <= 1:
         return True
-    edges = allowed_table_edges()
+    edges = allowed_table_edges(uniq)
     neighbor: Dict[str, Set[str]] = {t: set() for t in uniq}
     for e in edges:
         nodes = sorted(e)

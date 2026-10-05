@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { defaultAnalystChartType, isComparisonMeasure } from '@/lib/analystPresentation';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -223,6 +224,7 @@ function isDimension(col: string, sampleVal: any): boolean {
 
 function isDateCol(col: string, sampleVal: any): boolean {
   const lk = col.toLowerCase();
+  if (isComparisonMeasure(col)) return false;
   if (/date|month|period|year|quarter|week/.test(lk)) return true;
   const s = String(sampleVal ?? '').trim();
   return /^\d{4}-\d{2}(-\d{2})?$/.test(s) || /^\d{4}$/.test(s);
@@ -323,7 +325,8 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
         types.add('line');
         types.add('area');
         // Pie: sensible only for few categories with one measure
-        if (chart.data.length <= 12 && measures.length === 1 && !isDateCol(dims[0], chart.data[0]?.[dims[0]])) {
+        if (chart.data.length <= 12 && measures.length === 1 && !isDateCol(dims[0], chart.data[0]?.[dims[0]])
+            && chart.data.every(row => toNum(row[measures[0]]) >= 0)) {
           types.add('pie');
         }
         types.add('table');
@@ -904,7 +907,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       {charts.map((chart, idx) => {
         try {
           const typeList = available[idx] || [chart.chart_type || 'bar'];
-          const preferredDefault = typeList.includes('line') ? 'line' : (chart.chart_type || 'bar');
+          const preferredDefault = defaultAnalystChartType(chart.chart_type || 'bar', typeList);
           const activeType = overrides[idx] || preferredDefault;
           const mixedC = chart.chart_type !== 'table' && multiCcy(chart.data);
 

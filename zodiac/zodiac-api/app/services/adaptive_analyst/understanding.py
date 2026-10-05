@@ -48,7 +48,27 @@ _UNDERSTAND_SYSTEM = (
     "(true only when intent is analytics/investigation and required fields are missing)\n"
     "clarification_question: string or null\n"
     "resolved_question: standalone English query, or null when no database query is needed\n"
+    "turn_relation: new_request|clarification_answer|followup\n"
+    "context_source: none|pending_request|prior_request|prior_result\n"
     "Rules:\n"
+    "- Read the entire user message, including late constraints and multiple requested parts. "
+    "A long message is not an error or a reason to answer just the first clause. "
+    "Preserve every requested comparison, relationship, exclusion, and output requirement "
+    "in the resolved question. Distinguish quoted examples from the actual request.\n"
+    "- An unanswered analytical clarification is a pending REQUEST, not a query result. "
+    "When the user answers its choices, sets its source/grain/format, or accepts its "
+    "defaults, set turn_relation=clarification_answer and context_source=pending_request. "
+    "Resolve the whole pending request plus the reply into resolved_question, preserving "
+    "its metric, predicates, periods, limits and requested relationships unless the user "
+    "changes them. A selection to be computed by that request needs no prior result rows. "
+    "Do not turn an answer to a choice into a new unrelated count or ranking. "
+    "If another material choice remains, retain the resolved request and ask only for it.\n"
+    "- context_source=prior_result means the user selects an entity/document from an "
+    "already returned result (for example its leader or one of its rows). That requires "
+    "verified result evidence; a pending request cannot supply those IDs or values. "
+    "context_source=prior_request means reusing requested filters/periods, not row values. "
+    "An unrelated new question uses turn_relation=new_request and context_source=none; "
+    "do not inherit pending choices into it. Never treat a previous failure as results.\n"
     "- A follow-up that only asks what a prior answer meant or what you said "
     "→ conversation, requires_database=false. A follow-up that asks to retrieve, "
     "calculate, compare, rank, filter, or add database details → analytics/investigation, "
@@ -75,6 +95,15 @@ _UNDERSTAND_SYSTEM = (
     "default to 10 rows. Use calendar periods unless fiscal periods are requested. "
     "For a comparison, return both period values and the requested change measures; "
     "do not assume the result increased or decreased unless the user says so.\n"
+    "- A uniquely dated transaction/document belongs to one calendar period. "
+    "Do not resolve a period comparison as finding the same document ID in two "
+    "different periods. Keep document-level rankings as separate period cohorts; "
+    "align amounts across periods only using a stable entity the user specified "
+    "or a supported relationship. For selected documents and their linked documents, "
+    "compute the selection first and follow its verified relationships, without "
+    "claiming a prior result is required. If a stable comparison dimension is "
+    "missing, preserve the separate cohorts or ask one material question; never "
+    "invent a same-document cross-period match.\n"
     "- 'Most negative' means ascending order by a verified numeric measure with a "
     "less-than-zero filter. Keep negative/credit amounts when the user asks for "
     "negative values. Do not ask whether to include them.\n"
@@ -106,6 +135,9 @@ _RESPONSE_SYSTEM = (
     "You are BridgeEDI AI Analyst. Respond clearly in the user's requested language. "
     "For general knowledge, writing, coding, explanations, and reasoning, use your "
     "general knowledge and adapt the format, language, and detail to the user's request. "
+    "Read and answer every material part of long or compound messages. For a detailed request, "
+    "give a complete, well organized explanation with concrete examples when helpful; do not "
+    "force it into a short summary. Keep simple greetings and single facts brief. "
     "Apply user-authored communication preferences in conversation_context.user_preferences "
     "and other clearly stated user preferences in the recent user turns when their stated "
     "scope includes the current request. Preserve their requested format, "
@@ -124,7 +156,8 @@ _RESPONSE_SYSTEM = (
     "If capability facts are provided, ground your answer in them and do not "
     "claim capabilities that are not listed. "
     "For broad questions such as 'What can you help me analyze?', answer in at most "
-    "two short sentences and mention no more than three example task types. Do not "
+    "two short sentences and mention no more than three example task types unless the user "
+    "asks for detail, examples, or a multi-part explanation. Do not "
     "include schema counts, implementation details, a full domain catalog, or setup "
     "questions unless the user asks for those details. "
     "When the user asks you to simplify or explain your previous answer in plain language, "
@@ -156,6 +189,8 @@ class TurnUnderstanding:
     intent: str = "conversation"
     goal: str = ""
     resolved_question: Optional[str] = None
+    turn_relation: str = "new_request"
+    context_source: str = "none"
     requires_database: bool = False
     requires_metadata: bool = False
     requires_conversation_context: bool = False
@@ -242,6 +277,11 @@ def _context_block(
 ) -> str:
     parts: List[str] = []
     plan = prior_plan if isinstance(prior_plan, dict) else {}
+    from .pending_analysis import pending_analysis_context
+
+    pending = pending_analysis_context(plan, prior_question, prior_status)
+    if pending:
+        parts.append("Pending analytical request (unexecuted intent, not verified rows): " + json.dumps(pending, default=str, ensure_ascii=False))
     inv = plan.get("investigation_state") if isinstance(plan.get("investigation_state"), dict) else {}
     recent = plan.get("recent_turns") or inv.get("recent_turns") or []
     if isinstance(recent, list) and recent:
@@ -286,7 +326,7 @@ def _context_block(
                     parts.append(f"Most recent prior user request specifying a time period: {content[:600]}")
                     break
     if prior_question:
-        parts.append(f"Previous user message: {prior_question[:500]}")
+        parts.append(f"Previous user message: {prior_question[:32000]}")
     if prior_summary:
         parts.append(f"Previous assistant answer: {prior_summary[:1200]}")
     last_mode = str(plan.get("last_mode") or "")
@@ -482,6 +522,34 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
         reference_text,
         flags=re.I,
     )
+    # Demonstratives can refer to a cohort selected earlier in the same
+    # request ("show the ten lowest invoices ... compare those invoices").
+    # Remove that cue only when the same business entity is named before the
+    # demonstrative; otherwise it remains a conversational reference.
+    local_entity_patterns = (
+        r"(?:billing\s+)?invoices?",
+        r"(?:billing\s+)?documents?",
+        r"sales\s+orders?",
+        r"orders?",
+        r"customers?",
+        r"countries?",
+        r"materials?",
+        r"products?",
+        r"vendors?",
+        r"suppliers?",
+    )
+    for entity_pattern in local_entity_patterns:
+        demonstrative = re.search(
+            rf"\b(?:these|those|that|same)\s+(?:selected\s+)?(?:{entity_pattern})\b",
+            reference_text,
+            re.I,
+        )
+        if demonstrative and re.search(entity_pattern, reference_text[:demonstrative.start()], re.I):
+            reference_text = (
+                reference_text[:demonstrative.start()]
+                + re.sub(r"\b(?:these|those|that|same)\b", "", demonstrative.group(0), flags=re.I)
+                + reference_text[demonstrative.end():]
+            )
     refers_to_prior = bool(
         re.search(r"\b(this|these|those|that|same|above|previous|prior|earlier|its|their)\b", reference_text, re.I)
         or re.search(
@@ -508,6 +576,31 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
         )
     )
     return refers_to_prior and requests_data and mentions_business_data
+
+
+def has_same_turn_entity_antecedent(question: str) -> bool:
+    """Whether a demonstrative business-entity reference is anchored in this request."""
+    q = question or ""
+    for entity_pattern in (
+        r"(?:billing\s+)?invoices?",
+        r"(?:billing\s+)?documents?",
+        r"sales\s+orders?",
+        r"orders?",
+        r"customers?",
+        r"countries?",
+        r"materials?",
+        r"products?",
+        r"vendors?",
+        r"suppliers?",
+    ):
+        demonstrative = re.search(
+            rf"\b(?:these|those|that|same)\s+(?:selected\s+)?(?:{entity_pattern})\b",
+            q,
+            re.I,
+        )
+        if demonstrative and re.search(entity_pattern, q[:demonstrative.start()], re.I):
+            return True
+    return False
 
 
 def compact_prior_result(
@@ -590,10 +683,12 @@ def _coerce_understanding(data: Dict[str, Any], *, provider: str) -> TurnUnderst
         intent=intent,
         goal=str(data.get("goal") or "")[:500],
         resolved_question=(
-            str(data["resolved_question"]).strip()[:2000]
+            str(data["resolved_question"]).strip()[:32000]
             if data.get("resolved_question") not in (None, "")
             else None
         ),
+        turn_relation=str(data.get("turn_relation") or "new_request") if data.get("turn_relation") in {"new_request", "clarification_answer", "followup"} else "new_request",
+        context_source=str(data.get("context_source") or "none") if data.get("context_source") in {"none", "pending_request", "prior_request", "prior_result"} else "none",
         requires_database=requires_db,
         requires_metadata=requires_meta,
         requires_conversation_context=bool(data.get("requires_conversation_context")),
@@ -639,7 +734,7 @@ def understand_turn(
     user = (
         f"Conversation context:\n{_context_block(prior_question=prior_question, prior_summary=prior_summary, prior_plan=prior_plan, prior_status=prior_status, prior_rows=prior_rows, current_question=q)}\n\n"
         f"Available capabilities (facts, not the answer):\n{json.dumps(caps, default=str)[:1800]}\n\n"
-        f"Current user message:\n{q[:4000]}\n"
+        f"Current user message:\n{q}\n"
     )
     logger.info("[understanding] understanding_model_called question_len=%s prior=%s", len(q), bool(prior_question or prior_summary))
     try:
@@ -647,6 +742,13 @@ def understand_turn(
         if not isinstance(data, dict):
             raise RuntimeError("understanding model returned non-object JSON")
     except Exception as model_error:
+        from .pending_analysis import pending_analysis_context
+
+        if pending_analysis_context(prior_plan, prior_question, prior_status):
+            # A lexical fallback cannot resolve a choice against a pending
+            # request. Report the model failure instead of misreading the reply
+            # as a new query or blaming the absence of executed result rows.
+            raise RuntimeError("The model could not resolve the pending analytical request") from model_error
         # Keep supported data questions usable during a model outage. This
         # fallback only chooses the governed database capability; the schema,
         # semantic parser, SQL validators, and database still determine facts.
@@ -780,7 +882,7 @@ def generate_grounded_response(
             capability_facts() if understanding.intent == "capability" else None
         ),
         "conversation_context": {
-            "previous_user": (prior_question or "")[:4000],
+            "previous_user": (prior_question or "")[:32000],
             "previous_assistant": (prior_summary or "")[:6000],
             "recent_turns": recent_turns,
             "user_preferences": preferences,
@@ -788,23 +890,25 @@ def generate_grounded_response(
                 (evidence or {}).get("prior_result") if isinstance(evidence, dict) else None
             ),
         },
-        "current_user_message": (question or "")[:4000],
+        "current_user_message": question or "",
     }
     logger.info(
         "[understanding] response_model_called intent=%s has_capability_facts=%s",
         understanding.intent,
         bool(payload.get("capability_facts")),
     )
-    text, provider = complete_text(
-        _RESPONSE_SYSTEM,
-        (
-            "Rewrite the previous explanation in one short, plain-language sentence. "
-            "Use everyday words and do not add examples.\n"
-            if _is_simplification_followup(question, understanding.intent)
-            else "Produce the assistant reply for the user.\n"
+    from ..analyst_model_policy import analyst_model_task
+    with analyst_model_task("answer"):
+        text, provider = complete_text(
+            _RESPONSE_SYSTEM,
+            (
+                "Rewrite the previous explanation in one short, plain-language sentence. "
+                "Use everyday words and do not add examples.\n"
+                if _is_simplification_followup(question, understanding.intent)
+                else "Produce the assistant reply for the user.\n"
+            )
+            + json.dumps(payload, default=str),
         )
-        + json.dumps(payload, default=str),
-    )
     reply = (text or "").strip()
     if not reply:
         raise RuntimeError("response model returned empty text")
@@ -843,6 +947,10 @@ def _is_broad_capability_question(question: str, intent: str) -> bool:
 
 
 def _is_simplification_followup(question: str, intent: str) -> bool:
+    # Plain language can still be thorough. Only enforce a short rewrite when
+    # the user has not also asked for detail or multiple explanatory parts.
+    if re.search(r"\b(?:detailed|in\s+detail|thorough|comprehensive|step\s+by\s+step|examples?|all\s+(?:parts|details))\b", question or "", re.I):
+        return False
     return intent in {"conversation", "knowledge", "capability"} and bool(
         re.search(
             r"\b(simpler|simplify|more\s+simply|plain\s+language|less\s+technical|shorter|"
@@ -990,6 +1098,8 @@ def technical_understanding_failure(question: str, err: BaseException) -> Dict[s
 
 def analytics_clarification_payload(question: str, understanding: TurnUnderstanding) -> Dict[str, Any]:
     """Clarification only after understanding established analytics intent with gaps."""
+    from .pending_analysis import pending_analysis_plan
+
     msg = (understanding.clarification_question or "").strip() or (
         "I need a clearer business metric or dimension. "
         "Try something like: \"Show top 10 customers by billing revenue\" or "
@@ -1021,6 +1131,7 @@ def analytics_clarification_payload(question: str, understanding: TurnUnderstand
         "query_plan": {
             "last_mode": "clarification",
             "understanding": understanding.to_public_dict(),
+            "pending_analysis": pending_analysis_plan(question, understanding),
         },
         "suggested_followups": [
             "Show the top customers by billed sales.",

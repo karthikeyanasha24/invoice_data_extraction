@@ -1,0 +1,40 @@
+Browser tab: 3, Title: "AI Analyst · BridgeEDI", URL: "http://localhost:3000/dashboard/ai".
+The following is a diff from the previous accessibility tree with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 795
+~				791 button (expanded) Description: Collapse SQL query, Secondary Actions: Collapse
+~					794 text Collapse SQL
++					798 image
++				799 container Executed SQL
++					800 text This query was used to read the database.
++					801 container
++						802 button Copy SQL query
++							803 image
++						804 text WITH invoice_cohort AS (
+  SELECT k."vbeln" AS "_billing_document_key", TRIM(CAST(k."vbeln" AS TEXT)) AS "billing_document", TRIM(CAST(k."fkdat" AS TEXT)) AS "invoice_date", TRIM(CAST(k."kunag" AS TEXT)) AS "customer_id", CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) AS "invoice_amount", TRIM(CAST(k."waerk" AS TEXT)) AS "currency", TRIM(CAST(c."name1" AS TEXT)) AS "customer_name"
+  FROM "VBRK" k
+LEFT JOIN "KNA1" c ON k."kunag" = c."kunnr"
+  WHERE TRIM(CAST(k."fkdat" AS TEXT)) >= '20000101'
+    AND TRIM(CAST(k."fkdat" AS TEXT)) < '20010101'
+    AND CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) < 0
+    AND NULLIF(TRIM(CAST(k."waerk" AS TEXT)), '') IS NOT NULL
+  ORDER BY "invoice_amount" ASC, "billing_document" ASC
+  LIMIT 10
+),
+linked_orders AS (
+  SELECT DISTINCT i."billing_document", o."vbeln" AS "linked_order_key", TRIM(CAST(o."vbeln" AS TEXT)) AS "linked_sales_order", o."erdat" AS "linked_order_date", o."netwr" AS "linked_order_amount", o."waerk" AS "linked_order_currency"
+  FROM invoice_cohort i
+  JOIN "VBFA" f ON f."vbeln" = i."_billing_document_key"
+  JOIN "VBAK" o ON o."vbeln" = f."vbelv"
+),
+order_periods AS (
+  SELECT l."billing_document", STRING_AGG(DISTINCT l."linked_sales_order", ', ' ORDER BY l."linked_sales_order") AS "linked_sales_orders", COUNT(DISTINCT CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN l."linked_order_key" END) AS "linked_order_count_2000", SUM(CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), '') AS NUMERIC) END) AS "order_amount_2000", COUNT(DISTINCT CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN l."linked_order_key" END) AS "linked_order_count_2001", SUM(CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), '') AS NUMERIC) END) AS "order_amount_2001", COUNT(DISTINCT CASE WHEN ((TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') OR (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101')) AND NOT (UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency")) THEN l."linked_order_key" END) AS "currency_mismatch_order_count"
+  FROM linked_orders l
+  JOIN invoice_cohort i ON i."billing_document" = l."billing_document"
+  WHERE ((TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') OR (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101'))
+  GROUP BY l."billing_document"
+)
+SELECT i."billing_document", i."customer_id", i."customer_name", i."invoice_date", i."invoice_amount", i."currency", p."linked_sales_orders", p."linked_order_count_2000", p."order_amount_2000", p."linked_order_count_2001", p."order_amount_2001", p."currency_mismatch_order_count", (p."order_amount_2001" - p."order_amount_2000") AS "absolute_change", ROUND(((p."order_amount_2001" - p."order_amount_2000")) / NULLIF(ABS(p."order_amount_2000"), 0) * 100, 2) AS "percent_change"
+FROM invoice_cohort i
+LEFT JOIN order_periods p ON p."billing_document" = i."billing_document"
+ORDER BY i."customer_id", i."invoice_amount" ASC, i."billing_document"
+The focused UI element is 791 button (expanded) Description: Collapse SQL query, Secondary Actions: Collapse

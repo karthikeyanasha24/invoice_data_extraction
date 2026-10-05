@@ -531,6 +531,12 @@ def inject_currency_filter_sql(sql: str, table: str, column: str, currency_code:
     if not sql or not currency_code:
         return sql
     tbl = resolve_table_name(table) or table
+    # The pipeline can pass SQL through currency handling more than once.
+    # Recognize normalized predicates such as
+    # TRIM(CAST(k."waerk" AS TEXT)) = 'USD' as well as bare `waerk = 'USD'`;
+    # otherwise the second pass appends a duplicate predicate.
+    if strip_currency_filter_predicates(sql) != sql:
+        return sql
     # Match quoted/unquoted column refs: waerk =, "waerk" =, ."waerk"=
     if re.search(rf'(?:^|[.\s"]){re.escape(column)}"?\s*=', sql, re.I):
         return sql

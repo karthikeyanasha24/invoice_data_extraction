@@ -6,6 +6,7 @@ uvicorn==0.37.0
 sqlalchemy==2.0.44
 asyncpg==0.29.0
 psycopg2-binary==2.9.11
+sqlglot==25.28.0
 
 # Authentication & Security
 passlib[bcrypt]==1.7.4

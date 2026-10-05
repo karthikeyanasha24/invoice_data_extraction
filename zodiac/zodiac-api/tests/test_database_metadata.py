@@ -307,6 +307,20 @@ def test_local_possessive_in_invoice_question_is_not_mistaken_for_chat_followup(
     )
 
 
+def test_same_turn_selected_documents_anchor_demonstrative_followup():
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    question = (
+        "Show the bottom 10 negative billed invoices in calendar year 2000, then "
+        "compare linked sales order totals for those invoices in 2000 versus 2001."
+    )
+    assert not is_referential_database_action(question, has_prior=True)
+    assert is_referential_database_action(
+        "Compare linked sales order totals for those invoices in 2000 versus 2001.",
+        has_prior=True,
+    )
+
+
 @pytest.mark.parametrize("question", [
     "Show this year's billed sales.",
     "Show sales in the previous year.",

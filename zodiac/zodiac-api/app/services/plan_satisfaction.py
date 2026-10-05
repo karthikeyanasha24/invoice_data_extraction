@@ -199,9 +199,17 @@ def sql_has_period_comparison(sql: str, years: Optional[List[str]] = None) -> bo
     )
     if years and len(years) >= 2:
         y0, y1 = str(years[0]), str(years[-1])
-        if y0 in s and y1 in s and (has_case_pair or has_change or "FILTER" in su):
+        # Mentioning both years (or filtering both years) is not a comparison:
+        # the query must calculate a change/delta as well.
+        if y0 in s and y1 in s and has_change:
             return True
-        if y0 in s and y1 in s and has_case_pair:
+        # A linked-order comparison uses SAP document dates as full YYYYMMDD
+        # ranges and gives each verified order-period aggregate an explicit
+        # year alias. Those are period measures even without CASE YEAR='YYYY'.
+        order_periods = all(re.search(
+            rf'\bAS\s+"?order_amount_{re.escape(year)}"?', s, re.I
+        ) for year in (y0, y1))
+        if order_periods and re.search(r'\bAS\s+"?(?:absolute_change|percent_change)"?', s, re.I):
             return True
     if has_case_pair and has_change:
         return True
@@ -318,6 +326,10 @@ def sql_satisfies_analytical_intent(
     """True when SQL is compatible with the analytical plan. Fail closed for rankings/groupings."""
     if not (sql or "").strip():
         return False
+    from .sql_structure import sql_structure_errors
+
+    if sql_structure_errors(sql, question):
+        return False
     req = required_semantics(question, semantic)
     sem = merge_semantic_requirements(question, semantic or {})
     ops = sem.get("analytical_operations") or extract_analytical_operations(question)
@@ -405,7 +417,10 @@ def sql_satisfies_analytical_intent(
             return False
         limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.I)
         if not limit_match or int(limit_match.group(1)) != int(ranking["limit"]):
-            return False
+            from .sql_structure import has_ranking_bound
+
+            if not has_ranking_bound(sql, int(ranking["limit"])):
+                return False
     if period:
         years = _period_years(period if isinstance(period, dict) else {}, ops)
         if not sql_has_period_comparison(sql, years):
@@ -691,6 +706,34 @@ def result_matches_analytical_intent(
                 warnings.append("multi-period comparison columns missing from result")
         # If change present, verify condition when claimable
         condition = str((period or {}).get("condition") or (period or {}).get("op") or "").lower()
+        comparison = req.get("comparison")
+        rank_metric = str((ranking or {}).get("metric") or (ranking or {}).get("measure") or "").lower()
+        if (
+            ranking and isinstance(comparison, dict) and "period_a" in keys
+            and condition not in {"growth", "increase", "increased", "decline", "decrease", "decreased"}
+            and not any(term in rank_metric for term in ("change", "growth", "difference", "decline"))
+        ):
+            import math
+            import operator as numeric_operators
+
+            compare_fn = {"<": numeric_operators.lt, "<=": numeric_operators.le,
+                          ">": numeric_operators.gt, ">=": numeric_operators.ge,
+                          "=": numeric_operators.eq, "!=": numeric_operators.ne,
+                          "<>": numeric_operators.ne}.get(str(comparison.get("operator")))
+            try:
+                threshold = float(comparison["value"])
+            except (KeyError, TypeError, ValueError):
+                threshold = float("nan")
+            if compare_fn and math.isfinite(threshold):
+                for row in rows:
+                    try:
+                        baseline_value = float(str(row.get("period_a")).replace(",", ""))
+                        qualifies = math.isfinite(baseline_value) and compare_fn(baseline_value, threshold)
+                    except (TypeError, ValueError):
+                        qualifies = False
+                    if not qualifies:
+                        warnings.append("base-period ranking contains a value outside the requested measure predicate")
+                        break
         change_key = next((k for k in keys if any(t in k for t in ("change", "growth", "diff", "delta"))), None)
         if change_key and condition in {"increased", "growth", "increase"}:
             bad = 0

@@ -2636,7 +2636,11 @@ Generate a single PostgreSQL SELECT query to answer this. Rules:
                         intent_block = build_intent_sql_prompt_block(_sql_pipeline_question)
                         # Best-effort table extraction from schema header lines.
                         table_names = sorted(set(re.findall(r"^\s*[-*]?\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:(]", schema_text, flags=re.MULTILINE)))
-                        join_hints = join_hints_for_tables(table_names[:40]) if table_names else ""
+                        # This schema excerpt contains many unrelated tables. Use
+                        # configured paths here; query-scoped adaptive joins are
+                        # supplied by the primary SQL generator after table
+                        # selection, avoiding a large all-pairs inference pass.
+                        join_hints = join_hints_for_tables(table_names[:40], include_adaptive=False) if table_names else ""
                         sec_prompt = (
                             f"User question: {_sql_pipeline_question}\n\n"
                             f"{intent_block}\n\n"

@@ -38,6 +38,7 @@ import {
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
+import { analystAnswerText } from '@/lib/analystPresentation';
 import remarkGfm from 'remark-gfm';
 import {
   Send, Sparkles, RotateCcw, Copy, Check, Loader2,
@@ -144,6 +145,7 @@ type QueryResult = AnalystSqlFields & {
   totalCount?: number;
   sqlStrategy?: string;
   summary?: string;
+  answer?: string;
   keyFindings?: string[];
   kpis?: KPI[];
   charts?: Chart[];
@@ -815,8 +817,9 @@ function ResultContent({ result, onAskFollowup }: {
   const hasKpis    = (kpis?.length ?? 0) > 0;
   const hasCharts  = (charts?.length ?? 0) > 0;
   const hasData    = (data?.length ?? 0) > 0;
-  const hasSummary = !!summary;
-  const cleanFindings = humanizeFindings(keyFindings);
+  const fullAnswer = analystAnswerText(result);
+  const hasSummary = !!fullAnswer;
+  const cleanFindings = humanizeFindings(keyFindings).filter(f => f !== summary && f !== fullAnswer);
   const hasInsights = cleanFindings.length > 0 && cleanFindings[0] !== 'No results found.';
   const followups = humanizeFollowups(suggested_followups);
   const status = String(result.answer_status || '').toUpperCase();
@@ -923,7 +926,7 @@ function ResultContent({ result, onAskFollowup }: {
 
   return (
     <div className="space-y-0">
-      {hasSummary && <SummaryCard summary={summary!} intent={trust.intent} />}
+      {hasSummary && <SummaryCard summary={fullAnswer} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
       {hasData && <DataTable data={data || []} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
@@ -1005,6 +1008,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               charts: m.result.charts || [],
               meta: m.result.meta || {},
               summary: m.result.summary || m.content,
+              answer: m.result.answer || m.content,
               query_plan: m.result.query_plan || m.result.queryPlan || null,
               answer_status: m.result.answer_status
                 || (m.result.mode === 'general_chat' ? 'SUCCESS'
@@ -1151,6 +1155,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           res.summary || res.executive_summary || res.answer || '',
           String((res.query_plan || res.queryPlan || {}).analytical_context?.intent || res.intent || ''),
         ),
+        answer: res.answer || res.summary || res.executive_summary || '',
         keyFindings: res.keyFindings || res.key_findings || [],
         kpis:        isCannotAnswer || isTimeout ? [] : (res.kpis || []),
         charts:      isCannotAnswer || isTimeout ? [] : (res.charts || res.chart_configs || []),

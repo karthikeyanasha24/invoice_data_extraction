@@ -12,7 +12,7 @@ logger = logging.getLogger("zodiac-api.config")
 # Environment configuration
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "DEV")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
-OPENAI_API_KEY = os.getenv("OPEN_AI_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPEN_AI_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GEMINI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")

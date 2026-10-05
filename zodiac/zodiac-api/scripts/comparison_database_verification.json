@@ -1,0 +1,9 @@
+{
+  "base_year": "2000",
+  "comparison_year": "2001",
+  "structural_validation": true,
+  "failure_type": "OperationalError",
+  "database_error_code": null,
+  "failure_category": "connection_timeout",
+  "postgresql_execution": false
+}

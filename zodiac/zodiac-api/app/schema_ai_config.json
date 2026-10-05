@@ -190,6 +190,12 @@
   "join_rules": [
     {
       "left": "VBRP",
+      "right": "VBAK",
+      "on": "VBRP.AUBEL = VBAK.VBELN",
+      "note": "Billing item reference sales order to order header; AUPOS is the order item position, not its document number"
+    },
+    {
+      "left": "VBRP",
       "right": "VBRK",
       "on": "VBRP.VBELN = VBRK.VBELN",
       "note": "Billing item to header; mandatory for billing dates, customer context, and pricing joins"
@@ -205,6 +211,12 @@
       "right": "KNA1",
       "on": "VBRK.KUNAG = KNA1.KUNNR",
       "note": "Billing to customer"
+    },
+    {
+      "left": "VBRK",
+      "right": "BKPF",
+      "on": "VBRK.BELNR = BKPF.BELNR AND VBRK.GJAHR = BKPF.GJAHR AND VBRK.BUKRS = BKPF.BUKRS",
+      "note": "Billing document to its accounting document using document number, fiscal year, and company code"
     },
     {
       "left": "KNA1",
@@ -277,6 +289,18 @@
       "right": "VBAP",
       "on": "VBAK.VBELN = VBAP.VBELN",
       "note": "Sales order header to items"
+    },
+    {
+      "left": "VBAK",
+      "right": "VBFA",
+      "on": "VBAK.VBELN = VBFA.VBELV",
+      "note": "Sales order header to predecessor document in sales document flow"
+    },
+    {
+      "left": "VBRK",
+      "right": "VBFA",
+      "on": "VBRK.VBELN = VBFA.VBELN",
+      "note": "Billing header to successor document in sales document flow"
     },
     {
       "left": "BSAD",

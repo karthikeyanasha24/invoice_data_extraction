@@ -12,7 +12,9 @@ Used by ai_analysis_orchestrator, sap_sql_precision_validator (approve-query pat
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 # SQL function names that can appear before '(' in a CAST-target expression
@@ -309,6 +311,24 @@ def sanitize_gjahr_sql(sql: str) -> str:
     if not sql or "gjahr" not in sql.lower():
         return sql
 
+    # GJAHR is also a real part of SAP composite document keys. Preserve
+    # qualified column-to-column equalities such as BKPF.GJAHR = VBRK.GJAHR;
+    # rewriting those keys produces a date-column reference on the wrong table.
+    protected: List[str] = []
+    key_equality = re.compile(
+        r'(?P<left>"?[A-Za-z_][A-Za-z0-9_]*"?\s*\.\s*"?gjahr"?)'
+        r'\s*=\s*'
+        r'(?P<right>"?[A-Za-z_][A-Za-z0-9_]*"?\s*\.\s*"?gjahr"?)',
+        re.IGNORECASE,
+    )
+
+    def _protect_key_equality(match: re.Match[str]) -> str:
+        token = f"__SAP_GJAHR_KEY_{len(protected)}__"
+        protected.append(match.group(0))
+        return token
+
+    sql = key_equality.sub(_protect_key_equality, sql)
+
     # alias."gjahr" or alias."GJAHR" (re.I matches quoted column case)
     sql = re.sub(
         r'(\b[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"gjahr"',
@@ -330,6 +350,8 @@ def sanitize_gjahr_sql(sql: str) -> str:
         sql,
         flags=re.IGNORECASE,
     )
+    for index, equality in enumerate(protected):
+        sql = sql.replace(f"__SAP_GJAHR_KEY_{index}__", equality)
     return sql
 
 
@@ -356,6 +378,54 @@ def _question_needs_fkdat_calendar_year(question: str) -> bool:
         re.search(r"\b(by customer|by material|by vendor|by product|per customer|per product)\b", q)
     )
     return bool(revenue_intent or ranking_intent or breakdown_intent)
+
+
+def _configured_calendar_date_column(question: str) -> Optional[str]:
+    """Resolve billing vs posting date from the configured schema semantics."""
+    semantic = (
+        "posting date"
+        if re.search(r"\b(posting|posted|accounting)\b", question or "", re.I)
+        else "billing date"
+    )
+    config_path = Path(__file__).resolve().parents[1] / "schema_ai_config.json"
+    try:
+        hints = json.loads(config_path.read_text(encoding="utf-8")).get("column_semantic_hints") or {}
+    except (OSError, ValueError, TypeError):
+        return None
+    for column, description in hints.items():
+        if semantic in str(description).lower():
+            return str(column).upper()
+    return None
+
+
+def _sql_has_year_predicate_for_column(sql: str, column: str, year: str) -> bool:
+    for clause in re.split(r"\bWHERE\b", sql or "", flags=re.I)[1:]:
+        scope = re.split(
+            r"\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b",
+            clause,
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+        if not re.search(rf"\b{re.escape(column)}\b", scope, re.I):
+            continue
+        if re.search(
+            rf"\b{re.escape(column)}\b[\s\S]{{0,180}}?"
+            rf"(?:=|>=|>|\bbetween\b|\bin\s*\()[\s\S]{{0,30}}?"
+            rf"['\"]?{re.escape(year)}(?:\d{{4}}|['\"]|\b)",
+            scope,
+            re.I,
+        ):
+            return True
+    return False
+
+
+def _alias_referencing_column(sql: str, column: str) -> Optional[str]:
+    match = re.search(
+        rf'\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"?{re.escape(column)}"?',
+        sql or "",
+        re.I,
+    )
+    return match.group(1) if match else None
 
 
 def _sql_has_fkdat_year_predicate(sql: str, year: str) -> bool:
@@ -392,8 +462,9 @@ def _infer_vbrk_alias(sql: str) -> Optional[str]:
 
 def inject_fkdat_calendar_year_filter(sql: str, question: Optional[str]) -> Tuple[str, List[str]]:
     """
-    When the question names a calendar year and asks for billing ranking/revenue/breakdown,
-    ensure VBRK.fkdat is filtered to that year. Best-effort for a single top-level SELECT.
+    When a year-scoped billing question needs a date predicate, use the date concept
+    selected by the schema's semantic hints (billing date by default, posting date
+    when the user explicitly asks for it).
     """
     notes: List[str] = []
     if not sql or not question:
@@ -407,12 +478,17 @@ def inject_fkdat_calendar_year_filter(sql: str, question: Optional[str]) -> Tupl
         return sql, notes
     if not _question_needs_fkdat_calendar_year(question):
         return sql, notes
-    if _sql_has_fkdat_year_predicate(sql, year):
+    date_column = _configured_calendar_date_column(question)
+    if not date_column or _sql_has_year_predicate_for_column(sql, date_column, year):
         return sql, notes
-    alias = _infer_vbrk_alias(sql)
+    alias = (
+        _infer_vbrk_alias(sql)
+        if date_column == "FKDAT"
+        else _alias_referencing_column(sql, date_column)
+    )
     if not alias:
         return sql, notes
-    cond = f'SUBSTRING(TRIM({alias}."fkdat"),1,4) = \'{year}\''
+    cond = f'SUBSTRING(TRIM(CAST({alias}."{date_column.lower()}" AS TEXT)),1,4) = \'{year}\''
     # Prefer: extend existing WHERE before GROUP BY / ORDER BY / LIMIT
     if re.search(r"\bWHERE\b", sql, re.IGNORECASE):
         new_sql, n = re.subn(
@@ -423,16 +499,16 @@ def inject_fkdat_calendar_year_filter(sql: str, question: Optional[str]) -> Tupl
             flags=re.IGNORECASE,
         )
         if n:
-            notes.append(f"Auto-injected FKDAT calendar year filter for {year}.")
+            notes.append(f"Auto-injected {date_column} calendar year filter for {year}.")
             return new_sql, notes
         return sql, notes
     m2 = re.search(r"(\s+)(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.IGNORECASE)
     if m2:
         new_sql = sql[: m2.start()] + f" WHERE ({cond})" + sql[m2.start() :]
-        notes.append(f"Auto-injected FKDAT calendar year filter for {year}.")
+        notes.append(f"Auto-injected {date_column} calendar year filter for {year}.")
         return new_sql, notes
     new_sql = sql.rstrip().rstrip(";") + f" WHERE ({cond})"
-    notes.append(f"Auto-injected FKDAT calendar year filter for {year}.")
+    notes.append(f"Auto-injected {date_column} calendar year filter for {year}.")
     return new_sql, notes
 
 
@@ -862,4 +938,7 @@ def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
     s = sanitize_having_alias_references(s)
     if question:
         s, _notes = inject_fkdat_calendar_year_filter(s, question)
+    from .analytical_sql_safety import canonicalize_text_joins
+
+    s = canonicalize_text_joins(s)
     return s

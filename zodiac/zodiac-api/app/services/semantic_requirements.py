@@ -319,7 +319,8 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         comparison = None
     if comparison and str(ops.get("aggregation") or "").lower() == "none":
         agg = "none"
-        ranking = None
+        if not ops.get("ranking"):
+            ranking = None
 
     having_distinct = (
         sem.get("having_distinct")

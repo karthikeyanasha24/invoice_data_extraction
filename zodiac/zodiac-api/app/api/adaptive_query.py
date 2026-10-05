@@ -1235,6 +1235,17 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         sanitized = _quote_catalog_sql_tables(sanitized)
     except Exception:
         pass
+    from ..services.sql_structure import sql_structure_errors
+
+    structure_errors = sql_structure_errors(sanitized, question)
+    if question:
+        from ..services.semantic_requirements import required_semantics
+        from ..services.plan_satisfaction import sql_satisfies_analytical_intent
+
+        if required_semantics(question).get("period_compare") and not sql_satisfies_analytical_intent(sanitized, question):
+            structure_errors.append("SQL does not satisfy the requested period comparison")
+    if structure_errors:
+        raise ValueError("SQL analytical validation failed: " + "; ".join(structure_errors))
     # Trusted identity binding for user-scoped app tables (never LLM-chosen).
     bind_params: Dict[str, Any] = {}
     try:
@@ -1312,6 +1323,8 @@ def _col_role(col: str) -> str:
     c = col.lower()
     if c in _SAP_ID_NEVER_MEASURE:
         return "label"
+    if re.fullmatch(r"period_[ab]|(?:base|comparison)_period(?:_amount|_value|_total)?", c):
+        return "numeric"
     # Split on underscores and non-alpha to get meaningful word parts
     parts = set(re.split(r'[_\-\s]', c)) | {c}
 
@@ -1415,6 +1428,18 @@ def _auto_charts(
         return []
 
     cols = list(data[0].keys())
+    currency_key = next((c for c in cols if c.lower() in {"currency", "waerk", "waers"}), None)
+    if currency_key:
+        currencies = list(dict.fromkeys(str(row.get(currency_key) or "Unknown currency") for row in data))
+        if len(currencies) > 1:
+            separated = []
+            for currency in currencies:
+                subset = [row for row in data if str(row.get(currency_key) or "Unknown currency") == currency]
+                for spec in _auto_charts(question, sql, subset)[:1]:
+                    spec["title"] = f"{spec.get('title') or 'Comparison'} ({currency})"
+                    spec["description"] = f"{spec.get('description') or ''} · {currency}"
+                    separated.append(spec)
+            return separated
     # Classify columns based on name and actual values across a sample of rows
     # (first-row-only missed product totals when row 0 had NULL NETWR casts).
     date_cols   = [c for c in cols if _col_role(c) == "date"]
@@ -1422,12 +1447,15 @@ def _auto_charts(
     numeric_cols = [
         c for c in cols
         if _col_role(c) == "numeric"
+        and not re.search(r"(?:^|_)rank$|^row_number$", c, re.I)
         and c.lower() not in _SAP_ID_NEVER_MEASURE
         and _column_has_numeric(data, c)
     ]
 
     # Also detect columns that are actually numeric by value but not by name
     for c in cols:
+        if re.search(r"(?:^|_)rank$|^row_number$", c, re.I):
+            continue
         if c.lower() in _SAP_ID_NEVER_MEASURE:
             continue
         if c not in date_cols + label_cols + numeric_cols:
@@ -1449,7 +1477,11 @@ def _auto_charts(
     numeric_cols = _deduped
 
     # Need at least one dimension and one measure
-    x_candidates = date_cols or label_cols or [c for c in cols if c not in numeric_cols]
+    # Individual document values are categories, not aggregated time buckets.
+    document_key = next((c for c in label_cols if c.lower() in {"billing_document", "invoice_number", "document_number"}), None)
+    if document_key:
+        date_cols = []
+    x_candidates = ([document_key] if document_key else []) or date_cols or label_cols or [c for c in cols if c not in numeric_cols]
     y_candidates = numeric_cols
 
     if not x_candidates or not y_candidates:
@@ -1481,7 +1513,9 @@ def _auto_charts(
         # Pie chart — few segments, one value
         q_lower = question.lower()
         use_pie = any(kw in q_lower for kw in ["distribution","share","breakdown","proportion","percent","pie","split","by currency","by country","by region","by type","by status","by category"])
-        if (use_pie or n_rows <= 6) and _nunique(x_key) > 1:
+        if (use_pie or n_rows <= 6) and _nunique(x_key) > 1 and all(
+            _is_numeric_val(r.get(y_keys[0])) and float(str(r[y_keys[0]]).replace(',', '')) >= 0 for r in chart_data
+        ):
             charts.append({
                 "chart_type": "pie",
                 "title": _chart_title(question, "Distribution"),
@@ -2782,8 +2816,8 @@ def post_query_adaptive(
     q = (question or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail='Send JSON: {"question": "..."}')
-    if len(q) > 4000:
-        raise HTTPException(status_code=400, detail="question_too_long (max 4000)")
+    if len(q) > 32000:
+        raise HTTPException(status_code=400, detail="question_too_long (max 32000)")
 
     # Bind trusted execution scope for this request (never LLM-chosen).
     from ..services.adaptive_trusted_scope import (
@@ -2906,7 +2940,7 @@ def _post_query_adaptive_body(
         # do this), recover the last successful artifact from this user's own
         # persisted thread. Do this only for missing/failed context to avoid
         # adding a database read to normal chat turns.
-        if thread_id and user_id and (context_is_missing or context_is_failed and not retained_context):
+        if thread_id and user_id and (context_is_missing or context_is_failed and not retained_context and not plan_input.get("pending_analysis")):
             stored = load_thread(db, user_id, thread_id, last_n=80)
             restored_context = context_from_stored_turns(stored)
             stored_memory = recent_conversation(stored)
@@ -3144,7 +3178,7 @@ def _post_query_adaptive_body(
         snapshot = {
             "user_id": user_id,
             "thread_id": thread_id,
-            "question": _original_question[:10000],
+            "question": _original_question[:32000],
             "summary": str(
                 payload.get("summary")
                 or payload.get("answer")
@@ -3350,7 +3384,7 @@ def _post_query_adaptive_body(
         rows_raw = contextData.get("data")
         rows_list = rows_raw if isinstance(rows_raw, list) else []
         retained = _usable_retained_analytical_context(prev_plan_dict)
-        if prev_status == "CANNOT_ANSWER" and not retained:
+        if prev_status == "CANNOT_ANSWER" and not retained and not (prev_plan_dict or {}).get("pending_analysis"):
             # Preserve deep analytical chain after governed data-gap turns.
             ac = (prev_plan_dict or {}).get("analytical_context") if isinstance(prev_plan_dict, dict) else None
             if not (isinstance(ac, dict) and ac.get("deep_analysis")):
@@ -3368,7 +3402,12 @@ def _post_query_adaptive_body(
 
         # General conversation is the latest turn, while the last verified
         # analysis remains available as a separate anchor for data follow-ups.
-        if isinstance(retained, dict) and not prev_sql:
+        from ..services.adaptive_analyst.pending_analysis import pending_analysis_context
+
+        pending_request = pending_analysis_context(prev_plan_dict, prev_q, prev_status)
+        if pending_request:
+            prev_plan_dict = {**(prev_plan_dict or {}), "pending_analysis": pending_request}
+        if isinstance(retained, dict) and not prev_sql and not pending_request:
             retained_sql = str(retained.get("previousSQL") or "").strip()
             retained_plan = retained.get("previousPlan")
             retained_rows = retained.get("data")
@@ -3394,13 +3433,6 @@ def _post_query_adaptive_body(
     from ..services.result_first_followup import resolve_pending_currency_clarification
 
     pending_currency = (prev_plan_dict or {}).get("pending_clarification") if isinstance(prev_plan_dict, dict) else None
-    logger.info(
-        "[adaptive] clarification_resume_context pending=%s rows=%d sql=%s retained=%s",
-        (pending_currency or {}).get("kind") if isinstance(pending_currency, dict) else None,
-        len(rows_list),
-        bool(prev_sql),
-        bool(_usable_retained_analytical_context(prev_plan_dict)),
-    )
     resumed_question = resolve_pending_currency_clarification(
         clean_q,
         rows_list,
@@ -3460,13 +3492,17 @@ def _post_query_adaptive_body(
         turn.reason,
         bool(prev_sql or prev_plan_dict),
     )
-    if turn.intent == TurnIntent.NEW_ANALYTICAL_QUERY:
+    from ..services.adaptive_analyst.pending_analysis import pending_analysis_context
+
+    pending_request = pending_analysis_context(prev_plan_dict, prev_q, prev_status)
+    if turn.intent == TurnIntent.NEW_ANALYTICAL_QUERY and not pending_request:
         prev_q = ""
         prev_sql = ""
         prev_plan_dict = None
         rows_list = []
 
-    if turn.intent != TurnIntent.NEW_ANALYTICAL_QUERY:
+    analysis_question = clean_q
+    if turn.intent != TurnIntent.NEW_ANALYTICAL_QUERY and not pending_request:
         from ..services.result_first_followup import try_answer_from_prior_rows
 
         reused = try_answer_from_prior_rows(
@@ -3474,11 +3510,18 @@ def _post_query_adaptive_body(
             rows_list,
             prior_sql=prev_sql,
             prior_plan=prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+            prior_question=prev_q,
         )
         if reused and not reused.get("needs_plan_expansion"):
             reused["tableHint"] = tableHint
             logger.info("[adaptive] result-first follow-up rows=%s", reused.get("rowCount"))
             return _persist_and_return(reused)
+        if reused and reused.get("needs_plan_expansion") and reused.get("expanded_question"):
+            analysis_question = str(reused["expanded_question"])
+            logger.info(
+                "[adaptive] replan follow-up at missing grain concept=%s",
+                reused.get("missing_concept"),
+            )
 
     # ChatGPT-style: every turn goes through LLM understanding first.
     # Phrase classifiers are soft hints only — never return canned clarification
@@ -3505,7 +3548,7 @@ def _post_query_adaptive_body(
             # memory must survive topic changes and unsuccessful SQL turns.
             prev_plan_dict = {**(prev_plan_dict or {}), "recent_turns": memory_turns}
             orch = run_adaptive_orchestrator(
-                clean_q,
+                analysis_question,
                 db,
                 _execute_sql,
                 use_sap=bool(USE_SAP_DB_FOR_AI),

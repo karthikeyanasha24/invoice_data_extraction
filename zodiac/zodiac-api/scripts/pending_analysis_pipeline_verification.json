@@ -1,0 +1,149 @@
+[
+  {
+    "case": "reported_invoice_order_choice",
+    "answer_status": "CLARIFICATION",
+    "failure_class": null,
+    "sql_status": "not_generated",
+    "rowCount": 0,
+    "resolved_question": null,
+    "sql": "",
+    "summary": "There is no verified result identifying the entity or documents for this follow-up. Specify the customer, country, document, or other selection, or retry the preceding analysis.",
+    "meta": {
+      "understanding_model_called": false,
+      "understanding_result": {
+        "intent": "analytics",
+        "goal": "Use first invoices to compare and then compare with sales orders relevant to those linked invoices",
+        "resolved_question": null,
+        "turn_relation": "new_request",
+        "context_source": "none",
+        "requires_database": true,
+        "requires_metadata": false,
+        "requires_conversation_context": true,
+        "entities": [],
+        "metric": null,
+        "dimension": null,
+        "time_scope": null,
+        "operation": null,
+        "clarification_needed": false,
+        "clarification_question": null,
+        "provider": "local_schema_semantics_fallback",
+        "understanding_model_called": false,
+        "raw_keys": [
+          "clarification_needed",
+          "goal",
+          "intent",
+          "requires_conversation_context",
+          "requires_database",
+          "requires_metadata",
+          "resolved_question"
+        ]
+      },
+      "selected_capability": "analytics",
+      "request_id": "7050f79394b340f1a84b08647e0b85e9",
+      "pipeline_stage": "COMPLETED",
+      "elapsed_s": 35.7,
+      "remaining_s": 84.3,
+      "cancelled": false,
+      "timeout": false,
+      "status": "clarification",
+      "stage_elapsed_s": 0.0,
+      "stages": [
+        {
+          "pipeline_stage": "UNDERSTANDING",
+          "elapsed_s": 0.0
+        }
+      ],
+      "turn_intent": "NEW_ANALYTICAL_QUERY"
+    },
+    "query_plan": {
+      "investigation_state": {
+        "conversation_id": "",
+        "metric": "",
+        "dimensions": [],
+        "filters": [],
+        "time_period": "",
+        "ranking": "",
+        "comparison": "",
+        "domain": "",
+        "tables": [],
+        "columns": [],
+        "last_sql": "",
+        "last_summary": "Do you want the bottom 10 negative amounts at the invoice level, by customer, by product, or another dimension? Should I compare the same dimension in 2001?",
+        "last_user_question": "Show me lowest negative sales in the year 2000 and make comparison with the year 2001",
+        "last_resolved_question": "",
+        "entities": [],
+        "recent_turns": [
+          {
+            "role": "user",
+            "content": "Show me lowest negative sales in the year 2000 and make comparison with the year 2001"
+          },
+          {
+            "role": "assistant",
+            "content": "Do you want the bottom 10 negative amounts at the invoice level, by customer, by product, or another dimension? Should I compare the same dimension in 2001?",
+            "mode": "clarification"
+          },
+          {
+            "role": "user",
+            "content": "Use first invoices to compare and then compare with sales orders relevant to those linked invoices"
+          },
+          {
+            "role": "assistant",
+            "content": "There is no verified result identifying the entity or documents for this follow-up. Specify the customer, country, document, or other selection, or retry the preceding analysis.",
+            "mode": "clarification"
+          }
+        ]
+      },
+      "requires_result_anchor": true,
+      "understanding": {
+        "intent": "analytics",
+        "goal": "Use first invoices to compare and then compare with sales orders relevant to those linked invoices",
+        "resolved_question": null,
+        "turn_relation": "new_request",
+        "context_source": "none",
+        "requires_database": true,
+        "requires_metadata": false,
+        "requires_conversation_context": true,
+        "entities": [],
+        "metric": null,
+        "dimension": null,
+        "time_scope": null,
+        "operation": null,
+        "clarification_needed": false,
+        "clarification_question": null,
+        "provider": "local_schema_semantics_fallback",
+        "understanding_model_called": false,
+        "raw_keys": [
+          "clarification_needed",
+          "goal",
+          "intent",
+          "requires_conversation_context",
+          "requires_database",
+          "requires_metadata",
+          "resolved_question"
+        ]
+      },
+      "recent_turns": [
+        {
+          "role": "user",
+          "content": "Show me lowest negative sales in the year 2000 and make comparison with the year 2001"
+        },
+        {
+          "role": "assistant",
+          "content": "Do you want the bottom 10 negative amounts at the invoice level, by customer, by product, or another dimension? Should I compare the same dimension in 2001?",
+          "mode": "clarification"
+        },
+        {
+          "role": "user",
+          "content": "Use first invoices to compare and then compare with sales orders relevant to those linked invoices"
+        },
+        {
+          "role": "assistant",
+          "content": "There is no verified result identifying the entity or documents for this follow-up. Specify the customer, country, document, or other selection, or retry the preceding analysis.",
+          "mode": "clarification"
+        }
+      ]
+    },
+    "passed": false,
+    "latency_s": 48.51
+  }
+]

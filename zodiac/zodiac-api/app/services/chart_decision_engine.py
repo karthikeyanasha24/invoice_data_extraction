@@ -556,7 +556,7 @@ def _format_data(rows: List[Dict[str, Any]], max_items: int = 60) -> List[Dict[s
         clean: Dict[str, Any] = {}
         for k, v in row.items():
             if v is None:
-                clean[k] = 0
+                clean[k] = None
             elif isinstance(v, str):
                 clean[k] = _fmt_sap_date(v)
             elif isinstance(v, float) and math.isfinite(v):

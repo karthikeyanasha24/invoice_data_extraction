@@ -3374,6 +3374,7 @@ def _post_query_adaptive_body(
             retained_rows = retained.get("data")
             retained_status = str(retained.get("previousAnswerStatus") or "").upper()
             outer_plan = prev_plan_dict or {}
+            pending_clarification = outer_plan.get("pending_clarification")
             recent_turns = outer_plan.get("recent_turns")
             if not isinstance(recent_turns, list):
                 outer_state = outer_plan.get("investigation_state")
@@ -3387,6 +3388,24 @@ def _post_query_adaptive_body(
                 **(retained_plan if isinstance(retained_plan, dict) else {}),
                 "recent_turns": recent_turns if isinstance(recent_turns, list) else [],
             }
+            if isinstance(pending_clarification, dict):
+                prev_plan_dict["pending_clarification"] = pending_clarification
+
+    from ..services.result_first_followup import resolve_pending_currency_clarification
+
+    pending_currency = (prev_plan_dict or {}).get("pending_clarification") if isinstance(prev_plan_dict, dict) else None
+    resumed_question = resolve_pending_currency_clarification(
+        clean_q,
+        rows_list,
+        prev_plan_dict if isinstance(prev_plan_dict, dict) else None,
+    )
+    if resumed_question:
+        clean_q = q = resumed_question
+        prev_q = ""
+        prev_sql = ""
+        prev_plan_dict = None
+        prev_status = ""
+        rows_list = []
 
     from ..services.adaptive_analyst.orchestrator import adapt_user_turn
 

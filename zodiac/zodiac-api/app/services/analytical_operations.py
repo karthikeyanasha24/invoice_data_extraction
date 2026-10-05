@@ -743,7 +743,11 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     if (
         isinstance(period, dict)
         and "document" in (ops.get("group_by") or [])
-        and re.search(r"\bsame\s+(?:(?:billing|billed)\s+)?(?:documents?|invoices?)\b", ql)
+        and re.search(
+            r"\bsame\s+(?:(?:billing|billed)\s+)?(?:documents?|invoices?)\s+"
+            r"(?:in|for|during|across|between|from)\s+(?:the\s+)?(?:calendar\s+)?(?:year\s+)?(?:\d{4}|years?\b|periods?\b)",
+            ql,
+        )
     ):
         base = period.get("base_period") if isinstance(period.get("base_period"), dict) else {}
         compare = period.get("comparison_period") if isinstance(period.get("comparison_period"), dict) else {}
@@ -777,7 +781,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
                 ops["negative_measure"] = True
             # Row-level predicates are filters, not aggregations, unless ranked/totalled.
             if not re.search(r"\b(total|sum of|aggregate|combined|how many)\b", ql):
-                if not re.search(r"\b(top|highest|lowest|best|worst|rank|most)\b", ql):
+                if not ops.get("ranking") and not re.search(r"\b(top|bottom|highest|lowest|largest|smallest|least|best|worst|rank|most)\b", ql):
                     ops["aggregation"] = "none"
                     ops["ranking"] = None
                     ops["limit"] = None

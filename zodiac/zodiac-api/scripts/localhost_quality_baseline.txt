@@ -1,0 +1,306 @@
+Browser tab: 3, Title: "AI Analyst · BridgeEDI", URL: "http://localhost:3000/dashboard/ai".
+0 AXWebArea AI Analyst · BridgeEDI, URL: localhost:3000/dashboard/ai
+	1 container
+		2 container
+			3 pop up button (collapsed) Description: Open Next.js Dev Tools, ID: next-logo, Secondary Actions: Expand
+				4 image
+			5 button Open issues overlay
+				6 text 4
+				7 text Issue
+			8 button Collapse issues badge
+				9 image
+		10 text AI Analyst · BridgeEDI
+		11 link Description: Skip to content, Value: localhost:3000/dashboard/ai#main-content
+		12 container
+			13 text B BridgeEDI Governed SAP intelligence
+			14 button Close menu
+				15 image
+			16 container Main
+				17 text UNDERSTAND
+				18 button Overview, Help: Business snapshot and what to investigate
+					19 image
+					20 text Overview
+				21 text ASK
+				22 button AI Analyst, Help: Governed questions over SAP data
+					23 image
+					24 text AI Analyst
+				25 text OPERATE
+				26 button EDI operations, Help: Inbound SAT and outbound invoice operations
+					27 image
+					28 text EDI operations
+				29 button Invoices, Help: Validate and convert invoices
+					30 image
+					31 text Invoices
+				32 button SAT documents, Help: CFDI intake, merge, and send to SAP
+					33 image
+					34 text SAT documents
+				35 text MANAGE
+				36 button Customers, Help: EDI customer accounts
+					37 image
+					38 text Customers
+				39 button Workspaces, Help: Per-customer workspace
+					40 image
+					41 text Workspaces
+				42 button Customer users, Help: Users and customer assignments
+					43 image
+					44 text Customer users
+				45 button RFC to G/L mapping, Help: Map supplier RFC codes to SAP G/L accounts
+					46 image
+					47 text RFC to G/L mapping
+				48 button Supplier API access, Help: Tokens for supplier document intake
+					49 image
+					50 text Supplier API access
+				51 button Settings, Help: Profile, security, and API access
+					52 image
+					53 text Settings
+			54 container Connecting to: localhost:8000 Local API. The database behind this API may still contain SAP demo data.
+				55 text Local development
+				56 image
+			57 text Connecting to local API. SAP demo data may still be present in the configured database.
+			58 image
+			59 text puspesh puspesh@gmail.com
+			60 button Logout
+				61 image
+				62 text Logout
+		63 button (collapsed) Description: Open navigation menu, Secondary Actions: Expand
+			64 image
+		65 container main-content
+			66 image
+			67 heading AI Analyst, Value: 2
+				68 text AI Analyst
+			69 text Ask anything — conversation, schema, or business data
+			190 container
+				191 text Working on:  Governed analysis
+			185 text Starting a new investigation. Previous filters will not be applied.
+			186 button Clear chat
+				187 image
+			188 container
+				189 text show me lowest negative sales in the year 2000 and make comparison with the year 2001
+				192 image
+				193 image
+				194 text What we found
+				195 heading Bottom negative sales in 2000 versus 2001, Value: 2
+					196 text Bottom negative sales in 2000 versus 2001
+				197 container
+					198 text The query returned 3 qualifying customer–currency groups for the requested bottom 10.  SB Warenhaus R111 had the most negative amount in 2000, at  −12.19 DEM . In 2001, R110 had the most negative amount among these same customers, at  −14.98 DEM .
+				199 container
+					200 text These amounts are  sums of negative billing transactions only , not total or net sales including positive transactions. Ranking is based on the 2000 amount, from most negative upward.
+				201 table
+					202 row
+						203 cell
+							204 text Rank
+						205 cell
+							206 text customer_id
+						207 cell
+							208 text customer_name
+						209 cell
+							210 text currency
+						211 cell
+							212 text period_a (2000)
+						213 cell
+							214 text period_b (2001)
+						215 cell
+							216 text change (2001 − 2000)
+					217 row
+						218 cell
+							219 text 1
+						220 cell
+							221 text R111
+						222 cell
+							223 text SB Warenhaus R111
+						224 cell
+							225 text DEM
+						226 cell
+							227 text −12.19
+						228 cell
+							229 text −10.19
+						230 cell
+							231 text +2.00
+					232 row
+						233 cell
+							234 text 2
+						235 cell
+							236 text R110
+						237 cell
+							238 text SB Warenhaus R110
+						239 cell
+							240 text DEM
+						241 cell
+							242 text −2.63
+						243 cell
+							244 text −14.98
+						245 cell
+							246 text −12.35
+					247 row
+						248 cell
+							249 text 3
+						250 cell
+							251 text R112
+						252 cell
+							253 text SB Warenhaus R112
+						254 cell
+							255 text DEM
+						256 cell
+							257 text −0.28
+						258 cell
+							259 text 0.00*
+						260 cell
+							261 text +0.28
+				262 heading What changed, Value: 3
+					263 text What changed
+				264 content list
+					265 container
+						266 text R111:  The negative-transaction sum became  2.00 DEM less negative , moving from −12.19 to −10.19 DEM.
+					267 container
+						268 text R110:  The negative-transaction sum became  12.35 DEM more negative , moving from −2.63 to −14.98 DEM—the largest adverse movement among the returned customers.
+					269 container
+						270 text R112:  The reported change is +0.28 DEM.  Its 2001 value of 0.00 is a calculation default:  no qualifying negative 2001 transaction contributed to this group. It does not establish zero total sales in 2001.
+				271 container
+					272 text The comparison tracks the customers selected by their negative 2000 amounts; it is  not a separate bottom-10 ranking for 2001 .
+				273 text 📊
+				274 heading bottom 10 negative sales, Value: 4
+					275 text bottom 10 negative sales
+				276 text period a, period b, change by customer id
+				277 button BAR, Help: Switch to Bar
+					278 image
+					279 text BAR
+				280 button LINE, Help: Switch to Line
+					281 image
+					282 text LINE
+				283 button AREA, Help: Switch to Area
+					284 image
+					285 text AREA
+				286 button TABLE, Help: Switch to Table
+					287 image
+					288 text TABLE
+				289 button Download
+					290 image
+				291 container
+					292 content list
+						293 container
+							294 image change legend icon
+							295 text change
+						296 container
+							297 image period_a legend icon
+							298 text period_a
+						299 container
+							300 image period_b legend icon
+							301 text period_b
+					302 container
+					303 container
+						304 text R111
+						305 text R110
+						306 text R112
+						307 text -15
+						308 text -10
+						309 text -5
+						310 text 0
+						311 text 5
+						312 text -12.19
+						313 text -2.63
+						314 text -0.28
+						315 text -10.19
+						316 text -14.98
+						317 text 0
+						318 text 2
+						319 text -12.35
+						320 text 0.28
+				321 text 3  row s BAR
+				322 image
+				323 text Governed analysis · 3 rows
+				324 search text field (settable) Filter table rows
+				325 button Export CSV
+				326 table
+					327 row
+						328 cell
+							329 button currency
+						330 cell
+							331 button customer id
+						332 cell
+							333 button customer name
+						334 cell
+							335 button period a
+						336 cell
+							337 button period b
+						338 cell
+							339 button change
+					340 row
+						341 cell
+							342 text DEM
+						343 cell
+							344 text R111
+						345 cell
+							346 text SB Warenhaus R111
+						347 cell
+							348 text -12.19
+						349 cell
+							350 text -10.19
+						351 cell
+							352 text 2
+					353 row
+						354 cell
+							355 text DEM
+						356 cell
+							357 text R110
+						358 cell
+							359 text SB Warenhaus R110
+						360 cell
+							361 text -2.63
+						362 cell
+							363 text -14.98
+						364 cell
+							365 text -12.35
+					366 row
+						367 cell
+							368 text DEM
+						369 cell
+							370 text R112
+						371 cell
+							372 text SB Warenhaus R112
+						373 cell
+							374 text -0.28
+						375 cell
+							376 text 0
+						377 cell
+							378 text 0.28
+				379 image
+				380 text Key Findings
+				381 content list
+					382 container
+						383 image
+						384 text R111's negative-transaction amount narrowed from −12.19 DEM in 2000 to −10.19 DEM in 2001, a positive difference of 2.00 DEM.
+					385 container
+						386 image
+						387 text R110 moved from −2.63 DEM to −14.98 DEM, overtaking R111 as the most negative of the returned customers in 2001.
+					388 container
+						389 image
+						390 text R112's 0.00 DEM comparison value reflects the CASE ELSE 0 default, not verified zero sales.
+					391 container
+						392 image
+						393 text All returned groups use DEM, so the displayed comparisons do not mix currencies.
+				394 button (collapsed) How this was calculated, Secondary Actions: Expand
+					395 text How this was calculated
+					396 image
+				397 text NEXT INVESTIGATION
+				398 button Which customers independently rank in the bottom 10 for negative billing amounts in 2001?
+				399 button What are these customers' net sales in each year when positive transactions are included?
+				400 button Which billing documents account for R110's more negative amount in 2001?
+				401 button View SQL sources · 3 rows
+					402 image
+					403 text View SQL sources
+					404 text ·
+					405 text 3
+					406 text  rows
+					407 image
+				408 button (collapsed) Description: Expand SQL query, Secondary Actions: Expand
+					409 image
+					410 text Executed SQL
+					411 text Expand SQL
+					412 image
+			413 text entry area (settable)
+			181 button (disabled) Send question
+				414 image
+			183 image
+			184 text Same continuous chat — follow-ups keep context. Use Clear chat (top right) to reset.
+
+The focused UI element is 0 AXWebArea AI Analyst · BridgeEDI, URL: localhost:3000/dashboard/ai

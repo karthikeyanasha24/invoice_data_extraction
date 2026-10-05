@@ -39,7 +39,7 @@ class InvestigationState:
         # Greetings must not erase the last data/schema answer — follow-ups
         # like "summarize the above" need that result, not "Hello".
         if mode != "general_chat" or not (self.last_summary or "").strip():
-            self.last_user_question = (user or "")[:500]
+            self.last_user_question = (user or "")[:32000]
             self.last_summary = (assistant or "")[:2000]
 
     def substantive_prior_summary(self) -> str:

@@ -96,15 +96,38 @@ def sql_has_unsafe_monetary_fanout(sql: str) -> bool:
     if "NETWR" not in s and "WAVWR" not in s:
         return False
     has_billing = "VBRP" in s or "vbrp" in raw.lower()
+    # See below: this specific template proves VBFA/VBRP relationships first,
+    # then aggregates linked orders back to one row per billing document.
+    linked_order_invoice_grain = (
+        re.search(r"\binvoice_cohort\s+AS\s*\(", raw, re.I)
+        and re.search(r"\border_periods\s+AS\s*\(", raw, re.I)
+        and re.search(
+            r'GROUP\s+BY\s+l\."billing_document"\s*,\s*i\."currency"', raw, re.I
+        )
+        and re.search(
+            r'LEFT\s+JOIN\s+"?order_periods"?\s+p\s+ON\s+p\."billing_document"\s*=\s*i\."billing_document"',
+            raw,
+            re.I,
+        )
+        and not re.search(r"\b(?:SUM|AVG)\s*\(\s*p\.\"order_amount_", raw, re.I)
+    )
     if has_billing:
         for t in UNSAFE_MONETARY_JOINS:
-            if t in s:
+            if t in s and not (linked_order_invoice_grain and t == "VBFA"):
                 return True
         if _INV_JOIN_RE.search(raw):
             return True
     # Purchase NETWR joined to inventory snapshot before aggregation.
     if "EKPO" in s and _INV_JOIN_RE.search(raw):
         return True
+    # The linked-order comparison template keeps monetary sources separate:
+    # invoice_cohort has one row per billing document, order_periods aggregates
+    # linked order amounts back to that same billing-document grain, and the
+    # final projection joins the two one-to-one without aggregating either
+    # amount across the other source. This is safe despite naming both SAP
+    # money-bearing tables in separate CTEs.
+    if linked_order_invoice_grain:
+        return False
     # Sales-order monetary grain must not mix with billing or schedule-line fan-out.
     has_order = "VBAK" in s or "VBAP" in s
     if has_order and has_billing:

@@ -1,0 +1,142 @@
+- link "Skip to content":
+  - /url: "#main-content"
+- generic: B
+- generic: BridgeEDI
+- paragraph: Governed SAP intelligence
+- button "Close menu":
+- navigation "Main":
+  - paragraph: Understand
+  - button "Overview":
+    - generic: Overview
+  - paragraph: Ask
+  - button "AI Analyst":
+    - generic: AI Analyst
+  - paragraph: Operate
+  - button "EDI operations":
+    - generic: EDI operations
+  - button "Invoices":
+    - generic: Invoices
+  - button "SAT documents":
+    - generic: SAT documents
+  - paragraph: Manage
+  - button "Customers":
+    - generic: Customers
+  - button "Workspaces":
+    - generic: Workspaces
+  - button "Customer users":
+    - generic: Customer users
+  - button "RFC to G/L mapping":
+    - generic: RFC to G/L mapping
+  - button "Supplier API access":
+    - generic: Supplier API access
+  - button "Settings":
+    - generic: Settings
+- 'generic "Connecting to: localhost:8000 Local API. The database behind this API may still contain SAP demo data."':
+  - generic: Local development
+- paragraph: Connecting to local API. SAP demo data may still be present in the configured database.
+- generic: puspesh
+- generic: puspesh@gmail.com
+- button "Logout":
+  - generic: Logout
+- button "Open navigation menu":
+- main:
+  - heading "AI Analyst" [level=2]
+  - paragraph: Ask anything — conversation, schema, or business data
+  - paragraph: "Working on: Governed analysis"
+  - status: Starting a new investigation. Previous filters will not be applied.
+  - button "Clear chat":
+  - generic: show me lowest negative sales in the year 2000 and make comparison with the year 2001
+  - generic: What we found
+  - paragraph: 3 rows returned. Values shown are aggregated net sales for 2000 (period_a) and 2001 (period_b) and the difference (change = period_b - period_a).
+  - generic: 📈
+  - heading "bottom 10 negative sales" [level=4]
+  - paragraph: change over time
+  - button "Area":
+    - generic: Area
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Pie":
+    - generic: Pie
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: "-12.19"
+    - generic: "-2.63"
+    - generic: "-0.28"
+    - generic: "-15"
+    - generic: "-10"
+    - generic: "-5"
+    - generic: "0"
+    - generic: "5"
+  - generic: 3 rows
+  - generic: area
+  - generic: Governed analysis · 3 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "currency customer id customer name period a period b change":
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "customer id":
+          - button "customer id"
+        - columnheader "customer name":
+          - button "customer name"
+        - columnheader "period a":
+          - button "period a"
+        - columnheader "period b":
+          - button "period b"
+        - columnheader "change":
+          - button "change"
+    - rowgroup:
+      - row "DEM R111 SB Warenhaus R111 -12.19 -10.19 2":
+        - cell "DEM"
+        - cell "R111"
+        - cell "SB Warenhaus R111"
+        - cell "-12.19"
+        - cell "-10.19"
+        - cell "2"
+      - row "DEM R110 SB Warenhaus R110 -2.63 -14.98 -12.35":
+        - cell "DEM"
+        - cell "R110"
+        - cell "SB Warenhaus R110"
+        - cell "-2.63"
+        - cell "-14.98"
+        - cell "-12.35"
+      - row "DEM R112 SB Warenhaus R112 -0.28 0 0.28":
+        - cell "DEM"
+        - cell "R112"
+        - cell "SB Warenhaus R112"
+        - cell "-0.28"
+        - cell "0"
+        - cell "0.28"
+  - generic: Key Findings
+  - list:
+    - generic: 3 rows returned. Values shown are aggregated net sales for 2000 (period_a) and 2001 (period_b) and the difference (change = period_b - period_a).
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - paragraph: Next investigation
+  - button "If you want customer identifiers and names included, return the full result rows (currency, customer_id, customer_name) rather than numeric-only arrays."
+  - button "Consider converting currencies to a common currency before comparing if multiple currencies exist."
+  - button "If you want the true bottom 10 but more than 3 rows exist, remove or adjust any LIMIT or filtering that reduced results."
+  - button "View SQL sources · 3 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 3 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - textbox "Ask anything — e.g. \"Hi\", \"How many tables?\", \"Top customers by sales\""
+  - button "Send question" [disabled]:
+  - generic: Same continuous chat — follow-ups keep context. Use Clear chat (top right) to reset.
+- button "Open Next.js Dev Tools":
+- button "Open issues overlay":
+  - generic: "0"
+  - generic: "1"
+  - generic: Issue
+- button "Collapse issues badge":
+- alert
+- generic: "-15"

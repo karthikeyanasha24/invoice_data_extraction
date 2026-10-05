@@ -20,10 +20,48 @@ from app.services.adaptive_structured_sql import (
     _normalize_plan_expressions,
     validate_query_plan,
 )
+from app.services.adaptive_structured_sql import detect_ranking_measure
+from app.services.business_semantic_layer import resolve_metric
 from app.services.analytical_operations import extract_analytical_operations, merge_semantic_requirements
 from app.services.plan_satisfaction import result_matches_analytical_intent, sql_satisfies_analytical_intent
 from app.services.semantic_requirements import enrich_semantic_with_requirements, required_semantics
 from app.services.result_first_followup import try_answer_from_prior_rows
+
+
+@pytest.mark.parametrize("question", [
+    "Show the products with the highest profits.",
+    "Which products are most profitable?",
+    "List products by gross profit.",
+])
+def test_profit_ranking_phrasings_resolve_to_governed_gross_profit(question):
+    metric = resolve_metric(question)
+    assert metric is not None and metric.name == "gross_profit"
+    assert detect_ranking_measure(question) == "gross_profit"
+
+
+def test_true_net_profit_request_does_not_fall_back_to_gross_profit():
+    metric = resolve_metric("Rank products by net profit")
+    assert metric is not None and metric.name == "net_profit"
+    assert metric.status == "unavailable"
+    assert detect_ranking_measure("Rank products by net profit") == "net_profit"
+    assert build_dimension_ranking_sql(
+        "Rank products by net profit", ["vbrp", "VBRK", "MAKT"]
+    ) is None
+
+
+@pytest.mark.parametrize("question,metric,formula_piece", [
+    ("Show products with highest profits", "gross_profit", '"wavwr"'),
+    ("Rank products by highest gross margin", "gross_margin_pct", '"wavwr"'),
+    ("Rank products by cost of goods", "cogs", '"wavwr"'),
+    ("Rank products by revenue", "revenue", '"netwr"'),
+])
+def test_product_rankings_compile_catalog_metric_and_currency(question, metric, formula_piece):
+    sql = build_dimension_ranking_sql(question, ["vbrp", "VBRK", "MAKT"])
+    assert sql is not None
+    assert f'AS "{metric if metric != "revenue" else "total_sales"}"' in sql
+    assert formula_piece in sql
+    assert '"currency"' in sql
+    assert 'PARTITION BY grouped."currency"' in sql
 
 
 def test_combined_year_totals_compile_to_year_grain_despite_model_noise():

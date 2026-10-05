@@ -20,7 +20,7 @@ _THIS_RESULT = re.compile(
 )
 _RESULT_DIFFERENCE = re.compile(
     r"\b(?:difference|how much (?:higher|lower|more|less)|which .{0,40} higher|"
-    r"higher .{0,40} difference|more than the (?:next|second)|compared? with)\b",
+    r"higher .{0,40} difference|more than the (?:next|second))\b",
     re.I,
 )
 _APPEARS_MOST = re.compile(
@@ -581,12 +581,29 @@ def resolve_pending_currency_clarification(
 
     years: List[str] = []
     pending_question = str(pending.get("question") or "").strip()
+    retained = plan.get("retained_analytical_context")
+    retained = retained if isinstance(retained, dict) else {}
+    retained_plan = retained.get("previousPlan") or retained.get("previous_plan")
+    retained_plan = retained_plan if isinstance(retained_plan, dict) else {}
     prior_questions = [
         str(plan.get("last_user_question") or ""),
         str((plan.get("investigation_state") or {}).get("last_user_question") or "")
         if isinstance(plan.get("investigation_state"), dict) else "",
+        str(retained.get("previousQuestion") or retained.get("previous_question") or ""),
+        str(retained_plan.get("last_user_question") or ""),
+        str((retained_plan.get("investigation_state") or {}).get("last_user_question") or "")
+        if isinstance(retained_plan.get("investigation_state"), dict) else "",
     ]
-    for candidate in (plan, plan.get("verified_db_context"), plan.get("verified_context"), plan.get("query_plan")):
+    for candidate in (
+        plan,
+        plan.get("verified_db_context"),
+        plan.get("verified_context"),
+        plan.get("query_plan"),
+        retained_plan,
+        retained_plan.get("verified_db_context"),
+        retained_plan.get("verified_context"),
+        retained_plan.get("query_plan"),
+    ):
         if not isinstance(candidate, dict):
             continue
         semantic = candidate.get("semantic_requirements")
@@ -771,11 +788,13 @@ def _expand_linked_order_followup(
     question: str,
     rows: List[Dict[str, Any]],
     prior_plan: Optional[Dict[str, Any]],
+    prior_question: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Anchor a linked-order lookup to the billing-document IDs in prior rows."""
     q = question or ""
     if not re.search(r"\b(?:sales\s+orders?|orders?)\b", q, re.I) or not re.search(
-        r"\b(?:same|those|these|above|previous|prior)\s+(?:billing\s+)?documents?\b|\bthem\b",
+        r"\b(?:same|those|these|above|previous|prior)\s+"
+        r"(?:(?:linked|related)\s+)?(?:billing\s+)?(?:documents?|invoices?)\b|\bthem\b",
         q,
         re.I,
     ):
@@ -791,17 +810,26 @@ def _expand_linked_order_followup(
         if len(ids) >= 50:
             break
     if not ids:
+        # A customer/product aggregate may be the previous answer even though
+        # the user now needs invoice-level keys. Replan at document grain using
+        # the original request and current follow-up instead of asking the user
+        # to repeat information already present in the conversation.
+        original = (prior_question or "").strip()
+        expanded = (
+            f"Original analysis request: {original}\n"
+            f"Follow-up request: {q}\n"
+            "The prior result is aggregated and has no billing-document IDs. Re-run the original analysis at invoice/document grain, "
+            "put the billing document number first, and include customer and currency. Preserve the original year filters, negative-amount "
+            "condition, ranking direction, and row limit. Use the original base-period invoice cohort for the linked-order analysis. "
+            "Follow only verified invoice-to-sales-order item or document-flow relationships. Do not try to match a billing-document ID "
+            "across different years; compare the linked order amounts by the requested periods using the order date and show the linked "
+            "order IDs beside each invoice. State the cohort, join path, and any missing matches in the answer. Proceed with these defaults "
+            "without asking the user to restate the request."
+        )
         return {
-            "mode": "clarification",
-            "status": "clarification",
-            "answer_status": "CLARIFICATION",
-            "sql": "",
-            "sql_status": "not_generated",
-            "pipeline": "result_first_followup",
-            "rowCount": 0,
-            "data": [],
-            "summary": "The prior answer has no billing-document numbers to use for this link lookup. Run the document list again with document numbers included.",
-            "answer": "Please rerun the document list with document numbers included.",
+            "needs_plan_expansion": True,
+            "missing_concept": "invoice_document_keys_for_linked_order_comparison",
+            "expanded_question": expanded,
             "query_plan": prior_plan or {},
         }
     literal_ids = ", ".join(f"'{value}'" for value in ids)
@@ -914,6 +942,7 @@ def try_answer_from_prior_rows(
     *,
     prior_sql: str = "",
     prior_plan: Optional[Dict[str, Any]] = None,
+    prior_question: str = "",
 ) -> Optional[Dict[str, Any]]:
     rows = [r for r in (prior_rows or []) if isinstance(r, dict)]
     if rows:
@@ -926,12 +955,15 @@ def try_answer_from_prior_rows(
         customer_period = _expand_customer_period_followup(question, rows, prior_plan)
         if customer_period:
             return customer_period
-        linked_order = _expand_linked_order_followup(question, rows, prior_plan)
-        if linked_order:
-            return linked_order
         document_followup = _expand_billing_document_followup(question, rows, prior_plan)
         if document_followup:
             return document_followup
+    # A linked-order follow-up can arrive immediately after a clarification,
+    # before any result rows exist. Preserve the prior request and re-plan it
+    # at invoice grain instead of falling through to an unscoped table query.
+    linked_order = _expand_linked_order_followup(question, rows, prior_plan, prior_question)
+    if linked_order:
+        return linked_order
     if not is_result_scoped_followup(question, has_prior_rows=bool(rows)):
         return None
     # Explaining, summarizing, or asking why requires a model-grounded answer.

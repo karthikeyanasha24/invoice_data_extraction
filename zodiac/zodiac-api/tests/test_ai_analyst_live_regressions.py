@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from unittest.mock import MagicMock, patch
 
 from app.services.adaptive_analyst.chat_memory import compact_sql_lineage, relevant_conversation
@@ -281,6 +282,15 @@ def test_linked_order_comparison_keeps_invoice_rows_and_uses_verified_posting_da
     assert "GROUP BY l.\"billing_document\"" in sql
     assert "LIMIT 10" in sql
     assert sql_satisfies_analytical_intent(sql, question)
+    from app.services.sql_generation_sanitizers import sanitize_generated_sap_sql
+    sanitized_sql = sanitize_generated_sap_sql(sql, question)
+    assert 'fi."gjahr" = k."gjahr"' in sanitized_sql
+    assert 'fi."fkdat"' not in sanitized_sql
+    assert "SUBSTRING(TRIM(CAST(fi.\"budat\" AS TEXT)),1,4)" not in sanitized_sql
+    assert "fi.\"budat\" AS TEXT)) >= '20000101'" in sanitized_sql
+    from app.services.sap_sql_precision_validator import validate_sql_precision
+    validation = validate_sql_precision(sanitized_sql, physical_columns, question=question)
+    assert validation.is_valid, validation.errors
     rows = [{
         "billing_document": "1", "customer_id": "2", "customer_name": "Example",
         "invoice_date": "20000101", "invoice_amount": -10, "currency": "USD",
@@ -472,6 +482,39 @@ def test_currency_clarification_resumes_followup_from_verified_ranking():
         "pending_clarification": clarification["query_plan"]["pending_clarification"],
     }
     resumed = resolve_pending_currency_clarification("USD", rows, retained_plan)
+    assert resumed == (
+        "For country code 'US', show monthly billed sales in calendar year 2017 in currency USD."
+    )
+
+
+def test_currency_clarification_resumes_from_frontend_retained_analysis_shape():
+    rows = [
+        {"country": "US", "currency": "USD", "total billed sales": 1227978, "rank within currency": 1},
+        {"country": "DE", "currency": "USD", "total billed sales": 10000, "rank within currency": 2},
+        {"country": "EG", "currency": "EUR", "total billed sales": 22081, "rank within currency": 1},
+    ]
+    pending_question = "For the higher-sales country, show monthly billed sales in the same year and currency."
+    context = {
+        "pending_clarification": {
+            "kind": "currency_ambiguity",
+            "question": pending_question,
+            "currency_column": "currency",
+        },
+        # This is the shape sent by the chat UI after a clarification turn:
+        # the previous result is nested separately so conversational context survives.
+        "retained_analytical_context": {
+            "previousQuestion": "Show the top countries by billed sales in calendar year 2017, by currency.",
+            "previousPlan": {
+                "verified_db_context": {
+                    "semantic_requirements": {
+                        "time_filter": {"resolved_from_data": True, "years": ["2017"]}
+                    }
+                }
+            },
+        },
+    }
+
+    resumed = resolve_pending_currency_clarification("USD", rows, context)
     assert resumed == (
         "For country code 'US', show monthly billed sales in calendar year 2017 in currency USD."
     )

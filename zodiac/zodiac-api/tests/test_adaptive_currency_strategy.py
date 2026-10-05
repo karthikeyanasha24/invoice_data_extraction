@@ -75,6 +75,18 @@ def test_inject_skips_when_quoted_waerk_already_filtered():
     assert len(__import__("re").findall(r"\bWHERE\b", fixed, flags=__import__("re").I)) == 1
 
 
+def test_inject_skips_when_casted_waerk_already_filtered():
+    sql = (
+        'SELECT SUM(CAST(k."netwr" AS NUMERIC)) AS total FROM "VBRK" k '
+        'WHERE TRIM(CAST(k."waerk" AS TEXT)) = \'USD\' '
+        'AND SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4) = \'2017\' '
+        'GROUP BY k."fkdat"'
+    )
+    fixed = inject_currency_filter_sql(sql, "VBRK", "waerk", "USD")
+    assert fixed == sql
+    assert len(re.findall(r"\bwaerk\b", fixed, flags=re.I)) == 1
+
+
 def test_inject_currency_filter():
     sql = 'SELECT SUM(CAST("VBRK"."netwr" AS NUMERIC)) FROM "VBRK" GROUP BY "VBRK"."kunag" ORDER BY 1 DESC LIMIT 5'
     fixed = inject_currency_filter_sql(sql, "VBRK", "waerk", "EUR")

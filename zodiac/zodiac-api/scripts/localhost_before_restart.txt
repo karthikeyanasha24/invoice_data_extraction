@@ -1,0 +1,702 @@
+- link "Skip to content":
+  - /url: "#main-content"
+- generic: B
+- generic: BridgeEDI
+- paragraph: Governed SAP intelligence
+- button "Collapse sidebar":
+- navigation "Main":
+  - paragraph: Understand
+  - button "Overview":
+    - generic: Overview
+  - paragraph: Ask
+  - button "AI Analyst":
+    - generic: AI Analyst
+  - paragraph: Operate
+  - button "EDI operations":
+    - generic: EDI operations
+  - button "Invoices":
+    - generic: Invoices
+  - button "SAT documents":
+    - generic: SAT documents
+  - paragraph: Manage
+  - button "Customers":
+    - generic: Customers
+  - button "Workspaces":
+    - generic: Workspaces
+  - button "Customer users":
+    - generic: Customer users
+  - button "RFC to G/L mapping":
+    - generic: RFC to G/L mapping
+  - button "Supplier API access":
+    - generic: Supplier API access
+  - button "Settings":
+    - generic: Settings
+- 'generic "Connecting to: localhost:8000 Local API. The database behind this API may still contain SAP demo data."':
+  - generic: Local development
+- paragraph: Connecting to local API. SAP demo data may still be present in the configured database.
+- generic: puspesh
+- generic: puspesh@gmail.com
+- button "Logout":
+  - generic: Logout
+- main:
+  - heading "AI Analyst" [level=2]
+  - paragraph: Ask anything — conversation, schema, or business data
+  - paragraph: "Working on: Governed analysis"
+  - button "Clear chat":
+  - generic: Show the top five countries by billed sales in calendar year 2017, with billing currency shown as a field. Do not filter to one currency. Show the SQL.
+  - generic: What we found
+  - paragraph: The query completed and returned 9 row(s). See the result table for the verified values.
+  - generic: 📈
+  - heading "Show the top five countries" [level=4]
+  - generic: Multi-currency
+  - paragraph: total sales by country
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Area":
+    - generic: Area
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: DE
+    - generic: EG
+    - generic: DE
+    - generic: FR
+    - generic: SO
+    - generic: EG
+    - generic: DE
+    - generic: US
+    - generic: DE
+    - generic: "0"
+    - generic: 350.0K
+    - generic: 700.0K
+    - generic: 1.1M
+    - generic: 1.4M
+  - generic: 9 rows
+  - generic: bar
+  - generic: Governed analysis · 9 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "country currency total sales rank within currency":
+        - columnheader "country":
+          - button "country"
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "total sales":
+          - button "total sales"
+        - columnheader "rank within currency":
+          - button "rank within currency"
+    - rowgroup:
+      - row "DE CHF 980 1":
+        - cell "DE"
+        - cell "CHF"
+        - cell "980"
+        - cell "1"
+      - row "EG EUR 22,081 1":
+        - cell "EG"
+        - cell "EUR"
+        - cell "22,081"
+        - cell "1"
+      - row "DE EUR 3,890 2":
+        - cell "DE"
+        - cell "EUR"
+        - cell "3,890"
+        - cell "2"
+      - row "FR EUR 1,000 3":
+        - cell "FR"
+        - cell "EUR"
+        - cell "1,000"
+        - cell "3"
+      - row "SO GBP 2,010 1":
+        - cell "SO"
+        - cell "GBP"
+        - cell "2,010"
+        - cell "1"
+      - row "EG GBP 20 2":
+        - cell "EG"
+        - cell "GBP"
+        - cell "20"
+        - cell "2"
+      - row "DE GBP 10 3":
+        - cell "DE"
+        - cell "GBP"
+        - cell "10"
+        - cell "3"
+      - row "US USD 1,227,978 1":
+        - cell "US"
+        - cell "USD"
+        - cell "1,227,978"
+        - cell "1"
+      - row "DE USD 10,000 2":
+        - cell "DE"
+        - cell "USD"
+        - cell "10,000"
+        - cell "2"
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - button "View SQL sources · 9 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 9 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: For the higher-sales country, show monthly billed sales in the same year and currency.
+  - paragraph: The prior ranking contains multiple currencies, so the sales amounts cannot identify one higher-sales country across the whole result. Choose a currency to continue; I can then reuse the prior year and show its monthly sales.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: Show the top five countries by billed sales in calendar year 2017, with billing currency shown as a field. Do not filter to one currency. Show the SQL.
+  - generic: What we found
+  - paragraph: The query completed and returned 9 row(s). See the result table for the verified values.
+  - generic: 📈
+  - heading "Show the top five countries" [level=4]
+  - generic: Multi-currency
+  - paragraph: total sales by country
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Area":
+    - generic: Area
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: DE
+    - generic: EG
+    - generic: DE
+    - generic: FR
+    - generic: SO
+    - generic: EG
+    - generic: DE
+    - generic: US
+    - generic: DE
+    - generic: "0"
+    - generic: 350.0K
+    - generic: 700.0K
+    - generic: 1.1M
+    - generic: 1.4M
+  - generic: 9 rows
+  - generic: bar
+  - generic: Governed analysis · 9 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "country currency total sales rank within currency":
+        - columnheader "country":
+          - button "country"
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "total sales":
+          - button "total sales"
+        - columnheader "rank within currency":
+          - button "rank within currency"
+    - rowgroup:
+      - row "DE CHF 980 1":
+        - cell "DE"
+        - cell "CHF"
+        - cell "980"
+        - cell "1"
+      - row "EG EUR 22,081 1":
+        - cell "EG"
+        - cell "EUR"
+        - cell "22,081"
+        - cell "1"
+      - row "DE EUR 3,890 2":
+        - cell "DE"
+        - cell "EUR"
+        - cell "3,890"
+        - cell "2"
+      - row "FR EUR 1,000 3":
+        - cell "FR"
+        - cell "EUR"
+        - cell "1,000"
+        - cell "3"
+      - row "SO GBP 2,010 1":
+        - cell "SO"
+        - cell "GBP"
+        - cell "2,010"
+        - cell "1"
+      - row "EG GBP 20 2":
+        - cell "EG"
+        - cell "GBP"
+        - cell "20"
+        - cell "2"
+      - row "DE GBP 10 3":
+        - cell "DE"
+        - cell "GBP"
+        - cell "10"
+        - cell "3"
+      - row "US USD 1,227,978 1":
+        - cell "US"
+        - cell "USD"
+        - cell "1,227,978"
+        - cell "1"
+      - row "DE USD 10,000 2":
+        - cell "DE"
+        - cell "USD"
+        - cell "10,000"
+        - cell "2"
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - button "View SQL sources · 9 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 9 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: For the higher-sales country, show monthly billed sales in the same year and currency.
+  - paragraph: The prior ranking contains multiple currencies, so the sales amounts cannot identify one higher-sales country across the whole result. Choose a currency to continue; I can then reuse the prior year and show its monthly sales.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: USD
+  - status:
+    - paragraph: Data limitation
+    - paragraph: "Data limitation: no tables in the indexed schema match this question. Try rephrasing with a business metric and dimension (customer, material, billing, etc.)."
+    - paragraph: This is not an application failure. The question was understood, but the required data is not in this extract. No unsupported number was calculated. Previous conversation context is kept.
+  - generic: USD
+  - generic: What we found
+  - paragraph: The query completed and returned 6 row(s). See the result table for the verified values.
+  - generic: 📈
+  - heading "For country 'US', show monthly billed sales" [level=4]
+  - paragraph: total billed sales over time
+  - button "Area":
+    - generic: Area
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: "201701"
+    - generic: "201705"
+    - generic: "201706"
+    - generic: "201708"
+    - generic: "201709"
+    - generic: "201711"
+    - generic: "0"
+    - generic: 350.0K
+    - generic: 700.0K
+    - generic: 1.1M
+    - generic: 1.4M
+  - generic: 6 rows
+  - generic: area
+  - generic: Governed analysis · 6 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "month currency total billed sales":
+        - columnheader "month":
+          - button "month"
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "total billed sales":
+          - button "total billed sales"
+    - rowgroup:
+      - row "201701 USD 1,234,719":
+        - cell "201701"
+        - cell "USD"
+        - cell "1,234,719"
+      - row "201705 USD 500":
+        - cell "201705"
+        - cell "USD"
+        - cell "500"
+      - row "201706 USD 560":
+        - cell "201706"
+        - cell "USD"
+        - cell "560"
+      - row "201708 USD 1,000":
+        - cell "201708"
+        - cell "USD"
+        - cell "1,000"
+      - row "201709 USD 799":
+        - cell "201709"
+        - cell "USD"
+        - cell "799"
+      - row "201711 USD 400":
+        - cell "201711"
+        - cell "USD"
+        - cell "400"
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - button "View SQL sources · 6 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 6 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: Show billed sales by month for country code 'US' in calendar year 2017 in currency USD.
+  - generic: What we found
+  - paragraph: The query completed and returned 6 row(s). See the result table for the verified values.
+  - generic: 📈
+  - heading "Show billed sales" [level=4]
+  - paragraph: total billed sales over time
+  - button "Area":
+    - generic: Area
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: "201701"
+    - generic: "201705"
+    - generic: "201706"
+    - generic: "201708"
+    - generic: "201709"
+    - generic: "201711"
+    - generic: "0"
+    - generic: 350.0K
+    - generic: 700.0K
+    - generic: 1.1M
+    - generic: 1.4M
+  - generic: 6 rows
+  - generic: area
+  - generic: Governed analysis · 6 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "month currency total billed sales":
+        - columnheader "month":
+          - button "month"
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "total billed sales":
+          - button "total billed sales"
+    - rowgroup:
+      - row "201701 USD 1,224,719":
+        - cell "201701"
+        - cell "USD"
+        - cell "1,224,719"
+      - row "201705 USD 500":
+        - cell "201705"
+        - cell "USD"
+        - cell "500"
+      - row "201706 USD 560":
+        - cell "201706"
+        - cell "USD"
+        - cell "560"
+      - row "201708 USD 1,000":
+        - cell "201708"
+        - cell "USD"
+        - cell "1,000"
+      - row "201709 USD 799":
+        - cell "201709"
+        - cell "USD"
+        - cell "799"
+      - row "201711 USD 400":
+        - cell "201711"
+        - cell "USD"
+        - cell "400"
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - button "View SQL sources · 6 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 6 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: Show the top five countries by billed sales in calendar year 2017, with billing currency shown as a field. Do not filter to one currency. Show the SQL.
+  - generic: What we found
+  - paragraph: The query completed and returned 9 row(s). See the result table for the verified values.
+  - generic: 📈
+  - heading "Show the top five countries" [level=4]
+  - generic: Multi-currency
+  - paragraph: total sales by country
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Area":
+    - generic: Area
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: DE
+    - generic: EG
+    - generic: DE
+    - generic: FR
+    - generic: SO
+    - generic: EG
+    - generic: DE
+    - generic: US
+    - generic: DE
+    - generic: "0"
+    - generic: 350.0K
+    - generic: 700.0K
+    - generic: 1.1M
+    - generic: 1.4M
+  - generic: 9 rows
+  - generic: bar
+  - generic: Governed analysis · 9 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "country currency total sales rank within currency":
+        - columnheader "country":
+          - button "country"
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "total sales":
+          - button "total sales"
+        - columnheader "rank within currency":
+          - button "rank within currency"
+    - rowgroup:
+      - row "DE CHF 980 1":
+        - cell "DE"
+        - cell "CHF"
+        - cell "980"
+        - cell "1"
+      - row "EG EUR 22,081 1":
+        - cell "EG"
+        - cell "EUR"
+        - cell "22,081"
+        - cell "1"
+      - row "DE EUR 3,890 2":
+        - cell "DE"
+        - cell "EUR"
+        - cell "3,890"
+        - cell "2"
+      - row "FR EUR 1,000 3":
+        - cell "FR"
+        - cell "EUR"
+        - cell "1,000"
+        - cell "3"
+      - row "SO GBP 2,010 1":
+        - cell "SO"
+        - cell "GBP"
+        - cell "2,010"
+        - cell "1"
+      - row "EG GBP 20 2":
+        - cell "EG"
+        - cell "GBP"
+        - cell "20"
+        - cell "2"
+      - row "DE GBP 10 3":
+        - cell "DE"
+        - cell "GBP"
+        - cell "10"
+        - cell "3"
+      - row "US USD 1,227,978 1":
+        - cell "US"
+        - cell "USD"
+        - cell "1,227,978"
+        - cell "1"
+      - row "DE USD 10,000 2":
+        - cell "DE"
+        - cell "USD"
+        - cell "10,000"
+        - cell "2"
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - button "View SQL sources · 9 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 9 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: For the higher-sales country, show monthly billed sales in the same year and currency.
+  - paragraph: The prior ranking contains multiple currencies, so the sales amounts cannot identify one higher-sales country across the whole result. Choose a currency to continue; I can then reuse the prior year and show its monthly sales.
+  - generic: USD
+  - generic: What we found
+  - paragraph: The query completed and returned 6 row(s). See the result table for the verified values.
+  - generic: 📈
+  - heading "For country code 'US', show monthly billed sales" [level=4]
+  - paragraph: total billed sales over time
+  - button "Area":
+    - generic: Area
+  - button "Bar":
+    - generic: Bar
+  - button "Line":
+    - generic: Line
+  - button "Table":
+    - generic: Table
+  - button "Download":
+  - application:
+    - generic: "201701"
+    - generic: "201705"
+    - generic: "201706"
+    - generic: "201708"
+    - generic: "201709"
+    - generic: "201711"
+    - generic: "0"
+    - generic: 350.0K
+    - generic: 700.0K
+    - generic: 1.1M
+    - generic: 1.4M
+  - generic: 6 rows
+  - generic: area
+  - generic: Governed analysis · 6 rows
+  - searchbox "Filter table rows"
+  - button "Export CSV"
+  - table:
+    - rowgroup:
+      - row "month currency total billed sales":
+        - columnheader "month":
+          - button "month"
+        - columnheader "currency":
+          - button "currency"
+        - columnheader "total billed sales":
+          - button "total billed sales"
+    - rowgroup:
+      - row "201701 USD 1,224,719":
+        - cell "201701"
+        - cell "USD"
+        - cell "1,224,719"
+      - row "201705 USD 500":
+        - cell "201705"
+        - cell "USD"
+        - cell "500"
+      - row "201706 USD 560":
+        - cell "201706"
+        - cell "USD"
+        - cell "560"
+      - row "201708 USD 1,000":
+        - cell "201708"
+        - cell "USD"
+        - cell "1,000"
+      - row "201709 USD 799":
+        - cell "201709"
+        - cell "USD"
+        - cell "799"
+      - row "201711 USD 400":
+        - cell "201711"
+        - cell "USD"
+        - cell "400"
+  - button "How this was calculated":
+    - generic: How this was calculated
+  - button "View SQL sources · 6 rows":
+    - generic: View SQL sources
+    - generic: ·
+    - generic: 6 rows
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: Show me the bottom 10 negative billed invoices in calendar year 2000 with billing document number, customer, posting date, and amount. Then compare the linked sales orders for those invoices in 2000 versus 2001, including absolute and percent change.
+  - status:
+    - paragraph: Investigation incomplete
+    - paragraph: "The generated query was blocked by schema or SQL validation before execution. Validation detail: Join edge BKPF <-> VBRK has no approved predicate template in join graph.; Join edge VBAK <-> VBFA has no approved predicate template in join graph.; Year-scoped billing query must include FKDAT year predicate for 2000 (e.g. SUBSTRING(TRIM(r.fkdat),1,4) = '2000')."
+  - button "Expand SQL query":
+    - text: SQL did not pass validation
+    - text: Expand SQL
+  - generic: Show me the bottom 10 negative billed invoices in calendar year 2000 with billing document number, customer, posting date, and amount. Then compare the linked sales orders for those invoices in 2000 versus 2001, including absolute and percent change.
+  - status:
+    - paragraph: Timed out
+    - paragraph: This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned.
+  - button "Expand SQL query":
+    - text: Executed SQL
+    - text: Expand SQL
+  - generic: Show me the bottom 10 negative billed invoices in calendar year 2000 with billing document number, customer, posting date, and amount. Then compare the linked sales orders for those invoices in 2000 versus 2001, including absolute and percent change.
+  - status:
+    - paragraph: Timed out
+    - paragraph: This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned.
+  - paragraph: The service could not generate a database query for this investigation.
+  - generic: "New analysis: show me the bottom 10 negative billed invoices in calendar year 20"
+  - paragraph: Which calendar year did you mean by “20”? Please give the full four-digit year (e.g., 2000 or 2020). Also confirm the output columns you want—by default I will return billing document number, customer ID/name, posting date, billed amount, and billing currency. Do you want any other fields or filters (for example a specific currency or customer subset)?
+  - generic: Show the bottom 10 negative billed invoices in calendar year 2000. Include billing document number, customer, invoice posting date, billed amount, and currency. For those invoices, compare linked sales order totals in 2000 versus 2001 and show absolute and percent change. Show the SQL.
+  - paragraph: There is no verified result identifying the entity or documents for this follow-up. Specify the customer, country, document, or other selection, or retry the preceding analysis.
+  - generic: Show the bottom 10 negative billed invoices in calendar year 2000. Include billing document number, customer, invoice posting date, billed amount, and currency. For those invoices, compare linked sales order totals in 2000 versus 2001 and show absolute and percent change. Show the SQL.
+  - status:
+    - paragraph: Investigation incomplete
+    - paragraph: I couldn't complete understanding of your message due to a temporary model/service failure. Please try again in a moment.
+  - paragraph: The service could not generate a database query for this investigation.
+  - generic: Show the bottom 10 negative billed invoices in calendar year 2000. Include billing document number, customer, invoice posting date, billed amount, and currency. For those invoices, compare linked sales order totals in 2000 versus 2001 and show absolute and percent change. Show the SQL.
+  - status:
+    - paragraph: Timed out
+    - paragraph: This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned.
+  - paragraph: The service could not generate a database query for this investigation.
+  - generic: Show the bottom 10 negative billed invoices in calendar year 2000. Include billing document number, customer, invoice posting date, billed amount, and currency. For those invoices, compare linked sales order totals in 2000 versus 2001 and show absolute and percent change. Show the SQL.
+  - status:
+    - paragraph: No matching records
+    - paragraph: No matching records were found for the requested period and condition.
+  - button "Collapse SQL query" [expanded]:
+    - text: Executed SQL
+    - text: Collapse SQL
+  - region "Executed SQL":
+    - paragraph: This query was used to read the database.
+    - button "Copy SQL query":
+    - generic: WITH invoice_cohort AS ( SELECT k."vbeln" AS "_billing_document_key", TRIM(CAST(k."vbeln" AS TEXT)) AS "billing_document", TRIM(CAST(fi."budat" AS TEXT)) AS "invoice_date", TRIM(CAST(k."kunag" AS TEXT)) AS "customer_id", CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) AS "invoice_amount", TRIM(CAST(k."waerk" AS TEXT)) AS "currency", TRIM(CAST(c."name1" AS TEXT)) AS "customer_name" FROM "VBRK" k JOIN "BKPF" fi ON fi."belnr" = k."belnr" AND fi."gjahr" = k."gjahr" AND fi."bukrs" = k."bukrs" LEFT JOIN "KNA1" c ON k."kunag" = c."kunnr" WHERE TRIM(CAST(fi."budat" AS TEXT)) >= '20000101' AND TRIM(CAST(fi."budat" AS TEXT)) < '20010101' AND CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) < 0 AND NULLIF(TRIM(CAST(k."waerk" AS TEXT)), '') IS NOT NULL ORDER BY "invoice_amount" ASC, "billing_document" ASC LIMIT 10 ), linked_orders AS ( SELECT DISTINCT i."billing_document", o."vbeln" AS "linked_order_key", TRIM(CAST(o."vbeln" AS TEXT)) AS "linked_sales_order", o."erdat" AS "linked_order_date", o."netwr" AS "linked_order_amount", o."waerk" AS "linked_order_currency" FROM invoice_cohort i JOIN "VBFA" f ON f."vbeln" = i."_billing_document_key" JOIN "VBAK" o ON o."vbeln" = f."vbelv" ), order_periods AS ( SELECT l."billing_document", STRING_AGG(DISTINCT l."linked_sales_order", ', ' ORDER BY l."linked_sales_order") AS "linked_sales_orders", COUNT(DISTINCT CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN l."linked_order_key" END) AS "linked_order_count_2000", SUM(CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), '') AS NUMERIC) END) AS "order_amount_2000", COUNT(DISTINCT CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN l."linked_order_key" END) AS "linked_order_count_2001", SUM(CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), '') AS NUMERIC) END) AS "order_amount_2001", COUNT(DISTINCT CASE WHEN ((TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') OR (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101')) AND NOT (UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency")) THEN l."linked_order_key" END) AS "currency_mismatch_order_count" FROM linked_orders l JOIN invoice_cohort i ON i."billing_document" = l."billing_document" WHERE ((TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') OR (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101')) GROUP BY l."billing_document" ) SELECT i."billing_document", i."customer_id", i."customer_name", i."invoice_date", i."invoice_amount", i."currency", p."linked_sales_orders", p."linked_order_count_2000", p."order_amount_2000", p."linked_order_count_2001", p."order_amount_2001", p."currency_mismatch_order_count", (p."order_amount_2001" - p."order_amount_2000") AS "absolute_change", ROUND(((p."order_amount_2001" - p."order_amount_2000")) / NULLIF(ABS(p."order_amount_2000"), 0) * 100, 2) AS "percent_change" FROM invoice_cohort i LEFT JOIN order_periods p ON p."billing_document" = i."billing_document" ORDER BY i."customer_id", i."invoice_amount" ASC, i."billing_document"
+  - generic: Show billed sales by month for country code US in calendar year 2017 in currency USD. Include currency and show the SQL.
+  - status:
+    - paragraph: Investigation incomplete
+    - paragraph: "The generated query was blocked by schema or SQL validation before execution. Validation detail: Year-scoped billing query must include a billing date predicate for 2017."
+  - button "Expand SQL query":
+    - text: SQL did not pass validation
+    - text: Expand SQL
+  - generic: Show billed sales by month for country code US in calendar year 2017 in currency USD. Include currency and show the SQL.
+  - status:
+    - paragraph: Investigation incomplete
+    - paragraph: "The generated query was blocked by schema or SQL validation before execution. Validation detail: Year-scoped billing query must include a billing date predicate for 2017."
+  - button "Expand SQL query":
+    - text: SQL did not pass validation
+    - text: Expand SQL
+  - generic: show me lowest negative sales in the year 2000 and make comparison with the year 2001
+  - paragraph: Do you mean negative billed invoices (billing document/invoice-level billed amount) as the 'sales' to rank, or do you want sales orders totals tied to those invoices? Confirm the desired grain (invoice vs sales-order), which columns to return (e.g., billing document number, customer, posting date, currency, invoice amount), currency filter (e.g., USD or all currencies), and whether you want the SQ
+  - button "Show the top customers by billed sales."
+  - button "How many sales orders are there?"
+  - generic: use first invoices to compare and then compare with sales orders relevant to those linked invoices
+  - paragraph: "Thanks — I understand: you want the analysis to use the first (earliest) invoice linked to each sales order, find the bottom 10 negative invoice amounts in calendar year 2000, then for the sales orders linked to those invoices compare order totals in 2000 vs 2001 (absolute and percent change). Before I run or generate a validated query I need a couple of required confirmations and to surface schema/validation constraints I previously hit: 1) Confirm these selection rules - \"First invoices\": do you mean the earliest billing document per sales order by invoice posting date (FKDAT) or by accounting document date (BLDAT/BUDAT)? (FKDAT was required by prior validation for year scoping.) - Currency filter: restrict to USD only, or include all currencies? (Prior requests used USD often — say if you want USD.) - Output columns you want for the invoice list (I will by default include: billing document number, customer ID/name, invoice posting date (FKDAT), billed amount, currency). - For sales-order totals: should totals be sales-order header net value (VBAK net total) or summed VBAP.netwr across items? (Schema semantics indicate VBAK is sales order header with total value, VBAP has item netwr.) 2) Validation / join constraints you must approve or provide alternatives for - Year-scoped billing queries must include an FKDAT year predicate for 2000 (for example SUBSTRING(TRIM(r.fkdat),1,4) = '2000'). I will include that once you confirm FKDAT is the invoice date to use. - Previously the query failed validation because joins BKPF <-> VBRK and VBAK <-> VBFA lacked approved join predicates in the join graph. I can: a) Use the document-flow table VBFA to link invoices to preceding sales orders (VBFA is available per schema semantics); or b) If you prefer linking via accounting tables (BKPF/BSEG/VBRK) I need confirmation that those join edges are allowed in your environment or you must provide the approved join predicates. - Please confirm I should use VBFA to link invoice (invoice doc type) -> sales order (order doc type). If you confirm, I will build the query using VBFA document flow to find the first invoice per sales order. 3) Anything else - Limit to customers/countries? Or run across all customers? - Tie-breaking for \"first invoice\" when multiple invoices share same FKDAT — prefer lowest billing doc number? (I can pick a deterministic tie-breaker if you want.) What I will produce after you confirm the items above - A validated SQL query that: 1) Finds the earliest invoice (by FKDAT) per sales order and ranks negative invoice amounts, returning the bottom 10 negatives for 2000 with billing doc, customer, FKDAT, amount, currency. 2) For the sales orders linked to those invoices, computes sales-order totals for calendar year 2000 and 2001 (per your choice of VBAK total or summed VBAP.netwr), and shows absolute and percent change. - The SQL and a brief explanation of join logic and predicates used. Please confirm the items in (1) and (2) (especially: FKDAT as invoice date, use VBFA for linking, and whether to filter to USD). Once you confirm I’ll generate the SQL and run the analysis (subject to validation constraints)."
+  - generic: Billing document numbers first based on customer
+  - paragraph: "Thanks — I have noted: ‘billing document numbers first based on customer’ (i.e., group/sort invoices by customer, then list billing document numbers). I still need confirmations on the remaining choices before I can generate and validate the SQL: 1) ‘First invoices’ tie-break: should the earliest invoice per sales order be selected by invoice posting date (FKDAT) or by accounting/document date (BU"
+  - button "Show the top customers by billed sales."
+  - button "How many sales orders are there?"
+  - generic: Yes lets see
+  - status:
+    - paragraph: No matching records
+    - paragraph: No matching records were found for the requested period and condition.
+  - button "Collapse SQL query" [expanded] [active]:
+    - text: Executed SQL
+    - text: Collapse SQL
+  - region "Executed SQL":
+    - paragraph: This query was used to read the database.
+    - button "Copy SQL query":
+    - generic: WITH invoice_cohort AS ( SELECT k."vbeln" AS "_billing_document_key", TRIM(CAST(k."vbeln" AS TEXT)) AS "billing_document", TRIM(CAST(fi."budat" AS TEXT)) AS "invoice_date", TRIM(CAST(k."kunag" AS TEXT)) AS "customer_id", CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) AS "invoice_amount", TRIM(CAST(k."waerk" AS TEXT)) AS "currency", TRIM(CAST(c."name1" AS TEXT)) AS "customer_name" FROM "VBRK" k JOIN "BKPF" fi ON fi."belnr" = k."belnr" AND fi."gjahr" = k."gjahr" AND fi."bukrs" = k."bukrs" LEFT JOIN "KNA1" c ON k."kunag" = c."kunnr" WHERE TRIM(CAST(fi."budat" AS TEXT)) >= '20000101' AND TRIM(CAST(fi."budat" AS TEXT)) < '20010101' AND CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), '') AS NUMERIC) < 0 AND NULLIF(TRIM(CAST(k."waerk" AS TEXT)), '') IS NOT NULL ORDER BY "invoice_amount" ASC, "billing_document" ASC LIMIT 10 ), linked_orders AS ( SELECT DISTINCT i."billing_document", o."vbeln" AS "linked_order_key", TRIM(CAST(o."vbeln" AS TEXT)) AS "linked_sales_order", o."erdat" AS "linked_order_date", o."netwr" AS "linked_order_amount", o."waerk" AS "linked_order_currency" FROM invoice_cohort i JOIN "VBFA" f ON f."vbeln" = i."_billing_document_key" JOIN "VBAK" o ON o."vbeln" = f."vbelv" ), order_periods AS ( SELECT l."billing_document", STRING_AGG(DISTINCT l."linked_sales_order", ', ' ORDER BY l."linked_sales_order") AS "linked_sales_orders", COUNT(DISTINCT CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN l."linked_order_key" END) AS "linked_order_count_2000", SUM(CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), '') AS NUMERIC) END) AS "order_amount_2000", COUNT(DISTINCT CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN l."linked_order_key" END) AS "linked_order_count_2001", SUM(CASE WHEN (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101') AND UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency") THEN CAST(NULLIF(TRIM(CAST(l."linked_order_amount" AS TEXT)), '') AS NUMERIC) END) AS "order_amount_2001", COUNT(DISTINCT CASE WHEN ((TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') OR (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101')) AND NOT (UPPER(TRIM(CAST(l."linked_order_currency" AS TEXT))) = UPPER(i."currency")) THEN l."linked_order_key" END) AS "currency_mismatch_order_count" FROM linked_orders l JOIN invoice_cohort i ON i."billing_document" = l."billing_document" WHERE ((TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20000101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20010101') OR (TRIM(CAST(l."linked_order_date" AS TEXT)) >= '20010101' AND TRIM(CAST(l."linked_order_date" AS TEXT)) < '20020101')) GROUP BY l."billing_document" ) SELECT i."billing_document", i."customer_id", i."customer_name", i."invoice_date", i."invoice_amount", i."currency", p."linked_sales_orders", p."linked_order_count_2000", p."order_amount_2000", p."linked_order_count_2001", p."order_amount_2001", p."currency_mismatch_order_count", (p."order_amount_2001" - p."order_amount_2000") AS "absolute_change", ROUND(((p."order_amount_2001" - p."order_amount_2000")) / NULLIF(ABS(p."order_amount_2000"), 0) * 100, 2) AS "percent_change" FROM invoice_cohort i LEFT JOIN order_periods p ON p."billing_document" = i."billing_document" ORDER BY i."customer_id", i."invoice_amount" ASC, i."billing_document"
+  - textbox "Ask anything — e.g. \"Hi\", \"How many tables?\", \"Top customers by sales\""
+  - button "Send question" [disabled]:
+  - generic: Same continuous chat — follow-ups keep context. Use Clear chat (top right) to reset.
+- button "Open Next.js Dev Tools":
+- alert
+- generic: "201709"

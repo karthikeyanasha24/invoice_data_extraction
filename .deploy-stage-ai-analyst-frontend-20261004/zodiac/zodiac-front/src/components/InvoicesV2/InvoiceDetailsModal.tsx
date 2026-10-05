@@ -1,0 +1,331 @@
+'use client';
+
+import { X, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+interface ValidatedInvoice {
+  id: number;
+  status: 'success' | 'failed';
+  invoice_data: {
+    [key: string]: any;
+  };
+  missing_fields?: string[];
+  validation_errors?: Array<{ field: string; message: string }>;
+  validation_notes?: string;
+}
+
+interface Props {
+  invoice: ValidatedInvoice;
+  onClose: () => void;
+}
+
+export default function InvoiceDetailsModal({ invoice, onClose }: Props) {
+  const formatFieldName = (field: string) => {
+    return field
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  const renderFieldValue = (key: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'object') return JSON.stringify(value, null, 2);
+    return String(value);
+  };
+
+  // Comprehensive field groupings (Hybrid Approach)
+  const fieldGroups = {
+    header: [
+      'invoice_number', 'issue_date', 'due_date', 'currency', 'invoice_type_code',
+      'customization_id', 'profile_id', 'note', 'accounting_cost', 'buyer_reference'
+    ],
+    period: ['invoice_period_start', 'invoice_period_end'],
+    references: ['order_reference', 'sales_order_id', 'contract_reference', 'project_reference'],
+    customer: [
+      'customer_id', 'customer_id_scheme', 'customer_name', 'customer_legal_name',
+      'customer_tax_id', 'customer_address', 'customer_contact_name',
+      'customer_contact_telephone', 'customer_contact_email', 'customer_company_legal_form'
+    ],
+    supplier: [
+      'supplier_id', 'supplier_id_scheme', 'supplier_name', 'supplier_legal_name',
+      'supplier_tax_id', 'supplier_address', 'supplier_contact_name',
+      'supplier_contact_telephone', 'supplier_contact_email', 'supplier_company_legal_form'
+    ],
+    payment: [
+      'payment_means_code', 'payment_means_name', 'payment_id',
+      'payment_terms', 'payee_financial_account'
+    ],
+    tax: [
+      'tax_amount', 'tax_percentage', 'tax_category_id',
+      'taxable_amount', 'tax_scheme'
+    ],
+    monetary: [
+      'line_extension_amount', 'subtotal', 'total', 'payable_amount',
+      'allowance_total_amount', 'charge_total_amount', 'prepaid_amount'
+    ],
+    delivery: [
+      'delivery_date', 'delivery_location_id', 'delivery_address', 'delivery_party_name'
+    ]
+  };
+
+  // Collect all defined fields
+  const allDefinedFields = Object.values(fieldGroups).flat();
+  const otherFields = Object.keys(invoice.invoice_data).filter(
+    key => ![...allDefinedFields, 'line_items', 'line_items_count', 'allowances_charges'].includes(key)
+  );
+
+  const FieldSection = ({ title, fields }: { title: string; fields: string[] }) => {
+    const visibleFields = fields.filter(field => invoice.invoice_data[field] !== undefined);
+    if (visibleFields.length === 0) return null;
+
+    return (
+      <div className="space-y-3">
+        <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">{title}</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {visibleFields.map(field => {
+            const isMissing = invoice.missing_fields?.includes(field);
+            return (
+              <div key={field} className={cn('space-y-1', isMissing && 'opacity-50')}>
+                <div className="text-xs font-medium text-gray-500 flex items-center gap-1">
+                  {formatFieldName(field)}
+                  {isMissing ? (
+                    <span title="Missing">
+                      <AlertCircle className="h-3 w-3 text-red-500" aria-hidden />
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-sm text-gray-900 break-words">
+                  {renderFieldValue(field, invoice.invoice_data[field])}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+      {/* Overlay */}
+      <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={onClose}></div>
+
+      {/* Modal */}
+      <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+        <div className="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl">
+          {/* Header */}
+          <div className="bg-white px-6 py-4 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <h3 className="text-lg font-semibold text-gray-900" id="modal-title">
+                  Invoice Details
+                </h3>
+                {invoice.status === 'success' ? (
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    <CheckCircle className="h-3 w-3 mr-1" />
+                    Success
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    <XCircle className="h-3 w-3 mr-1" />
+                    Failed
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-gray-500 transition-colors"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="bg-gray-50 px-6 py-6 max-h-[calc(100vh-200px)] overflow-y-auto">
+            <div className="space-y-6">
+              {/* Validation Notes */}
+              {invoice.validation_notes && (
+                <div className={cn(
+                  'p-4 rounded-md',
+                  invoice.status === 'success' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+                )}>
+                  <p className={cn(
+                    'text-sm',
+                    invoice.status === 'success' ? 'text-green-700' : 'text-red-700'
+                  )}>
+                    {invoice.validation_notes}
+                  </p>
+                </div>
+              )}
+
+              {/* Missing Fields Alert */}
+              {invoice.missing_fields && invoice.missing_fields.length > 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                  <div className="flex items-start">
+                    <AlertCircle className="h-5 w-5 text-yellow-600 mr-3 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-sm font-medium text-yellow-800 mb-1">Missing Fields</h4>
+                      <p className="text-sm text-yellow-700">
+                        {invoice.missing_fields.map(formatFieldName).join(', ')}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Validation Errors */}
+              {invoice.validation_errors && invoice.validation_errors.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                  <div className="flex items-start">
+                    <XCircle className="h-5 w-5 text-red-600 mr-3 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-red-800 mb-2">Validation Errors</h4>
+                      <ul className="space-y-1">
+                        {invoice.validation_errors.map((error, idx) => (
+                          <li key={idx} className="text-sm text-red-700">
+                            <span className="font-medium">{formatFieldName(error.field)}:</span> {error.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Invoice Data Sections */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-6">
+                <FieldSection title="Invoice Header" fields={fieldGroups.header} />
+                <FieldSection title="Invoice Period" fields={fieldGroups.period} />
+                <FieldSection title="References" fields={fieldGroups.references} />
+                <FieldSection title="Customer Information" fields={fieldGroups.customer} />
+                <FieldSection title="Supplier Information" fields={fieldGroups.supplier} />
+                <FieldSection title="Payment Details" fields={fieldGroups.payment} />
+                <FieldSection title="Tax Breakdown" fields={fieldGroups.tax} />
+                <FieldSection title="Monetary Summary" fields={fieldGroups.monetary} />
+                <FieldSection title="Delivery" fields={fieldGroups.delivery} />
+                
+                {/* Allowances & Charges */}
+                {invoice.invoice_data.allowances_charges && Array.isArray(invoice.invoice_data.allowances_charges) && invoice.invoice_data.allowances_charges.length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                      Allowances & Charges ({invoice.invoice_data.allowances_charges.length})
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reason</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Base Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {invoice.invoice_data.allowances_charges.map((ac: any, idx: number) => (
+                            <tr key={idx}>
+                              <td className="px-3 py-2 text-sm text-gray-900">
+                                {ac.charge_indicator === 'true' ? 'Charge' : 'Allowance'}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{ac.reason || ac.reason_code || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-900">{ac.amount || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{ac.base_amount || 'N/A'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                
+                {otherFields.length > 0 && <FieldSection title="Additional Information" fields={otherFields} />}
+
+                {/* Enhanced Line Items */}
+                {invoice.invoice_data.line_items && Array.isArray(invoice.invoice_data.line_items) && invoice.invoice_data.line_items.length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                      Line Items ({invoice.invoice_data.line_items.length})
+                    </h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product IDs</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Qty</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Tax %</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {invoice.invoice_data.line_items.map((item: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="px-3 py-2 text-sm text-gray-900">{item.id || idx + 1}</td>
+                              <td className="px-3 py-2 text-sm">
+                                <div className="font-medium text-gray-900">{item.item_name || 'N/A'}</div>
+                                {item.item_description && (
+                                  <div className="text-xs text-gray-500 mt-0.5">{item.item_description}</div>
+                                )}
+                                {item.line_note && (
+                                  <div className="text-xs text-blue-600 mt-0.5">Note: {item.line_note}</div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-600">
+                                <div className="space-y-0.5">
+                                  {item.buyer_item_id && <div className="text-xs">Buyer: {item.buyer_item_id}</div>}
+                                  {item.seller_item_id && <div className="text-xs">Seller: {item.seller_item_id}</div>}
+                                  {item.standard_item_id && <div className="text-xs">Standard: {item.standard_item_id}</div>}
+                                  {!item.buyer_item_id && !item.seller_item_id && !item.standard_item_id && 'N/A'}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-900">
+                                {item.quantity || 'N/A'}
+                                {item.unit_code && <span className="text-xs text-gray-500"> {item.unit_code}</span>}
+                              </td>
+                              <td className="px-3 py-2 text-sm text-gray-900">{item.price || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm font-medium text-gray-900">{item.line_amount || 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-900">{item.tax_percent ? `${item.tax_percent}%` : 'N/A'}</td>
+                              <td className="px-3 py-2 text-sm text-gray-600">{item.origin_country || 'N/A'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* Additional Line Item Info */}
+                    {invoice.invoice_data.line_items.some((item: any) => item.order_line_reference || item.accounting_cost) && (
+                      <div className="text-xs text-gray-500 mt-2 space-y-1">
+                        {invoice.invoice_data.line_items.map((item: any, idx: number) => (
+                          <div key={idx}>
+                            {item.order_line_reference && (
+                              <span>Line {item.id}: Order Ref - {item.order_line_reference} </span>
+                            )}
+                            {item.accounting_cost && (
+                              <span>Accounting Cost - {item.accounting_cost}</span>
+                            )}
+                          </div>
+                        )).filter(Boolean)}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex justify-end">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

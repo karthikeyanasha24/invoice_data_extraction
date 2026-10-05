@@ -40,8 +40,12 @@ def find_join_path(start_table: str, target_table: str) -> Optional[List[JoinEdg
         return None
     if s == t:
         return []
-    for include_low in (False, True):
-        edges = preferred_join_graph(include_low_confidence=include_low)
+    for edges in (
+        preferred_join_graph(),
+        # When no configured multi-hop route exists, infer a direct edge from
+        # schema metadata for this requested pair only.
+        preferred_join_graph(tables=[s, t]),
+    ):
         neigh = _neighbors(edges)
         q = deque([(s, [])])
         seen: Set[str] = set()
