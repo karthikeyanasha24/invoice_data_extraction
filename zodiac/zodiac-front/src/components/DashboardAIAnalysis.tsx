@@ -312,11 +312,13 @@ function exportCsv(data: any[], filename: string) {
 
 function DataTable({
   data,
+  rowCount,
   totalCount,
   heading,
   columnSemantics,
 }: {
   data: any[];
+  rowCount?: number;
   totalCount?: number;
   heading?: string;
   columnSemantics?: QueryResult['column_semantics'];
@@ -367,7 +369,7 @@ function DataTable({
           <span className="text-sm font-medium text-slate-700">
             {isEmpty
               ? <span className="text-amber-700">No rows for this question</span>
-              : `${heading || 'Results'} · ${data.length.toLocaleString()} rows`}
+              : `${heading || 'Results'} · ${data.length.toLocaleString()} ${rowCount && rowCount > data.length ? `sample rows of ${rowCount.toLocaleString()} returned` : 'rows'}`}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -494,10 +496,24 @@ function humanizeFindings(findings?: string[]): string[] {
     });
 }
 
+function AnswerMarkdown({ text }: { text: string }) {
+  return (
+    <div className="text-sm leading-relaxed break-words [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3 [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3 [&_h2]:font-semibold [&_h2]:text-base [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:bg-slate-50 [&_td]:px-3 [&_td]:py-2 [&_tr]:border-b [&_tr]:border-slate-200 [&_code]:text-xs [&_pre]:overflow-x-auto">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+        table: ({ children }) => (
+          <div className="max-w-full overflow-x-auto my-3">
+            <table className="w-full border-collapse whitespace-nowrap">{children}</table>
+          </div>
+        ),
+      }}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
 function ConversationCard({ message }: { message: string }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
-      <p className="text-sm text-slate-800 whitespace-pre-line leading-relaxed">{message}</p>
+      <div className="text-slate-800"><AnswerMarkdown text={message} /></div>
     </div>
   );
 }
@@ -559,7 +575,7 @@ function SummaryCard({ summary, intent }: { summary: string; intent?: string }) 
         <span className="text-sm font-bold text-slate-800">What we found</span>
       </div>
       <div className="prose prose-sm prose-slate max-w-none text-slate-700 text-sm leading-relaxed">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{humanizePublicSummary(summary, intent)}</ReactMarkdown>
+        <AnswerMarkdown text={humanizePublicSummary(summary, intent)} />
       </div>
     </div>
   );
@@ -609,6 +625,7 @@ function MetaStrip({ meta, sqlStrategy: _sqlStrategy, rowCount, totalCount }: {
 // Pipeline progress indicator
 // ═══════════════════════════════════════════════════════════════════════════════
 function AnalysisProgress({ elapsed, progress }: { elapsed: number; progress: AnalystProgress }) {
+  const totalElapsed = Math.max(elapsed, (progress.elapsed_s || 0) * 1000);
   const stage = progress.pipeline_stage || 'UNDERSTANDING';
   const label = ANALYST_STAGE_LABELS[stage] || 'Working on your question';
   const history = (progress.stages || []).filter((step, i, list) =>
@@ -622,7 +639,7 @@ function AnalysisProgress({ elapsed, progress }: { elapsed: number; progress: An
         <span>{label}</span>
       </div>
       <p className="text-xs text-slate-500 pl-7" aria-live="off">
-        {Math.floor(elapsed / 1000)}s elapsed
+        {Math.floor(totalElapsed / 1000)}s elapsed
         {progress.stage_elapsed_s != null && ` · ${Math.floor(progress.stage_elapsed_s)}s on this step`}
       </p>
       {previousSteps.length > 0 && (
@@ -635,7 +652,7 @@ function AnalysisProgress({ elapsed, progress }: { elapsed: number; progress: An
           ))}
         </ol>
       )}
-      {elapsed > 15000 && <p className="text-xs text-slate-500 pl-7">Still working on this step. You can stop the analysis at any time.</p>}
+      {totalElapsed > 15000 && <p className="text-xs text-slate-500 pl-7">Still working on this step. You can stop the analysis at any time.</p>}
     </div>
   );
 }
@@ -853,7 +870,7 @@ function ResultContent({ result, onAskFollowup }: {
     if (mode === 'database_metadata' && hasData && (data?.length ?? 0) > 1) {
       return (
         <div className="space-y-3">
-          <ConversationCard message={summary || ''} />
+          <ConversationCard message={fullAnswer} />
           <DataTable
             data={data || []}
             totalCount={totalCount}
@@ -863,7 +880,7 @@ function ResultContent({ result, onAskFollowup }: {
         </div>
       );
     }
-    return <ConversationCard message={summary || 'Hello! How can I help you today?'} />;
+    return <ConversationCard message={fullAnswer || 'Hello! How can I help you today?'} />;
   }
 
   if (isClarification) {
@@ -929,7 +946,7 @@ function ResultContent({ result, onAskFollowup }: {
       {hasSummary && <SummaryCard summary={fullAnswer} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
-      {hasData && <DataTable data={data || []} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
+      {hasData && <DataTable data={data || []} rowCount={rowCount} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
       {hasInsights && <InsightsPanel findings={cleanFindings} />}
       {!isGeneral && <TrustPanel result={result} />}
       {followups.length > 0 && onAskFollowup && (
@@ -1055,7 +1072,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   useEffect(() => {
     if (loading) {
       setElapsed(0);
-      timerRef.current = setInterval(() => setElapsed(e => e + 500), 500);
+      const startedAt = Date.now();
+      timerRef.current = setInterval(() => setElapsed(Date.now() - startedAt), 500);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
     }

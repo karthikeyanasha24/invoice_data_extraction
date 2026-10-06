@@ -223,6 +223,8 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         period = None
 
     negation = sem.get("negation") if isinstance(sem.get("negation"), dict) else ops.get("negation")
+    if re.search(r"\b(?:include|including|retain|retaining|preserve|preserving)\b[^.;]{0,100}\b(?:no|without|missing)\b", ql):
+        negation = None
     if isinstance(negation, dict) and not (negation.get("required") or negation.get("forbidden") or negation.get("type")):
         negation = None
     # LLM often emits {"required": "purchase_order", "forbidden": null} for PO ranking
@@ -237,7 +239,9 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         negation = None
     if negation and not negation.get("forbidden") and _absence_lang:
         # Infer positive/negative entities from language when possible.
-        if re.search(r"purchase orders?.{0,40}(no|without|not).{0,20}invoices?", ql) or re.search(
+        if re.search(r"sales orders?.{0,40}(no|without|not).{0,20}invoices?", ql):
+            negation = {"type": "anti_join", "required": "sales_order", "forbidden": "invoice"}
+        elif re.search(r"purchase orders?.{0,40}(no|without|not).{0,20}invoices?", ql) or re.search(
             r"orders?.{0,40}(no|without).{0,20}invoices?", ql
         ):
             negation = {

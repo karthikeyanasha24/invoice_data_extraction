@@ -38,6 +38,7 @@ _UNDERSTAND_SYSTEM = (
     "requires_database: boolean (true only if SAP/business fact rows are needed)\n"
     "requires_metadata: boolean (true if schema/catalog introspection is needed)\n"
     "requires_conversation_context: boolean\n"
+    "requested_parts: array of standalone English requests, one per independently requested result\n"
     "entities: array of strings\n"
     "metric: string or null\n"
     "dimension: string or null\n"
@@ -54,7 +55,11 @@ _UNDERSTAND_SYSTEM = (
     "- Read the entire user message, including late constraints and multiple requested parts. "
     "A long message is not an error or a reason to answer just the first clause. "
     "Preserve every requested comparison, relationship, exclusion, and output requirement "
-    "in the resolved question. Distinguish quoted examples from the actual request.\n"
+    "in the resolved question. Also list each independently requested result in requested_parts; "
+    "use one item for one analytical request, and separate items for distinct outputs such as "
+    "a ranking plus a count. Keep filters, periods, and comparison rules attached to the request "
+    "they constrain. Do not split one comparison into multiple requests. Distinguish quoted "
+    "examples from the actual request.\n"
     "- An unanswered analytical clarification is a pending REQUEST, not a query result. "
     "When the user answers its choices, sets its source/grain/format, or accepts its "
     "defaults, set turn_relation=clarification_answer and context_source=pending_request. "
@@ -194,6 +199,7 @@ class TurnUnderstanding:
     requires_database: bool = False
     requires_metadata: bool = False
     requires_conversation_context: bool = False
+    requested_parts: List[str] = field(default_factory=list)
     entities: List[str] = field(default_factory=list)
     metric: Optional[str] = None
     dimension: Optional[str] = None
@@ -557,6 +563,18 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
             r"(?:customer|country|material|product|vendor|supplier|document|invoice|order)\b",
             reference_text, re.I,
         )
+        # Users often refer back to a described cohort without a demonstrative,
+        # e.g. "the three orders with differences". Treat quantified business
+        # groups as prior-result references when a prior turn exists, so the
+        # adapter keeps its verified rows/SQL available for the follow-up.
+        or re.search(
+            r"\bthe\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+            r"eleven|twelve|few|several|many)\s+"
+            r"(?:orders?|invoices?|billing\s+documents?|documents?|customers?|"
+            r"countries|materials?|products?|vendors?|suppliers?)\b"
+            r"(?:\s+(?:that|which|with|having|showing|whose)\b|\s+with\s+)",
+            reference_text, re.I,
+        )
     )
     requests_data = bool(
         re.search(
@@ -581,6 +599,29 @@ def is_referential_database_action(question: str, *, has_prior: bool) -> bool:
 def has_same_turn_entity_antecedent(question: str) -> bool:
     """Whether a demonstrative business-entity reference is anchored in this request."""
     q = question or ""
+    possessive = re.search(r"\b(?:its|their)\b", q, re.I)
+    if possessive:
+        # A possessive may point to an entity named earlier in this request,
+        # e.g. "order items and their linked billing items". That is a
+        # complete request scope, not a reference to a prior result.
+        for entity_pattern in (
+            r"sales[- ]order[- ]items?",
+            r"order[- ]items?",
+            r"billing[- ]items?",
+            r"invoice[- ]items?",
+            r"(?:billing\s+)?invoices?",
+            r"(?:billing\s+)?documents?",
+            r"sales\s+orders?",
+            r"orders?",
+            r"customers?",
+            r"countries?",
+            r"materials?",
+            r"products?",
+            r"vendors?",
+            r"suppliers?",
+        ):
+            if re.search(entity_pattern, q[:possessive.start()], re.I):
+                return True
     for entity_pattern in (
         r"(?:billing\s+)?invoices?",
         r"(?:billing\s+)?documents?",
@@ -666,6 +707,11 @@ def _coerce_understanding(data: Dict[str, Any], *, provider: str) -> TurnUnderst
         entities = [entities]
     if not isinstance(entities, list):
         entities = []
+    requested_parts = data.get("requested_parts") or []
+    if isinstance(requested_parts, str):
+        requested_parts = [requested_parts]
+    if not isinstance(requested_parts, list):
+        requested_parts = []
     requires_db = bool(data.get("requires_database"))
     requires_meta = bool(data.get("requires_metadata"))
     if intent == "metadata":
@@ -692,6 +738,7 @@ def _coerce_understanding(data: Dict[str, Any], *, provider: str) -> TurnUnderst
         requires_database=requires_db,
         requires_metadata=requires_meta,
         requires_conversation_context=bool(data.get("requires_conversation_context")),
+        requested_parts=[str(part).strip()[:2000] for part in requested_parts if str(part).strip()][:8],
         entities=[str(e)[:80] for e in entities if e][:12],
         metric=(str(data["metric"])[:80] if data.get("metric") not in (None, "") else None),
         dimension=(str(data["dimension"])[:80] if data.get("dimension") not in (None, "") else None),

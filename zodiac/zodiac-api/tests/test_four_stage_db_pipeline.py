@@ -24,6 +24,15 @@ def test_sat_question_includes_operational_tables():
     assert _question_needs_operational_tables("Show SAT processing log steps that failed")
 
 
+def test_table_coverage_accepts_structured_evidence_only_for_selected_real_tables():
+    from app.services.four_stage_db_pipeline import _covered_by_selected_tables
+    evidence = {'billing_references': {'tables': ['VBRK'], 'covered': True}}
+    assert _covered_by_selected_tables(evidence, 'billing_references', ['VBRK'])
+    assert not _covered_by_selected_tables(evidence, 'billing_references', ['VBAK'])
+    assert not _covered_by_selected_tables({'x': {'tables': ['invented']}}, 'x', ['invented'])
+    assert not _covered_by_selected_tables({'x': {'tables': ['VBRK'], 'covered': False}}, 'x', ['VBRK'])
+
+
 def test_sat_concept_maps_to_sat_processing_logs():
     reg = get_schema_registry()
     scored = reg.score_tables_for_question(

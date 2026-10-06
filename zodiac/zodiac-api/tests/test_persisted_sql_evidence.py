@@ -36,7 +36,7 @@ def test_sql_evidence_roundtrip_through_write_and_history_api(monkeypatch, sql_s
     monkeypatch.setattr(chat_thread_store, "save_turn", save)
     api._persist_adaptive_turn_async({
         "user_id": 42, "thread_id": "ada_sql_history", "question": "Show billed sales.",
-        "summary": "The analysis outcome.", "answer_status": answer_status,
+        "summary": "The analysis outcome.", "answer": "Detailed **explanation** with limitations.", "answer_status": answer_status,
         "sql": sql if answer_status == "SUCCESS" else "", "sql_evidence": evidence,
     })
     assistant = save.call_args_list[1].kwargs
@@ -52,6 +52,8 @@ def test_sql_evidence_roundtrip_through_write_and_history_api(monkeypatch, sql_s
     restored = history["messages"][0]["result"]
     assert {key: restored[key] for key in evidence} == evidence
     assert restored["answer_status"] == answer_status
+    assert restored["summary"] == "The analysis outcome."
+    assert restored["answer"] == "Detailed **explanation** with limitations."
     if answer_status != "SUCCESS":
         context = context_from_stored_turns([turn])
         assert context["previousSQL"] == "" and context["data"] == []

@@ -458,6 +458,19 @@ def verify_and_expand_table_coverage(
     )
 
 
+def _covered_by_selected_tables(coverage: Dict[str, Any], concept: str, tables: List[str]) -> bool:
+    entry = coverage.get(concept, coverage.get(concept.lower()))
+    if entry is True:
+        return True
+    if not isinstance(entry, dict) or entry.get("covered") is False:
+        return False
+    mapped = entry.get("tables")
+    if not isinstance(mapped, list) or not mapped:
+        return False
+    selected = {str(t).lower() for t in tables}
+    return all(isinstance(t, str) and t.lower() in selected and has_table(t) for t in mapped)
+
+
 def expand_coverage_from_metadata(
     question: str,
     ctx: VerifiedDbContext,
@@ -479,7 +492,7 @@ def expand_coverage_from_metadata(
     added: List[str] = []
 
     for concept in concepts:
-        if coverage.get(concept) is True or coverage.get(concept.lower()) is True:
+        if _covered_by_selected_tables(coverage, concept, ctx.tables):
             continue
         if any(reg.table_covers_concept(t, concept) for t in ctx.tables):
             coverage[concept] = True
@@ -519,7 +532,7 @@ def uncovered_semantic_concepts(ctx: VerifiedDbContext) -> List[str]:
     coverage = ctx.coverage or {}
     missing: List[str] = []
     for concept in concepts:
-        if coverage.get(concept) is True or coverage.get(concept.lower()) is True:
+        if _covered_by_selected_tables(coverage, concept, ctx.tables):
             continue
         if any(reg.table_covers_concept(t, concept) for t in ctx.tables):
             continue
@@ -775,6 +788,14 @@ def pipeline25_query_plan(question: str, ctx: VerifiedDbContext, db: Optional[Se
     if budget is not None:
         budget.checkpoint("query_planning")
 
+    if db is not None and "document_identity_profiles" not in ctx.semantic_requirements:
+        from .document_identity_quality import profile_document_identities
+
+        profiles = profile_document_identities(db, ctx.tables, ctx.columns)
+        if profiles:
+            ctx.semantic_requirements["document_identity_profiles"] = profiles
+            _log_stage(ctx, "DOCUMENT_IDENTITY_QUALITY", profiles)
+
     if not _resolve_latest_data_years(question, ctx, db):
         _log_stage(ctx, "LATEST_DATA_YEARS_UNRESOLVED", {"clarification": (ctx.semantic_requirements or {}).get("clarification")})
         return
@@ -787,6 +808,15 @@ def pipeline25_query_plan(question: str, ctx: VerifiedDbContext, db: Optional[Se
     # The same intent, schema, currency, execution and result gates still run.
     if pipeline3_sql_generation(question, ctx, templates_only=True):
         _log_stage(ctx, "QUERY_PLAN", {"source": "verified_semantic_renderer", "model_required": False})
+        return
+    monetary_sources = {c.split(".")[0].upper() for c in ctx.columns
+                        if "." in c and c.split(".")[-1].upper() in {"NETWR", "WAVWR", "DMBTR", "WRBTR", "SALK3"}}
+    if len(monetary_sources) > 1:
+        # The flat structured-plan format cannot declare independent query
+        # scopes. Let the SQL model plan those scopes from verified metadata,
+        # then apply the same structure, schema, currency and grain validation.
+        _log_stage(ctx, "QUERY_PLAN", {"source": "dynamic_sql_multi_measure", "model_required": False,
+                                      "monetary_sources": sorted(monetary_sources)})
         return
     if budget is not None:
         budget.checkpoint("query_planning")
@@ -1224,6 +1254,9 @@ def _validate_sql_against_context(sql: str, ctx: VerifiedDbContext, db: Session)
     if _contains_unresolved_sql_value(sql):
         errors.append("SQL contains an unresolved placeholder instead of a verified value")
     errors.extend(detect_expression_as_column_errors(sql))
+    from .document_identity_quality import document_identity_errors
+
+    errors.extend(document_identity_errors(sql, ctx.semantic_requirements.get("document_identity_profiles", {})))
     if errors:
         return errors
     allowed = _tables_in_verified_set(ctx.tables)
@@ -1246,6 +1279,8 @@ def _validate_sql_against_context(sql: str, ctx: VerifiedDbContext, db: Session)
             errors.extend(prec_errors)
     except Exception:
         pass
+    if not errors and sql_has_unsafe_monetary_fanout(sql):
+        errors.append("mixed monetary grains: aggregate each fact independently and join on all grouping keys; preserve document identity through row CTEs")
     return errors
 
 
@@ -1345,6 +1380,8 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
     from .adaptive_structured_sql import (
         build_country_customer_list_sql,
         build_customer_industry_revenue_sql,
+        build_billing_item_ranking_sql,
+        build_unbilled_order_items_sql,
         build_billing_document_ranking_sql,
         build_dimension_period_sales_sql,
         build_dimension_ranking_sql,
@@ -1355,6 +1392,8 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         build_period_compare_sql,
         build_period_sales_sql,
         build_linked_order_period_comparison_sql,
+        build_order_item_billing_reconciliation_sql,
+        build_linked_order_invoice_totals_sql,
         build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
@@ -1363,7 +1402,11 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
 
     for builder in (
         lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_order_item_billing_reconciliation_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_linked_order_invoice_totals_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_unbilled_order_items_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_billing_item_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
@@ -1478,12 +1521,20 @@ def _template_sql(ctx: VerifiedDbContext, question: str, source: str, sql: str) 
     return out
 
 
-def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates_only: bool = False) -> str:
+def pipeline3_sql_generation(
+    question: str,
+    ctx: VerifiedDbContext,
+    *,
+    templates_only: bool = False,
+    validation_feedback: Optional[Dict[str, Any]] = None,
+) -> str:
     from .investigation_budget import current_budget
     from .plan_satisfaction import sql_satisfies_analytical_intent
     from .adaptive_structured_sql import (
         build_country_customer_list_sql,
         build_customer_industry_revenue_sql,
+        build_billing_item_ranking_sql,
+        build_unbilled_order_items_sql,
         build_billing_document_ranking_sql,
         build_dimension_period_sales_sql,
         build_dimension_ranking_sql,
@@ -1498,6 +1549,9 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
         build_period_compare_sql,
         build_period_sales_sql,
         build_linked_order_period_comparison_sql,
+        build_order_item_billing_reconciliation_sql,
+        build_linked_order_invoice_totals_sql,
+        build_linked_billing_documents_for_orders_sql,
         build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
@@ -1525,12 +1579,26 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
                 {"source": source, "reason": "invalid_sql_structure", "errors": structure_errors, "sql": out[:500]},
             )
             return None
+        if sql_has_unsafe_monetary_fanout(out):
+            _log_stage(ctx, "SQL_VALIDATION_GRAIN", {
+                "source": source, "reason": "mixed monetary grains",
+                "instruction": "Aggregate each monetary fact independently before joining on all grouping keys; use EXISTS for document-link filters.",
+                "previous_sql": out[:1200],
+            })
+            return None
         # First-class templates: validate against question-derived semantics only.
         # LLM semantic pollution (spurious currency/group_by dims) must not reject
         # correct deterministic templates in favor of broken free-form SQL.
         # Ranking templates already encode billed grain (VBRK/vbrp). Do not
         # reject them for extra LLM dims (VBAK, partition_by, negative_measure).
-        if source in {"multidim_ranking_template", "dimension_ranking_template"}:
+        if source in {
+            "multidim_ranking_template",
+            "dimension_ranking_template",
+            "billing_item_ranking_template",
+            "unbilled_order_items_template",
+            "order_item_billing_reconciliation_template",
+            "linked_order_invoice_totals_template",
+        }:
             return _template_sql(ctx, question, source, out)
         sem_for_check = (
             None
@@ -1554,8 +1622,13 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
     template_builders = (
+        ("linked_billing_documents_for_orders_template", lambda: build_linked_billing_documents_for_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_order_period_comparison_template", lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("order_item_billing_reconciliation_template", lambda: build_order_item_billing_reconciliation_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("linked_order_invoice_totals_template", lambda: build_linked_order_invoice_totals_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_sales_orders_template", lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("unbilled_order_items_template", lambda: build_unbilled_order_items_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("billing_item_ranking_template", lambda: build_billing_item_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("billing_document_ranking_template", lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_period_sales", lambda: build_dimension_period_sales_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1594,16 +1667,20 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
                 entry for entry in template_builders if entry is not period_builder
             )
 
-    for source, builder in template_builders:
-        accepted = _accept(source, builder())
-        if accepted:
-            return accepted
+    # A validation-repair call must not select the same deterministic template
+    # that produced the rejected SQL. Send the precise feedback to the SQL
+    # model so it can repair the query shape while retaining verified scope.
+    if not validation_feedback:
+        for source, builder in template_builders:
+            accepted = _accept(source, builder())
+            if accepted:
+                return accepted
 
     if templates_only:
         return ""
 
     # Primary path: render from the validated structured query plan
-    if ctx.query_plan:
+    if ctx.query_plan and not validation_feedback:
         from .adaptive_structured_sql import StructuredQueryPlan
 
         plan_obj = StructuredQueryPlan.from_dict({**ctx.query_plan, "semantic_requirements": ctx.semantic_requirements})
@@ -1625,12 +1702,13 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
                 {"source": "structured_plan_renderer_skipped", "plan_viol": plan_viol, "schema_viol": schema_viol},
             )
 
-    filter_sql = build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)
-    accepted = _accept("filter_list_template", filter_sql)
-    if accepted:
-        return accepted
+    if not validation_feedback:
+        filter_sql = build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)
+        accepted = _accept("filter_list_template", filter_sql)
+        if accepted:
+            return accepted
 
-    if detect_filter_list_intent(question, ctx.semantic_requirements):
+    if not validation_feedback and detect_filter_list_intent(question, ctx.semantic_requirements):
         expanded = list(dict.fromkeys(ctx.tables))
         if has_table("VBRK") and not any((resolve_table_name(t) or t).upper() == "VBRK" for t in expanded):
             expanded.insert(0, resolve_table_name("VBRK") or "VBRK")
@@ -1639,7 +1717,7 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
         if accepted:
             return accepted
 
-    for source, builder in (
+    repair_fallbacks = () if validation_feedback else (
         ("multidim_ranking_template", lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_ranking_template", lambda: build_dimension_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("relative_document_list_template", lambda: build_relative_document_list_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1655,22 +1733,21 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
         ("customer_industry_revenue_template", lambda: build_customer_industry_revenue_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("sat_logs_template", lambda: build_sat_logs_sql(question, ctx.tables)),
         ("total_measure_template", lambda: build_total_measure_sql(question, ctx.tables, ctx.semantic_requirements)),
-    ):
+    )
+    for source, builder in repair_fallbacks:
         accepted = _accept(source, builder())
         if accepted:
             return accepted
 
     from .adaptive_query_repair import build_measure_ranking_sql
 
-    accepted = _accept(
-        "measure_ranking_template",
-        build_measure_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
-    )
-    if accepted:
-        return accepted
-
-    if accepted:
-        return accepted
+    if not validation_feedback:
+        accepted = _accept(
+            "measure_ranking_template",
+            build_measure_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
+        )
+        if accepted:
+            return accepted
 
     if budget is not None and not budget.allow_llm():
         _log_stage(ctx, "PIPELINE_3_SQL_GENERATION", {"source": "llm_skipped_budget"})
@@ -1688,6 +1765,11 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
         "RIGHT: SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 4) "
         "Do NOT reference any table not listed under Verified tables. "
         "Quote identifiers. CAST text numerics with NULLIF(TRIM(...),''). "
+        "PostgreSQL FULL OUTER JOIN requires an equality join condition; do not use IS NOT DISTINCT FROM there. "
+        "Preserve unmatched groups with FULL OUTER JOIN on equality and disclose missing grouping keys rather than inventing matching values. "
+        "When comparing measures from different fact tables, aggregate each independently at the same grouping grain before joining; never sum header amounts across raw document-flow or item joins. "
+        "Start each amount aggregation from its own fact row source (or a deduplicated row CTE), attach unique headers using complete client/document keys, and use EXISTS for relationship filters that could expand rows. Preserve the fact's complete document/item identity through row CTEs before aggregating. "
+        "For verified identical source duplicates, use a row SELECT DISTINCT with full document/item keys and required calculation attributes before SUM. Source duplicate counts are already supplied in document_identity_profiles. "
         "Never invent document/customer IDs or use placeholder values, ellipses, or template markers. "
         "For a follow-up, preserve the prior query's verified scope or use it as a subquery; if the scope cannot be preserved, ask for clarification. "
         "Do not invent tables. Do not add restrictive date filters unless the question asks for a period. "
@@ -1702,11 +1784,19 @@ def pipeline3_sql_generation(question: str, ctx: VerifiedDbContext, *, templates
             f"Verified columns: {ctx.columns}\n"
             f"Relationships: {ctx.relationships}\n\n"
             f"Prior verified SQL for scope (not the current request): {ctx.prior_sql[:6000]}\n\n"
-            f"Validation feedback: {json.dumps({k: v for k, v in ctx.pipeline_log.items() if 'VALIDATION' in k or 'REPAIR' in k}, default=str)[:2000]}\n\n"
+            f"Earlier pipeline diagnostics: {json.dumps({k: v for k, v in ctx.pipeline_log.items() if 'VALIDATION' in k or 'REPAIR' in k}, default=str)[:2000]}\n\n"
+            f"Current correction request: {json.dumps(validation_feedback or {}, default=str)[:5000]}\n"
+            "If correction details are present, repair the previous SQL while preserving the user's intent. "
+            "Use the listed validation errors as constraints; do not repeat a rejected join or omit required grouping keys. "
+            "Return one complete PostgreSQL SELECT statement and do not claim that it was executed.\n\n"
             f"{detail}\n\nGenerate SQL."
             ),
         )
     except Exception as exc:
+        ctx.pipeline_log["sql_generation_error"] = {
+            "error_type": type(exc).__name__,
+            "timed_out": "timeout" in type(exc).__name__.lower(),
+        }
         _log_stage(
             ctx,
             "PIPELINE_3_SQL_GENERATION",
@@ -2052,6 +2142,37 @@ def _run_four_stage_body(
     # query into the question contaminates deterministic grain and metric parsing.
     sql = pipeline3_sql_generation(question, ctx)
 
+    # A model timeout returns no SQL. Do not pass that empty string to the SQL
+    # validators or spend the remaining investigation budget retrying the same
+    # timed-out generation request as if it were malformed SQL.
+    if not sql:
+        generation_error = ctx.pipeline_log.get("sql_generation_error") or {}
+        timed_out = bool(generation_error.get("timed_out"))
+        message = (
+            "The query-planning model timed out before it returned SQL. No database query was run. "
+            "Your previous result is still available; retry this follow-up or narrow it to one comparison."
+            if timed_out else
+            "The query-planning model did not return a usable SQL query, so no database query was run. "
+            "Your previous result is still available; retry this follow-up or narrow it to one comparison."
+        )
+        if budget is not None:
+            budget.diagnostics["generated_sql"] = ""
+            budget.diagnostics["sql_status"] = "not_generated"
+        return {
+            "error": "sql_generation_timeout" if timed_out else "sql_generation_failed",
+            "error_kind": "pipeline_error",
+            "error_class": "MODEL_TIMEOUT" if timed_out else "MODEL_FAILURE",
+            "failure_class": "MODEL_TIMEOUT" if timed_out else "MODEL_FAILURE",
+            "user_message": message,
+            "detail": [generation_error.get("error_type") or "SQL generation returned no query."],
+            "tables": ctx.tables,
+            "missing": [],
+            "sql": "",
+            "rows": [],
+            "verified_context": ctx.to_dict(),
+            "pipeline_log": ctx.pipeline_log,
+        }
+
     sql = sanitize_generated_sql(sql, question)
     sql = _apply_currency_if_needed(question, sql, ctx, db)
     if budget is not None:
@@ -2072,7 +2193,16 @@ def _run_four_stage_body(
 
     if viol:
         sql = sanitize_generated_sql(
-            pipeline3_sql_generation(question, ctx)
+            pipeline3_sql_generation(
+                question,
+                ctx,
+                validation_feedback={
+                    "kind": "sql_validation_repair",
+                    "previous_sql": sql[:5000],
+                    "validation_errors": [str(error)[:500] for error in viol[:10]],
+                },
+            ),
+            question,
         )
         viol = _validate_sql_against_context(sql, ctx, db)
         if viol and is_currency_validation_error(viol):
@@ -2128,6 +2258,13 @@ def _run_four_stage_body(
         if structure_errors:
             exec_error = "; ".join(structure_errors)
             _log_stage(ctx, "SQL_STRUCTURE_REJECTED", {"errors": structure_errors})
+            break
+        # Repairs must pass the same read/schema/monetary checks as the initial
+        # query. A successful syntax repair does not establish correct grain.
+        repair_errors = _validate_sql_against_context(sql, ctx, db)
+        if repair_errors or sql_has_unsafe_monetary_fanout(sql):
+            exec_error = "; ".join(repair_errors or ["mixed monetary grains"])
+            _log_stage(ctx, "SQL_REPAIR_REJECTED", {"errors": repair_errors or ["mixed monetary grains"]})
             break
         if budget is not None and not budget.allow_repair(exec_attempt):
             break
@@ -2195,7 +2332,9 @@ def _run_four_stage_body(
                     sql = sanitize_generated_sql(_apply_currency_if_needed(question, fallback, ctx, db), question)
                     _log_stage(ctx, "SQL_EXECUTION_FALLBACK", {"source": "deterministic_template", "sql": sql[:500]})
                     continue
-            if err_class in {"undefined_column", "syntax_error", "expression_as_column", "generic_sql_error", "duplicate_alias"}:
+            if err_class in {"undefined_column", "syntax_error", "expression_as_column", "generic_sql_error", "duplicate_alias", "invalid_join", "invalid_datatype"}:
+                if exec_attempt == 2:
+                    break
                 fallback = _execution_fallback_sql(question, ctx)
                 if fallback and exec_attempt == 0:
                     sql = sanitize_generated_sql(_apply_currency_if_needed(question, fallback, ctx, db), question)
@@ -2211,7 +2350,16 @@ def _run_four_stage_body(
                     },
                 )
                 sql = sanitize_generated_sql(
-                    pipeline3_sql_generation(question, ctx),
+                    pipeline3_sql_generation(
+                        question,
+                        ctx,
+                        validation_feedback={
+                            "kind": "execution_repair",
+                            "previous_sql": sql[:5000],
+                            "failure_class": err_class,
+                            "database_error": exec_error[:1000],
+                        },
+                    ),
                     question,
                 )
                 viol = _validate_sql_against_context(sql, ctx, db)

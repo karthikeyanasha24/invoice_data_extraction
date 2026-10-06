@@ -28,6 +28,13 @@ from app.services.semantic_requirements import enrich_semantic_with_requirements
 from app.services.result_first_followup import try_answer_from_prior_rows
 
 
+def test_including_unmatched_entities_does_not_filter_to_missing_relationships():
+    question = "Compare sales order net values with linked invoices. Include orders without linked invoices."
+    assert not extract_analytical_operations(question).get("negation")
+    assert not required_semantics(question, {"negation": {"required": "purchase_order", "forbidden": "invoice"}}).get("negation")
+    assert extract_analytical_operations("Show sales orders without invoices")["negation"]["required"] == "sales_order"
+
+
 @pytest.mark.parametrize("question", [
     "Show the products with the highest profits.",
     "Which products are most profitable?",
@@ -548,7 +555,7 @@ def test_product_sales_ranking_keeps_billing_item_grain(monkeypatch):
 
     physical_columns = {
         "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
-        "vbrp": {"vbeln", "posnr", "matnr", "netwr", "fkimg"},
+        "vbrp": {"mandt", "vbeln", "posnr", "matnr", "netwr", "fkimg"},
         "MAKT": {"matnr", "maktx", "spras"},
     }
     monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in {t.upper() for t in physical_columns})
@@ -564,7 +571,9 @@ def test_product_sales_ranking_keeps_billing_item_grain(monkeypatch):
     sql = build_dimension_ranking_sql("Show the top five products by billed sales.", ["VBRK", "vbrp"])
 
     assert sql
-    assert 'FROM "vbrp" p' in sql
+    assert 'WITH "billing_item_rows" AS' in sql
+    assert 'SELECT DISTINCT src."mandt", src."vbeln", src."posnr", src."netwr"' in sql
+    assert 'FROM "billing_item_rows" p' in sql
     assert "SUM(CAST(NULLIF" in sql and 'p."netwr"' in sql
 
 

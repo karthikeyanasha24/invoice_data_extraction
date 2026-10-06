@@ -323,6 +323,12 @@ class SchemaIntelligenceRegistry:
                 lines.append(f"  joins: {json.dumps(meta.joins)}")
             if meta.sql_hints:
                 lines.append(f"  sql_hints: {meta.sql_hints[:300]}")
+        from .schema_loader import _load_schema_ai_config
+
+        selected = {str(t).upper() for t in tables}
+        for rule in _load_schema_ai_config().get("comparison_policies", []):
+            if selected.intersection(str(t).upper() for t in rule.get("tables", [])):
+                lines.append("Comparison policy metadata: " + json.dumps(rule, ensure_ascii=False))
         return "\n".join(lines)
 
     def find_tables_for_concept(

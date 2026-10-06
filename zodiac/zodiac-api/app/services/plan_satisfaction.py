@@ -129,6 +129,16 @@ def _grouping_matches_required_grain(sql: str, group_by: List[str]) -> bool:
     from .analytical_operations import classify_column_role
 
     requested_time = next((grain for grain in ("month", "quarter", "year") if grain in group_by), None)
+    # Period comparisons intentionally align January with January across two
+    # years. In that shape, the grouped SAP month component is a valid month
+    # grain even though it is SUBSTRING(FKDAT, 5, 2), rather than YYYYMM.
+    month_of_year_comparison = bool(
+        requested_time == "month"
+        and re.search(r"\bAS\s+\"?period_a\b", sql, re.I)
+        and re.search(r"\bAS\s+\"?period_b\b", sql, re.I)
+        and re.search(r"\bAS\s+\"?change\b", sql, re.I)
+        and re.search(r"SUBSTRING\s*\([\s\S]*?,\s*5\s*,\s*2\s*\)", sql, re.I)
+    )
     matched = False
     for selections, groups in _grouped_selects(sql):
         if not any(sql_has_aggregation(expression) for expression in selections):
@@ -148,11 +158,17 @@ def _grouping_matches_required_grain(sql: str, group_by: List[str]) -> bool:
             else:
                 expression = aliases.get(expression.strip('"').lower(), expression)
             resolved.append(expression)
-        if requested_time and not any(_expression_time_grain(expression) == requested_time for expression in resolved):
+        if requested_time and not (
+            any(_expression_time_grain(expression) == requested_time for expression in resolved)
+            or month_of_year_comparison
+        ):
             return False
         matched = True
         for expression in resolved:
-            if _expression_time_grain(expression):
+            if _expression_time_grain(expression) or (
+                month_of_year_comparison
+                and re.search(r"SUBSTRING\s*\([\s\S]*?,\s*5\s*,\s*2\s*\)", expression, re.I)
+            ):
                 continue
             for table, column in re.findall(r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*"?([A-Za-z_][A-Za-z0-9_]*)"?', expression):
                 role = classify_column_role(table, column)
@@ -503,6 +519,19 @@ def result_matches_analytical_intent(
 ) -> List[str]:
     """Result-level validation. A successful query can still be the wrong answer."""
     warnings: List[str] = []
+    # Explicit SAP document/customer/material numbers are hard scope constraints.
+    # A query that silently drops them can return plausible-looking global rows,
+    # so reject it before describing the result as an answer. Years and short
+    # numeric values are excluded; date literals remain covered by date checks.
+    explicit_ids = {
+        token
+        for token in re.findall(r"(?<![A-Za-z0-9])\d{6,}(?![A-Za-z0-9])", question or "")
+        if not re.fullmatch(r"(?:19|20)\d{2}", token)
+    }
+    sql_text = str(sql or "")
+    for identifier in sorted(explicit_ids):
+        if not re.search(rf"(?<!\d){re.escape(identifier)}(?!\d)", sql_text):
+            warnings.append(f"explicit identifier {identifier} missing from SQL scope")
     req = required_semantics(question, semantic)
     sem = merge_semantic_requirements(question, semantic or {})
     ops = sem.get("analytical_operations") or extract_analytical_operations(question)

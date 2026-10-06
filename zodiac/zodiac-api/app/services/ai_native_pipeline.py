@@ -390,10 +390,21 @@ def _extract_sql_table_refs(sql: str) -> List[str]:
         seen.add(key)
         refs.append(name)
 
-    for m in re.finditer(r'(?:FROM|JOIN)\s+"([A-Za-z0-9_]+)"', s, re.I):
-        add(m.group(1))
+    # ``IS DISTINCT FROM "alias"`` is an expression operator, not a relation
+    # reference. Without this guard, the table scanner treats the alias after
+    # DISTINCT FROM as a table and rejects otherwise valid multi-CTE SQL.
+    def is_distinct_from_operator(match: re.Match[str]) -> bool:
+        return match.group(0).lstrip().upper().startswith("FROM") and bool(
+            re.search(r"\bDISTINCT\s+$", s[: match.start()], re.I)
+        )
 
-    for m in re.finditer(r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)', s, re.I):
+    for m in re.finditer(r'\b(?:FROM|JOIN)\s+"([A-Za-z0-9_]+)"', s, re.I):
+        if not is_distinct_from_operator(m):
+            add(m.group(1))
+
+    for m in re.finditer(r'\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)', s, re.I):
+        if is_distinct_from_operator(m):
+            continue
         name = m.group(1)
         if name.upper() in _SQL_TABLE_STOPWORDS:
             continue

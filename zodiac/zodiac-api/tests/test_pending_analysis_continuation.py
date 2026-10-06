@@ -7,6 +7,16 @@ from app.services.adaptive_analyst import orchestrator, understanding
 from app.services.adaptive_analyst.pending_analysis import pending_analysis_context
 
 
+def test_final_result_validation_reuses_the_pipeline_question_not_its_paraphrase():
+    original = "Show the top 10 customers by billed sales, grouped by currency."
+    rewritten = "For each currency, rank customers by invoice revenue."
+
+    assert orchestrator._result_validation_question(
+        {"_original_user_question": original}, original, rewritten
+    ) == original
+    assert orchestrator._result_validation_question({}, original, rewritten) == original
+
+
 def test_self_contained_database_question_replaces_stale_pending_clarification(monkeypatch):
     question = (
         "Show the bottom 10 negative billed invoices in calendar year 2000. "
@@ -159,6 +169,87 @@ def test_new_request_does_not_inherit_pending_goal_or_unrelated_retained_rows(mo
     assert pipeline.call_args.args[3].dimensions == []
 
 
+def test_compound_new_request_after_pending_clarification_keeps_both_asks(monkeypatch):
+    from app.services import sales_order_analysis
+
+    question = "Show the top customers by billed sales. How many sales orders are there?"
+    monkeypatch.setattr(understanding, "understand_turn", lambda *a, **k: understanding.TurnUnderstanding(
+        intent="analytics", requires_database=True, turn_relation="new_request", context_source="none",
+        requested_parts=["Show the top customers by billed sales.", "How many sales orders are there?"],
+        understanding_model_called=True,
+    ))
+    count_fast_path = MagicMock(side_effect=AssertionError("must not discard the billed-sales ranking"))
+    monkeypatch.setattr(sales_order_analysis, "try_sales_order_analysis", count_fast_path)
+    pipeline = MagicMock(return_value={"error": "sql_validation_failed", "detail": ["test boundary"]})
+    monkeypatch.setattr(orchestrator, "_run_four_stage_or_legacy_sql", pipeline)
+    pending = {"pending_analysis": {"question": "How do the comparisons change for a defined reporting period?"}}
+
+    orchestrator.run_adaptive_orchestrator(
+        question, MagicMock(), MagicMock(),
+        prior_question="How do the comparisons change for a defined reporting period?",
+        prior_plan=pending, prior_status="CLARIFICATION",
+    )
+
+    assert pipeline.call_args.args[0] == question
+    assert pipeline.call_args.kwargs["prior_sql"] == ""
+    assert pipeline.call_args.args[3].tables == []
+    count_fast_path.assert_not_called()
+
+
+def test_single_part_sales_order_count_keeps_its_governed_fast_path(monkeypatch):
+    from app.services import sales_order_analysis, plan_satisfaction
+
+    question = "How many sales orders are there?"
+    monkeypatch.setattr(understanding, "understand_turn", lambda *a, **k: understanding.TurnUnderstanding(
+        intent="analytics", requires_database=True, requested_parts=[question],
+        understanding_model_called=True,
+    ))
+    result = {
+        "answer_status": "SUCCESS", "summary": "There are 12 sales orders.",
+        "sql": 'SELECT COUNT(DISTINCT vbeln) FROM "VBAK"', "data": [{"count": 12}],
+        "rowCount": 1, "query_plan": {},
+    }
+    fast_path = MagicMock(return_value=result)
+    monkeypatch.setattr(sales_order_analysis, "try_sales_order_analysis", fast_path)
+    monkeypatch.setattr(plan_satisfaction, "sql_satisfies_analytical_intent", lambda *a, **k: True)
+    pipeline = MagicMock(side_effect=AssertionError("single atomic count should retain its governed path"))
+    monkeypatch.setattr(orchestrator, "_run_four_stage_or_legacy_sql", pipeline)
+
+    out = orchestrator.run_adaptive_orchestrator(question, MagicMock(), MagicMock())
+
+    assert out["pipeline"] == "governed_sales_order_count"
+    fast_path.assert_called_once()
+    pipeline.assert_not_called()
+
+
+def test_model_understanding_exposes_requested_parts_without_losing_full_goal(monkeypatch):
+    seen = {}
+
+    def model(system, user):
+        seen["system"] = system
+        seen["user"] = user
+        return {
+            "intent": "analytics",
+            "goal": "Rank customers by billed sales and count sales orders.",
+            "requires_database": True,
+            "requested_parts": [
+                "Show the top customers by billed sales.",
+                "How many sales orders are there?",
+            ],
+            "resolved_question": "Show the top customers by billed sales and count the sales orders.",
+        }, "test"
+
+    monkeypatch.setattr(understanding, "analyze_json", model)
+    result = understanding.understand_turn(
+        "Show the top customers by billed sales. How many sales orders are there?",
+        capability_context={},
+    )
+
+    assert len(result.requested_parts) == 2
+    assert "separate items for distinct outputs" in seen["system"]
+    assert "Show the top customers by billed sales" in result.resolved_question
+
+
 def test_api_preserves_pending_plan_even_when_classifier_calls_it_fresh(monkeypatch):
     from fastapi import BackgroundTasks
     from app.api.adaptive_query import _post_query_adaptive_body
@@ -225,6 +316,50 @@ def test_followup_can_reuse_requested_periods_without_claiming_result_entities(m
         prior_question="Compare purchasing costs in 2012 and 2013.", prior_status="CANNOT_ANSWER",
     )
     assert pipeline.call_args.args[0] == resolved
+
+
+def test_explaining_a_failed_request_does_not_require_a_database_rewrite(monkeypatch):
+    monkeypatch.setattr(understanding, "understand_turn", lambda *a, **k: understanding.TurnUnderstanding(
+        intent="conversation", requires_database=False, turn_relation="followup",
+        context_source="prior_request", resolved_question=None,
+    ))
+    monkeypatch.setattr(understanding, "generate_grounded_response", lambda *a, **k: (
+        "The comparison stopped before a verified result was available.", "test"))
+    pipeline = MagicMock(side_effect=AssertionError("explanations must not execute SQL"))
+    execute = MagicMock(side_effect=AssertionError("explanations must not execute SQL"))
+    monkeypatch.setattr(orchestrator, "_run_four_stage_or_legacy_sql", pipeline)
+    result = orchestrator.run_adaptive_orchestrator(
+        "What does that error mean?", MagicMock(), execute,
+        prior_question="Compare two monetary measures.", prior_status="CANNOT_ANSWER",
+    )
+    assert result["mode"] == "general_chat"
+    assert "verified result" in result["answer"]
+    pipeline.assert_not_called()
+    execute.assert_not_called()
+
+
+def test_new_analytical_request_preserves_user_scope_without_invented_rewrite(monkeypatch):
+    resolved = "Compare independently aggregated order and invoice net values per order, within the same currency."
+    monkeypatch.setattr(understanding, "understand_turn", lambda *a, **k: understanding.TurnUnderstanding(
+        intent="analytics", requires_database=True, turn_relation="new_request",
+        context_source="none", resolved_question=resolved,
+    ))
+    pipeline = MagicMock(return_value={"error": "sql_validation_failed"})
+    monkeypatch.setattr(orchestrator, "_run_four_stage_or_legacy_sql", pipeline)
+    orchestrator.run_adaptive_orchestrator("Compare orders and linked billing values.", MagicMock(), MagicMock())
+    assert pipeline.call_args.args[0] == "Compare orders and linked billing values."
+
+
+def test_analytics_needing_metadata_still_runs_the_analytical_pipeline(monkeypatch):
+    monkeypatch.setattr(understanding, "understand_turn", lambda *a, **k: understanding.TurnUnderstanding(
+        intent="analytics", requires_database=True, requires_metadata=True,
+        turn_relation="new_request", context_source="none",
+    ))
+    pipeline = MagicMock(return_value={"error": "sql_validation_failed"})
+    monkeypatch.setattr(orchestrator, "_run_four_stage_or_legacy_sql", pipeline)
+    result = orchestrator.run_adaptive_orchestrator("Compare the two linked document values.", MagicMock(), MagicMock())
+    pipeline.assert_called_once()
+    assert result["route"] == "database"
 
 
 @pytest.mark.parametrize("rewrite", [None, 'SELECT * FROM "VBRK"'])

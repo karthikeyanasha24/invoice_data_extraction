@@ -276,45 +276,50 @@ def sql_groups_currency_dimension(sql: str) -> bool:
     authoritative so later currency inference does not inject another currency
     column from an unrelated candidate table.
     """
-    source = sql or ""
-    currency_ref = re.compile(
-        r"(?<![A-Za-z0-9_])(?:waerk|waers|rtcur|hwaer|curr|currency)(?![A-Za-z0-9_])",
-        re.I,
-    )
+    try:
+        from sqlglot import exp, parse_one
+        from sqlglot.optimizer.scope import Scope, traverse_scope
+        scopes = list(traverse_scope(parse_one(sql, read="postgres")))
+        known = {c.lower() for c in CURRENCY_COLUMNS}
 
-    group_matches = list(re.finditer(r"\bGROUP\s+BY\b", source, re.I))
-    for group in group_matches:
-        depth = _sql_depth(source, group.start())
-        # Locate the SELECT and FROM belonging to this GROUP BY scope. This
-        # avoids mistaking an unrelated nested query for a projected dimension.
-        selects = [
-            match for match in re.finditer(r"\bSELECT\b", source[: group.start()], re.I)
-            if _sql_depth(source, match.start()) == depth
-        ]
-        if not selects:
-            continue
-        select = selects[-1]
-        from_match = re.search(r"\bFROM\b", source[select.end() : group.start()], re.I)
-        if not from_match:
-            continue
-        projection = source[select.end() : select.end() + from_match.start()]
-        if not currency_ref.search(projection):
-            continue
+        def is_currency(column, scope, seen=None):
+            seen = set(seen or ())
+            marker = (id(scope), column.table, column.name)
+            if marker in seen:
+                return False
+            seen.add(marker)
+            sources = scope.selected_sources
+            source = sources.get(column.table)
+            if source is None and not column.table and len(sources) == 1:
+                source = next(iter(sources.values()))
+            if source is None:
+                return False
+            source = source[1]
+            if isinstance(source, exp.Table):
+                return column.name.lower() in known
+            if isinstance(source, Scope):
+                for projection in source.expression.expressions:
+                    if projection.alias_or_name.lower() == column.name.lower():
+                        value = projection.this if isinstance(projection, exp.Alias) else projection
+                        refs = list(value.find_all(exp.Column))
+                        return len(refs) == 1 and is_currency(refs[0], source, seen)
+            return False
 
-        boundary = len(source)
-        for match in re.finditer(
-            r"\)|\b(?:HAVING|ORDER\s+BY|LIMIT|UNION|EXCEPT|INTERSECT)\b",
-            source[group.end() :],
-            re.I,
-        ):
-            position = group.end() + match.start()
-            if _sql_depth(source, position) == depth:
-                boundary = position
-                break
-        grouping = source[group.end() : boundary]
-        if currency_ref.search(grouping):
-            return True
-    return False
+        for scope in scopes:
+            select = scope.expression
+            if not isinstance(select, exp.Select) or not select.args.get("group"):
+                continue
+            values = [p.this if isinstance(p, exp.Alias) else p for p in select.expressions]
+            for key in select.args["group"].expressions:
+                if isinstance(key, exp.Column) and not key.table:
+                    key = next((p.this for p in select.expressions
+                                if isinstance(p, exp.Alias) and p.alias.lower() == key.name.lower()), key)
+                refs = list(key.find_all(exp.Column))
+                if key in values and len(refs) == 1 and is_currency(refs[0], scope):
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 _CURRENCY_COLUMN_REF = (

@@ -161,6 +161,30 @@ def _usable_retained_analytical_context(plan: Optional[Dict[str, Any]]) -> Optio
     return retained
 
 
+def _should_restore_thread_context(context_data: Any) -> bool:
+    """Recover a thread's saved analysis when the client sent no usable anchor."""
+    context = context_data if isinstance(context_data, dict) else {}
+    plan = context.get("previousPlan") or {}
+    plan = plan if isinstance(plan, dict) else {}
+    status = str(context.get("previousAnswerStatus") or "").strip().upper()
+    retained = _usable_retained_analytical_context(plan)
+    missing = not context or not any(
+        context.get(key) for key in ("previousQuestion", "previousSQL", "previousPlan", "data")
+    )
+    failed = status in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED"}
+    unanchored_clarification = (
+        status == "CLARIFICATION"
+        and not retained
+        and not plan.get("pending_clarification")
+        and not plan.get("pending_analysis")
+    )
+    return bool(
+        missing
+        or failed and not retained and not plan.get("pending_analysis")
+        or unanchored_clarification
+    )
+
+
 def _extract_known_columns_from_question(question: str) -> List[str]:
     q = (question or "").lower()
     found: List[str] = []
@@ -2677,6 +2701,7 @@ async def get_adaptive_chat_history(
                 "data": rows,
                 "charts": t.get("charts") or [],
                 "summary": content,
+                "answer": metrics.get("answer") or content,
                 "rowCount": row_count,
                 "query_plan": metrics.get("query_plan"),
                 "answer_status": metrics.get("answer_status") or "SUCCESS",
@@ -2735,6 +2760,7 @@ def _persist_adaptive_turn_async(snapshot: Dict[str, Any]) -> None:
                 "meta": snapshot.get("meta"),
                 "row_count": snapshot.get("row_count"),
                 "sql_evidence": snapshot.get("sql_evidence"),
+                "answer": snapshot.get("answer") or snapshot.get("summary") or "",
             },
             query_mode="new",
             action=snapshot.get("pipeline") or "adaptive",
@@ -2929,18 +2955,12 @@ def _post_query_adaptive_body(
                 plan_input.get("recent_turns") or inv_input.get("recent_turns")
             )
 
-        context_status = str((contextData or {}).get("previousAnswerStatus") or "").strip().upper()
-        retained_context = _usable_retained_analytical_context(plan_input)
-        context_is_failed = context_status in {"CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED"}
-        context_is_missing = not contextData or not any(
-            (contextData or {}).get(key)
-            for key in ("previousQuestion", "previousSQL", "previousPlan", "data")
-        )
-        # If the browser sent the failed turn as context (older UI bundles can
-        # do this), recover the last successful artifact from this user's own
-        # persisted thread. Do this only for missing/failed context to avoid
-        # adding a database read to normal chat turns.
-        if thread_id and user_id and (context_is_missing or context_is_failed and not retained_context and not plan_input.get("pending_analysis")):
+        # If the browser sent a failed or unanchored clarification turn, recover
+        # the last successful artifact from this user's own persisted thread.
+        # Ordinary turns with a usable context avoid the extra database read.
+        if thread_id and user_id and (
+            _should_restore_thread_context(contextData)
+        ):
             stored = load_thread(db, user_id, thread_id, last_n=80)
             restored_context = context_from_stored_turns(stored)
             stored_memory = recent_conversation(stored)
@@ -3186,6 +3206,7 @@ def _post_query_adaptive_body(
                 or ""
             )[:10000],
             "sql": sql_to_store,
+            "answer": str(payload.get("answer") or payload.get("summary") or "")[:32000],
             "sql_evidence": sql_evidence_from_payload(payload),
             "rows": rows if isinstance(rows, list) else [],
             "charts": charts,

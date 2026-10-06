@@ -200,6 +200,15 @@ _DEFINITION_CUE = re.compile(
     r")\b"
 )
 
+# Metric questions are data requests even when they use definition-style
+# wording (for example, "What is the average sales value?"). Keep this
+# semantic rule separate from specific prompt templates so paraphrases route
+# consistently.
+_BUSINESS_METRIC_QUESTION = re.compile(
+    r"(?i)\b(average|avg|mean|median|total|sum|count|number|amount|value|"
+    r"quantity|volume|rate|percent|percentage|ratio|growth|change)\b"
+)
+
 
 def is_capability_or_help_question(question: str) -> bool:
     """True when the user asks what the assistant can do / answer / help with.
@@ -257,6 +266,8 @@ def is_general_knowledge_question(question: str) -> bool:
         return True
     ql = q.lower()
     if _FACT_REQUEST.search(q):
+        return False
+    if _BUSINESS_METRIC_QUESTION.search(q) and _SEMANTIC_BUSINESS.search(q):
         return False
     # Investigation / company-data cues must stay on the analytical path.
     if re.search(r"\b(why|caused|contribut|decline|fell|dropped|grew|increased|decreased)\b", ql):

@@ -14,6 +14,7 @@ from app.services.adaptive_analyst.database_metadata import (
 from app.services.adaptive_analyst.understanding import (
     _context_block,
     _schema_semantics_evidence,
+    has_same_turn_entity_antecedent,
     is_prior_turn_discourse,
     is_referential_database_action,
 )
@@ -22,8 +23,11 @@ from app.services.adaptive_structured_sql import (
     PlanField,
     StructuredQueryPlan,
     _apply_period_compare_fields,
+    build_linked_billing_documents_for_orders_sql,
     build_dimension_ranking_sql,
     build_linked_order_period_comparison_sql,
+    build_billing_item_ranking_sql,
+    build_unbilled_order_items_sql,
 )
 from app.services.four_stage_db_pipeline import (
     VerifiedDbContext,
@@ -153,6 +157,95 @@ def test_top_five_country_currency_ranking_is_not_currency_filtered():
     assert '"rank_within_currency" <= 5' in sql
     assert not re.search(r'\."(?:waerk|waers|rtcur)"\s*=\s*\'[A-Z]{3}\'', sql, re.I)
     assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_top_ten_customers_separate_currency_ranks_within_currency():
+    question = "Show the top 10 customers by billed sales, with currency shown separately."
+    for semantic in (
+        None,
+        {"ranking": {"limit": 10, "direction": "DESC", "partition_by": ["currency"]}},
+    ):
+        sql = build_dimension_ranking_sql(question, ["VBRK", "KNA1"], semantic)
+        assert sql
+        assert 'AS "customer_id"' in sql
+        assert 'AS "currency"' in sql
+        assert 'PARTITION BY grouped."currency"' in sql
+        assert '"rank_within_currency" <= 10' in sql
+        assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_pipeline_does_not_fall_back_to_global_limit_for_currency_partition(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+    from app.services.four_stage_db_pipeline import pipeline3_sql_generation
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "KNA1": {"kunnr", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = "Show the top 10 customers by billed sales, with currency shown separately."
+    plan = {
+        "ranking": {"direction": "DESC", "limit": 10, "partition_by": ["currency"]},
+        "group_by": ["customer"],
+        "measure": {"concept": "revenue", "aggregation": "SUM"},
+    }
+    ctx = VerifiedDbContext(
+        question=question,
+        tables=["VBRK", "KNA1"],
+        semantic_requirements=required_semantics(question, plan),
+    )
+    sql = pipeline3_sql_generation(question, ctx)
+    assert sql
+    assert ctx.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "dimension_ranking_template"
+    assert 'PARTITION BY grouped."currency"' in sql
+    assert '"rank_within_currency" <= 10' in sql
+    assert not re.search(r"\bLIMIT\s+10\s*$", sql, re.I)
+
+
+def test_currency_safety_dimension_does_not_route_customer_topn_to_multidim_global_limit(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+    from app.services.four_stage_db_pipeline import pipeline3_sql_generation
+
+    physical_columns = {
+        "VBRK": {"vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "KNA1": {"kunnr", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = "Show the top 10 customers by billed sales separately within each currency."
+    plan = {
+        "dimensions": ["customer", "currency"],
+        "group_by": ["customer", "currency"],
+        "measure": {"concept": "revenue", "aggregation": "SUM"},
+        "ranking": {"direction": "DESC", "limit": 10, "partition_by": ["currency"]},
+    }
+    ctx = VerifiedDbContext(
+        question=question,
+        tables=["VBRK", "KNA1"],
+        semantic_requirements=required_semantics(question, plan),
+    )
+
+    sql = pipeline3_sql_generation(question, ctx)
+
+    assert sql
+    assert ctx.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "dimension_ranking_template"
+    assert 'AS "currency"' in sql and 'AS "customer_id"' in sql
+    assert 'PARTITION BY grouped."currency"' in sql
+    assert '"rank_within_currency" <= 10' in sql
+    assert not re.search(r"\bLIMIT\s+10\s*$", sql, re.I)
 
 
 def test_currency_partitioned_top_n_result_allows_up_to_n_per_currency():
@@ -298,6 +391,79 @@ def test_linked_order_comparison_keeps_invoice_rows_and_uses_verified_posting_da
         "absolute_change": 5, "percent_change": 25,
     }]
     assert result_matches_analytical_intent(rows, question, sql=sql) == []
+
+
+def test_same_turn_order_item_possessive_is_not_misread_as_prior_result_reference():
+    question = (
+        "Compare order-item net values with the sums of their linked billing-item values "
+        "for order 0000004969"
+    )
+    assert has_same_turn_entity_antecedent(question)
+
+
+def test_order_item_billing_reconciliation_uses_independent_currency_grain(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+    from app.services.four_stage_db_pipeline import pipeline3_sql_generation
+    from app.services.sql_grain_guard import sql_has_unsafe_monetary_fanout
+
+    physical_columns = {
+        "VBAP": {"mandt", "vbeln", "posnr", "netwr", "waerk"},
+        "VBRP": {"mandt", "vbeln", "posnr", "aubel", "aupos", "netwr", "shkzg"},
+        "VBRK": {"mandt", "vbeln", "waerk", "vbtyp"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = (
+        "Compare order-item net values with the sums of their linked billing-item values "
+        "for order 0000004969"
+    )
+    ctx = VerifiedDbContext(question=question, tables=list(physical_columns))
+    sql = pipeline3_sql_generation(question, ctx)
+
+    assert sql
+    assert ctx.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "order_item_billing_reconciliation_template"
+    assert 'LPAD(\'0000004969\', 10, \'0\')' in sql
+    assert '"order_values" AS' in sql and '"billing_values" AS' in sql
+    assert 'o."posnr" = b."order_item"' in sql
+    assert 'o."currency" = b."currency"' in sql
+    assert not sql_has_unsafe_monetary_fanout(sql)
+
+
+def test_linked_order_invoice_totals_use_independent_header_aggregates(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+    from app.services.four_stage_db_pipeline import pipeline3_sql_generation
+    from app.services.sql_grain_guard import sql_has_unsafe_monetary_fanout
+
+    physical_columns = {
+        "VBAK": {"mandt", "vbeln", "netwr", "waerk", "vbtyp"},
+        "VBFA": {"mandt", "vbelv", "vbeln", "vbtyp_v", "vbtyp_n"},
+        "VBRK": {"mandt", "vbeln", "netwr", "waerk", "vbtyp", "fksto"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = "Compare sales orders and linked invoices net values"
+    ctx = VerifiedDbContext(question=question, tables=list(physical_columns))
+    sql = pipeline3_sql_generation(question, ctx)
+
+    assert sql
+    assert ctx.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "linked_order_invoice_totals_template"
+    assert '"order_totals" AS' in sql and '"invoice_totals" AS' in sql
+    assert "EXISTS (SELECT 1 FROM \"VBFA\"" in sql
+    assert 'o."currency" = i."currency"' in sql
+    assert "cancelled originals excluded" in sql
+    assert not sql_has_unsafe_monetary_fanout(sql)
 
 
 def test_latest_year_questions_get_dynamic_relative_semantics():
@@ -560,7 +726,10 @@ def test_currency_clarification_requires_a_verified_year():
 
 
 def test_failed_followup_can_restore_client_retained_successful_analysis():
-    from app.api.adaptive_query import _usable_retained_analytical_context
+    from app.api.adaptive_query import (
+        _should_restore_thread_context,
+        _usable_retained_analytical_context,
+    )
 
     retained = {
         "previousQuestion": "Show billed sales by country for calendar year 2017 in USD.",
@@ -581,9 +750,33 @@ def test_failed_followup_can_restore_client_retained_successful_analysis():
     # anchor still points to a successful, verified analysis.
     context = _usable_retained_analytical_context({"retained_analytical_context": retained})
     assert context == retained
+    assert not _should_restore_thread_context({
+        "previousQuestion": "Show billed sales by country for calendar year 2017 in USD.",
+        "previousAnswerStatus": "SUCCESS",
+        "previousPlan": {"retained_analytical_context": retained},
+    })
     assert _usable_retained_analytical_context({
         "retained_analytical_context": {**retained, "previousAnswerStatus": "CANNOT_ANSWER"}
     }) is None
+
+
+def test_unanchored_clarification_recovers_verified_thread_result():
+    from app.api.adaptive_query import _should_restore_thread_context
+
+    assert _should_restore_thread_context({
+        "previousQuestion": "From those documents, which ones are cancellations?",
+        "previousAnswerStatus": "CLARIFICATION",
+        "previousPlan": {"requires_result_anchor": True},
+        "data": [],
+    })
+    # A clarification that is actually waiting on a user choice must retain
+    # that pending state rather than replacing it with a prior result.
+    assert not _should_restore_thread_context({
+        "previousQuestion": "Which currency should I use?",
+        "previousAnswerStatus": "CLARIFICATION",
+        "previousPlan": {"pending_clarification": {"kind": "currency_ambiguity"}},
+        "data": [],
+    })
 
 
 def test_deeper_ranked_country_followup_reuses_verified_period_and_currency():
@@ -656,6 +849,224 @@ def test_followup_routing_distinguishes_recall_from_database_augmentation():
         current_question=implicit_lineage_recall,
     )
     assert "VBAK" in context and "vbeln" in context
+
+
+def test_quantified_cohort_followup_keeps_prior_result_context():
+    from app.services.ai_followup_routing import TurnIntent, classify_turn
+    from app.services.adaptive_analyst.orchestrator import adapt_user_turn
+    from app.services.adaptive_analyst.understanding import is_referential_database_action
+
+    question = (
+        "For the three orders with differences, list each linked billing document "
+        "separately and distinguish invoices from cancellation documents."
+    )
+    assert is_referential_database_action(question, has_prior=True)
+    assert not is_referential_database_action(question, has_prior=False)
+
+    adapted = adapt_user_turn(
+        question,
+        prior_question="Compare sales orders and linked invoices net values",
+        prior_plan={"result_artifact": {"row_count": 65808, "truncated": True}},
+        prior_status="SUCCESS",
+    )
+    assert adapted.action == "query"
+    assert adapted.drop_prior is False
+    assert adapted.is_fragment is True
+
+    turn = classify_turn(
+        question,
+        previous_question="Compare sales orders and linked invoices net values",
+        previous_sql="SELECT order_vbeln, billed_net_value FROM comparison",
+        previous_plan={"result_artifact": {"row_count": 65808, "truncated": True}},
+        previous_status="SUCCESS",
+    )
+    assert turn.intent == TurnIntent.FOLLOWUP_DELTA
+
+
+def test_explicit_long_numeric_entity_ids_must_remain_in_executed_sql():
+    question = (
+        "List linked billing documents for sales orders 0000004969 and 0000004970."
+    )
+    rows = [{"billing_document": "0090005177"}]
+
+    warnings = result_matches_analytical_intent(
+        rows, question, sql='SELECT vbeln FROM "VBRK" ORDER BY vbeln LIMIT 200'
+    )
+    assert any("explicit identifier 0000004969 missing from SQL scope" in w for w in warnings)
+    assert any("explicit identifier 0000004970 missing from SQL scope" in w for w in warnings)
+
+    scoped = result_matches_analytical_intent(
+        rows,
+        question,
+        sql=(
+            'SELECT vbeln FROM "VBRK" WHERE "vbeln" IN '
+            "('0000004969', '0000004970')"
+        ),
+    )
+    assert not any("explicit identifier" in w for w in scoped)
+
+
+def test_explicit_sales_order_linked_billing_request_uses_deduplicated_document_flow():
+    question = (
+        "List linked billing documents for sales orders 0000004969 and 0000004970, "
+        "including each document net amount, type, and category."
+    )
+    sql = build_linked_billing_documents_for_orders_sql(question, [])
+
+    assert sql is not None
+    assert 'FROM "VBFA" f' in sql
+    assert 'JOIN "VBAK" o' in sql
+    assert 'JOIN "VBRK" bh' in sql
+    assert 'SELECT DISTINCT f."mandt", f."vbelv"' in sql
+    assert "LPAD('0000004969', 10, '0')" in sql
+    assert "LPAD('0000004970', 10, '0')" in sql
+    assert '"billing_net_value"' in sql
+    assert '"billing_type"' in sql
+    assert '"billing_category"' in sql
+    assert '"cancellation_flag"' in sql
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_governed_linked_billing_request_runs_without_model_understanding(monkeypatch):
+    from app.services.adaptive_analyst import orchestrator, understanding
+    from app.services import plan_satisfaction
+
+    question = (
+        "List linked billing documents for sales orders 0000004969, 0000004970, "
+        "and 0000004971 with net amount, type, and cancellation reference."
+    )
+    rows = [{
+        "sales_order": "0000004969",
+        "billing_document": "0090005177",
+        "billing_net_value": 5500,
+        "currency": "DEM",
+        "billing_type": "F2",
+        "billing_category": "M",
+        "cancellation_flag": "X",
+        "cancellation_reference": None,
+    }]
+    monkeypatch.setattr(
+        understanding,
+        "understand_turn",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("model should be bypassed")),
+    )
+    monkeypatch.setattr(plan_satisfaction, "result_matches_analytical_intent", lambda *_args, **_kwargs: [])
+    execute = MagicMock(return_value=rows)
+
+    result = orchestrator.run_adaptive_orchestrator(question, MagicMock(), execute)
+
+    assert result["answer_status"] == "SUCCESS"
+    assert result["pipeline"] == "governed_linked_billing_document_list"
+    assert result["meta"]["understanding_model_called"] is False
+    assert result["data"] == rows
+    assert execute.call_count == 1
+    assert all(value in execute.call_args.args[1] for value in ("0000004969", "0000004970", "0000004971"))
+
+
+def test_material_ranking_deduplicates_verified_identical_billing_items(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+    from app.services.document_identity_quality import document_identity_errors
+    from app.services.sql_grain_guard import sql_has_unsafe_monetary_fanout
+
+    physical_columns = {
+        "VBRK": {"mandt", "vbeln", "fkdat", "waerk"},
+        "VBRP": {"mandt", "vbeln", "posnr", "matnr", "netwr", "aubel", "aupos", "fkimg", "vrkme"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = "Which materials had the highest billed sales in 2013?"
+    sql = structured.build_dimension_ranking_sql(question, ["VBRK", "VBRP"])
+    assert sql
+    assert 'SELECT DISTINCT src."mandt", src."vbeln", src."posnr"' in sql
+    assert 'p."netwr"' in sql
+    profile = {"VBRP": {
+        "verified": True,
+        "keys": ["mandt", "vbeln", "posnr"],
+        "duplicate_identity_groups": 1,
+        "conflicting_identity_groups": 0,
+    }}
+    assert not document_identity_errors(sql, profile)
+    assert not sql_has_unsafe_monetary_fanout(sql)
+
+
+def test_negative_billing_item_ranking_preserves_document_item_identity(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBRK": {"mandt", "vbeln", "fkdat", "kunag", "waerk"},
+        "VBRP": {"mandt", "vbeln", "posnr", "netwr", "matnr", "shkzg"},
+        "KNA1": {"kunnr", "name1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = "Find the 10 most negative billing-item net values in 2000. Show invoice, item, customer, and amount."
+    sql = build_billing_item_ranking_sql(question, ["VBRK", "VBRP", "KNA1"])
+    assert sql
+    assert 'SELECT DISTINCT src."mandt", src."vbeln", src."posnr", src."netwr"' in sql
+    assert 'AS "billing_document"' in sql and 'AS "billing_item"' in sql
+    assert 'AS "customer_id"' in sql and 'AS "customer_name"' in sql
+    assert "< 0" in sql and "= '2000'" in sql
+    assert 'ORDER BY CAST(NULLIF(TRIM(CAST(i."netwr" AS TEXT)), \'\') AS NUMERIC) ASC' in sql
+    assert "LIMIT 10" in sql
+
+
+def test_unbilled_order_item_list_uses_direct_item_reference_anti_join(monkeypatch):
+    import app.services.adaptive_structured_sql as structured
+
+    physical_columns = {
+        "VBAP": {"mandt", "vbeln", "posnr", "matnr", "netwr", "kwmeng", "waerk"},
+        "VBRP": {"mandt", "aubel", "aupos"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    question = "Which sales-order items have no linked billing items? Show order 0000004969, item, and ordered value."
+    sql = build_unbilled_order_items_sql(question, ["VBAP", "VBRP"])
+    assert sql
+    assert 'SELECT DISTINCT src."mandt", src."vbeln", src."posnr", src."netwr"' in sql
+    assert 'src."waerk"' in sql.split('FROM "VBAP" src', 1)[0]
+    assert 'TRIM(CAST(i."waerk" AS TEXT)) AS "currency"' in sql
+    assert 'NOT EXISTS (SELECT 1 FROM "VBRP" p' in sql
+    assert 'p."aubel"' in sql and 'p."aupos"' in sql
+    assert "LPAD('0000004969', 10, '0')" in sql
+    assert "SUM(" not in sql
+
+
+def test_referential_linked_order_followup_expands_only_a_verified_matching_cohort():
+    from app.services.adaptive_analyst.orchestrator import _expand_linked_billing_order_cohort
+
+    question = (
+        "For the three orders with differences, list each linked billing document "
+        "separately and distinguish invoices from cancellation documents."
+    )
+    rows = [
+        {"order_vbeln": "0000004969", "order_less_billed_net_value": -11000},
+        {"order_vbeln": "0000004970", "order_less_billed_net_value": -65676},
+        {"order_vbeln": "0000004971", "order_less_billed_net_value": -24400},
+        {"order_vbeln": "0000004972", "order_less_billed_net_value": 0},
+    ]
+    expanded = _expand_linked_billing_order_cohort(question, rows)
+    assert expanded.endswith("for sales orders 0000004969, 0000004970, 0000004971")
+
+    ambiguous = _expand_linked_billing_order_cohort(question, rows[:2])
+    assert ambiguous == question
 
 
 def test_database_augmentation_reuses_prior_verified_tables_and_flags_requery():

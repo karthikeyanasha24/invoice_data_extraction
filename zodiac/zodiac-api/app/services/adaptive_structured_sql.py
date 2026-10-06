@@ -561,7 +561,15 @@ def detect_multidim_ranking_intent(question: str, semantic: Optional[Dict[str, A
         return True
     sem = semantic or {}
     dims = sem.get("dimensions")
-    if isinstance(dims, list) and len(dims) >= 2:
+    # Currency is a safety/grain key for monetary measures, not an entity
+    # dimension. Treating [customer, currency] as a multi-entity ranking sent
+    # ordinary per-currency Top-N questions to a renderer that applied a
+    # global LIMIT and dropped currency from its grouping.
+    ranked_dims = [
+        d for d in dims
+        if str(d).strip().lower() not in {"currency", "waerk", "waers", "rtcur"}
+    ] if isinstance(dims, list) else []
+    if len(ranked_dims) >= 2:
         return True
     return False
 
@@ -730,6 +738,9 @@ def extract_ranking_limit(question: str, default: int = 10) -> int:
     m = re.search(r"\b(?:top|bottom|first|last)\s+(\d{1,3})\b", q)
     if m:
         return max(1, min(int(m.group(1)), 500))
+    m = re.search(r"\b(\d{1,3})\s+(?:most|least)\b", q)
+    if m:
+        return max(1, min(int(m.group(1)), 500))
     m = re.search(
         r"\b(\d{1,3})\s+(?:biggest|largest|smallest|highest|lowest|best|worst|top|leading)\b", q
     )
@@ -769,7 +780,14 @@ def extract_ranking_limit(question: str, default: int = 10) -> int:
 
 
 def ranking_direction(question: str) -> str:
-    return "ASC" if _DESCENDING_EXCEPTIONS.search(question or "") else "DESC"
+    q = question or ""
+    if _DESCENDING_EXCEPTIONS.search(q):
+        return "ASC"
+    # "Most negative" is the lowest signed value (e.g. -100 < -5),
+    # even though the superlative itself normally implies DESC.
+    if re.search(r"\bmost\s+negative\b", q, re.I):
+        return "ASC"
+    return "DESC"
 
 
 def _sap_year_predicate(qualifier: str, column: str, years: List[str]) -> Optional[str]:
@@ -870,6 +888,347 @@ def detect_ranking_measure(
     return "sales"
 
 
+def build_billing_item_ranking_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Return ranked billing-item facts without multiplying duplicate SAP rows.
+
+    The result remains at VBRP item grain, with VBRK used only for header
+    context such as date, customer, and currency.
+    """
+    q = (question or "").lower()
+    if not (
+        re.search(r"\b(?:billing|invoice)[- ]items?\b|\bitem[- ]level\b", q)
+        and re.search(r"\b(top|bottom|highest|lowest|most|least|largest|smallest|rank|ranking)\b", q)
+    ):
+        return None
+    if not all(has_table(t) for t in ("VBRK", "VBRP")):
+        return None
+    header = resolve_table_name("VBRK") or "VBRK"
+    item = resolve_table_name("VBRP") or "VBRP"
+    if not all(has_column(item, c) for c in ("mandt", "vbeln", "posnr", "netwr")):
+        return None
+    if not all(has_column(header, c) for c in ("mandt", "vbeln", "fkdat")):
+        return None
+
+    try:
+        limit = extract_ranking_limit(question, default=10)
+    except Exception:
+        limit = 10
+    limit = max(1, min(int(limit), 500))
+    direction = ranking_direction(question)
+    amount = 'CAST(NULLIF(TRIM(CAST(i."netwr" AS TEXT)), \'\') AS NUMERIC)'
+    row_columns = ["mandt", "vbeln", "posnr", "netwr"]
+    row_columns.extend(
+        c for c in ("aubel", "aupos", "matnr", "fkimg", "vrkme", "shkzg")
+        if has_column(item, c)
+    )
+    select = [
+        'TRIM(CAST(i."vbeln" AS TEXT)) AS "billing_document"',
+        'TRIM(CAST(i."posnr" AS TEXT)) AS "billing_item"',
+        'TRIM(CAST(h."fkdat" AS TEXT)) AS "billing_date"',
+        f'{amount} AS "billing_item_net_value"',
+    ]
+    joins = [
+        f'JOIN "{header}" h ON i."mandt" = h."mandt" '
+        'AND LPAD(TRIM(CAST(i."vbeln" AS TEXT)), 10, \'0\') '
+        '= LPAD(TRIM(CAST(h."vbeln" AS TEXT)), 10, \'0\')'
+    ]
+    if has_column(header, "kunag"):
+        select.append('TRIM(CAST(h."kunag" AS TEXT)) AS "customer_id"')
+        if has_table("KNA1") and has_column("KNA1", "kunnr"):
+            joins.append(
+                'LEFT JOIN "KNA1" c ON LPAD(TRIM(CAST(h."kunag" AS TEXT)), 10, \'0\') '
+                '= LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\')'
+            )
+            if has_column("KNA1", "name1"):
+                select.append('TRIM(c."name1") AS "customer_name"')
+    if has_column(item, "matnr"):
+        select.append('TRIM(CAST(i."matnr" AS TEXT)) AS "material_id"')
+    currency_col = next((c for c in ("waerk", "waers") if has_column(header, c)), None)
+    if currency_col:
+        select.append(f'TRIM(CAST(h."{currency_col}" AS TEXT)) AS "currency"')
+    if has_column(item, "shkzg"):
+        select.append('TRIM(CAST(i."shkzg" AS TEXT)) AS "debit_credit_indicator"')
+
+    where = [f"{amount} IS NOT NULL"]
+    if re.search(r"\bnegative\b", q):
+        where.append(f"{amount} < 0")
+    years = extract_question_years(question)
+    if years:
+        where.append(_sap_year_predicate("h", "fkdat", years))
+    return (
+        'WITH "billing_item_rows" AS (\n'
+        '  SELECT DISTINCT ' + ", ".join(f'src."{c}"' for c in row_columns) +
+        f' FROM "{item}" src\n'
+        ')\nSELECT ' + ", ".join(select) +
+        '\nFROM "billing_item_rows" i\n' + "\n".join(joins) +
+        '\nWHERE ' + "\n  AND ".join(where) +
+        f'\nORDER BY {amount} {direction}, i."vbeln", i."posnr"\nLIMIT {limit}'
+    )
+
+
+def build_unbilled_order_items_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """List sales-order items without directly linked billing items."""
+    q = (question or "").lower()
+    if not (
+        re.search(r"\bsales[- ]order\s+items?\b", q)
+        and re.search(r"\b(no|without|unbilled|not\s+billed)\b", q)
+        and re.search(r"\b(billing|invoice)\s+items?\b", q)
+    ):
+        return None
+    if not all(has_table(t) for t in ("VBAP", "VBRP")):
+        return None
+    order_item = resolve_table_name("VBAP") or "VBAP"
+    billing_item = resolve_table_name("VBRP") or "VBRP"
+    needed = (
+        (order_item, ("mandt", "vbeln", "posnr")),
+        (billing_item, ("mandt", "aubel", "aupos")),
+    )
+    if any(not has_column(table, column) for table, cols in needed for column in cols):
+        return None
+
+    row_columns = ["mandt", "vbeln", "posnr"]
+    row_columns.extend(
+        c for c in ("netwr", "matnr", "kwmeng", "vrkme", "waerk") if has_column(order_item, c)
+    )
+    select = [
+        'TRIM(CAST(i."vbeln" AS TEXT)) AS "sales_order"',
+        'TRIM(CAST(i."posnr" AS TEXT)) AS "sales_order_item"',
+    ]
+    if has_column(order_item, "matnr"):
+        select.append('TRIM(CAST(i."matnr" AS TEXT)) AS "material_id"')
+    if has_column(order_item, "netwr"):
+        select.append(
+            'CAST(NULLIF(TRIM(CAST(i."netwr" AS TEXT)), \'\') AS NUMERIC) AS "ordered_net_value"'
+        )
+    if has_column(order_item, "kwmeng"):
+        select.append(
+            'CAST(NULLIF(TRIM(CAST(i."kwmeng" AS TEXT)), \'\') AS NUMERIC) AS "ordered_quantity"'
+        )
+    if has_column(order_item, "waerk"):
+        select.append('TRIM(CAST(i."waerk" AS TEXT)) AS "currency"')
+    billing_match = (
+        'p."mandt" = i."mandt" AND '
+        'LPAD(TRIM(CAST(p."aubel" AS TEXT)), 10, \'0\') '
+        '= LPAD(TRIM(CAST(i."vbeln" AS TEXT)), 10, \'0\') AND '
+        'LPAD(TRIM(CAST(p."aupos" AS TEXT)), 6, \'0\') '
+        '= LPAD(TRIM(CAST(i."posnr" AS TEXT)), 6, \'0\')'
+    )
+    requested_order = re.search(
+        r"\b(?:order|sales\s+order)(?:\s+(?:number|id|#))?\s*[:#]?\s*['\"]?(\d{6,12})\b",
+        question,
+        re.I,
+    )
+    scope = ""
+    if requested_order:
+        value = requested_order.group(1).replace("'", "''")
+        scope = (
+            '\n  AND LPAD(TRIM(CAST(i."vbeln" AS TEXT)), 10, \'0\') '
+            f"= LPAD('{value}', 10, '0')"
+        )
+    try:
+        limit = extract_ranking_limit(question, default=200)
+    except Exception:
+        limit = 200
+    limit = max(1, min(int(limit), 500))
+    return (
+        'WITH "order_item_rows" AS (\n'
+        '  SELECT DISTINCT ' + ", ".join(f'src."{c}"' for c in row_columns) +
+        f' FROM "{order_item}" src\n'
+        ')\nSELECT ' + ", ".join(select) +
+        '\nFROM "order_item_rows" i\n'
+        f'WHERE NOT EXISTS (SELECT 1 FROM "{billing_item}" p WHERE {billing_match})'
+        + scope +
+        '\nORDER BY i."vbeln", i."posnr"' +
+        f'\nLIMIT {limit}'
+    )
+
+
+def build_order_item_billing_reconciliation_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Compare ordered item net values with amounts on directly linked billing items.
+
+    The order and billing facts are deduplicated and aggregated independently
+    at client/order/item/currency grain before they are joined. This supports
+    split and partial billing without multiplying the ordered item amount.
+    """
+    q = question or ""
+    if not (
+        re.search(r"\b(?:compare|reconcile|difference|versus|vs\.?|against)\b", q, re.I)
+        and re.search(r"\border[- ]items?\b", q, re.I)
+        and re.search(r"\b(?:billing|invoice)[- ]items?\b", q, re.I)
+        and re.search(r"\b(?:net\s+values?|amounts?|netwr|values?)\b", q, re.I)
+    ):
+        return None
+    if not all(has_table(t) for t in ("VBAP", "VBRP", "VBRK")):
+        return None
+    order, item, header = (
+        resolve_table_name(name) or name for name in ("VBAP", "VBRP", "VBRK")
+    )
+    if any(not has_column(table, col) for table, cols in (
+        (order, ("mandt", "vbeln", "posnr", "netwr", "waerk")),
+        (item, ("mandt", "vbeln", "posnr", "aubel", "aupos", "netwr")),
+        (header, ("mandt", "vbeln", "waerk")),
+    ) for col in cols):
+        return None
+
+    requested_order = re.search(
+        r"\b(?:order|sales\s+order)(?:\s+(?:number|id|#))?\s*[:#]?\s*['\"]?(\d{6,12})\b",
+        q, re.I,
+    )
+    order_filter = ""
+    invoice_filter = ""
+    if requested_order:
+        value = requested_order.group(1).replace("'", "''")
+        normalized = f"LPAD(TRIM(CAST(\"VBAP\".\"vbeln\" AS TEXT)), 10, '0') = LPAD('{value}', 10, '0')"
+        order_filter = f" WHERE {normalized}"
+        invoice_filter = (
+            f" AND LPAD(TRIM(CAST(i.\"aubel\" AS TEXT)), 10, '0') = LPAD('{value}', 10, '0')"
+        )
+
+    item_attrs = [col for col in ("shkzg",) if has_column(item, col)]
+    billing_distinct = [
+        'i."mandt"', 'i."vbeln" AS "billing_document"', 'i."posnr" AS "billing_item"',
+        'i."aubel" AS "order_document"', 'i."aupos" AS "order_item"', 'i."netwr"',
+        'h."waerk" AS "currency"',
+    ]
+    billing_distinct.extend(f'i."{col}"' for col in item_attrs)
+    if has_column(header, "vbtyp"):
+        billing_distinct.append('h."vbtyp"')
+    order_distinct = ['"mandt"', '"vbeln"', '"posnr"', '"netwr"', '"waerk"']
+    billing_row_key = ["mandt", "billing_document", "billing_item", "order_document", "order_item", "netwr", "currency", *item_attrs]
+    order_amount = 'CAST(NULLIF(TRIM(CAST("netwr" AS TEXT)), \'\') AS NUMERIC)'
+    billing_amount = 'CAST(NULLIF(TRIM(CAST("netwr" AS TEXT)), \'\') AS NUMERIC)'
+    return (
+        'WITH "order_item_rows" AS (\n'
+        '  SELECT DISTINCT ' + ', '.join(f'"VBAP".{col}' for col in order_distinct) +
+        f' FROM "{order}" AS "VBAP"{order_filter}\n'
+        '), "billing_headers" AS (\n'
+        f'  SELECT "mandt", "vbeln", MAX("waerk") AS "waerk"{", MAX(\"vbtyp\") AS \"vbtyp\"" if has_column(header, "vbtyp") else ""} FROM "{header}" GROUP BY "mandt", "vbeln"\n'
+        '), "billing_item_rows" AS (\n'
+        '  SELECT DISTINCT ' + ', '.join(billing_distinct) +
+        f' FROM "{item}" AS i JOIN "billing_headers" AS h '
+        'ON h."mandt" = i."mandt" AND h."vbeln" = i."vbeln"\n'
+        '  WHERE NULLIF(TRIM(CAST(i."aubel" AS TEXT)), \'\') IS NOT NULL '
+        'AND NULLIF(TRIM(CAST(i."aupos" AS TEXT)), \'\') IS NOT NULL'
+        + invoice_filter + '\n'
+        '), "order_values" AS (\n'
+        '  SELECT "mandt", "vbeln", "posnr", "waerk" AS "currency", '
+        f'SUM({order_amount}) AS "order_item_net_value", COUNT(*) FILTER (WHERE {order_amount} IS NULL) AS "missing_order_amount_count"\n'
+        '  FROM "order_item_rows" GROUP BY "mandt", "vbeln", "posnr", "waerk"\n'
+        '), "billing_values" AS (\n'
+        '  SELECT "mandt", "order_document", "order_item", "currency", '
+        f'SUM({billing_amount}) AS "linked_billing_item_net_value", COUNT(*) AS "linked_billing_item_count", '
+        'COUNT(DISTINCT "billing_document") AS "linked_billing_document_count"\n'
+        '  FROM "billing_item_rows" GROUP BY "mandt", "order_document", "order_item", "currency"\n'
+        ')\n'
+        'SELECT COALESCE(o."mandt", b."mandt") AS "client", '
+        'COALESCE(o."vbeln", b."order_document") AS "sales_order", '
+        'COALESCE(o."posnr", b."order_item") AS "sales_order_item", '
+        'o."currency" AS "order_currency", b."currency" AS "billing_currency", '
+        'o."order_item_net_value", b."linked_billing_item_net_value", '
+        'b."linked_billing_item_count", b."linked_billing_document_count", '
+        'CASE WHEN o."currency" = b."currency" AND o."missing_order_amount_count" = 0 '
+        'THEN o."order_item_net_value" - b."linked_billing_item_net_value" END AS "order_minus_billed_value", '
+        'CASE WHEN o."vbeln" IS NULL THEN \'Billing item without matched order item\' '
+        'WHEN b."order_document" IS NULL THEN \'Order item without linked billing item\' '
+        'WHEN o."currency" <> b."currency" THEN \'Currency differs; amounts not subtracted\' '
+        'ELSE \'Compared at order-item and currency grain\' END AS "comparison_status" '
+        'FROM "order_values" o FULL OUTER JOIN "billing_values" b '
+        'ON o."mandt" = b."mandt" AND o."vbeln" = b."order_document" '
+        'AND o."posnr" = b."order_item" AND o."currency" = b."currency"\n'
+        'ORDER BY "sales_order", "sales_order_item", "order_currency", "billing_currency"'
+    )
+
+
+def build_linked_order_invoice_totals_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Compare all sales-order and linked-invoice header values by client/currency."""
+    q = question or ""
+    if not (
+        re.search(r"\b(?:compare|reconcile|difference|versus|vs\.?|against)\b", q, re.I)
+        and re.search(r"\bsales\s+orders?\b", q, re.I)
+        and re.search(r"\b(?:linked\s+)?invoices?\b", q, re.I)
+        and re.search(r"\b(?:net\s+values?|amounts?|netwr|values?)\b", q, re.I)
+        and not re.search(r"\border[- ]items?\b|\bbilling[- ]items?\b|\binvoice[- ]items?\b", q, re.I)
+    ):
+        return None
+    if not all(has_table(t) for t in ("VBAK", "VBFA", "VBRK")):
+        return None
+    order, flow, invoice = (
+        resolve_table_name(name) or name for name in ("VBAK", "VBFA", "VBRK")
+    )
+    if any(not has_column(table, col) for table, cols in (
+        (order, ("mandt", "vbeln", "netwr", "waerk")),
+        (flow, ("mandt", "vbelv", "vbeln")),
+        (invoice, ("mandt", "vbeln", "netwr", "waerk")),
+    ) for col in cols):
+        return None
+
+    def document_type(alias: str, table: str, col: str, value: str) -> str:
+        return f' AND {alias}."{col}" = \'{value}\'' if has_column(table, col) else ""
+
+    order_type = document_type('o', order, "vbtyp", "C")
+    invoice_type = document_type('k', invoice, "vbtyp", "M")
+    flow_types = (
+        document_type('f', flow, "vbtyp_v", "C")
+        + document_type('f', flow, "vbtyp_n", "M")
+    )
+    cancelled_filter = (
+        ' AND COALESCE(TRIM(CAST("fksto" AS TEXT)), \'\') <> \'X\''
+        if has_column(invoice, "fksto") else ""
+    )
+    amount_o = 'CAST(NULLIF(TRIM(CAST("net_value" AS TEXT)), \'\') AS NUMERIC)'
+    amount_i = 'CAST(NULLIF(TRIM(CAST("net_value" AS TEXT)), \'\') AS NUMERIC)'
+    return (
+        'WITH "order_rows" AS (\n'
+        f'  SELECT DISTINCT "mandt", "vbeln", "waerk" AS "currency", "netwr" AS "net_value" FROM "{order}" o\n'
+        f'  WHERE 1 = 1{order_type}\n'
+        '), "invoice_rows" AS (\n'
+        f'  SELECT DISTINCT k."mandt", k."vbeln", k."waerk" AS "currency", k."netwr" AS "net_value" FROM "{invoice}" k\n'
+        f'  WHERE 1 = 1{invoice_type}{cancelled_filter}\n'
+        '    AND EXISTS (SELECT 1 FROM "' + flow + '" f JOIN "order_rows" o '
+        'ON o."mandt" = f."mandt" AND o."vbeln" = f."vbelv" '
+        'WHERE f."mandt" = k."mandt" AND f."vbeln" = k."vbeln"' + flow_types + ')\n'
+        '), "order_totals" AS (\n'
+        f'  SELECT "mandt", "currency", COUNT(*) AS "sales_order_count", SUM({amount_o}) AS "sales_order_net_value", '
+        f'COUNT(*) FILTER (WHERE {amount_o} IS NULL) AS "missing_order_amount_count"\n'
+        '  FROM "order_rows" GROUP BY "mandt", "currency"\n'
+        '), "invoice_totals" AS (\n'
+        f'  SELECT "mandt", "currency", COUNT(*) AS "linked_invoice_count", SUM({amount_i}) AS "linked_invoice_net_value", '
+        f'COUNT(*) FILTER (WHERE {amount_i} IS NULL) AS "missing_invoice_amount_count"\n'
+        '  FROM "invoice_rows" GROUP BY "mandt", "currency"\n'
+        ')\n'
+        'SELECT COALESCE(o."mandt", i."mandt") AS "client", '
+        'COALESCE(o."currency", i."currency") AS "currency", '
+        'o."sales_order_count", i."linked_invoice_count", '
+        'o."sales_order_net_value", i."linked_invoice_net_value", '
+        'CASE WHEN o."currency" = i."currency" AND o."missing_order_amount_count" = 0 '
+        'AND i."missing_invoice_amount_count" = 0 '
+        'THEN o."sales_order_net_value" - i."linked_invoice_net_value" END AS "order_minus_invoice_net_value", '
+        'CASE WHEN o."sales_order_count" IS NULL THEN \'Linked invoices only at this currency\' '
+        'WHEN i."linked_invoice_count" IS NULL THEN \'Sales orders only at this currency\' '
+        'ELSE \'Compared separately by client and currency\' END AS "comparison_status", '
+        '\'All available dates; sales-order and invoice headers; document-flow-linked invoices; cancelled originals excluded; no currency conversion\' AS "comparison_scope" '
+        'FROM "order_totals" o FULL OUTER JOIN "invoice_totals" i '
+        'ON o."mandt" = i."mandt" AND o."currency" = i."currency"\n'
+        'ORDER BY "client", "currency"'
+    )
+
+
 def build_dimension_ranking_sql(
     question: str,
     tables: List[str],
@@ -897,7 +1256,19 @@ def build_dimension_ranking_sql(
     req = required_semantics(question, semantic)
     ranking = req.get("ranking") if isinstance(req.get("ranking"), dict) else None
     if ranking and ranking.get("partition_by"):
-        return None  # partitioned Top-N owns this shape
+        partitions = ranking.get("partition_by")
+        if isinstance(partitions, str):
+            partitions = [partitions]
+        # Currency is a comparison-safety key, not a user-visible ranking
+        # dimension. This builder already adds a currency partition for every
+        # monetary rank, so it can satisfy the currency-partitioned Top-N too.
+        unsupported_partitions = {
+            str(value).strip().lower()
+            for value in (partitions or [])
+            if str(value).strip().lower() not in {"currency", "waerk", "waers", "rtcur"}
+        }
+        if unsupported_partitions:
+            return None  # another partitioned Top-N template owns this shape
     # Multi-entity rankings (country+customer+industry) belong to the multidim builder.
     q_dims = sum(
         1
@@ -970,11 +1341,13 @@ def build_dimension_ranking_sql(
     currency_rank = False
 
     if use_line:
-        from_clause = f'FROM "{line}" p'
+        from_clause = 'FROM "billing_item_rows" p'
         joins.append(
             f'JOIN "{hdr}" k ON LPAD(TRIM(CAST(p."vbeln" AS TEXT)), 10, \'0\') '
             f'= LPAD(TRIM(CAST(k."vbeln" AS TEXT)), 10, \'0\')'
         )
+        if has_column(line, "mandt") and has_column(hdr, "mandt"):
+            joins[-1] += ' AND p."mandt" = k."mandt"'
     else:
         from_clause = f'FROM "{hdr}" k'
 
@@ -1038,9 +1411,13 @@ def build_dimension_ranking_sql(
         # rankings need the billing document total so they agree with monthly
         # and invoice-level follow-ups. Product and explicitly item-level
         # requests continue to use the line-grain metric formula.
-        if metric_def.name == "revenue" and not use_line:
+        if metric_def.name == "revenue":
+            # The DB catalogue may expose SAP amount columns as native NUMERIC
+            # even though imported demo extracts store them as text. Always cast
+            # to text before TRIM so this shared metric works for both schemas.
+            amount_alias = "p" if use_line else "k"
             formula = (
-                'SUM(CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC))'
+                f'SUM(CAST(NULLIF(TRIM(CAST({amount_alias}."netwr" AS TEXT)), \'\') AS NUMERIC))'
             )
         else:
             formula = metric_def.formula_sql
@@ -1117,6 +1494,32 @@ def build_dimension_ranking_sql(
         pred = _sap_year_predicate("k", "fkdat", years)
         if pred:
             where.append(pred)
+    elif has_column(hdr, "fkdat"):
+        # Ranking templates bypass the generic structured-plan renderer, so
+        # carry its resolved relative date window into this SQL path as well.
+        # This keeps "last year" bounded to the prior calendar year and lets
+        # latest-data-year questions use the dynamically resolved SAP period.
+        date_filter = req.get("date_filter") if isinstance(req.get("date_filter"), dict) else {}
+        semantic_tf = (req.get("semantic") or {}).get("time_filter") or {}
+        start = str(date_filter.get("start_yyyymmdd") or semantic_tf.get("start_yyyymmdd") or "")
+        end = str(date_filter.get("end_yyyymmdd") or semantic_tf.get("end_yyyymmdd") or "")
+        if start.isdigit() and end.isdigit() and len(start) == 8 and len(end) == 8:
+            date_expr = 'TRIM(CAST(k."fkdat" AS TEXT))'
+            where.extend([f"{date_expr} >= '{start}'", f"{date_expr} < '{end}'"])
+    displayed_year = years[0] if len(years) == 1 else None
+    if not displayed_year:
+        date_filter = req.get("date_filter") if isinstance(req.get("date_filter"), dict) else {}
+        semantic_tf = (req.get("semantic") or {}).get("time_filter") or {}
+        start = str(date_filter.get("start_yyyymmdd") or semantic_tf.get("start_yyyymmdd") or "")
+        end = str(date_filter.get("end_yyyymmdd") or semantic_tf.get("end_yyyymmdd") or "")
+        if (
+            len(start) == 8 and start.isdigit() and start.endswith("0101")
+            and len(end) == 8 and end.isdigit() and end.endswith("0101")
+            and int(end[:4]) == int(start[:4]) + 1
+        ):
+            displayed_year = start[:4]
+    if displayed_year and re.search(r"\b(?:show|include|with|including)?\s*(?:the\s+)?year\b", question, re.I):
+        sel.append(f"'{displayed_year}' AS \"billing_year\"")
 
     sql = f"SELECT {', '.join(sel)}\n{from_clause}"
     for j in joins:
@@ -1124,6 +1527,24 @@ def build_dimension_ranking_sql(
     if where:
         sql += "\nWHERE " + "\n  AND ".join(where)
     sql += f"\nGROUP BY {', '.join(gb)}"
+    if use_line:
+        # VBRP can contain exact duplicate item copies. Collapse only rows with
+        # the complete SAP item identity and the attributes that can affect a
+        # ranking/calculation before joining headers or aggregating measures.
+        # DISTINCT on amount alone would merge legitimate equal-value items.
+        identity_attributes = (
+            "mandt", "vbeln", "posnr", "netwr", "aubel", "aupos",
+            "matnr", "fkimg", "vrkme",
+        )
+        row_columns = [column for column in identity_attributes if has_column(line, column)]
+        if not {"mandt", "vbeln", "posnr"} <= set(row_columns):
+            return None
+        projections = ", ".join(f'src."{column}"' for column in row_columns)
+        sql = (
+            'WITH "billing_item_rows" AS (\n'
+            f'  SELECT DISTINCT {projections} FROM "{line}" src\n'
+            ')\n' + sql
+        )
     safe_limit = max(1, min(int(limit), 500))
     if currency_rank:
         # Amounts in different currencies are not comparable. Keep all currency
@@ -1645,6 +2066,85 @@ def build_linked_sales_orders_sql(
     )
 
 
+def build_linked_billing_documents_for_orders_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """List billing headers linked to explicitly named sales orders.
+
+    The identifiers are extracted from the user's request at runtime. SAP
+    document flow is deduplicated before joining the monetary header fact so
+    item-level flow rows cannot multiply invoice values.
+    """
+    q = question or ""
+    if not re.search(r"\b(?:list|show|display|find|give)\b", q, re.I):
+        return None
+    if not re.search(r"\b(?:linked|related)\b[\s\S]{0,80}\b(?:billing\s+documents?|invoices?)\b", q, re.I):
+        return None
+    if not re.search(r"\bsales\s+orders?\b", q, re.I):
+        return None
+
+    # Document numbers are schema values, never embedded constants. Ignore
+    # calendar years, which appear in many date-scoped questions.
+    ids = list(dict.fromkeys(
+        value for value in re.findall(r"(?<!\d)\d{6,10}(?!\d)", q)
+        if not (len(value) == 4 and value.startswith(("19", "20")))
+    ))[:50]
+    if not ids or not all(
+        has_table(table) and all(has_column(table, column) for column in columns)
+        for table, columns in (
+            ("VBFA", ("mandt", "vbelv", "vbeln")),
+            ("VBAK", ("mandt", "vbeln")),
+            ("VBRK", ("mandt", "vbeln", "netwr", "waerk")),
+        )
+    ):
+        return None
+
+    order_table = resolve_table_name("VBAK") or "VBAK"
+    flow_table = resolve_table_name("VBFA") or "VBFA"
+    invoice_table = resolve_table_name("VBRK") or "VBRK"
+    id_list = ", ".join(
+        f"LPAD('{value}', 10, '0')" for value in ids
+    )
+    optional_fields = []
+    for col, alias in (
+        ("fkart", "billing_type"),
+        ("vbtyp", "billing_category"),
+        ("fksto", "cancellation_flag"),
+        ("sfakn", "cancellation_reference"),
+    ):
+        if has_column(invoice_table, col):
+            optional_fields.append(f'TRIM(CAST(b."{col}" AS TEXT)) AS "{alias}"')
+    fields = [
+        'TRIM(CAST(l."sales_order" AS TEXT)) AS "sales_order"',
+        'TRIM(CAST(b."vbeln" AS TEXT)) AS "billing_document"',
+        'CAST(NULLIF(TRIM(CAST(b."netwr" AS TEXT)), \'\') AS NUMERIC) AS "billing_net_value"',
+        'TRIM(CAST(b."waerk" AS TEXT)) AS "currency"',
+        *optional_fields,
+    ]
+    return (
+        'WITH "order_billing_links" AS (\n'
+        '  SELECT DISTINCT f."mandt", f."vbelv" AS "sales_order", f."vbeln" AS "billing_document"\n'
+        f'  FROM "{flow_table}" f\n'
+        f'  JOIN "{order_table}" o ON o."mandt" = f."mandt" '
+        'AND LPAD(TRIM(CAST(o."vbeln" AS TEXT)), 10, \'0\') = '
+        'LPAD(TRIM(CAST(f."vbelv" AS TEXT)), 10, \'0\')\n'
+        f'  JOIN "{invoice_table}" bh ON bh."mandt" = f."mandt" '
+        'AND LPAD(TRIM(CAST(bh."vbeln" AS TEXT)), 10, \'0\') = '
+        'LPAD(TRIM(CAST(f."vbeln" AS TEXT)), 10, \'0\')\n'
+        '  WHERE LPAD(TRIM(CAST(o."vbeln" AS TEXT)), 10, \'0\') IN ('
+        f'{id_list})\n'
+        ')\n'
+        f'SELECT {", ".join(fields)}\n'
+        f'FROM "order_billing_links" l\n'
+        f'JOIN "{invoice_table}" b ON b."mandt" = l."mandt" '
+        'AND LPAD(TRIM(CAST(b."vbeln" AS TEXT)), 10, \'0\') = '
+        'LPAD(TRIM(CAST(l."billing_document" AS TEXT)), 10, \'0\')\n'
+        'ORDER BY "sales_order", "billing_document"'
+    )
+
+
 def build_linked_order_period_comparison_sql(
     question: str,
     tables: List[str],
@@ -1941,6 +2441,41 @@ def build_period_compare_sql(
     hdr = resolve_table_name("VBRK") or "VBRK"
     net = f'CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC)'
     yexpr = 'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4)'
+    month_requested = bool(
+        re.search(r"\b(monthly|month[- ]by[- ]month|by month|per month|each month|monthly comparison)\b", original_user_question, re.I)
+        or "month" in [str(d).lower() for d in (req.get("group_by") or req.get("dimensions") or [])]
+    )
+    if month_requested and not aggregate_only:
+        # Compare like-for-like months across the requested years. Keep each
+        # currency as its own row because the nominal amounts are incomparable.
+        currency_col = next((c for c in ("waerk", "waers", "rtcur") if has_column(hdr, c)), None)
+        document_col = next((c for c in ("vbeln", "belnr") if has_column(hdr, c)), None)
+        if not currency_col or not document_col:
+            return None
+        month_expr = 'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 5, 2)'
+        amount_a = f"SUM(CASE WHEN {yexpr} = '{y_a}' THEN {net} ELSE 0 END)"
+        amount_b = f"SUM(CASE WHEN {yexpr} = '{y_b}' THEN {net} ELSE 0 END)"
+        difference = f"({amount_b} - {amount_a})"
+        identity_columns = [
+            column for column in ("mandt", document_col, "fkdat", currency_col, "netwr")
+            if has_column(hdr, column)
+        ]
+        if document_col not in identity_columns or "fkdat" not in identity_columns or "netwr" not in identity_columns:
+            return None
+        identity_projection = ", ".join(f'src."{column}"' for column in identity_columns)
+        return (
+            'WITH "billing_document_rows" AS (\n'
+            f'  SELECT DISTINCT {identity_projection} FROM "{hdr}" src\n'
+            ')\n'
+            f'SELECT {month_expr} AS "month", TRIM(CAST(k."{currency_col}" AS TEXT)) AS "currency", '
+            f'{amount_a} AS "period_a", {amount_b} AS "period_b", '
+            f'{difference} AS "change"\n'
+            'FROM "billing_document_rows" k\n'
+            f"WHERE NULLIF(TRIM(CAST(k.\"fkdat\" AS TEXT)), '') IS NOT NULL\n"
+            f"  AND {yexpr} IN ('{y_a}', '{y_b}')\n"
+            f'GROUP BY {month_expr}, TRIM(CAST(k."{currency_col}" AS TEXT))\n'
+            f'ORDER BY "month", "currency"'
+        )
     if aggregate_only:
         period_a = f"SUM(CASE WHEN {yexpr} = '{y_a}' THEN {net} ELSE 0 END)"
         period_b = f"SUM(CASE WHEN {yexpr} = '{y_b}' THEN {net} ELSE 0 END)"

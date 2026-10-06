@@ -109,6 +109,69 @@ def _parse_topn(question: str) -> Optional[int]:
     return None
 
 
+def _expand_linked_billing_order_cohort(
+    question: str, prior_rows: Optional[List[Dict[str, Any]]]
+) -> str:
+    """Resolve a referential order cohort from the immediately verified rows.
+
+    Only expands a request when the prior result contains an order key and a
+    measurable difference column, and when the requested cohort size matches
+    the distinct qualifying orders. This prevents an ambiguous reference from
+    turning into an unscoped invoice query.
+    """
+    q = str(question or "").strip()
+    if re.search(r"(?<!\d)\d{6,10}(?!\d)", q):
+        return q
+    if not (
+        re.search(r"\b(?:linked|related)\b[\s\S]{0,80}\b(?:billing\s+documents?|invoices?)\b", q, re.I)
+        and re.search(r"\borders?\b", q, re.I)
+        and re.search(r"\b(?:difference|differences|variance|discrepanc(?:y|ies)|gap|gaps)\b", q, re.I)
+    ):
+        return q
+    rows = [row for row in (prior_rows or []) if isinstance(row, dict)]
+    if not rows:
+        return q
+
+    normalized_keys = {str(key).strip().lower().replace(" ", "_"): key for key in rows[0]}
+    order_key = next((
+        original for key, original in normalized_keys.items()
+        if key in {"order_vbeln", "sales_order", "sales_order_id", "order_id"}
+        or ("order" in key and ("vbeln" in key or key.endswith("_id")))
+    ), None)
+    difference_key = next((
+        original for key, original in normalized_keys.items()
+        if any(token in key for token in ("difference", "variance", "discrepancy", "gap", "order_less_billed", "order_minus_invoice"))
+    ), None)
+    if not order_key or not difference_key:
+        return q
+
+    qualifying: List[str] = []
+    for row in rows[:5000]:
+        raw_order = str(row.get(order_key) or "").strip()
+        raw_difference = str(row.get(difference_key) or "").strip().replace(",", "")
+        if not raw_order or not re.fullmatch(r"\d{6,10}", raw_order):
+            continue
+        try:
+            differs = float(raw_difference) != 0.0
+        except (TypeError, ValueError):
+            continue
+        if differs and raw_order not in qualifying:
+            qualifying.append(raw_order)
+
+    count_match = re.search(
+        r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+orders?\b",
+        q, re.I,
+    )
+    if count_match:
+        count_token = count_match.group(1).lower()
+        expected = int(count_token) if count_token.isdigit() else _TOPN_WORDS.get(count_token)
+        if expected is None or len(qualifying) != expected:
+            return q
+    if not qualifying:
+        return q
+    return q + " for sales orders " + ", ".join(qualifying)
+
+
 def _prior_is_sales_ranking(prior_question: str) -> bool:
     pq = (prior_question or "").strip().lower()
     if not pq:
@@ -528,6 +591,19 @@ def _run_four_stage_or_legacy_sql(
                 pass
 
 
+def _result_validation_question(
+    semantic: Optional[Dict[str, Any]], user_question: str, resolved_question: str
+) -> str:
+    """Use the same user wording as the four-stage result validator.
+
+    The pipeline stores this value in its verified semantic context. Rechecking
+    the same rows against a model paraphrase can invent extra requirements and
+    reject a result that already passed the analytical plan.
+    """
+    original = semantic.get("_original_user_question") if isinstance(semantic, dict) else None
+    return str(original or user_question or resolved_question or "").strip()
+
+
 def _pipeline2_sql(
     resolved: str,
     original: str,
@@ -895,6 +971,64 @@ def run_adaptive_orchestrator(
         }
         return out
 
+    # Governed order-to-billing document requests have an exact, schema-gated
+    # SAP document-flow query. Run that bounded capability before model
+    # understanding: an LLM outage should not prevent a query whose entities,
+    # joins, grain, and output fields are already explicit and validated.
+    try:
+        from ..adaptive_structured_sql import build_linked_billing_documents_for_orders_sql
+        from ..plan_satisfaction import result_matches_analytical_intent
+
+        linked_question = _expand_linked_billing_order_cohort(q, prior_rows)
+        linked_sql = build_linked_billing_documents_for_orders_sql(linked_question, [])
+        if linked_sql:
+            linked_rows = execute_sql(db, linked_sql, linked_question) or []
+            linked_warnings = result_matches_analytical_intent(
+                linked_rows, linked_question, sql=linked_sql
+            )
+            if not linked_warnings:
+                summary = (
+                    f"Found {len(linked_rows)} linked billing document(s) for the requested sales orders. "
+                    "The rows show each billing document's net header value, currency, type, category, "
+                    "and cancellation-reference fields where the connected schema provides them. "
+                    "Cancellation flags identify document status; amounts are not netted across cancellation pairs."
+                    if linked_rows else
+                    "No linked billing documents matched the requested sales orders in the connected data."
+                )
+                state.last_sql = linked_sql
+                state.last_user_question = q
+                state.last_resolved_question = linked_question
+                state.last_summary = summary[:2000]
+                state.tables = ["VBAK", "VBFA", "VBRK"]
+                state.remember_turn(q, summary, mode="database_analysis")
+                return {
+                    "mode": "database_analysis",
+                    "route": "database",
+                    "pipeline": "governed_linked_billing_document_list",
+                    "sql_generation_method": "schema_gated_document_flow_template",
+                    "sql": linked_sql,
+                    "data": linked_rows,
+                    "rows": linked_rows,
+                    "rowCount": len(linked_rows),
+                    "summary": summary,
+                    "answer": summary,
+                    "keyFindings": [],
+                    "answer_status": "SUCCESS" if linked_rows else "SUCCESS_EMPTY",
+                    "query_plan": {
+                        "selected_capability": "linked_billing_document_list",
+                        "tables": ["VBAK", "VBFA", "VBRK"],
+                        "grain": "one row per linked order and billing document",
+                        "investigation_state": state.to_dict(),
+                    },
+                    "meta": {
+                        "selected_capability": "linked_billing_document_list",
+                        "understanding_model_called": False,
+                    },
+                }
+            logger.info("[adaptive-orch] linked billing list rejected: %s", linked_warnings[:4])
+    except Exception as linked_error:
+        logger.info("[adaptive-orch] linked billing list path skipped: %s", type(linked_error).__name__)
+
     from .understanding import (
         analytics_clarification_payload,
         capability_facts,
@@ -981,7 +1115,7 @@ def run_adaptive_orchestrator(
         and understanding.context_source == "prior_request"
         and (prior_question or any(turn.get("role") == "user" for turn in state.recent_turns))
     )
-    if request_scoped_continuation and not understanding.clarification_needed:
+    if analytical_turn and request_scoped_continuation and not understanding.clarification_needed:
         resolved_request = str(understanding.resolved_question or "").strip()
         if not resolved_request or re.search(
             r"\bSELECT\b[\s\S]*\bFROM\b|^\s*(?:WITH|UPDATE|DELETE|INSERT)\b|```",
@@ -1005,7 +1139,10 @@ def run_adaptive_orchestrator(
     locally_anchored_reference = has_same_turn_entity_antecedent(q)
     referential_data_action = analytical_turn and (
         (understanding.context_source == "prior_result" and not locally_anchored_reference)
-        or is_referential_database_action(q, has_prior=True)
+        or (
+            not locally_anchored_reference
+            and is_referential_database_action(q, has_prior=True)
+        )
     )
     # A scoped data drill-down needs a verified selection. Perform this check
     # after understanding so a conversational example needs no result anchor.
@@ -1095,6 +1232,14 @@ def run_adaptive_orchestrator(
             if isinstance(resp_evidence, dict):
                 from .understanding import compact_prior_result
 
+                # A failed investigation is an outcome, not an empty successful
+                # result. Give conversational explanations the known status.
+                prior_pipeline = (prior_plan or {}).get("pipeline2") or {}
+                resp_evidence["prior_outcome"] = {
+                    "answer_status": prior_status,
+                    "failure_kind": prior_pipeline.get("error") if isinstance(prior_pipeline, dict) else None,
+                }
+
                 artifact = (prior_plan or {}).get("result_artifact") or {}
                 resp_evidence["prior_result"] = compact_prior_result(
                     prior_rows,
@@ -1168,7 +1313,9 @@ def run_adaptive_orchestrator(
         }
         return _attach_understanding_meta(out, understanding)
 
-    if intent == "metadata" or understanding.requires_metadata:
+    # An analytical request may need schema inspection as a prerequisite.
+    # That does not change its destination into a schema-only answer.
+    if intent == "metadata" or (understanding.requires_metadata and not analytical_turn):
         from .database_metadata import answer_database_metadata
 
         schema = schema_for_metadata if isinstance(schema_for_metadata, dict) else {}
@@ -1271,14 +1418,21 @@ def run_adaptive_orchestrator(
 
     # Sales-order counts have a governed source and grain in the connected SAP
     # catalog. Use that source-aware read-only capability directly so generic
-    # SQL generation cannot turn a scalar count into an invalid GROUP BY.
+    # SQL generation cannot turn a scalar count into an invalid GROUP BY. Only
+    # use it when model understanding has identified exactly one requested part;
+    # a fast path must never discard other asks from a compound message.
     try:
         from ...data_catalog.source_selector import select_source
         from ..sales_order_analysis import try_sales_order_analysis
         from ..plan_satisfaction import sql_satisfies_analytical_intent
 
         source_spec = select_source(q, prior_plan=prior_plan if isinstance(prior_plan, dict) else None)
-        if source_spec.route == "sales_order" and source_spec.metric == "sales_order_count":
+        if (
+            source_spec.route == "sales_order"
+            and source_spec.metric == "sales_order_count"
+            and understanding.understanding_model_called
+            and len(understanding.requested_parts) == 1
+        ):
             order_count = try_sales_order_analysis(q, source_spec, db, execute_sql)
             if order_count and sql_satisfies_analytical_intent(str(order_count.get("sql") or ""), q):
                 summary = str(order_count.get("summary") or order_count.get("answer") or "")
@@ -1551,7 +1705,7 @@ def run_adaptive_orchestrator(
                 failure_class = "MODEL_FAILURE"
             else:
                 failure_class = "SYSTEM_FAILURE"
-            msg = user_safe_pipeline_message(
+            msg = str(p2.get("user_message") or "").strip() or user_safe_pipeline_message(
                 "technical" if failure_class in {"TECHNICAL_ERROR", "SYSTEM_FAILURE", "TOOL_FAILURE", "MODEL_FAILURE"} else "repair_failed"
             )
             if is_sql_validation_error:
@@ -1568,7 +1722,7 @@ def run_adaptive_orchestrator(
                         "The generated query was blocked by schema or SQL validation before execution. "
                         f"Validation detail: {diagnostics}"
                     )
-            elif p2.get("error"):
+            elif p2.get("error") and not p2.get("user_message"):
                 msg = f"The analysis stopped before producing a verified result (pipeline status: {p2['error']})."
             err_class = str(p2.get("error_class") or "").lower()
             if failure_class == "TOOL_FAILURE" and err_class in {"timeout", "db_unavailable", "connection"}:
@@ -1578,7 +1732,7 @@ def run_adaptive_orchestrator(
                     "I couldn't execute a verified query against the connected data. "
                     "Retry the question or narrow its time range."
                 )
-            elif failure_class == "MODEL_FAILURE":
+            elif failure_class == "MODEL_FAILURE" and not p2.get("user_message"):
                 msg = "I couldn't plan a verified query for that question. Try rephrasing with a metric and period."
             status = "CANNOT_ANSWER"
             logger.warning(
@@ -1717,7 +1871,10 @@ def run_adaptive_orchestrator(
         if isinstance(p2.get("verified_context"), dict)
         else None
     ) or p1
-    final_warnings = result_matches_analytical_intent(rows, resolved or q, semantic, sql=sql)
+    validation_question = _result_validation_question(semantic, q, resolved)
+    final_warnings = result_matches_analytical_intent(
+        rows, validation_question, semantic, sql=sql
+    )
     if p3.get("incomplete"):
         final_warnings.append("The answer model identified missing requirements in the result.")
     answer_text = str(p3.get("answer") or summary)

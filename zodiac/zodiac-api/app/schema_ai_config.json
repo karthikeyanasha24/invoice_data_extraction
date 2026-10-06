@@ -190,6 +190,12 @@
   "join_rules": [
     {
       "left": "VBRP",
+      "right": "VBAP",
+      "on": "VBRP.AUBEL = VBAP.VBELN AND VBRP.AUPOS = VBAP.POSNR",
+      "note": "Billing item to originating sales-order item. Include matching MANDT when available. Billing POSNR is not the originating order item number."
+    },
+    {
+      "left": "VBRP",
       "right": "VBAK",
       "on": "VBRP.AUBEL = VBAK.VBELN",
       "note": "Billing item reference sales order to order header; AUPOS is the order item position, not its document number"
@@ -739,6 +745,31 @@
       "right": "TCKH2",
       "on": "TCKH1.ELEHK = TCKH2.ELEHK AND TCKH1.ELEMT = TCKH2.ELEMT",
       "note": "Cost component text to cost component hierarchy"
+    }
+  ],
+  "document_identity_rules": {
+    "VBAK": {"keys": ["MANDT", "VBELN"], "attributes": ["NETWR", "WAERK", "VBTYP"]},
+    "VBAP": {"keys": ["MANDT", "VBELN", "POSNR"], "attributes": ["NETWR", "WAERK", "MATNR", "KWMENG", "VRKME"]},
+    "VBRK": {"keys": ["MANDT", "VBELN"], "attributes": ["NETWR", "WAERK", "VBTYP", "FKART", "FKSTO", "SFAKN"]},
+    "VBRP": {"keys": ["MANDT", "VBELN", "POSNR"], "attributes": ["NETWR", "AUBEL", "AUPOS", "MATNR", "FKIMG", "VRKME"]}
+  },
+  "comparison_policies": [
+    {
+      "name": "sales_order_billing_reconciliation",
+      "tables": ["VBAK", "VBAP", "VBRK", "VBRP", "VBFA"],
+      "document_identity": "Use MANDT and VBELN; item identity also needs POSNR. Preserve client keys wherever available.",
+      "item_link": "VBRP.AUBEL = VBAP.VBELN and VBRP.AUPOS = VBAP.POSNR. VBRP.VBELN links its own VBRK header. Never equate order and invoice document numbers or their POSNR without the originating reference.",
+      "flow_link": "VBFA.VBELV/POSNV identify predecessor, VBELN/POSNN successor. Respect predecessor and successor document categories. Direct order-to-invoice flow may be absent for delivery-based billing; use verified item references or the delivery chain, never invent an association.",
+      "values": "VBAK.NETWR and VBRK.NETWR are whole document values. VBAP.NETWR and VBRP.NETWR are item values. A header pair listing is association evidence, not an amount allocated to that order. Prefer an order or order-item reconciliation for an unspecified linked-value comparison; explicitly state the chosen grain.",
+      "aggregation": "Several invoices can bill one order and one invoice can contain several orders. Sum each billing item once at its originating order/item and currency grain before comparing with the independently selected order value. Do not SUM repeated headers or use SUM(DISTINCT amount) to hide duplicated documents.",
+      "source_quality": "Use verified document_identity_profiles when supplied. Identical copies may be deduplicated only while preserving complete document keys, references, currencies/units, and every calculation attribute. Conflicting versions require a disclosed limitation or a verified version-selection rule; never arbitrarily pick a version. Report what was deduplicated.",
+      "quantity": "Compare VBAP.KWMENG with VBRP.FKIMG only with compatible VRKME units. Use verified unit conversions when needed. An order quantity is not a billing quantity; partial billing does not by itself indicate a price error.",
+      "currency": "Keep order and invoice WAERK visible and separate. Subtract or compute percentages only in the same currency or after an explicit verified conversion. Missing invoices and missing amounts are not verified zero values.",
+      "business_policy": "Disclose date scope and actual billing document categories included. Do not invent sign changes, cancellation/credit/pro-forma policy, conversion rates, proportional price allocation, or rounding tolerance. Describe results under the supported scope; ask only when an unresolved policy changes the requested conclusion. A variance alone does not prove an error.",
+      "sources": [
+        "https://help.sap.com/saphelp_snc70/helpdata/en/42/9a54a7a7e541b1b5f8036979540339/content.htm",
+        "https://userapps.support.sap.com/sap/support/knowledge/en/3633545"
+      ]
     }
   ]
 }

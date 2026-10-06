@@ -838,18 +838,24 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    if _NEGATION.search(ql):
+    # Retaining unmatched entities in a comparison is outer-join semantics,
+    # not a request to filter the result down to absent relationships.
+    inclusive_absence = re.search(
+        r"\b(?:include|including|retain|retaining|preserve|preserving)\b[^.;]{0,100}"
+        r"\b(?:no|without|missing)\b", ql
+    )
+    if _NEGATION.search(ql) and not inclusive_absence:
         neg = {"type": "anti_join"}
-        if re.search(r"purchase orders?.{0,60}(no|without|not|but no).{0,30}invoices?", ql) or re.search(
+        if re.search(r"sales orders?.{0,60}(no|without|not|but no).{0,30}(billing|invoices?)", ql):
+            neg.update({"required": "sales_order", "forbidden": "invoice"})
+        elif re.search(r"invoices?.{0,60}(no|without|not|but no).{0,30}sales orders?", ql):
+            neg.update({"required": "invoice", "forbidden": "sales_order"})
+        elif re.search(r"purchase orders?.{0,60}(no|without|not|but no).{0,30}invoices?", ql) or re.search(
             r"\borders?\b.{0,40}\b(no|without|but no)\b.{0,30}\binvoices?\b", ql
         ):
             neg.update({"required": "purchase_order", "forbidden": "invoice"})
         elif re.search(r"invoices?.{0,60}(no|without|not|but no).{0,30}(orders?|payments?)", ql):
             neg.update({"required": "invoice", "forbidden": "purchase_order"})
-        elif re.search(r"sales orders?.{0,60}(no|without|not|but no).{0,30}(billing|invoices?)", ql):
-            neg.update({"required": "sales_order", "forbidden": "invoice"})
-        elif re.search(r"invoices?.{0,60}(no|without|not|but no).{0,30}sales orders?", ql):
-            neg.update({"required": "invoice", "forbidden": "sales_order"})
         elif re.search(r"activity.{0,40}(without|no).{0,20}billing", ql):
             neg.update({"required": "purchase_order", "forbidden": "invoice"})
         ops["negation"] = neg

@@ -450,9 +450,11 @@ _SIX_STEP_FOLLOWUPS = (
 )
 
 
-def _assert_clarification_not_prior_result(payload: dict) -> None:
-    assert payload.get("answer_status") == "CLARIFICATION"
-    assert payload.get("type") == "clarification"
+def _assert_non_analytical_turn_does_not_reuse_prior_data(payload: dict) -> None:
+    # General chat is model-backed. With a live model it may answer naturally;
+    # during a provider outage it may return CANNOT_ANSWER. Neither path may
+    # reinterpret the previous SAP rows or execute SQL for this message.
+    assert payload.get("answer_status") in {"CLARIFICATION", "CANNOT_ANSWER", "SUCCESS"}
     assert not (payload.get("sql") or "").strip()
     assert payload.get("charts") in ([], None)
     assert (payload.get("data") or []) == []
@@ -464,7 +466,7 @@ def _assert_clarification_not_prior_result(payload: dict) -> None:
     assert "from your result set" not in blob
 
 
-async def _adaptive_direct(question: str, context=None):
+def _adaptive_direct(question: str, context=None):
     from unittest.mock import MagicMock, patch
     from app.api.adaptive_query import post_query_adaptive
 
@@ -472,7 +474,9 @@ async def _adaptive_direct(question: str, context=None):
         "app.api.adaptive_query._followup_analysis",
         side_effect=AssertionError("continuation narrative must not run for gated questions"),
     ):
-        return await post_query_adaptive(
+        # The FastAPI route is intentionally synchronous; the app runs it in a
+        # worker thread. Call it directly here instead of awaiting its dict.
+        return post_query_adaptive(
             question=question,
             tableHint=None,
             contextData=context,
@@ -485,43 +489,35 @@ async def _adaptive_direct(question: str, context=None):
 
 def test_intent_gate_blocks_nonsense_after_followup_chain():
     """Test A: valid → follow-up → … → 'Meaning of life' must not re-summarize prior rows."""
-    import asyncio
-
-    payload = asyncio.run(_adaptive_direct("Meaning of life", _PRIOR_INVOICE_COUNT_CONTEXT))
-    _assert_clarification_not_prior_result(payload)
+    payload = _adaptive_direct("Meaning of life", _PRIOR_INVOICE_COUNT_CONTEXT)
+    _assert_non_analytical_turn_does_not_reuse_prior_data(payload)
 
 
 def test_intent_gate_blocks_nonsense_after_single_valid_query():
     """Test B: one valid query then nonsense, with continuation context attached."""
-    import asyncio
-
     ctx = {
         "previousQuestion": "Show me highest sales for the year 2004 with customer and industry",
         "previousSQL": 'SELECT 1 AS total_sales FROM "VBRK"',
         "previousAnswerStatus": "SUCCESS",
         "data": [{"customer_name": "Motomarkt Stuttgart GmbH", "total_sales": 6099225}],
     }
-    payload = asyncio.run(_adaptive_direct("Meaning of life", ctx))
-    _assert_clarification_not_prior_result(payload)
+    payload = _adaptive_direct("Meaning of life", ctx)
+    _assert_non_analytical_turn_does_not_reuse_prior_data(payload)
     assert "motomarkt" not in json.dumps(payload).lower()
     assert "6099225" not in json.dumps(payload)
 
 
 def test_intent_gate_blocks_nonsense_as_first_message():
     """Test C: fresh session, no prior context — original gate must still fire."""
-    import asyncio
-
-    payload = asyncio.run(_adaptive_direct("Meaning of life", None))
-    _assert_clarification_not_prior_result(payload)
+    payload = _adaptive_direct("Meaning of life", None)
+    _assert_non_analytical_turn_does_not_reuse_prior_data(payload)
 
 
 def test_intent_gate_blocks_joke_and_favorite_color_after_followup():
     """Test D: continuation context must not bypass the gate for other chit-chat."""
-    import asyncio
-
     for q in ("Tell me a joke", "What's your favorite color?"):
-        payload = asyncio.run(_adaptive_direct(q, _PRIOR_INVOICE_COUNT_CONTEXT))
-        _assert_clarification_not_prior_result(payload)
+        payload = _adaptive_direct(q, _PRIOR_INVOICE_COUNT_CONTEXT)
+        _assert_non_analytical_turn_does_not_reuse_prior_data(payload)
 
 
 def test_intent_gate_still_allows_six_step_followups():

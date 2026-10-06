@@ -118,6 +118,57 @@ def test_period_decline_has_having():
     assert sql_satisfies_analytical_intent(sql, q)
 
 
+def test_period_comparison_monthly_compares_same_months_and_keeps_currency(monkeypatch):
+    from app.services import adaptive_structured_sql as structured
+
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() == "VBRK")
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: table.upper() == "VBRK" and column.lower() in {"vbeln", "netwr", "fkdat", "waerk", "mandt"},
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: "VBRK")
+    question = "Compare monthly billed sales for 2013 with 2014, keeping each currency separate."
+    semantic = {
+        "period_compare": {
+            "base_period": {"year": "2013"},
+            "comparison_period": {"year": "2014"},
+        },
+        "group_by": ["month"],
+    }
+    sql = build_period_compare_sql(question, ["VBRK"], semantic)
+    assert sql
+    assert '"billing_document_rows" AS' in sql
+    assert 'src."vbeln"' in sql
+    assert 'AS "month"' in sql and 'AS "currency"' in sql
+    assert "GROUP BY SUBSTRING" in sql
+    assert "2013" in sql and "2014" in sql
+    assert 'AS "period_a"' in sql and 'AS "period_b"' in sql and 'AS "change"' in sql
+    assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_material_ranking_carries_resolved_relative_year_bounds(monkeypatch):
+    from app.services import adaptive_structured_sql as structured
+
+    columns = {
+        "VBRK": {"vbeln", "netwr", "fkdat", "waerk", "mandt"},
+        "VBRP": {"mandt", "vbeln", "posnr", "netwr", "aubel", "aupos", "matnr", "fkimg", "vrkme"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in columns)
+    monkeypatch.setattr(structured, "has_column", lambda table, column: column.lower() in columns.get(table.upper(), set()))
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    question = "Which 10 materials had the highest billed sales last year? Show the year and currency."
+    semantic = {
+        "time_filter": {"relative": "last_year", "start_yyyymmdd": "20250101", "end_yyyymmdd": "20260101"}
+    }
+    sql = build_dimension_ranking_sql(question, ["VBRK", "VBRP"], semantic)
+    assert sql
+    assert '"fkdat" AS TEXT)) >= \'20250101\'' in sql
+    assert '"fkdat" AS TEXT)) < \'20260101\'' in sql
+    assert 'AS "billing_year"' in sql
+    assert 'CAST(p."netwr" AS TEXT)' in sql
+
+
 def test_period_comparison_includes_requested_base_period_documents_and_percent_change(monkeypatch):
     from app.services import adaptive_structured_sql as structured
 

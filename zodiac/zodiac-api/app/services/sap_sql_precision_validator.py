@@ -125,6 +125,106 @@ def _strip_exists_subqueries(sql: str) -> str:
     return out
 
 
+def _exists_bridge_edges(sql: str) -> Set[frozenset[str]]:
+    """Prove positive correlated JOIN-ON semi-joins using approved key edges.
+
+    EXISTS in a disjunction, NOT EXISTS, aggregate EXISTS, shadowed aliases,
+    and client-only equalities do not establish a document relationship.
+    Inner row sources stay out of the outer join graph.
+    """
+    try:
+        from sqlglot import exp, parse_one
+        from sqlglot.optimizer.scope import traverse_scope
+        from .join_graph import join_graph_for_tables, _parse_join_rule_pairs
+
+        root = parse_one(sql, read="postgres")
+        scopes = list(traverse_scope(root))
+        scope = next((s for s in scopes if s.expression is root), None)
+        if scope is None or not isinstance(root, exp.Select):
+            return set()
+        outer = {alias.upper(): source.name.upper()
+                 for alias, (_, source) in scope.selected_sources.items()
+                 if isinstance(source, exp.Table)}
+
+        def conjuncts(node):
+            if isinstance(node, exp.Paren):
+                return conjuncts(node.this)
+            if isinstance(node, exp.And):
+                return conjuncts(node.this) + conjuncts(node.expression)
+            return [node] if node is not None else []
+
+        result = set()
+        for join in root.args.get("joins") or []:
+            target = join.this.alias_or_name.upper()
+            if target not in outer:
+                continue
+            for predicate in conjuncts(join.args.get("on")):
+                if not isinstance(predicate, exp.Exists):
+                    continue
+                sub = predicate.this
+                inner_scope = next((s for s in scopes if s.expression is sub), None)
+                if inner_scope is None or not isinstance(sub, exp.Select):
+                    continue
+                if any(sub.args.get(k) for k in ("group", "having", "limit", "offset")):
+                    continue
+                if any(n.find_ancestor(exp.Select) is sub for n in sub.find_all(exp.AggFunc)):
+                    continue
+                sources = inner_scope.selected_sources
+                if not sources or any(not isinstance(src, exp.Table) for _, src in sources.values()):
+                    continue
+                inner = {a.upper(): src.name.upper() for a, (_, src) in sources.items()}
+                # Resolve each qualifier within its own scope, including shadowing.
+                nodes = {("outer", a): t for a, t in outer.items()}
+                nodes.update({("inner", a): t for a, t in inner.items()})
+                soft = {"MANDT", "WAERK", "BUKRS", "WERKS", "VKORG", "VTWEG", "SPART", "LAND1"}
+                templates = {}
+                for edge in join_graph_for_tables(list(set(nodes.values())), include_adaptive=False):
+                    keys = {k for k in _parse_join_rule_pairs(edge.on_template) if not k <= soft}
+                    if keys:
+                        templates.setdefault(frozenset({edge.left_table, edge.right_table}), []).append(keys)
+                neighbors = {node: set() for node in nodes}
+                used = {}
+                atoms = conjuncts(sub.args.get("where").this if sub.args.get("where") else None)
+                for inner_join in sub.args.get("joins") or []:
+                    atoms.extend(conjuncts(inner_join.args.get("on")))
+                for atom in atoms:
+                    if not isinstance(atom, exp.EQ):
+                        continue
+                    left, right = atom.this, atom.expression
+                    if not isinstance(left, exp.Column) or not isinstance(right, exp.Column):
+                        continue
+                    def resolve(col):
+                        alias = col.table.upper()
+                        return (("inner", alias) if alias in inner else
+                                ("outer", alias) if alias in outer else None)
+                    a, b = resolve(left), resolve(right)
+                    if not a or not b or a == b:
+                        continue
+                    keys = frozenset({left.name.upper(), right.name.upper()})
+                    if keys <= soft:
+                        continue
+                    used.setdefault(frozenset({a, b}), set()).add(keys)
+                for pair, keys in used.items():
+                    a, b = tuple(pair)
+                    if any(required <= keys for required in templates.get(frozenset({nodes[a], nodes[b]}), [])):
+                        neighbors[a].add(b)
+                        neighbors[b].add(a)
+                start = ("outer", target)
+                seen, pending = set(), [start]
+                while pending:
+                    node = pending.pop()
+                    if node not in seen:
+                        seen.add(node)
+                        pending.extend(neighbors[node] - seen)
+                for kind, alias in seen:
+                    if kind == "outer" and alias != target and outer[alias] != outer[target]:
+                        result.add(frozenset({outer[target], outer[alias]}))
+        return result
+    except Exception:
+        # Unknown structures remain subject to the conservative existing guard.
+        return set()
+
+
 def _outer_query_after_ctes(sql: str) -> str:
     """Return the main SELECT after a WITH clause for outer-scope join checks."""
     if not re.search(r"\bWITH\b", sql or "", re.I):
@@ -219,54 +319,55 @@ def _extract_expression_column_refs(expr: str) -> List[Tuple[str, str]]:
 
 def _extract_join_column_pairs(sql: str, alias_map: Dict[str, str]) -> Dict[frozenset[str], Set[frozenset[str]]]:
     pairs: Dict[frozenset[str], Set[frozenset[str]]] = {}
+    # Only predicates that establish row relationships count as join keys.
+    # Scanning the whole SQL text also picked up SELECT expressions such as
+    # CASE WHEN order.currency = invoice.currency, incorrectly treating the
+    # currency comparison as the physical VBAK↔VBRK join.
+    try:
+        from sqlglot import exp, parse_one
 
-    # --- Pass 1: LPAD/TRIM-wrapped joins ---
-    # Handles SAP document-key joins like:
-    #   LPAD(TRIM(a.vbeln), 10, '0') = LPAD(TRIM(b.vbeln), 10, '0')
-    # The outer eq_pattern cannot parse these because of comma-separated extra args.
-    lpad_pat = re.compile(
-        r'LPAD\s*\(\s*(?:TRIM\s*\(\s*)?'
-        r'(?P<lq>"?[A-Za-z_][A-Za-z0-9_]*"?)\.(?P<lc>"?[A-Za-z_][A-Za-z0-9_]*"?)'
-        r'(?:\s*\))?[^)]*\)'          # close TRIM) + any LPAD extra args + close LPAD)
-        r'\s*=\s*'
-        r'LPAD\s*\(\s*(?:TRIM\s*\(\s*)?'
-        r'(?P<rq>"?[A-Za-z_][A-Za-z0-9_]*"?)\.(?P<rc>"?[A-Za-z_][A-Za-z0-9_]*"?)',
-        re.IGNORECASE,
-    )
-    for m in lpad_pat.finditer(sql or ""):
-        left_alias = _clean_identifier(m.group("lq"))
-        left_col = _clean_identifier(m.group("lc"))
-        right_alias = _clean_identifier(m.group("rq"))
-        right_col = _clean_identifier(m.group("rc"))
-        left_table = alias_map.get(left_alias.upper())
-        right_table = alias_map.get(right_alias.upper())
-        if not left_table or not right_table or left_table.upper() == right_table.upper():
-            continue
-        pair_key = frozenset({left_table.upper(), right_table.upper()})
-        col_key = frozenset({left_col.upper(), right_col.upper()})
-        pairs.setdefault(pair_key, set()).add(col_key)
+        tree = parse_one(sql or "", read="postgres")
+    except Exception:
+        return pairs
 
-    # --- Pass 2: General function-wrapped / plain equality ---
-    eq_pattern = re.compile(
-        r'(?P<left>(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*)*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\))*)'
-        r'\s*=\s*'
-        r'(?P<right>(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*)*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s*\))*)',
-        re.IGNORECASE,
-    )
-    for match in eq_pattern.finditer(sql or ""):
-        left_refs = _extract_expression_column_refs(match.group("left"))
-        right_refs = _extract_expression_column_refs(match.group("right"))
-        if not left_refs or not right_refs:
-            continue
-        for left_alias, left_col in left_refs:
-            for right_alias, right_col in right_refs:
-                left_table = alias_map.get(left_alias.upper())
-                right_table = alias_map.get(right_alias.upper())
-                if not left_table or not right_table or left_table.upper() == right_table.upper():
-                    continue
-                pair_key = frozenset({left_table.upper(), right_table.upper()})
-                col_key = frozenset({left_col.upper(), right_col.upper()})
-                pairs.setdefault(pair_key, set()).add(col_key)
+    def has_or_ancestor(node, scope):
+        parent = node.parent
+        while parent is not None and parent is not scope:
+            if isinstance(parent, exp.Or):
+                return True
+            parent = parent.parent
+        return False
+
+    def record_equalities(expression, scope):
+        if expression is None:
+            return
+        for equality in expression.find_all(exp.EQ):
+            # Do not attribute an equality inside a nested EXISTS/subquery to
+            # the containing JOIN or WHERE scope.
+            if equality.find_ancestor(exp.Select) is not scope or has_or_ancestor(equality, scope):
+                continue
+            left_cols = list(equality.this.find_all(exp.Column))
+            right_cols = list(equality.expression.find_all(exp.Column))
+            # An ambiguous expression such as COALESCE(a.id, b.id) = c.id
+            # does not prove which physical key established the relationship.
+            if len(left_cols) != 1 or len(right_cols) != 1:
+                continue
+            left, right = left_cols[0], right_cols[0]
+            if not left.table or not right.table:
+                continue
+            left_table = alias_map.get(left.table.upper())
+            right_table = alias_map.get(right.table.upper())
+            if not left_table or not right_table or left_table.upper() == right_table.upper():
+                continue
+            table_pair = frozenset({left_table.upper(), right_table.upper()})
+            column_pair = frozenset({left.name.upper(), right.name.upper()})
+            pairs.setdefault(table_pair, set()).add(column_pair)
+
+    for scope in tree.find_all(exp.Select):
+        for join in scope.args.get("joins") or []:
+            record_equalities(join.args.get("on"), scope)
+        where = scope.args.get("where")
+        record_equalities(where.this if where else None, scope)
     return pairs
 
 
@@ -522,7 +623,7 @@ def validate_sql_precision(
         neighbor: Dict[str, Set[str]] = {t: set() for t in outer_tables}
         all_pairs_for_connectivity = set(
             _extract_join_column_pairs(outer_sql, outer_alias_map).keys()
-        ) | _extract_join_table_pairs_from_clauses(outer_sql, outer_alias_map)
+        ) | _extract_join_table_pairs_from_clauses(outer_sql, outer_alias_map) | _exists_bridge_edges(normalized_sql)
         for pair in all_pairs_for_connectivity:
             tlist = sorted(pair)
             if len(tlist) == 2 and tlist[0] in neighbor and tlist[1] in neighbor:

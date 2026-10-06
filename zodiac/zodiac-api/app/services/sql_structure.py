@@ -237,6 +237,11 @@ def sql_structure_errors(sql: str, question: str = "") -> list[str]:
                     return
                 if isinstance(node, exp.AggFunc) and not _window_aggregate(node):
                     return
+                if (isinstance(node, exp.Filter) and isinstance(node.this, exp.AggFunc)
+                        and not _window_aggregate(node.this)):
+                    # FILTER predicates belong to the aggregate input rows,
+                    # not the grouped result projection.
+                    return
                 if isinstance(node, exp.Column):
                     errors.append(f"Ungrouped column in aggregate projection: {node.sql(dialect='postgres')}")
                     return

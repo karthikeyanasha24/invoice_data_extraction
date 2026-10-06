@@ -22,6 +22,19 @@ def test_cast_after_from_is_not_a_table():
     assert not any("unknown table CAST" in v for v in viol)
 
 
+def test_distinct_from_alias_is_not_misread_as_table():
+    sql = (
+        'WITH "left_side" AS (SELECT 1 AS "key"), '
+        '"right_side" AS (SELECT 1 AS "key") '
+        'SELECT "o"."key" FROM "left_side" AS "o" '
+        'JOIN "right_side" AS "i" '
+        'ON "o"."key" IS DISTINCT FROM\n "i"."key" '
+        'WHERE "i"."key" IS DISTINCT FROM "o"."key"'
+    )
+    viol = _schema_violations(sql)
+    assert not any("unknown table i" in v.lower() for v in viol), viol
+
+
 def test_negative_sales_2000_rendered_plan_validates():
     from app.services.adaptive_structured_sql import (
         PlanField,
