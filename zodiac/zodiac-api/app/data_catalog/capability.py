@@ -5,7 +5,7 @@ from .physical import has_table, sap_business_tables
 from .registry import available_domains, tables_for_domain
 
 
-def capability_summary() -> str:
+def capability_summary(*, include_examples: bool = False) -> str:
     domains = available_domains()
     bits = []
     if has_table("VBAK"):
@@ -26,12 +26,29 @@ def capability_summary() -> str:
         bits.append("cost")
     extra = ", ".join(bits) if bits else "the migrated SAP tables in this extract"
     n = len(sap_business_tables())
-    return (
+    summary = (
         f"I can answer governed questions across {n} migrated SAP business tables, including {extra}. "
         "Ask naturally about a business metric, group it by a supported SAP dimension, and add any "
         "relevant time period or filters. Specify sales orders or billing documents when you want "
         "to choose between those sources."
     )
+    if include_examples:
+        examples = []
+        has_billing = has_table("VBRK") and has_table("VBRP")
+        has_orders = has_table("VBAK") and has_table("VBAP")
+        if has_billing:
+            examples.append("Show billed sales by month and currency.")
+        if has_billing and has_table("KNA1"):
+            examples.append("Which customers had the highest billed sales in 2017?")
+        if has_billing and has_table("MARA"):
+            examples.append("Which materials had the highest billed sales in the latest year?")
+        if has_billing and has_orders:
+            examples.append("Compare sales-order item values with their linked billing-item values.")
+        if has_table("EKKO") and has_table("EKPO"):
+            examples.append("Summarize purchase-order value by supplier and year.")
+        if examples:
+            summary += " Examples you can try: " + " ".join(examples)
+    return summary
 
 
 def domain_table_preview(domain: str, limit: int = 8) -> str:

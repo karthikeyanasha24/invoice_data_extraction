@@ -36,6 +36,13 @@ export function adminNavGroups(opts: { isAdmin: boolean; workspaceUi: boolean })
           description: 'Business snapshot and what to investigate',
           icon: 'LayoutDashboard',
         },
+        {
+          id: 'technology-patent',
+          label: 'Technology & Patent',
+          path: '/technology',
+          description: 'SAP integration architecture, patent information, and licensing',
+          icon: 'ShieldCheck',
+        },
       ],
     },
     {

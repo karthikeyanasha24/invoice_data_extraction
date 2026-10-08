@@ -1104,15 +1104,32 @@ _MEMORY_LANGUAGE_STOP_WORDS = frozenset(
 
 def technical_understanding_failure(question: str, err: BaseException) -> Dict[str, Any]:
     """Infrastructure / model failure — never a business-metric clarification."""
-    msg = (
-        "I couldn't complete understanding of your message due to a temporary "
-        "model/service failure. Please try again in a moment."
-    )
-    logger.warning(
-        "[understanding] technical failure: %s: %s",
-        type(err).__name__,
-        str(err)[:300],
-    )
+    cause = err
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    code = str(getattr(cause, "code", "") or "").lower()
+    status_code = getattr(cause, "status_code", None)
+    service_issue = "model_unavailable"
+    if code in {"insufficient_quota", "credit_balance_exhausted"}:
+        service_issue = "quota_exhausted"
+        msg = (
+            "The AI model service has exhausted its API credits. Restore the configured "
+            "provider's credits or configure a funded provider to resume AI answers. "
+            "Calculations and connected schema questions are still available."
+        )
+    elif status_code == 429:
+        service_issue = "rate_limited"
+        msg = "The AI model service is rate-limiting requests. Please try again shortly."
+    elif status_code in {401, 403, 404}:
+        service_issue = "provider_configuration"
+        msg = "The AI model service configuration needs attention. Check its API key and model access."
+    else:
+        msg = (
+            "I couldn't answer because the AI model service is currently unavailable. "
+            "Please try again in a moment."
+        )
+    logger.warning("[understanding] model failure type=%s code=%s status=%s",
+                   type(cause).__name__, code, status_code)
     return {
         "mode": "error",
         "route": "understanding",
@@ -1134,7 +1151,8 @@ def technical_understanding_failure(question: str, err: BaseException) -> Dict[s
         "meta": {
             "understanding_model_called": True,
             "failure_class": "UNDERSTANDING_MODEL_FAILED",
-            "error_type": type(err).__name__,
+            "error_type": type(cause).__name__,
+            "service_issue": service_issue,
         },
         "query_plan": {
             "last_mode": "understanding_error",

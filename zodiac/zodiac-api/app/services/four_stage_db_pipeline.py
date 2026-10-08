@@ -1539,6 +1539,7 @@ def pipeline3_sql_generation(
         build_dimension_period_sales_sql,
         build_dimension_ranking_sql,
         build_document_count_by_period_sql,
+        build_document_total_count_sql,
         build_above_average_sql,
         build_filter_list_sql,
         build_master_list_sql,
@@ -1622,6 +1623,7 @@ def pipeline3_sql_generation(
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
     template_builders = (
+        ("document_total_count_template", lambda: build_document_total_count_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_billing_documents_for_orders_template", lambda: build_linked_billing_documents_for_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_order_period_comparison_template", lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("order_item_billing_reconciliation_template", lambda: build_order_item_billing_reconciliation_sql(question, ctx.tables, ctx.semantic_requirements)),

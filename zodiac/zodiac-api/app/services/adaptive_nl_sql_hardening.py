@@ -222,6 +222,19 @@ def is_capability_or_help_question(question: str) -> bool:
     if _CAPABILITY_META.search(q):
         return True
     ql = q.lower().strip()
+    # Requests for example prompts are conversational help, even when phrased
+    # as an imperative ("list some sample questions to ask") rather than as a
+    # direct capability question. Keep this intent-level rule broad; it does
+    # not classify requests for business rows or example records as help.
+    has_examples = bool(re.search(r"\b(sample|examples?|suggested|ideas?)\b", ql))
+    has_prompt_artifact = bool(re.search(r"\b(questions?|prompts?|queries)\b", ql))
+    asks_for_prompts = bool(re.search(
+        r"\b(list|show|give|suggest|recommend|provide|share)\b|"
+        r"\b(?:to|i can|you can|we can) ask\b|\bto try\b",
+        ql,
+    ))
+    if has_examples and has_prompt_artifact and asks_for_prompts:
+        return True
     # Short analytical fragments are never capability.
     if _CAPABILITY_ANALYTICAL_FRAGMENT.search(ql) and not _CAPABILITY_ASSISTANT_REF.search(ql):
         return False

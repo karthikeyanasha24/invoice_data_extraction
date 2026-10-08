@@ -90,6 +90,8 @@ const PALETTE = [
 
 // ─── Quick-question chips ────────────────────────────────────────────────────
 const QUICK_QUESTIONS = [
+  { label: 'Quick calculation', q: 'What is 2 plus 2?' },
+  { label: 'Explain a concept', q: 'Explain what an API is in simple language.' },
   { label: 'Highest-profit products', q: 'Show the products with the highest profits.' },
   { label: 'Inventory versus sales', q: 'Show inventory versus sales.' },
   { label: 'Supplier concentration', q: 'Show supplier concentration.' },
@@ -1345,10 +1347,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             {messages.length > 0 && (
               <button onClick={clearAll}
                 disabled={loading}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-                title="Clear chat"
-                aria-label="Clear chat">
-                <RotateCcw className="h-4 w-4" />
+                className="inline-flex items-center p-1.5 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                title="New chat"
+                aria-label="New chat">
+                <RotateCcw className="h-4 w-4" /><span className="text-xs font-medium ml-1.5">New chat</span>
               </button>
             )}
           </div>
@@ -1546,7 +1548,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         </div>
         <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-400 px-1">
           <Zap className="h-3 w-3 text-amber-400" />
-          <span>Same continuous chat — follow-ups keep context. Use Clear chat (top right) to reset.</span>
+          <span>Same continuous chat — follow-ups keep context. Use New chat (top right) to start fresh.</span>
         </div>
       </div>
 

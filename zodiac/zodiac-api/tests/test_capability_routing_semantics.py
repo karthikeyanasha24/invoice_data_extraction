@@ -40,6 +40,8 @@ CAPABILITY_VARIANTS = [
     "What kind of questions can you handle?",
     "Are you able to answer questions about my data?",
     "What does this AI Analyst do?",
+    "List out some sample questions to ask.",
+    "Could you suggest example prompts I can try?",
 ]
 
 
@@ -100,6 +102,20 @@ def test_business_analytics_not_capability() -> None:
     turn = classify_turn(q)
     assert turn.intent == TurnIntent.NEW_ANALYTICAL_QUERY
     assert not should_route_to_general_chat(q, turn)
+
+
+def test_example_question_prompts_are_catalog_help_not_sql(monkeypatch) -> None:
+    from app.data_catalog import capability
+
+    available = {"VBRK", "VBRP", "KNA1"}
+    monkeypatch.setattr(capability, "has_table", lambda table: table in available)
+    monkeypatch.setattr(capability, "available_domains", lambda: [])
+    monkeypatch.setattr(capability, "sap_business_tables", lambda: sorted(available))
+
+    reply = capability.capability_summary(include_examples=True)
+    assert "Show billed sales by month and currency." in reply
+    assert "Which customers had the highest billed sales" in reply
+    assert "purchase-order value" not in reply
 
 
 def test_orchestrator_force_general_overrides_query_action(monkeypatch) -> None:

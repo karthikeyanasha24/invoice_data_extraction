@@ -2927,11 +2927,6 @@ def _post_query_adaptive_body(
     from ..services.ai_native_pipeline import ai_native_enabled
     from ..services.adaptive_analyst import orchestrator_enabled, run_adaptive_orchestrator
 
-    if not openai_key and not google_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Set OPEN_AI_KEY or GOOGLE_API_KEY on the server",
-        )
     api_key = openai_key
     thread_id = (threadId or "").strip() or None
     if thread_id and not thread_id.startswith("ada_"):
@@ -3007,6 +3002,17 @@ def _post_query_adaptive_body(
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
+        rank_rows = payload.get("data") or []
+        if rank_rows and all(isinstance(row, dict) and "rank_within_currency" in row for row in rank_rows):
+            currencies = {str(row.get("currency") or "") for row in rank_rows}
+            if len(currencies) > 1:
+                from ..services.adaptive_structured_sql import extract_ranking_limit
+                rank_limit = extract_ranking_limit(_original_question)
+                note = f"Rankings are separate for each currency: up to {rank_limit} results per currency. Amounts in different currencies are not combined."
+                for field in ("summary", "answer"):
+                    narrative = str(payload.get(field) or "")
+                    if "per currency" not in narrative.lower():
+                        payload[field] = (narrative + "\n\n" + note).strip()
         budget_now = current_budget()
         execution = (budget_now.diagnostics.get("sql_execution") or {}) if budget_now else {}
         displayed_sql = str(payload.get("sql") or payload.get("attempted_sql") or "")
@@ -3327,6 +3333,23 @@ def _post_query_adaptive_body(
     from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
+    # Self-contained arithmetic takes precedence over analytical follow-up
+    # heuristics, including percentage reuse from a previous database result.
+    from ..services.adaptive_analyst.calculator import calculate_question
+
+    if not (overrideSql and overrideSql.strip()) and calculate_question(clean_q) is not None:
+        calc_context = contextData if isinstance(contextData, dict) else {}
+        calc_plan = calc_context.get("previousPlan")
+        calc_plan = calc_plan if isinstance(calc_plan, dict) else {}
+        return _persist_and_return(run_adaptive_orchestrator(
+            clean_q, db, _execute_sql,
+            prior_question=str(calc_context.get("previousQuestion") or ""),
+            prior_sql=str(calc_context.get("previousSQL") or ""),
+            prior_plan={**calc_plan, "recent_turns": memory_turns},
+            prior_status=str(calc_context.get("previousAnswerStatus") or ""),
+            thread_id=thread_id or "",
+        ))
+
     from ..services.adaptive_analyst.understanding import is_prior_turn_discourse
 
     metadata_is_prior_recall = is_prior_turn_discourse(
@@ -3341,8 +3364,15 @@ def _post_query_adaptive_body(
             is_database_metadata_question,
         )
         if is_database_metadata_question(clean_q) and not metadata_is_prior_recall:
-            meta_payload = answer_database_metadata(clean_q, schema=_load_schema())
+            from ..services.adaptive_analyst.live_schema import load_live_schema
+            metadata_schema, metadata_source = load_live_schema(db, _load_schema())
+            meta_payload = answer_database_metadata(clean_q, schema=metadata_schema)
             if meta_payload is not None:
+                meta_payload["meta"] = {**(meta_payload.get("meta") or {}), "schema_source": metadata_source}
+                if metadata_source == "schema_snapshot":
+                    for field in ("summary", "answer"):
+                        if meta_payload.get(field):
+                            meta_payload[field] = str(meta_payload[field]).replace("connected database", "saved schema snapshot")
                 return _persist_and_return(meta_payload)
     except Exception as meta_err:
         logger.warning("[adaptive] database_metadata path failed: %s", meta_err)

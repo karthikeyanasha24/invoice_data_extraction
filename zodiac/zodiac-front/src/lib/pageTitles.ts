@@ -1,6 +1,7 @@
 const TITLES: { prefix: string; title: string }[] = [
   { prefix: '/dashboard/ai', title: 'AI Analyst · BridgeEDI' },
   { prefix: '/overview', title: 'Overview · BridgeEDI' },
+  { prefix: '/technology', title: 'Technology & Patent · BridgeEDI' },
   { prefix: '/dashboard', title: 'EDI operations · BridgeEDI' },
   { prefix: '/sat-documents', title: 'SAT documents · BridgeEDI' },
   { prefix: '/invoices-v2', title: 'Invoices · BridgeEDI' },

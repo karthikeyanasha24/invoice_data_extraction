@@ -19,6 +19,7 @@ import {
   MapPin,
   Boxes,
   ArrowDownToLine,
+  ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -50,6 +51,7 @@ export default function Sidebar({ isCollapsed, onToggle, isMobile = false, mobil
   const workspaceUiEnabled = process.env.NEXT_PUBLIC_WORKSPACE_UI !== 'false';
   const ICONS: Record<string, LucideIcon> = {
     LayoutDashboard,
+    ShieldCheck,
     Sparkles,
     ArrowDownToLine,
     FileText,

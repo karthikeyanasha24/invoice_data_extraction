@@ -67,7 +67,10 @@ def test_followup_generation_receives_current_question_and_separate_prior_sql(mo
         assert current == question
         context.query_plan = {"grain": "year"}
 
-    def generate(current, context):
+    def generate(current, context, *, validation_feedback=None):
+        if validation_feedback is not None:
+            assert validation_feedback["kind"] == "sql_validation_repair"
+            assert validation_feedback["validation_errors"] == ["test validation boundary"]
         seen.append((current, context.prior_sql))
         return 'SELECT fkdat AS billing_date FROM "VBRK"'
 

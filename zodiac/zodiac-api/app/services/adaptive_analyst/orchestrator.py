@@ -300,6 +300,10 @@ def adapt_user_turn(
     from ..ranking_question_normalizer import normalize_ranking_question
 
     q = (question or "").strip()
+    from .calculator import calculate_question
+
+    if calculate_question(q) is not None:
+        return AdaptedTurn("chat", q)
     if _force_general_chat(q):
         return AdaptedTurn("chat", q)
 
@@ -905,6 +909,28 @@ def run_adaptive_orchestrator(
     )
     from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
 
+    # Numeric questions are computed from the complete expression, never from
+    # saved SAP rows or an LLM guess. Preserve conversation history for recall.
+    from .calculator import calculate_question
+
+    calculation = calculate_question(q)
+    if calculation is not None:
+        state.remember_turn(q, calculation.answer, mode="general_chat")
+        return {
+            "mode": "general_chat", "route": "general", "status": "success",
+            "answer_status": "SUCCESS", "failure_class": "SUCCESS",
+            "sql": "", "data": [], "rowCount": 0, "charts": [], "keyFindings": [],
+            "summary": calculation.answer, "answer": calculation.answer,
+            "pipeline": "adaptive_orchestrator", "sql_generation_method": "decimal_calculator",
+            "llm_calls": 0, "suggested_followups": [],
+            "query_plan": {"investigation_state": {**state.to_dict(), "mode": "general_chat"},
+                           "last_mode": "general_chat"},
+            "meta": {"selected_capability": "calculation", "provider": "local_decimal",
+                     "understanding_model_called": False, "response_model_called": False,
+                     "expression": calculation.expression, "value": calculation.value,
+                     "approximate": calculation.approximate},
+        }
+
     # Fast path: short greetings = ONE LLM reply (not understand JSON + respond).
     # Still model-generated — not a canned template — ChatGPT-like latency.
     if is_greeting_or_chitchat(q):
@@ -1260,7 +1286,11 @@ def run_adaptive_orchestrator(
                 try:
                     from ...data_catalog.capability import capability_summary
 
-                    reply = capability_summary()
+                    wants_examples = bool(
+                        re.search(r"\b(sample|examples?|suggested|ideas?)\b", q, re.I)
+                        and re.search(r"\b(questions?|prompts?|queries)\b", q, re.I)
+                    )
+                    reply = capability_summary(include_examples=True) if wants_examples else capability_summary()
                     provider = "connected_catalog_fallback"
                     capability_fallback = True
                     logger.warning(

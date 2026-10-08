@@ -221,6 +221,7 @@ def _is_gemini_quota(exc: BaseException) -> bool:
 
 
 _PROVIDER_FAILURE_UNTIL: Dict[str, float] = {}
+_PROVIDER_FAILURE_ERRORS: Dict[str, BaseException] = {}
 
 
 def _provider_identity(provider: str) -> str:
@@ -253,7 +254,9 @@ def _provider_failed(provider: str, error: BaseException) -> None:
     seconds = max(300.0, transient_cooldown) if (
         _is_openai_quota(error) or _is_gemini_quota(error)
     ) else transient_cooldown
-    _PROVIDER_FAILURE_UNTIL[_provider_identity(provider)] = time.monotonic() + seconds
+    identity = _provider_identity(provider)
+    _PROVIDER_FAILURE_UNTIL[identity] = time.monotonic() + seconds
+    _PROVIDER_FAILURE_ERRORS[identity] = error
 
 
 def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, str]:
@@ -278,7 +281,10 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
 
     def _try_gemini() -> Optional[Tuple[str, str]]:
         nonlocal last_err
-        if not _google_key() or not _provider_available("gemini"):
+        if not _google_key():
+            return None
+        if not _provider_available("gemini"):
+            last_err = _PROVIDER_FAILURE_ERRORS.get(_provider_identity("gemini")) or last_err
             return None
         try:
             response = _gemini_chat(system, user)
@@ -297,7 +303,10 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
 
     def _try_openai() -> Optional[Tuple[str, str]]:
         nonlocal last_err
-        if not _openai_key() or not _provider_available("openai"):
+        if not _openai_key():
+            return None
+        if not _provider_available("openai"):
+            last_err = _PROVIDER_FAILURE_ERRORS.get(_provider_identity("openai")) or last_err
             return None
         try:
             response = _openai_chat(system, user, json_mode=json_mode)

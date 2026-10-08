@@ -815,6 +815,9 @@ def _expand_linked_order_followup(
         # the original request and current follow-up instead of asking the user
         # to repeat information already present in the conversation.
         original = (prior_question or "").strip()
+        if not original:
+            # Without a prior request there is no scope to reconstruct safely.
+            return None
         expanded = (
             f"Original analysis request: {original}\n"
             f"Follow-up request: {q}\n"

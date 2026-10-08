@@ -396,6 +396,36 @@ def test_capability_question_uses_connected_catalog_when_models_are_unavailable(
     assert not result.get("sql")
 
 
+def test_sample_question_request_survives_model_outage_with_catalog_examples(monkeypatch):
+    from app.data_catalog import capability as catalog_capability
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(und, "analyze_json", unavailable)
+    monkeypatch.setattr(und, "complete_text", unavailable)
+    monkeypatch.setattr(und, "capability_facts", lambda: {})
+    monkeypatch.setattr(
+        catalog_capability,
+        "capability_summary",
+        lambda **kwargs: "Catalog-backed examples were provided." if kwargs.get("include_examples") else "Missing examples.",
+    )
+
+    result = run_adaptive_orchestrator(
+        "List out some sample questions to ask.",
+        MagicMock(),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("help must not run SQL")),
+        use_sap=False,
+        force_general_chat=True,
+    )
+
+    assert result["mode"] == "general_chat"
+    assert result["answer_status"] == "SUCCESS"
+    assert result["summary"] == "Catalog-backed examples were provided."
+    assert result["meta"]["fallback"] == "connected_catalog"
+    assert not result.get("sql")
+
+
 def test_general_message_is_not_misrouted_to_database_when_model_is_down(monkeypatch):
     def unavailable(*_args, **_kwargs):
         raise RuntimeError("provider unavailable")

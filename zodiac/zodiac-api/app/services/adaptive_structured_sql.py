@@ -3007,6 +3007,56 @@ def build_relative_document_list_sql(
     return None
 
 
+def build_document_total_count_sql(
+    question: str, tables: List[str], semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Count explicit SAP documents at their header key, never a nearby ledger."""
+    q = (question or "").lower()
+    if not re.search(r"\b(?:count|how many|number of)\b", q):
+        return None
+    # Only unfiltered totals and explicit years belong here. Other predicates
+    # must be planned normally rather than silently erased by this capability.
+    allowed = {
+        "count", "how", "many", "number", "of", "sales", "orders", "order",
+        "billed", "billing", "invoices", "invoice", "documents", "document",
+        "are", "were", "there", "do", "we", "have", "the", "all", "total",
+        "in", "for", "year", "years", "and", "please",
+    }
+    tokens = re.findall(r"[a-z0-9_]+", q)
+    if any(token not in allowed and not re.fullmatch(r"(?:19|20)\d{2}", token) for token in tokens):
+        return None
+    if re.search(r"\b(?:by|per|each|compare|top|highest|lowest|without|linked|supplier|vendor|sat|cfdi|edi)\b", q):
+        return None
+    if re.search(r"\b(?:last|latest|recent|this|previous|current)\b", q):
+        return None
+    if re.search(r"\bsales orders?\b", q):
+        table, alias, date_col = "VBAK", "sales_order_count", "audat"
+    elif re.search(r"\b(?:billed|billing|invoices?)\b", q):
+        table, alias, date_col = "VBRK", "billing_document_count", "fkdat"
+    else:
+        return None
+    if not has_table(table) or not has_column(table, "vbeln"):
+        return None
+    table = resolve_table_name(table) or table
+    document_key = f'NULLIF(TRIM(CAST("{table}"."vbeln" AS TEXT)), \'\')'
+    keys = [document_key]
+    if has_column(table, "mandt"):
+        keys.insert(0, f'TRIM(CAST("{table}"."mandt" AS TEXT))')
+    identity = '(' + ', '.join(keys) + ')' if len(keys) > 1 else keys[0]
+    filters = [document_key + ' IS NOT NULL']
+    years = extract_question_years(question)
+    if years:
+        if not has_column(table, date_col):
+            return None
+        dates = ' OR '.join(
+            f'TRIM(CAST("{table}"."{date_col}" AS TEXT)) LIKE \'{year}%\''
+            for year in years
+        )
+        filters.append('(' + dates + ')')
+    return (f'SELECT COUNT(DISTINCT {identity}) AS "{alias}" FROM "{table}" WHERE '
+            + ' AND '.join(filters))
+
+
 def build_document_count_by_period_sql(
     question: str,
     tables: List[str],
