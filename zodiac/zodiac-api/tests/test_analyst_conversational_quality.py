@@ -325,6 +325,29 @@ def test_model_fallback_explains_unavailable_linked_order_comparison():
     assert result['findings'] == [result['answer']]
 
 
+def test_model_fallback_explains_gross_profit_rankings_without_mixing_currencies():
+    from app.services.four_stage_db_pipeline import _verified_result_fallback
+    result = _verified_result_fallback([
+        {
+            'material_id': 'SER-1', 'material_name': 'Standard 5x10',
+            'currency': 'EUR', 'gross_profit': 1234.5, 'rank_within_currency': 1,
+        },
+        {
+            'material_id': 'SER-2', 'material_name': 'Pump',
+            'currency': 'USD', 'gross_profit': 998.0, 'rank_within_currency': 1,
+        },
+        {
+            'material_id': 'NO-DESCRIPTION', 'material_name': None,
+            'currency': 'CAD', 'gross_profit': 15.0, 'rank_within_currency': 1,
+        },
+    ])
+    assert 'billing-item gross-profit' in result['answer']
+    assert 'cannot be compared directly' in result['answer']
+    assert 'EUR: Standard 5x10 (SER-1) — 1,234.5' in result['answer']
+    assert 'USD: Pump (SER-2) — 998' in result['answer']
+    assert 'CAD: NO-DESCRIPTION — 15' in result['answer']
+
+
 def test_preaggregated_linked_order_comparison_is_safe_at_invoice_grain():
     from app.services.sql_grain_guard import sql_has_unsafe_monetary_fanout
     safe = '''WITH invoice_cohort AS (SELECT vbeln AS "billing_document", netwr, waerk AS "currency" FROM VBRK),

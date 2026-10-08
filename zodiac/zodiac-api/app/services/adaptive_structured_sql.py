@@ -1419,6 +1419,14 @@ def build_dimension_ranking_sql(
             formula = (
                 f'SUM(CAST(NULLIF(TRIM(CAST({amount_alias}."netwr" AS TEXT)), \'\') AS NUMERIC))'
             )
+        elif metric_def.name == "gross_profit" and use_line:
+            # The curated metric formula is expressed with text-oriented SAP
+            # aliases. Cast native numeric imports to text before TRIM so it
+            # runs on both CSV-derived and normalized PostgreSQL schemas.
+            formula = (
+                'SUM(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) '
+                '- SUM(CAST(NULLIF(TRIM(CAST(COALESCE(p."wavwr", 0) AS TEXT)), \'\') AS NUMERIC))'
+            )
         else:
             formula = metric_def.formula_sql
         alias_map = {"v": "p", "vk": "k"} if use_line else {"vk": "k"}
@@ -1534,7 +1542,7 @@ def build_dimension_ranking_sql(
         # DISTINCT on amount alone would merge legitimate equal-value items.
         identity_attributes = (
             "mandt", "vbeln", "posnr", "netwr", "aubel", "aupos",
-            "matnr", "fkimg", "vrkme",
+            "matnr", "fkimg", "vrkme", "wavwr",
         )
         row_columns = [column for column in identity_attributes if has_column(line, column)]
         if not {"mandt", "vbeln", "posnr"} <= set(row_columns):

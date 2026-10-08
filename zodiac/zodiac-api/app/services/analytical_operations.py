@@ -245,7 +245,13 @@ def _extract_measure_comparison(ql: str) -> Optional[Dict[str, Any]]:
 def extract_analytical_operations(question: str) -> Dict[str, Any]:
     """Language → structured operations. Independent of any specific question string."""
     q = (question or "").strip()
-    ql = q.lower()
+    # Recover common missing spaces before entity nouns (for example,
+    # "theproduct") without changing user-visible text or SQL literals.
+    ql = re.sub(
+        r"\b(the|a|an)(?=(?:products?|materials?|customers?|clients?|countries?|invoices?|orders?)\b)",
+        r"\1 ",
+        q.lower(),
+    )
     ops: Dict[str, Any] = {
         "group_by": [],
         "aggregation": None,
@@ -278,6 +284,18 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
             ql,
         ):
             group_by.append(ent)
+    # Generic noun-first ranking: "show the product with the highest profit"
+    # expresses the same result grain as "which product is most profitable".
+    ranked_entity = re.search(
+        r"\b(?:show|list|find|display|identify)\s+(?:the\s+)?"
+        r"(customers?|clients?|buyers?|countries?|materials?|products?|suppliers?|vendors?|industries?)\b"
+        r"[\s\S]{0,100}\b(?:highest|lowest|largest|smallest|most|least|best|worst|top|bottom)\b",
+        ql,
+    )
+    if ranked_entity:
+        entity = _ENTITY_WORDS.get(ranked_entity.group(1).lower(), ranked_entity.group(1).lower().rstrip("s"))
+        if entity not in group_by:
+            group_by.append(entity)
     ops["group_by"] = group_by
     if "month" in group_by:
         ops["time_grain"] = "month"
@@ -295,7 +313,9 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     ):
         ops["aggregation"] = "SUM"
 
-    if re.search(r"\b(revenue|turnover|billed amount|billing amount|billed value|invoice value|billed sales)\b", ql):
+    if re.search(r"\b(gross\s+)?profits?\b|\bprofitability\b|\bgross\s+margin\b", ql):
+        ops["measure_concept"] = "gross_profit"
+    elif re.search(r"\b(revenue|turnover|billed amount|billing amount|billed value|invoice value|billed sales)\b", ql):
         ops["measure_concept"] = "revenue"
     elif re.search(
         r"\b((money|cash)\s+(generated|made|earned|brought in)|"
@@ -427,9 +447,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
                 ops["aggregation"] = "SUM"
             if not ops.get("measure_concept"):
                 ops["measure_concept"] = "sales"
-        elif re.search(r"\b(highest|most|best|largest|top)\b", ql) and not re.search(
-            r"\b(show|list|display)\b.{0,40}\b(with|and)\b", ql
-        ):
+        elif re.search(r"\b(highest|most|best|largest|top)\b", ql):
             # Singular "which X … most/highest" or "top country/customer" ⇒ top-1.
             singular = bool(
                 re.search(
@@ -475,6 +493,10 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         elif re.search(r"\b(least|highest|smallest|closest)\s+negative\b", ql):
             ops["ranking"]["direction"] = "DESC"
             ops["order"] = "DESC"
+        if re.search(r"\b(?:show|list|find|display|identify)\s+(?:the\s+)?(?:product|material|customer|client|country|vendor|supplier)\b", ql):
+            # Singular noun phrase plus a superlative requests one entity.
+            ops["ranking"]["limit"] = 1
+            ops["limit"] = 1
         # The ranked noun determines the output grain. A customer named later
         # as a filter must not turn a document ranking into a customer total.
         if re.search(

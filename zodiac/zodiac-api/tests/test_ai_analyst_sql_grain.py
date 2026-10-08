@@ -46,6 +46,39 @@ def test_profit_ranking_phrasings_resolve_to_governed_gross_profit(question):
     assert detect_ranking_measure(question) == "gross_profit"
 
 
+def test_glued_article_product_profit_question_is_understood_and_source_routed():
+    question = "show theproduct with the highest profits"
+    ops = extract_analytical_operations(question)
+    req = required_semantics(question)
+
+    assert ops["group_by"] == ["material"]
+    assert ops["measure_concept"] == "gross_profit"
+    assert ops["ranking"] == {"direction": "DESC", "limit": 1}
+    assert req["dimensions"] == ["material"]
+    assert req["measure"]["concept"] == "gross_profit"
+    assert req["ranking"]["limit"] == 1
+
+    from app.data_catalog.source_selector import select_source
+
+    source = select_source(question)
+    assert source.metric == "gross_profit"
+    assert {table.upper() for table in source.tables} >= {"VBRP", "VBRK"}
+
+    from app.services.four_stage_db_pipeline import VerifiedDbContext, pipeline3_sql_generation
+
+    context = VerifiedDbContext(
+        question=question,
+        tables=["vbrp", "VBRK", "MAKT"],
+        semantic_requirements=req,
+    )
+    sql = pipeline3_sql_generation(question, context, templates_only=True)
+    assert sql is not None
+    assert 'AS "gross_profit"' in sql
+    assert 'PARTITION BY grouped."currency"' in sql
+    assert '"wavwr"' in sql and '"netwr"' in sql
+    assert context.pipeline_log["PIPELINE_3_SQL_GENERATION"]["source"] == "dimension_ranking_template"
+
+
 def test_true_net_profit_request_does_not_fall_back_to_gross_profit():
     metric = resolve_metric("Rank products by net profit")
     assert metric is not None and metric.name == "net_profit"

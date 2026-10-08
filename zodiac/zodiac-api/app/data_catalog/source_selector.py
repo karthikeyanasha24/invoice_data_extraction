@@ -40,7 +40,12 @@ class SourceSpec:
 
 
 def _ql(question: str) -> str:
-    return re.sub(r"\s+", " ", (question or "").strip().lower())
+    ql = re.sub(r"\s+", " ", (question or "").strip().lower())
+    return re.sub(
+        r"\b(the|a|an)(?=(?:products?|materials?|customers?|clients?|countries?|invoices?|orders?)\b)",
+        r"\1 ",
+        ql,
+    )
 
 
 def _years(q: str) -> List[str]:
@@ -138,6 +143,31 @@ def select_source(
     years = _years(question)
     dims = _dims(ql)
     named = _named_sap_table(ql)
+
+    # Resolve governed profitability metrics from their catalog aliases and
+    # source metadata. This lets natural-language product-profit questions
+    # discover the billing-item fact even when they never say "invoice".
+    if re.search(r"\b(profits?|profitability|gross\s+margin)\b", ql):
+        try:
+            from ..services.business_semantic_layer import resolve_metric
+
+            metric = resolve_metric(question)
+            if metric and metric.name in {"gross_profit", "gross_margin_pct"}:
+                metric_tables = [
+                    table for table in metric.base_tables if has_table(table)
+                ]
+                return SourceSpec(
+                    route="existing",
+                    domain="profit_and_loss",
+                    metric=metric.name,
+                    dimensions=dims,
+                    tables=metric_tables,
+                    years=years,
+                    ranking="highest" if re.search(r"\b(highest|top|most|best)\b", ql) else "",
+                    reason="governed_profitability_metric",
+                )
+        except Exception:
+            pass
 
     prior_ctx = {}
     if isinstance(prior_plan, dict):

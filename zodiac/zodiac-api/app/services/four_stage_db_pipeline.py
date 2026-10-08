@@ -1874,6 +1874,86 @@ def _verified_result_fallback(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "follow_up_suggestions": [],
         }
 
+    # A deterministic, evidence-based answer for ranked gross-profit results is
+    # more useful than the generic row-count fallback. Monetary rankings must
+    # remain partitioned by currency; values from different currencies cannot
+    # support one global winner without an exchange-rate basis.
+    normalized_rows = [
+        {str(key).strip().lower().replace(" ", "_"): value for key, value in row.items()}
+        for row in rows
+    ]
+    if any("gross_profit" in row for row in normalized_rows):
+        def _number(value: Any) -> Optional[float]:
+            try:
+                return float(str(value).replace(",", "").strip()) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        currency_key = next(
+            (key for key in normalized_rows[0] if key in {"currency", "waerk", "waers", "currency_code"}),
+            None,
+        )
+        rank_key = next((key for key in normalized_rows[0] if "rank" in key), None)
+        metric_key = next((key for key in normalized_rows[0] if key == "gross_profit"), None)
+        dimension_keys = [
+            key for key in normalized_rows[0]
+            if key not in {currency_key, rank_key, metric_key}
+            and not any(token in key for token in ("count", "date", "year", "percent", "change", "amount", "sales"))
+        ]
+        dimension_key = next(
+            (key for key in dimension_keys if key.endswith(("_name", "_description"))),
+            next(
+                (key for key in dimension_keys if any(token in key for token in ("material", "product"))),
+                dimension_keys[0] if dimension_keys else None,
+            ),
+        )
+        if metric_key and dimension_key:
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for row in normalized_rows:
+                group = str(row.get(currency_key) or "(currency not supplied)") if currency_key else "(currency not supplied)"
+                grouped.setdefault(group, []).append(row)
+            winners: List[Tuple[str, Dict[str, Any]]] = []
+            for currency, group_rows in sorted(grouped.items()):
+                ranked = [
+                    row for row in group_rows
+                    if rank_key and str(row.get(rank_key) or "").strip() == "1"
+                ]
+                if not ranked:
+                    scored = [(row, _number(row.get(metric_key))) for row in group_rows]
+                    scored = [(row, score) for row, score in scored if score is not None]
+                    if scored:
+                        ranked = [max(scored, key=lambda pair: pair[1])[0]]
+                winners.extend((currency, row) for row in ranked)
+            if winners:
+                entries: List[str] = []
+                for currency, row in winners:
+                    product_id_key = next((key for key in dimension_keys if key.endswith("_id") and key != dimension_key), None)
+                    product_name = str(row.get(dimension_key) or "").strip()
+                    product_id = str(row.get(product_id_key) or "").strip() if product_id_key else ""
+                    product = product_name or product_id or "(product not identified)"
+                    if product_name and product_id and product_id != product_name:
+                        product = f"{product_name} ({product_id})"
+                    value = _number(row.get(metric_key))
+                    amount = f"{value:,.2f}".rstrip("0").rstrip(".") if value is not None else "unavailable"
+                    entries.append(f"{currency}: {product} — {amount}")
+                if currency_key and len(grouped) > 1:
+                    answer = (
+                        "I treated ‘profit’ as the available billing-item gross-profit measure "
+                        "(net value less recorded cost), not net profit after overheads. The highest product "
+                        "is reported separately in each currency because those amounts cannot be compared "
+                        "directly without a currency-conversion basis.\n\n"
+                        + "\n".join(f"- {entry}" for entry in entries)
+                    )
+                else:
+                    answer = f"The highest product by gross profit is {entries[0]}"
+                return {
+                    "answer": answer,
+                    "summary": answer,
+                    "findings": [answer],
+                    "presentation_type": "table",
+                    "follow_up_suggestions": [],
+                }
+
     message = f"The query completed and returned {row_count} row(s). See the result table for the verified values."
     return {"answer": message, "summary": message, "findings": [], "presentation_type": "table"}
 

@@ -1124,11 +1124,25 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     investigationIdRef.current = investigationId;
     let polling = true;
     let poll: ReturnType<typeof setTimeout> | undefined;
+    let statusPollDelayMs = 1200;
     const pollStatus = async () => {
-      const st = await dashboardApi.getInvestigationStatus(investigationId, ac.signal);
       if (!polling || ac.signal.aborted || investigationIdRef.current !== investigationId) return;
-      setProgress(previous => mergeAnalystProgress(previous, st));
-      poll = setTimeout(pollStatus, 1200);
+      try {
+        const st = await dashboardApi.getInvestigationStatus(investigationId, ac.signal);
+        if (!polling || ac.signal.aborted || investigationIdRef.current !== investigationId) return;
+        setProgress(previous => mergeAnalystProgress(previous, st));
+        statusPollDelayMs = 1200;
+      } catch {
+        // Status polling is auxiliary: a transient poll timeout must not stop
+        // the investigation or leave the progress UI frozen until the answer
+        // POST completes. Retry with a short capped backoff; the main request
+        // remains authoritative for success, failure, and cancellation.
+        if (!polling || ac.signal.aborted || investigationIdRef.current !== investigationId) return;
+        statusPollDelayMs = Math.min(Math.max(statusPollDelayMs * 2, 1200), 5000);
+      }
+      if (polling && !ac.signal.aborted && investigationIdRef.current === investigationId) {
+        poll = setTimeout(pollStatus, statusPollDelayMs);
+      }
     };
     poll = setTimeout(pollStatus, 300);
 
