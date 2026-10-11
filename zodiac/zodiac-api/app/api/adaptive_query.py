@@ -1463,6 +1463,18 @@ def _auto_charts(
         return []
 
     cols = list(data[0].keys())
+    client_key = next((c for c in cols if c.lower() in {"mandt", "sap_client", "client", "client_id"}), None)
+    if client_key:
+        clients = list(dict.fromkeys(str(row.get(client_key) or "Unknown client") for row in data))
+        if len(clients) > 1:
+            separated = []
+            for client in clients:
+                subset = [row for row in data if str(row.get(client_key) or "Unknown client") == client]
+                for spec in _auto_charts(question, sql, subset):
+                    spec["title"] = f"{spec.get('title') or 'Comparison'} · Client {client}"
+                    spec["sap_client"] = client
+                    separated.append(spec)
+            return separated
     currency_key = next((c for c in cols if c.lower() in {"currency", "waerk", "waers"}), None)
     if currency_key:
         currencies = list(dict.fromkeys(str(row.get(currency_key) or "Unknown currency") for row in data))
@@ -1510,6 +1522,13 @@ def _auto_charts(
             _seen_num.add(c)
             _deduped.append(c)
     numeric_cols = _deduped
+    # Amounts, percentages and document/quantity counts have different units.
+    # Keep supporting counts in the verified table rather than on a money axis.
+    monetary_cols = [c for c in numeric_cols
+                     if re.search(r"(?:^|_)(?:sales|revenue|amount|value|cost|profit|netwr|period_[ab])(?:_|$)", c, re.I)
+                     and not re.search(r"(?:^|_)(?:count|qty|quantity|pct|percent|ratio|growth|documents|records|rows)(?:_|$)", c, re.I)]
+    if monetary_cols:
+        numeric_cols = monetary_cols
 
     # Need at least one dimension and one measure
     # Individual document values are categories, not aggregated time buckets.

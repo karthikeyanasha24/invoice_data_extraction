@@ -111,13 +111,26 @@ api.interceptors.response.use(
             responseDetail.includes('invalid token') ||
             responseDetail.includes('signature has expired');
 
+        // A trailing-slash redirect to the API port drops the Authorization header.
+        // That 401 is a missing token on the follow-up request, not an expired session.
+        let redirectedOffSite = false;
+        if (typeof window !== 'undefined') {
+            const finalUrl = String(error.request?.responseURL || '');
+            try {
+                redirectedOffSite = !!finalUrl && new URL(finalUrl).host !== window.location.host;
+            } catch {
+                redirectedOffSite = false;
+            }
+        }
+
         // Trigger logout ONLY when: not a credential form, not an AI/dashboard path, AND
         // the server explicitly told us the session/token is invalid.
         const shouldForceLogout =
             error.response?.status === 401 &&
             !isAuthCredentialRequest &&
             !isNonSessionEndpoint &&
-            isSessionExpiredResponse;
+            isSessionExpiredResponse &&
+            !redirectedOffSite;
 
         if (shouldForceLogout) {
             if (typeof window !== 'undefined') {
@@ -2360,7 +2373,7 @@ export const satCanonicalApi = {
             if (fiscal_year) params.fiscal_year = fiscal_year;
             if (fiscal_period) params.fiscal_period = fiscal_period;
 
-            const response = await api.get('/api/v1/sat/canonical', { params });
+            const response = await api.get('/api/v1/sat/canonical/', { params });
             return response.data;
         } catch (error: any) {
             console.error('Failed to fetch canonical documents:', error);

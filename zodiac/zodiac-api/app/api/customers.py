@@ -25,7 +25,7 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 logger = logging.getLogger("zodiac-api.customers")
 
 
-@router.post("/", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 def create_customer(
     customer: CustomerCreate,
     db: Session = Depends(get_db),
@@ -97,7 +97,7 @@ def create_customer(
         )
 
 
-@router.get("/", response_model=CustomerListResponse)
+@router.get("", response_model=CustomerListResponse)
 def list_customers(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Number of records to return"),

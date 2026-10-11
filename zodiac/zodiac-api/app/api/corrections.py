@@ -125,7 +125,7 @@ async def get_correction_stats(
         raise HTTPException(status_code=500, detail=f"Error fetching statistics: {str(e)}")
 
 
-@router.get("/", response_model=CorrectionListResponse)
+@router.get("", response_model=CorrectionListResponse)
 async def list_corrections(
     customer_id: Optional[str] = Query(None, description="Filter by customer ID"),
     error_type: Optional[str] = Query(None, description="Filter by error type"),

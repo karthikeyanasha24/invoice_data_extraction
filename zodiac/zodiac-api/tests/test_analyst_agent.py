@@ -325,7 +325,7 @@ def test_final_validation_feedback_triggers_a_new_tool_query(monkeypatch):
     result = run("Show billing documents in 2000", MagicMock(return_value=[{"vbeln": "A"}]))
     assert result["answer_status"] == "SUCCESS"
     assert "2000%" in result["sql"]
-    assert "Application validation feedback" in inputs[2][-1]["content"]
+    assert "Application validation feedback" in str(inputs[1])
 
 
 def test_general_chat_does_not_hide_retained_database_context(monkeypatch):
@@ -362,15 +362,83 @@ def test_decision_limit_uses_last_verified_query(monkeypatch):
     assert result["data"] == [{"vbeln": "A"}]
 
 
-def test_verified_sql_asks_the_model_to_stop_investigating(monkeypatch):
+def test_verified_sql_returns_without_another_model_turn(monkeypatch):
     inputs = scripted(monkeypatch, [
         tool("run_readonly_sql", {"source": "business", "sql": 'SELECT vbeln FROM "VBRK"', "purpose": "List billing documents"}),
         final("Document A is in the connected billing data.", "analysis", ["result_1"]),
     ])
     result = run("Show billing documents", MagicMock(return_value=[{"vbeln": "A"}]))
     assert result["answer_status"] == "SUCCESS"
-    assert "already satisfies the request" in str(inputs[1])
-    assert result["meta"]["agent_turns"] >= 1
+    assert result["meta"].get("evidence_fallback") is True
+    assert len(inputs) == 1
+    assert result["data"] == [{"vbeln": "A"}]
+    assert result["meta"]["agent_turns"] == 1
+
+
+def test_short_followup_keeps_prior_customer_and_replaces_year():
+    prior = "Did the insurance company in 2004 have any sales?"
+    assert "show those billing documents" in agent._scope_question("show those billing documents", prior)
+    changed = agent._scope_question("what about 2000", prior)
+    assert "2000" in changed and "2004" not in changed
+    assert "insurance company" in changed.lower()
+
+
+@pytest.mark.parametrize("followup", ["Break down by country", "Only negative amounts", "Also include industry"])
+def test_followup_keeps_the_actual_modifier(followup):
+    prior = "Top 10 customers by billed sales"
+    scope = agent._scope_question(followup, prior)
+    assert prior in scope and followup in scope
+
+
+def test_short_new_topic_does_not_inherit_customer_or_period():
+    assert agent._scope_question("What can you do?", "Insurance Company sales in 2004") == "What can you do?"
+    scope = agent._scope_question("Compare 2000 with 2001 for those customers", "Top customers in 2004")
+    assert "2000" in scope and "2001" in scope
+
+
+def test_shape_validation_error_returns_feedback_instead_of_crashing(monkeypatch):
+    monkeypatch.setattr("app.services.plan_satisfaction.result_matches_analytical_intent",
+                        lambda rows, *_a, **_k: [] if rows and "amount" in rows[0] else ["sales measure missing from result columns"])
+    inputs = scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT vbeln FROM VBRK", "purpose": "Inspect documents"}),
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT netwr AS amount FROM VBRK", "purpose": "Read amounts"}, "repair"),
+    ])
+    execute = MagicMock(side_effect=[[{"vbeln": "A"}], [{"amount": 42}]])
+    result = run("Show billing amounts", execute)
+    assert result["answer_status"] == "SUCCESS"
+    assert result["data"] == [{"amount": 42}]
+    assert result["meta"]["validation_rejects"] == 1
+    assert "sales measure missing" in str(inputs[1])
+
+
+def test_small_aggregate_answer_displays_zero_count_and_null_amount():
+    answer = agent._answer_from_analysis("Any sales?", {"rows": [{"billing_documents": 0, "billed_sales": None}]})
+    assert "billing documents" in answer and "| 0 | Not available |" in answer
+    assert "No matching records" not in answer
+
+
+def test_empty_result_summary_preserves_the_verified_empty_answer(monkeypatch):
+    scripted(monkeypatch, [tool("run_readonly_sql", {"source": "business", "sql": "SELECT vbeln FROM VBRK", "purpose": "Read billing documents"})])
+    result = run("Show billing documents", MagicMock(return_value=[]))
+    assert result["answer_status"] == "SUCCESS_EMPTY"
+    assert result["summary"] == result["answer"]
+    assert "No matching records" in result["summary"]
+
+
+def test_profit_fallback_names_the_cost_basis_without_an_extra_model_turn():
+    answer = agent._answer_from_analysis("Highest profits", {"rows": [{"gross_profit": 30}], "sql": "SELECT netwr-wavwr FROM vbrp"})
+    assert "vbrp.wavwr" in answer and "gross-profit proxy" in answer
+
+
+def test_multiple_selected_queries_do_not_bypass_primary_validation():
+    tools = agent.AnalystTools(MagicMock(), MagicMock(), lambda: SCHEMA)
+    tools.save([{"vbeln": "A"}], kind="analysis", source="business", sql='SELECT vbeln FROM "VBRK"')
+    tools.save([{"vbeln": "B"}], kind="analysis", source="business", sql='SELECT vbeln FROM "VBRK"')
+    with pytest.raises(ValueError, match="does not satisfy"):
+        agent._final_result("Show billing documents in 2000", {
+            "kind": "analysis", "answer": "Here are the documents.", "summary": "Documents",
+            "result_ids": ["result_1", "result_2"], "followups": [],
+        }, tools, agent.InvestigationState(), 1)
 
 
 def test_complete_ranking_does_not_inherit_prior_year(monkeypatch):

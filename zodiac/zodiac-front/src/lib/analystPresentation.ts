@@ -8,6 +8,19 @@ export function isComparisonMeasure(key: string): boolean {
   return /^(period_[ab]|(?:base|comparison)_period(?:_amount|_value|_total)?|(?:sales|netwr|amount|total)_\d{4})$/i.test(key);
 }
 
+/** Numeric business keys label a category; their magnitude is not a measure. */
+export function isAnalystChartDimension(key: string): boolean {
+  return /^(client|sap_client|client_id|mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|vtweg|spart|belnr|posnr|ebelp|ebeln|fkdat|budat|gjahr|pernr|aubel|knumv)$/i.test(key)
+    || /(_id|_code|_no|_key|_num|id$|code$|no$|num$|sno$|ref$|seq$)/i.test(key);
+}
+
+export function isAnalystChartDate(key: string, value: unknown): boolean {
+  if (isComparisonMeasure(key)) return false;
+  // Four-digit counts and amounts are not years merely because of their value.
+  return /date|month|period|year|quarter|week/i.test(key)
+    || /^\d{4}-\d{2}(-\d{2})?$/.test(String(value ?? '').trim());
+}
+
 export function defaultAnalystChartType(preferred: string, available: string[]): string {
   return available.includes(preferred) ? preferred : (available.includes('bar') ? 'bar' : 'table');
 }

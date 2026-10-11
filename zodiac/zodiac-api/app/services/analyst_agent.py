@@ -34,7 +34,9 @@ previous requests unless the user refers back (these, those, same, only, break d
 instead, compare that). A short modification or SQL request uses the prior analysis.
 
 Database workflow: discover tables and inspect columns/meanings when needed, then
-write one read-only SELECT or WITH using actual sources. A failed query is feedback:
+write one read-only SELECT or WITH using actual sources. If this conversation already
+inspected the tables you need, write SQL on the next turn. Do not repeat list_tables,
+search_schema, or describe_tables for those same tables. A failed query is feedback:
 inspect the error/schema, change your approach, and retry within the budget. Empty
 rows mean no matches, not absence of a dataset. Never invent tables, columns, joins,
 IDs, metrics, amounts, or evidence. Use the application source for EDI/SAT processing
@@ -403,8 +405,7 @@ def _best_verified_analysis(question: str, tools: AnalystTools) -> tuple[dict | 
     ranked: list[tuple[int, dict, list[str]]] = []
     for result in _analysis_candidates(tools):
         issues = result_matches_analytical_intent(result.get("rows") or [], question, sql=str(result.get("sql") or ""))
-        hard = [item for item in issues if "missing from result columns" not in item or result.get("rows")]
-        ranked.append((len(hard), result, hard))
+        ranked.append((len(issues), result, issues))
     if not ranked:
         return None, ["no executed analysis"]
     ranked.sort(key=lambda item: (item[0], -int(item[1].get("row_count") or 0)))
@@ -413,32 +414,35 @@ def _best_verified_analysis(question: str, tools: AnalystTools) -> tuple[dict | 
 
 def _answer_from_analysis(question: str, evidence: dict) -> str:
     rows = evidence.get("rows") or []
-    purpose = str(evidence.get("purpose") or "database check").strip()
     if not rows:
-        return (
-            f"No matching rows were found in the connected data for this request. "
-            f"The verified query ({purpose}) returned an empty result."
-        )
-    keys = [str(key) for key in rows[0].keys()]
-    header = "| " + " | ".join(keys) + " |"
-    divider = "| " + " | ".join("---" for _ in keys) + " |"
-    body = "\n".join(
-        "| " + " | ".join("" if row.get(key) is None else str(row.get(key)) for key in keys) + " |"
-        for row in rows[:25]
-    )
-    more = f"\n\nShowing 25 of {len(rows)} verified rows." if len(rows) > 25 else ""
-    return f"Verified result for: {question}\n\n{header}\n{divider}\n{body}{more}"
+        return "No matching records were found in the connected data for this request."
+    count = len(rows)
+    noun = "row" if count == 1 else "rows"
+    sample = " The displayed result is a bounded sample." if evidence.get("truncated") else ""
+    answer = f"Verified database result: {count} {noun}.{sample}"
+    if re.search(r"\bprofits?\b", question, re.I) and re.search(r"\bwavwr\b", str(evidence.get("sql") or ""), re.I):
+        answer += "\n\nProfit uses billed revenue minus invoice document cost (`vbrp.wavwr`), a gross-profit proxy."
+    # A one-row aggregate is not one business record. Surface the actual fields,
+    # including zero counts and NULL values, without inventing an interpretation.
+    if count <= 3:
+        keys = list(rows[0])
+        def cell(value):
+            return str(value if value is not None else "Not available").replace("|", "\\|").replace("\n", " ")
+        answer += "\n\n| " + " | ".join(cell(str(key).replace("_", " ")) for key in keys) + " |"
+        answer += "\n| " + " | ".join("---" for _ in keys) + " |"
+        answer += "".join("\n| " + " | ".join(cell(row.get(key)) for key in keys) + " |" for row in rows)
+    return answer
 
 
 def _fallback_verified_result(question: str, tools: AnalystTools, state: InvestigationState, calls: int, reason: str) -> dict:
     evidence, issues = _best_verified_analysis(question, tools)
-    hard = [item for item in issues if "analytical plan" in item or "Group only" in item or "date scope" in item]
-    if evidence is None or hard:
-        raise ValueError(reason if evidence is None else reason + ": " + "; ".join(hard[:4]))
+    if evidence is None or issues:
+        raise ValueError(reason if evidence is None else reason + ": " + "; ".join(issues[:4]))
+    answer = _answer_from_analysis(question, evidence)
     final = {
         "kind": "analysis",
-        "answer": _answer_from_analysis(question, evidence),
-        "summary": "Verified database result.",
+        "answer": answer,
+        "summary": answer.split("\n\n", 1)[0],
         "result_ids": [evidence["id"]],
         "followups": [],
     }
@@ -476,7 +480,23 @@ def _is_complete_analytical_request(question: str) -> bool:
     return (has_metric and has_entity and len(q.split()) >= 6) or (has_metric and has_period and has_entity)
 
 
-def _final_result(question: str, final: dict, tools: AnalystTools, state: InvestigationState, calls: int) -> dict:
+def _scope_question(question: str, prior_question: str) -> str:
+    """Keep explicit follow-up edits without importing scope into a new topic."""
+    current = (question or "").strip()
+    prior = (prior_question or "").strip()
+    if not prior or _is_complete_analytical_request(current):
+        return current
+    if not re.search(r"\b(?:those|that|these|same|only|instead|also|break\s+down|what\s+about)\b", current, re.I):
+        return current
+    years = re.findall(r"\b(?:19|20)\d{2}\b", current)
+    prior_years = set(re.findall(r"\b(?:19|20)\d{2}\b", prior))
+    if len(years) == 1 and len(prior_years) <= 1:
+        prior = re.sub(r"\b(?:19|20)\d{2}\b", years[0], prior) if prior_years else f"{prior} for year {years[0]}"
+    # Preserve all modifiers, rather than treating every follow-up as year-only.
+    return f"{prior}\nFollow-up: {current}"
+
+
+def _final_result(question: str, final: dict, tools: AnalystTools, state: InvestigationState, calls: int, scope_question: str | None = None) -> dict:
     if set(final) != set(_FINAL_SCHEMA["properties"]):
         raise ValueError("The final answer must match its required response schema")
     kind = final["kind"]
@@ -497,11 +517,22 @@ def _final_result(question: str, final: dict, tools: AnalystTools, state: Invest
         raise ValueError("This request needs database evidence; use tools or clarify")
     analyses = [result for result in selected if result["kind"] == "analysis"]
     from .plan_satisfaction import result_matches_analytical_intent, answer_consistent_with_rows
+    check_question = scope_question or question
     issues = []
-    if len(analyses) == 1:
-        issues.extend(result_matches_analytical_intent(analyses[0]["rows"], question, sql=analyses[0]["sql"]))
+    compound_counts = re.split(r"\s+and\s+", check_question, flags=re.I) if re.match(r"^\s*(?:count|how many)\b", check_question, re.I) else []
+    if len(compound_counts) > 1 and analyses:
+        # Independent scalar counts may need separate sources. Each requested
+        # subquestion still needs a fully validated result; adding a second ID
+        # alone cannot turn incomplete evidence into a successful answer.
+        for part in compound_counts:
+            part = part if re.match(r"^\s*(?:count|how many)\b", part, re.I) else "Count " + part
+            if not any(not result_matches_analytical_intent(item["rows"], part, sql=item["sql"]) for item in analyses):
+                issues.append("No validated evidence for compound request: " + part)
+    elif analyses:
+        # Selecting supporting queries must not bypass the primary result gate.
+        issues.extend(result_matches_analytical_intent(analyses[-1]["rows"], check_question, sql=analyses[-1]["sql"]))
     evidence_rows = [row for result in analyses for row in result["rows"]]
-    issues.extend(answer_consistent_with_rows(final["answer"], evidence_rows, question))
+    issues.extend(answer_consistent_with_rows(final["answer"], evidence_rows, check_question))
     if issues:
         raise ValueError("Final result does not satisfy the request: " + "; ".join(issues[:6]))
     if kind in {"analysis", "metadata"}:
@@ -563,6 +594,8 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
         state = InvestigationState()
     history = conversation or prior_plan.get("recent_turns") or state.recent_turns
     state.recent_turns = relevant_conversation(question, history, recent_limit=20, max_chars=22000)
+    prior_question = str(context.get("previousQuestion") or "")
+    scope = _scope_question(question, prior_question)
     prior_status = str(context.get("previousAnswerStatus") or "")
     pending = prior_plan.get("pending_analysis")
     prior_rows = context.get("data")
@@ -587,12 +620,12 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
             + (
                 "This is a complete new analytical request: do not inherit the previous year, customer, or ranking unless the user refers back."
                 if _is_complete_analytical_request(question)
-                else "This looks like a short follow-up: keep the prior customer/year/metric unless the user replaces them."
+                else "This looks like a short follow-up. Satisfy this effective request, not the short sentence alone: " + scope
             )
         ),
     }
     from .semantic_requirements import required_semantics
-    contract = required_semantics(question)
+    contract = required_semantics(scope)
     contract = {key: contract.get(key) for key in ("group_by", "measure", "ranking", "date_filter", "period_compare", "comparison", "clarification") if contract.get(key)}
     input_items: list[Any] = [{"role": turn["role"], "content": turn["content"]} for turn in state.recent_turns]
     # Context remains user-level evidence; no client-authored text becomes system instructions.
@@ -605,7 +638,7 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
     if own_budget:
         from .investigation_budget import begin_investigation
         begin_investigation(question)
-    calls, tool_count, feedback_count = 0, 0, 0
+    calls, tool_count, feedback_count, final_rejects = 0, 0, 0, 0
     model_failed = False
     started = time.monotonic()
     try:
@@ -636,33 +669,37 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                     result = tools.call(call["name"], arguments)
                     input_items.append({"type": "function_call_output", "call_id": call["call_id"],
                                         "output": _model_evidence(result)})
-                evidence, issues = _best_verified_analysis(question, tools)
-                hard = [item for item in issues if "analytical plan" in item or "Group only" in item or "date scope" in item]
-                if evidence and not hard:
-                    input_items.append({
-                        "role": "user",
-                        "content": (
-                            f"Application notice: result {evidence['id']} already satisfies the request. "
-                            "Return the final JSON now using that result_id. Do not run more SQL or optional diagnostics."
+                evidence, issues = _best_verified_analysis(scope, tools)
+                if evidence and not issues:
+                    return _attach_loop_metrics(
+                        _fallback_verified_result(
+                            scope, tools, state, calls,
+                            "The verified query already answers the request",
                         ),
-                    })
+                        started=started, calls=calls, tool_count=tool_count,
+                        feedback_count=feedback_count, tools=tools,
+                    )
+                if evidence and issues and any(call.get("name") == "run_readonly_sql" for call in function_calls):
+                    feedback_count += 1
+                    input_items.append({"role": "user", "content": "Application validation feedback: " + "; ".join(issues[:6]) + ". The executed result is incomplete for this request. Revise the query using the inspected schema; do not report this result as verified."})
                 continue
             checkpoint("PREPARING_ANSWER")
             try:
                 final = json.loads(response.output_text)
                 result = _attach_loop_metrics(
-                    _final_result(question, final, tools, state, calls),
+                    _final_result(question, final, tools, state, calls, scope_question=scope),
                     started=started, calls=calls, tool_count=tool_count,
                     feedback_count=feedback_count, tools=tools,
                 )
                 return result
             except (ValueError, TypeError, KeyError) as error:
                 feedback_count += 1
-                if feedback_count > 2:
+                final_rejects += 1
+                if final_rejects > 2:
                     try:
                         return _attach_loop_metrics(
                             _fallback_verified_result(
-                                question, tools, state, calls,
+                                scope, tools, state, calls,
                                 "The agent could not produce an answer supported by its tool results",
                             ),
                             started=started, calls=calls, tool_count=tool_count,
@@ -674,7 +711,7 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
         try:
             return _attach_loop_metrics(
                 _fallback_verified_result(
-                    question, tools, state, calls,
+                    scope, tools, state, calls,
                     "The agent reached its decision limit before completing a verified answer",
                 ),
                 started=started, calls=calls, tool_count=tool_count,

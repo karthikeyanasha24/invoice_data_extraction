@@ -1,12 +1,5 @@
-'use client';
-
-import MainLayout from '@/components/MainLayout';
-import IntegrationTechnology from '@/components/IntegrationTechnology';
+import { redirect } from 'next/navigation';
 
 export default function TechnologyPage() {
-  return (
-    <MainLayout>
-      <IntegrationTechnology />
-    </MainLayout>
-  );
+  redirect('/overview');
 }

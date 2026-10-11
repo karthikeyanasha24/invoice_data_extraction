@@ -446,7 +446,7 @@ async def merge_documents(
         )
 
 
-@router.get("/", response_model=SimpleMergedListResponse)
+@router.get("", response_model=SimpleMergedListResponse)
 async def list_simple_merged_documents(
     fiscal_year: Optional[int] = None,
     fiscal_period: Optional[int] = None,

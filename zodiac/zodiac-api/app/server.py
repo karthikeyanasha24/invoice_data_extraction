@@ -13,6 +13,7 @@ if sys.platform == "win32":
         pass
 
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,6 +57,43 @@ app = FastAPI(
     description="RESTful API for Zodiac invoice data extraction",
     version="1.0.0"
 )
+
+
+class _RelativeRedirectMiddleware:
+    """Keep slash redirects on the site the browser is using.
+
+    FastAPI's trailing-slash redirect otherwise sends the browser to
+    http://127.0.0.1:8003. That cross-origin hop drops the Authorization
+    header, the API returns 401, and the app sends the user to login.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_relative(message):
+            if message["type"] == "http.response.start":
+                headers = []
+                for key, value in message.get("headers") or []:
+                    if key.lower() == b"location":
+                        parts = urlsplit(value.decode("latin1"))
+                        if parts.scheme and parts.netloc:
+                            path = parts.path or "/"
+                            if parts.query:
+                                path = f"{path}?{parts.query}"
+                            value = path.encode("latin1")
+                    headers.append((key, value))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_relative)
+
+
+app.add_middleware(_RelativeRedirectMiddleware)
 
 from .core.cors_origins import parse_cors_allow_all, resolve_cors_origins, REQUIRED_CORS
 

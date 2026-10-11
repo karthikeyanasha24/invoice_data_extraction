@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { defaultAnalystChartType, isComparisonMeasure } from '@/lib/analystPresentation';
+import { defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate } from '@/lib/analystPresentation';
 import { analystChartLayout, analystChartCsv, compactChartNumber, shortenChartLabel } from '@/lib/analystChartLayout';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area,
@@ -212,21 +212,15 @@ function multiCcy(data: any[]): boolean {
 function isDimension(col: string, sampleVal: any): boolean {
   const lk = col.toLowerCase();
   // Explicit SAP ID / key columns
-  if (/^(mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|vtweg|spart|belnr|posnr|ebelp|ebeln|fkdat|budat|gjahr|pernr|aubel|knumv)$/.test(lk)) return true;
+  if (isAnalystChartDimension(lk)) return true;
   if (isYearCol(lk)) return true;
   // Generic pattern: ends in _id, _code, _no, _key; or IS "id", "code", "no"
   if (/(_id|_code|_no|_key|_num|id$|code$|no$|num$|sno$|ref$|seq$)/.test(lk)) return true;
-  // High-cardinality unique integer strings look like IDs
-  if (typeof sampleVal === 'string' && /^\d{5,}$/.test(sampleVal.trim())) return true;
   return false;
 }
 
 function isDateCol(col: string, sampleVal: any): boolean {
-  const lk = col.toLowerCase();
-  if (isComparisonMeasure(col)) return false;
-  if (/date|month|period|year|quarter|week/.test(lk)) return true;
-  const s = String(sampleVal ?? '').trim();
-  return /^\d{4}-\d{2}(-\d{2})?$/.test(s) || /^\d{4}$/.test(s);
+  return isAnalystChartDate(col, sampleVal);
 }
 
 function isNumericVal(v: any): boolean {

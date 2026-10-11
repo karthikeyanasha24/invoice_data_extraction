@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analystAnswerText, defaultAnalystChartType, isComparisonMeasure } from './analystPresentation.ts';
+import { analystAnswerText, defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate } from './analystPresentation.ts';
 
 test('detailed answers survive alongside their concise overview', () => {
   const answer = ('# Findings\n\n' + 'Explain evidence and its limitations. '.repeat(200)).trim();
@@ -15,6 +15,17 @@ test('comparison amounts cannot become date axes', () => {
   for (const key of ['year', 'billing_date', 'period_label', 'month']) {
     assert.equal(isComparisonMeasure(key), false);
   }
+});
+
+test('client codes label charts while four-digit counts remain measures', () => {
+  for (const key of ['client', 'sap_client', 'mandt', 'customer_id']) assert.equal(isAnalystChartDimension(key), true);
+  for (const key of ['billing_document_count', 'netwr', 'billed_sales']) {
+    assert.equal(isAnalystChartDimension(key), false);
+    assert.equal(isAnalystChartDate(key, '5074'), false);
+    assert.equal(isAnalystChartDate(key, 2000), false);
+  }
+  assert.equal(isAnalystChartDate('calendar_year', 2000), true);
+  assert.equal(isAnalystChartDate('billing_date', '2000-01-01'), true);
 });
 
 test('category comparison respects server chart type even when line toggle is available', () => {
