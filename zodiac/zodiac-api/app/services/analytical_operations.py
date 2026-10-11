@@ -124,6 +124,17 @@ _ENTITY_WORDS = {
 }
 
 
+def ranking_count_is_explicit(question: str) -> bool:
+    """An inferred display default is not a user-requested exact row count."""
+    q = (question or "").lower()
+    return bool(_TOP_N.search(q) or _RANKED_SET_COUNT.search(q) or re.search(
+        r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+        r"(?:customers?|countries|products?|materials?|vendors?|suppliers?)\b.{0,80}"
+        r"\b(?:most|least|highest|lowest|top|bottom)\b|"
+        r"\bwhich\s+(?:country|customer|product|material|vendor|supplier)\b", q,
+    ))
+
+
 def classify_column_role(table: str, column: str) -> str:
     col = (column or "").lower()
     if col in _MEASURE_COLS:
@@ -274,6 +285,17 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     group_by: List[str] = []
     for pat, dim in _GROUP_PATTERNS:
         if re.search(pat, ql):
+            if dim not in group_by:
+                group_by.append(dim)
+    # A coordinated dimension list must not stop at the first noun after "by".
+    dimension_words = {**_ENTITY_WORDS, "sector": "industry", "sectors": "industry",
+                       "month": "month", "months": "month", "year": "year", "years": "year",
+                       "quarter": "quarter", "quarters": "quarter", "currency": "currency", "currencies": "currency"}
+    entity_pattern = "(?:" + "|".join(sorted(dimension_words, key=len, reverse=True)) + ")"
+    list_pattern = rf"\b(?:by|per|for each|with)\s+({entity_pattern}(?:\s*(?:,\s*(?:and\s+)?|and\s+|&\s*|/\s*){entity_pattern})*)\b"
+    for clause in re.finditer(list_pattern, ql):
+        for word in re.findall(r"\b" + entity_pattern + r"\b", clause.group(1)):
+            dim = dimension_words[word]
             if dim not in group_by:
                 group_by.append(dim)
     which = _WHICH_ENTITY.search(q)
@@ -561,7 +583,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         ops["growth"] = True
     if re.search(
         r"\b(trend|month by month|monthly|how .{0,60} (moved|changed|evolved)|over (the )?years?|over time)\b",
-        ql,
+        re.sub(r"\byear[- ]over[- ]year\b", "", ql),
     ):
         ops["trend"] = True
         if not ops["time_grain"]:

@@ -280,6 +280,12 @@ def is_general_knowledge_question(question: str) -> bool:
     ql = q.lower()
     if _FACT_REQUEST.search(q):
         return False
+    # "Mean" is a definition verb here, not a request for an average. The
+    # distinction applies to any concept, including business vocabulary.
+    if re.fullmatch(r"(?:please\s+)?what\s+do(?:es)?\s+.+\s+mean[?.!]*", q, re.I) and not re.search(
+        r"\b(?:our|my|company|workspace|this|that|these|those)\b", q, re.I,
+    ):
+        return True
     if _BUSINESS_METRIC_QUESTION.search(q) and _SEMANTIC_BUSINESS.search(q):
         return False
     # Investigation / company-data cues must stay on the analytical path.

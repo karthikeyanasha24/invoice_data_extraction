@@ -1,0 +1,360 @@
+"""Scripted model decisions exercise the real loop and database boundaries."""
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy import create_engine, text
+
+from app.services import analyst_agent as agent
+from app.services.analyst_agent_sql import validate_agent_sql, enforce_agent_user_scope, queryable_schema
+from app.services.adaptive_trusted_scope import TrustedAiExecutionScope, set_trusted_scope, reset_trusted_scope
+from app.services.investigation_budget import begin_investigation, end_investigation, cancel_investigation
+
+SCHEMA = {
+    "VBRK": [{"col": "vbeln", "type": "text"}, {"col": "netwr", "type": "text"}, {"col": "waerk", "type": "text"}],
+    "KNA1": [{"col": "kunnr", "type": "text"}, {"col": "name1", "type": "text"}],
+    "sat_documents": [{"col": "id", "type": "integer"}, {"col": "user_id", "type": "integer"}, {"col": "status", "type": "text"}],
+    "users": [{"col": "id", "type": "integer"}, {"col": "password_hash", "type": "text"}],
+}
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx.Client, "send", lambda *_a, **_k: pytest.fail("Tests must not contact external models"))
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (SCHEMA, "live_database_metadata"))
+    yield
+    end_investigation()
+
+
+def tool(name, arguments, call_id="call_1"):
+    if name == "describe_tables":
+        arguments = {"column_filter": None, **arguments}
+    return SimpleNamespace(output=[{"type": "reasoning", "id": "reasoning_1", "encrypted_content": "opaque-reasoning", "summary": []},
+                                   {"type": "function_call", "call_id": call_id, "name": name, "arguments": json.dumps(arguments)}], output_text="")
+
+
+def final(answer, kind="conversation", result_ids=None):
+    body = {"kind": kind, "answer": answer, "summary": answer, "result_ids": result_ids or [], "followups": []}
+    return SimpleNamespace(output=[{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": json.dumps(body)}]}], output_text=json.dumps(body))
+
+
+def scripted(monkeypatch, responses):
+    inputs = []
+    iterator = iter(responses)
+    def respond(**kwargs):
+        inputs.append(json.loads(json.dumps(kwargs["input"])))
+        return next(iterator)
+    monkeypatch.setattr(agent, "create_agent_response", respond)
+    return inputs
+
+
+def run(question="Hello", execute=None, **kwargs):
+    return agent.run_analyst_agent(question, MagicMock(), execute or MagicMock(), schema_loader=lambda: SCHEMA, **kwargs)
+
+
+def test_general_conversation_needs_no_database_tools(monkeypatch):
+    scripted(monkeypatch, [final("Hello!"), final("An invoice is a request for payment.")])
+    execute = MagicMock(side_effect=AssertionError("No SQL needed"))
+    assert run("Hai", execute)["answer"] == "Hello!"
+    result = run("What is an invoice?", execute)
+    assert result["mode"] == "general_chat" and result["query_plan"]["agent_trace"] == []
+    execute.assert_not_called()
+
+
+def test_table_count_uses_tool_and_preserves_reasoning_items(monkeypatch):
+    inputs = scripted(monkeypatch, [tool("list_tables", {"source": "business", "name_filter": None, "include_names": False, "limit": None}),
+                                    final("There are 4 tables.", "metadata", ["result_1"])])
+    result = run("How many tables are there?")
+    assert result["answer_status"] == "SUCCESS"
+    assert result["data"] == [{"table_count": 4}]
+    assert inputs[1][-1]["type"] == "function_call_output"
+    assert any(item.get("type") == "reasoning" for item in inputs[1])
+    assert result["meta"]["tool_calls"] == 1
+
+
+def test_schema_snapshot_is_disclosed_in_final_answer(monkeypatch):
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (SCHEMA, "schema_snapshot"))
+    scripted(monkeypatch, [tool("list_tables", {"source": "business", "name_filter": None, "include_names": False, "limit": None}),
+                           final("There are 4 tables in the snapshot.", "metadata", ["result_1"])])
+    result = run("How many tables are there?")
+    assert result["answer_status"] == "SUCCESS"
+    assert "live catalog could not be verified" in result["answer"]
+
+
+def test_followup_reaches_model_with_prior_context_and_preferences(monkeypatch):
+    inputs = scripted(monkeypatch, [tool("list_tables", {"source": "business", "name_filter": None, "include_names": True, "limit": None}),
+                                    final("Here are those tables.", "metadata", ["result_1"])])
+    context = {"previousQuestion": "How many tables are there?", "previousAnswerStatus": "SUCCESS", "data": [{"table_count": 4}],
+               "previousPlan": {"recent_turns": [{"role": "user", "content": "Please answer in Spanish from now on"},
+                                                {"role": "assistant", "content": "Hay cuatro tablas.", "mode": "database_metadata"}]}}
+    result = run("list those", context=context)
+    assert "How many tables" in str(inputs[0]) and "Spanish" in str(inputs[0])
+    assert result["rowCount"] == 4
+
+
+def test_sql_error_returns_feedback_then_agent_revises_query(monkeypatch):
+    inputs = scripted(monkeypatch, [
+        tool("describe_tables", {"source": "business", "tables": ["VBRK"]}),
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT nonexistent FROM "VBRK"', "purpose": "Inspect billing documents"}, "bad"),
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT vbeln FROM "VBRK"', "purpose": "Inspect billing documents"}, "good"),
+        final("Found two billing documents.", "analysis", ["result_2"]),
+    ])
+    execute = MagicMock(return_value=[{"vbeln": "A"}, {"vbeln": "B"}])
+    result = run("Show billing documents", execute)
+    assert result["answer_status"] == "SUCCESS"
+    execute.assert_called_once()
+    assert '"vbeln"' in result["sql"]
+    error = json.loads(inputs[2][-1]["output"])
+    assert error["ok"] is False and "nonexistent" in error["error"]
+    assert [step["status"] for step in result["query_plan"]["agent_trace"]] == ["completed", "error", "completed"]
+
+
+def test_database_execution_error_can_be_repaired_in_same_turn(monkeypatch):
+    inputs = scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT CAST(netwr AS NUMERIC) AS amount FROM "VBRK"', "purpose": "Inspect billed amounts"}),
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT netwr FROM "VBRK"', "purpose": "Inspect billed amounts"}, "repair"),
+        final("The document value is 12.5.", "analysis", ["result_1"]),
+    ])
+    execute = MagicMock(side_effect=[RuntimeError("Invalid numeric text"), [{"netwr": "12.5"}]])
+    result = run("Show billing document values", execute)
+    assert result["answer_status"] == "SUCCESS" and execute.call_count == 2
+    assert "Invalid numeric" in inputs[1][-1]["output"]
+
+
+def test_compound_request_preserves_two_successful_result_sets(monkeypatch):
+    scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT COUNT(*) AS documents FROM "VBRK"', "purpose": "Count billing documents"}),
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT COUNT(*) AS customers FROM "KNA1"', "purpose": "Count customer records"}, "customers"),
+        final("There are 12 documents and 5 customers.", "analysis", ["result_1", "result_2"]),
+    ])
+    result = run("Count billing documents and customer records", MagicMock(side_effect=[[{"documents": 12}], [{"customers": 5}]]))
+    assert result["answer_status"] == "SUCCESS" and len(result["agent_results"]) == 2
+    assert result["agent_primary_result_id"] == "result_2"
+
+
+def test_final_answer_cannot_reference_nonexistent_results(monkeypatch):
+    scripted(monkeypatch, [final("Revenue is 999.", "analysis", ["made_up"])] * 3)
+    result = run("Show revenue")
+    assert result["answer_status"] == "CANNOT_ANSWER" and not result["data"]
+    assert result["failure_class"] == "AGENT_VALIDATION_FAILED"
+
+
+def test_general_answer_cannot_replace_required_database_evidence(monkeypatch):
+    scripted(monkeypatch, [final("Your total sales are 999.")] * 3)
+    result = run("What were our total sales in 2000?")
+    assert result["answer_status"] == "CANNOT_ANSWER"
+
+
+def test_unknown_tools_and_extra_identity_arguments_are_rejected():
+    tools = agent.AnalystTools(MagicMock(), MagicMock(), lambda: SCHEMA)
+    assert tools.call("shell", {"command": "anything"})["ok"] is False
+    assert tools.call("run_readonly_sql", {"source": "business", "sql": "SELECT 1", "purpose": "test", "user_id": 2})["ok"] is False
+
+
+def test_tool_and_decision_limits_stop_an_infinite_loop(monkeypatch):
+    scripted(monkeypatch, [tool("calculate", {"expression": "2 + 2"})] * 10)
+    result = run("Compute 2 + 2")
+    assert result["answer_status"] == "CANNOT_ANSWER"
+    assert result["meta"]["error_type"] == "ValueError"
+    assert len(result["query_plan"]["agent_trace"]) == 10
+    assert result["query_plan"]["agent_trace"][-1]["status"] == "cached"
+
+
+def test_cancellation_prevents_any_model_or_tool_call(monkeypatch):
+    model = MagicMock(side_effect=AssertionError("Cancelled"))
+    monkeypatch.setattr(agent, "create_agent_response", model)
+    budget = begin_investigation("test", request_id="agent-cancel-test")
+    cancel_investigation(budget.request_id)
+    result = run()
+    assert result["answer_status"] == "CANCELLED"
+    model.assert_not_called()
+
+
+def test_provider_quota_does_not_become_canned_chat_success(monkeypatch):
+    error = RuntimeError("provider credits exhausted")
+    error.code, error.status_code = "credit_balance_exhausted", 429
+    monkeypatch.setattr(agent, "create_agent_response", MagicMock(side_effect=error))
+    result = run("hai again")
+    assert result["answer_status"] == "CANNOT_ANSWER"
+    assert result["meta"]["service_issue"] == "quota_exhausted"
+    assert not result["sql"] and "Hello" not in result["answer"]
+    assert run("2 plus 2")["answer"].endswith("= 4")
+    assert run("How many tables are there?")["data"] == [{"table_count": 4}]
+
+
+def test_tool_output_compaction_always_remains_valid_json():
+    result = {"ok": True, "id": "r", "rows": [{"large": "x" * 5000} for _ in range(200)]}
+    compact = json.loads(agent._model_evidence(result))
+    assert compact["ok"] is True and compact["model_sample_truncated"] is True
+    assert len(compact["rows"]) < 200
+
+
+def test_catalog_fallback_timeout_returns_structured_failure(monkeypatch):
+    from app.services.investigation_budget import InvestigationTimeout
+    monkeypatch.setattr(agent, "create_agent_response", MagicMock(side_effect=RuntimeError("provider unavailable")))
+    monkeypatch.setattr(agent.AnalystTools, "schema", MagicMock(side_effect=InvestigationTimeout("RETRIEVING_SCHEMA", 120)))
+    result = run("How many tables are there?")
+    assert result["answer_status"] == "TIMEOUT"
+    assert result["pipeline"] == "analyst_agent"
+    assert not result["data"] and result["query_plan"]["agent_trace"] == []
+
+
+@pytest.mark.parametrize("sql", [
+    'DELETE FROM "VBRK"', 'SELECT * FROM "VBRK"; DROP TABLE "VBRK"',
+    'WITH x AS (DELETE FROM "VBRK" RETURNING *) SELECT * FROM x',
+    'SELECT * INTO stolen FROM "VBRK"', 'SELECT * FROM "VBRK" FOR UPDATE',
+    "SELECT pg_read_file('/etc/passwd') FROM VBRK", "SELECT set_config('x','y',false) FROM VBRK",
+    "SELECT my_side_effect() FROM VBRK", 'SELECT * FROM information_schema.tables',
+    'SELECT password_hash FROM users', 'SELECT nonexistent FROM VBRK',
+    'SELECT * FROM another_database.public.VBRK',
+])
+def test_unsafe_or_unavailable_sql_is_blocked_before_execution(sql):
+    with pytest.raises(Exception):
+        validate_agent_sql(sql, SCHEMA)
+
+
+def test_valid_cte_and_star_are_checked_against_safe_columns():
+    schema = {"VBRK": SCHEMA["VBRK"] + [{"col": "api_key", "type": "text"}]}
+    sql, tables = validate_agent_sql('WITH x AS (SELECT * FROM VBRK) SELECT * FROM x', schema)
+    assert tables == ["VBRK"] and "api_key" not in sql
+    assert "LIMIT 201" in sql
+    assert "users" not in queryable_schema(SCHEMA)
+
+
+@pytest.mark.parametrize("sql", [
+    'SELECT id FROM sat_documents WHERE user_id = 2 OR status = \'ok\'',
+    'SELECT id FROM sat_documents UNION ALL SELECT id FROM sat_documents WHERE user_id = 2',
+    'WITH x AS (SELECT * FROM sat_documents) SELECT id FROM x',
+    'SELECT a.id FROM sat_documents a JOIN sat_documents b ON a.id = b.id',
+])
+def test_ownership_filter_survives_or_union_cte_and_join(sql):
+    safe, _ = validate_agent_sql(sql, SCHEMA)
+    token = set_trusted_scope(TrustedAiExecutionScope(user_id=1))
+    try:
+        scoped, params = enforce_agent_user_scope(safe, SCHEMA)
+    finally:
+        reset_trusted_scope(token)
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE sat_documents (id INTEGER, user_id INTEGER, status TEXT)"))
+        connection.execute(text("INSERT INTO sat_documents VALUES (11,1,'ok'),(22,2,'ok')"))
+        rows = connection.execute(text(scoped), params).fetchall()
+    assert rows and all(row[0] == 11 for row in rows)
+
+
+def test_application_sql_requires_authenticated_scope():
+    sql, _ = validate_agent_sql("SELECT id FROM sat_documents", SCHEMA)
+    with pytest.raises(PermissionError):
+        enforce_agent_user_scope(sql, SCHEMA)
+
+
+def test_actual_executor_sets_readonly_and_fetches_bounded_rows(monkeypatch):
+    from app.api import adaptive_query as api
+    monkeypatch.setattr(api, "apply_statement_timeout", lambda *_a, **_k: None)
+    budget = begin_investigation("Show billing documents")
+    budget.diagnostics.update(agent_read_only=True, agent_schema=SCHEMA, agent_max_rows=201)
+    db = MagicMock()
+    result = MagicMock()
+    result.keys.return_value = ["vbeln"]
+    result.fetchmany.return_value = [("A",)]
+    db.execute.return_value = result
+    assert api._execute_sql(db, 'SELECT vbeln FROM "VBRK"', "Show billing documents") == [{"vbeln": "A"}]
+    assert str(db.execute.call_args_list[0].args[0]) == "SET TRANSACTION READ ONLY"
+    result.fetchmany.assert_called_once_with(201)
+    result.fetchall.assert_not_called()
+
+
+def test_public_endpoint_runs_agent_by_default(monkeypatch):
+    from app.api import adaptive_query as api
+    runner = MagicMock(return_value={"answer_status": "SUCCESS", "mode": "general_chat", "answer": "Hello.", "summary": "Hello.", "data": [], "rowCount": 0, "pipeline": "analyst_agent"})
+    monkeypatch.delenv("AI_ANALYST_AGENT_ENABLED", raising=False)
+    monkeypatch.setattr(agent, "run_analyst_agent", runner)
+    result = api.post_query_adaptive(question="Hai", db=MagicMock(), current_user=None,
+                                    tableHint=None, contextData=None, overrideSql=None, threadId=None,
+                                    investigationId=None, conversationHistory=None, newQuestion=False)
+    assert result["pipeline"] == "analyst_agent"
+    runner.assert_called_once()
+
+
+def test_responses_transport_uses_tools_stateless_reasoning_and_bounded_retries(monkeypatch):
+    from app.services import analyst_agent_provider as provider
+    import openai
+    response = SimpleNamespace(status="completed", output=[], output_text="{}")
+    client = MagicMock()
+    client.responses.create.return_value = response
+    factory = MagicMock(return_value=client)
+    monkeypatch.setattr(openai, "OpenAI", factory)
+    monkeypatch.setattr(provider, "_openai_key", lambda: "synthetic-test-key")
+    monkeypatch.setattr(provider, "_provider_available", lambda _: True)
+    monkeypatch.setenv("AI_ANALYST_AGENT_MODEL", "gpt-6-astra")
+    result = provider.create_agent_response(instructions="test", input=[], tools=agent._TOOLS, output_schema=agent._FINAL_SCHEMA)
+    assert result is response
+    args = client.responses.create.call_args.kwargs
+    assert args["store"] is False and args["parallel_tool_calls"] is False
+    assert args["model"] == "gpt-6-astra" and args["include"] == ["reasoning.encrypted_content"]
+    assert args["text"]["format"]["strict"] is True
+    assert factory.call_args.kwargs["max_retries"] == 0
+
+
+def test_incomplete_model_response_is_not_accepted(monkeypatch):
+    from app.services import analyst_agent_provider as provider
+    import openai
+    client = MagicMock()
+    client.responses.create.return_value = SimpleNamespace(status="incomplete", output_text="partial")
+    monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
+    monkeypatch.setattr(provider, "_openai_key", lambda: "synthetic-test-key")
+    monkeypatch.setattr(provider, "_provider_available", lambda _: True)
+    monkeypatch.setattr(provider, "_provider_failed", MagicMock())
+    with pytest.raises(RuntimeError, match="partial answers"):
+        provider.create_agent_response(instructions="test", input=[], tools=[], output_schema=agent._FINAL_SCHEMA)
+
+
+def test_final_validation_feedback_triggers_a_new_tool_query(monkeypatch):
+    schema = {"VBRK": SCHEMA["VBRK"] + [{"col": "fkdat", "type": "text"}]}
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (schema, "live_database_metadata"))
+    inputs = scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT vbeln FROM VBRK', "purpose": "Inspect billing documents"}),
+        final("These are the 2000 billing documents.", "analysis", ["result_1"]),
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT vbeln FROM VBRK WHERE fkdat LIKE '2000%'", "purpose": "Inspect billing documents in 2000"}, "correct_period"),
+        final("These are the 2000 billing documents.", "analysis", ["result_2"]),
+    ])
+    result = run("Show billing documents in 2000", MagicMock(return_value=[{"vbeln": "A"}]))
+    assert result["answer_status"] == "SUCCESS"
+    assert "2000%" in result["sql"]
+    assert "Application validation feedback" in inputs[2][-1]["content"]
+
+
+def test_general_chat_does_not_hide_retained_database_context(monkeypatch):
+    inputs = scripted(monkeypatch, [final("I can continue that analysis.")])
+    run("Can you explain that?", context={"previousQuestion": "Hi", "previousPlan": {
+        "retained_analytical_context": {"previousQuestion": "Top customers", "previousSQL": 'SELECT kunnr FROM "KNA1"',
+                                        "previousAnswerStatus": "SUCCESS", "data": [{"kunnr": "C1"}]}}})
+    assert 'SELECT kunnr' in str(inputs[0]) and 'C1' in str(inputs[0])
+
+
+def test_tool_purpose_is_not_parsed_as_a_second_user_request(monkeypatch):
+    schema = {"VBRK": SCHEMA["VBRK"] + [{"col":"mandt","type":"text"}, {"col":"kunag","type":"text"}],
+              "KNA1": SCHEMA["KNA1"] + [{"col":"mandt","type":"text"}, {"col":"land1","type":"text"}]}
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (schema,"live_database_metadata"))
+    sql = '''SELECT h.waerk AS currency,c.land1 AS country,SUM(CAST(h.netwr AS NUMERIC)) AS billed_sales
+             FROM VBRK h LEFT JOIN KNA1 c ON h.mandt=c.mandt AND LPAD(h.kunag,10,'0')=LPAD(c.kunnr,10,'0')
+             GROUP BY h.waerk,c.land1 ORDER BY billed_sales DESC LIMIT 10'''
+    scripted(monkeypatch,[tool("run_readonly_sql",{"source":"business","sql":sql,"purpose":"Rank top 10 sold-to customer countries; do not group by customer"}),
+                          final("Here are the highest billed sales by country.","analysis",["result_1"])])
+    execute = MagicMock(return_value=[{"currency":"USD","country":"US","billed_sales":12.5}])
+    result = run("Show the highest sales by country",execute)
+    assert result["answer_status"] == "SUCCESS"
+    assert execute.call_args.args[2] == ""
+
+
+def test_numeric_evidence_blocks_invented_totals_and_accepts_rounding_and_calculations():
+    results = [{"kind": "analysis", "rows": [{"sales": 12.346}], "row_count": 1}]
+    assert agent._unsupported_numbers("Sales are 999.", results, "Show sales") == ["999"]
+    assert agent._unsupported_numbers("Sales are 12.35.", results, "Show sales") == []
+    assert agent._unsupported_numbers("Growth is -25%.", results, "Show growth") == ["-25"]
+    results.append({"kind": "calculation", "value": "-25", "rows": []})
+    assert agent._unsupported_numbers("Growth is -25%.", results, "Show growth") == []

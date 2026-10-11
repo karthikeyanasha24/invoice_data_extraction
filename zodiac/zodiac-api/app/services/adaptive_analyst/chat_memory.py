@@ -26,7 +26,7 @@ def user_conversation_preferences(turns: Any) -> List[str]:
     Assistant acknowledgements and questions about preferences are not rules.
     """
     preferences: List[str] = []
-    for turn in recent_conversation(turns):
+    for turn in _clean_conversation(turns):
         if turn.get("role") != "user":
             continue
         content = str(turn.get("content") or "").strip()
@@ -65,7 +65,7 @@ def relevant_conversation(
     that a later follow-up explicitly refers to. This adds lexical retrieval over
     the bounded history without treating any old turn as an instruction.
     """
-    cleaned = recent_conversation(turns)
+    cleaned = _clean_conversation(turns)
     if not cleaned:
         return []
 
@@ -106,23 +106,37 @@ def relevant_conversation(
             if start + 1 < len(cleaned) and cleaned[start + 1].get("role") == "assistant":
                 selected.add(start + 1)
 
-    ordered = sorted(selected)
-    result: List[Dict[str, str]] = []
-    remaining = max_chars
-    for index in ordered:
+    # Reserve explicit user preferences, then spend the remaining budget from
+    # newest to oldest. Chronological allocation let old evidence consume the
+    # entire prompt and silently discard the very follow-up being discussed.
+    priority = sorted(selected, key=lambda index: (
+        cleaned[index].get("role") == "user" and cleaned[index].get("content") in preferences,
+        index,
+    ), reverse=True)
+    retained: Dict[int, Dict[str, str]] = {}
+    remaining = max(0, max_chars)
+    for index in priority:
         item = cleaned[index]
         content = str(item.get("content") or "")
         # Older turns are retrieval evidence, so keep their summaries compact.
-        if index < recent_start:
-            content = content[:1200]
-        if not content or len(content) > remaining:
+        cap = 1200 if index < recent_start or (item.get("role") == "user" and content in preferences) else 6000
+        if len(content) > cap:
+            marker = "\n[Message excerpt; remaining content omitted.]"
+            content = content[:cap - len(marker)] + marker
+        if not content or remaining <= 0:
             continue
+        if len(content) > remaining:
+            # Do not pass a clipped number or SQL statement as complete evidence.
+            marker = "\n[Message excerpt; remaining content omitted.]"
+            if remaining <= len(marker):
+                continue
+            content = content[:remaining - len(marker)] + marker
         row = {"role": str(item.get("role") or ""), "content": content}
         if item.get("mode"):
             row["mode"] = str(item["mode"])
-        result.append(row)
+        retained[index] = row
         remaining -= len(content)
-    return result
+    return [retained[index] for index in sorted(retained)]
 
 
 def compact_sql_lineage(sql: str, *, max_chars: int = 1800) -> str:
@@ -134,25 +148,29 @@ def compact_sql_lineage(sql: str, *, max_chars: int = 1800) -> str:
     return text[:max_chars]
 
 
-def recent_conversation(turns: Any) -> List[Dict[str, str]]:
+def _clean_conversation(turns: Any) -> List[Dict[str, str]]:
+    """Normalize a bounded number of turns before choosing what fits the prompt."""
     cleaned: List[Dict[str, str]] = []
     if not isinstance(turns, list):
         return cleaned
-    remaining = 26000
-    for turn in reversed(turns[-40:]):
+    for turn in turns[-40:]:
         if not isinstance(turn, dict) or turn.get("role") not in {"user", "assistant"}:
             continue
-        content = str(turn.get("content") or "")[:6000]
-        if not content or len(content) > remaining:
-            if len(content) > remaining:
-                break
+        content = str(turn.get("content") or "")
+        if len(content) > 6000:
+            marker = "\n[Message excerpt; remaining content omitted.]"
+            content = content[:6000 - len(marker)] + marker
+        if not content:
             continue
         item = {"role": turn["role"], "content": content}
         if turn.get("mode"):
             item["mode"] = str(turn["mode"])[:40]
         cleaned.append(item)
-        remaining -= len(content)
-    return list(reversed(cleaned))
+    return cleaned
+
+
+def recent_conversation(turns: Any) -> List[Dict[str, str]]:
+    return relevant_conversation("", turns, recent_limit=40, max_chars=26000, relevant_pair_limit=0)
 
 
 def context_from_stored_turns(turns: List[Dict[str, Any]]) -> Dict[str, Any]:

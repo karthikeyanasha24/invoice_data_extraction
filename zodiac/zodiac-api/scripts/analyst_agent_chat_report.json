@@ -1,0 +1,23 @@
+{
+  "live_model_decisions": true,
+  "database_access_disabled": true,
+  "database_evidence_sent": false,
+  "cases": [
+    {
+      "question": "Hi, what can you help me with?",
+      "status": "PASS",
+      "mode": "general_chat",
+      "answer_status": "SUCCESS",
+      "answer": "Hi! I\u2019m BridgeEDI AI Analyst. I can help you:\n\n- **Analyze SAP business data**\u2014sales, billing, customers, orders, and trends.\n- **Investigate EDI/SAT processing**\u2014check statuses, find errors, and troubleshoot issues.\n- **Explore connected data**\u2014identify relevant tables and explain what the results mean.\n- **Handle everyday tasks**\u2014answer questions, write or review code, draft content, and explain concepts.\n\nYou can ask in plain language\u2014for example, \u201cWho are our top customers by billed revenue?\u201d or \u201cWhich EDI documents failed processing?\u201d\n\nWhat would you like to work on?",
+      "llm_calls": 1
+    },
+    {
+      "question": "What is generative AI? Explain in one sentence.",
+      "status": "PASS",
+      "mode": "general_chat",
+      "answer_status": "SUCCESS",
+      "answer": "Generative AI is artificial intelligence that learns patterns from existing data to create new content, such as text, images, music, or code.",
+      "llm_calls": 1
+    }
+  ]
+}

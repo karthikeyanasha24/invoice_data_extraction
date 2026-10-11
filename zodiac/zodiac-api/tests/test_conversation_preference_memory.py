@@ -29,6 +29,47 @@ def test_preference_is_retained_when_the_next_topic_has_no_matching_words():
     assert user_conversation_preferences(relevant) == [preference]
 
 
+def test_long_retrieved_answers_cannot_displace_the_latest_followup():
+    turns = []
+    for index in range(8):
+        turns.extend([
+            {"role": "user", "content": f"Show billing sales for country {index}."},
+            {"role": "assistant", "content": f"Country {index}: " + "Verified row. " * 460},
+        ])
+    turns.extend([
+        {"role": "user", "content": "Only for calendar year 2000."},
+        {"role": "assistant", "content": "I used calendar year 2000 and kept currencies separate.", "mode": "analysis"},
+    ])
+    result = relevant_conversation("Compare that with 2001", turns, recent_limit=20, max_chars=12000)
+    assert result[-2:] == turns[-2:]
+    assert sum(len(turn["content"]) for turn in result) <= 12000
+    assert any("Message excerpt" in turn["content"] for turn in result)
+
+
+def test_a_long_message_is_marked_as_an_excerpt_even_before_total_budget_runs_out():
+    result = relevant_conversation("Explain those results", [
+        {"role": "assistant", "content": "Verified data " * 600},
+    ], max_chars=22000)
+    assert len(result[0]["content"]) <= 6000
+    assert result[0]["content"].endswith("[Message excerpt; remaining content omitted.]")
+
+
+def test_preferences_survive_large_results_and_later_corrections_stay_ordered():
+    first = "For this chat, please use short answers."
+    correction = "Forget my brevity preference and use detailed replies from now on."
+    turns = [{"role": "user", "content": first}]
+    for index in range(10):
+        turns.extend([
+            {"role": "user", "content": f"Show customer {index}."},
+            {"role": "assistant", "content": "Verified data " * 500},
+        ])
+    turns.extend([{"role": "user", "content": correction}, {"role": "assistant", "content": "Understood."}])
+    result = relevant_conversation("Explain an index", turns, recent_limit=12, max_chars=12000)
+    assert user_conversation_preferences(result) == [first, correction]
+    assert result[-2:] == turns[-2:]
+    assert sum(len(turn["content"]) for turn in result) <= 12000
+
+
 def test_general_model_receives_user_preference_and_recent_chat_despite_an_sql_anchor(monkeypatch):
     preference = "For our conversation, explain general concepts in Spanish and avoid bullet lists."
     history = [

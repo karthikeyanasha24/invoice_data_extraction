@@ -144,9 +144,10 @@ export default function MainLayout({ children, topSection, fillViewport = false 
         </div>
 
         <div
+          style={fillViewport ? { height: '100dvh' } : undefined}
           className={cn(
             'flex-1 transition-all duration-300 flex flex-col min-w-0 w-full',
-            fillViewport && 'h-screen overflow-hidden',
+            fillViewport && 'h-dvh overflow-hidden',
             !isMobile && (sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64')
           )}
         >

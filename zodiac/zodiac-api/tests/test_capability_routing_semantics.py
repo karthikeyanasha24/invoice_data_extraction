@@ -223,6 +223,7 @@ def test_adaptive_body_general_and_clarification_no_unbound_local(monkeypatch) -
     monkeypatch.setattr(und, "analyze_json", fake_json)
     monkeypatch.setattr(und, "complete_text", fake_text)
     monkeypatch.setenv("OPEN_AI_KEY", "sk-test")
+    monkeypatch.setattr("app.services.adaptive_analyst.llm_provider.complete_text", fake_text)
     monkeypatch.setenv("GOOGLE_API_KEY", "test")
     monkeypatch.setattr(aq, "USE_SAP_DB_FOR_AI", False, raising=False)
     monkeypatch.setattr(aq, "_load_schema", lambda: {"VBAK": [{"col": "VBELN"}]})

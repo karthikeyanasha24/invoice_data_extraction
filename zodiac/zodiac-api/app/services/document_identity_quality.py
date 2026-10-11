@@ -6,11 +6,12 @@ from ..data_catalog.physical import column_names, resolve_table_name
 from .schema_loader import _load_schema_ai_config
 
 
-def profile_document_identities(db, tables, columns):
+def profile_document_identities(db, tables, columns, *, required_tables=()):
     rules = _load_schema_ai_config().get('document_identity_rules', {})
     profiles = {}
     monetary_tables = {c.split('.')[0].upper() for c in columns
                        if '.' in c and c.split('.')[-1].upper() in {'NETWR', 'WAVWR'}}
+    monetary_tables.update(str(table).upper() for table in required_tables)
     for requested in tables:
         rule = rules.get(requested.upper())
         if not rule or requested.upper() not in monetary_tables:

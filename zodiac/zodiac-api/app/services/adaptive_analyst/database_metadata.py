@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -742,6 +742,74 @@ def classify_metadata_operation(
     return MetadataPlan(operation=DESCRIBE_SCHEMA, confidence=0.6)
 
 
+def resolve_metadata_followup(
+    question: str,
+    prior_plan: Optional[Dict[str, Any]] = None,
+    prior_question: str = "",
+) -> Optional[MetadataPlan]:
+    """Resolve a bounded catalog action against its actual previous scope.
+
+    A pronoun alone is not evidence of a schema request. Reuse only a verified
+    metadata plan, or a prior metadata turn from older saved conversations.
+    Business results and unrelated conversation must not become global lists.
+    """
+    q = (question or "").strip()
+    if not re.fullmatch(
+        r"(?:(?:please|can you|could you|would you)\s+)?"
+        r"(?:list|show|display|enumerate|count|how many|what are)\s+"
+        r"(?:(?:me|all|the|first|top|\d+|of)\s+)*"
+        r"(?:those|these|them|that|these tables|those tables|those columns|those fields|all)"
+        r"(?:\s+(?:tables|columns|fields|are there|are available|please))*[?.!]*",
+        q, re.I,
+    ):
+        return None
+    plan = prior_plan if isinstance(prior_plan, dict) else {}
+    raw = plan.get("metadata_context")
+    state = plan.get("investigation_state") or {}
+    from .chat_memory import recent_conversation
+    turns = recent_conversation(plan.get("recent_turns") or (state.get("recent_turns") if isinstance(state, dict) else []))
+    previous = None
+    from ..adaptive_nl_sql_hardening import is_greeting_or_chitchat
+
+    for index in range(len(turns) - 1, -1, -1):
+        turn = turns[index]
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        mode = str(turn.get("mode") or "")
+        user = next((str(t.get("content") or "") for t in reversed(turns[:index])
+                     if isinstance(t, dict) and t.get("role") == "user"), "")
+        if mode in {"error", "understanding_error"} or is_greeting_or_chitchat(user):
+            continue
+        if mode != "database_metadata":
+            return None
+        previous = classify_metadata_operation(user)
+        break
+    if isinstance(raw, dict):
+        previous = MetadataPlan(**{k: v for k, v in raw.items() if k in MetadataPlan.__dataclass_fields__})
+    elif previous is None and plan.get("last_mode") == "database_metadata":
+        previous = classify_metadata_operation(prior_question)
+    if previous is None:
+        return None
+    if previous.operation in {COUNT_TABLES, LIST_TABLES, SEARCH_TABLES, DESCRIBE_SCHEMA}:
+        operation = COUNT_TABLES if _COUNT_CUE.search(q) or re.match(r"count\b", q, re.I) else LIST_TABLES
+        if re.search(r"\b(?:columns|fields)\b", q, re.I):
+            return None
+    elif previous.table_name and previous.operation in {COUNT_COLUMNS, LIST_COLUMNS, DESCRIBE_TABLE}:
+        operation = COUNT_COLUMNS if _COUNT_CUE.search(q) or re.match(r"count\b", q, re.I) else LIST_COLUMNS
+        if re.search(r"\btables\b", q, re.I):
+            return None
+    else:
+        return None
+    # Search results are not equivalent to the whole schema. Keep topic filters;
+    # unsupported search scopes must remain with model-based reference resolution.
+    if previous.operation == SEARCH_TABLES:
+        return None
+    if operation == COUNT_TABLES and (previous.domain_filter or previous.topic_terms):
+        return None
+    return replace(previous, operation=operation, confidence=0.96,
+                   list_all=True, list_limit=_requested_list_limit(q), include_total_count=False)
+
+
 def execute_metadata_plan(
     plan: MetadataPlan,
     schema: Optional[Dict[str, Any]],
@@ -1028,6 +1096,7 @@ def build_metadata_payload(
         "pipeline": "database_metadata",
         "sql_generation_method": "schema_catalog",
         "llm_calls": 0,
+        "query_plan": {"last_mode": "database_metadata", "metadata_context": asdict(plan)},
     }
 
 

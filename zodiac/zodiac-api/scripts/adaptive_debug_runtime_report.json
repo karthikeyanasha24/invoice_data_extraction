@@ -1,0 +1,189 @@
+{
+  "external_model_transport_disabled": true,
+  "counts": {
+    "PASS": 5,
+    "BLOCKED": 0,
+    "FAIL": 0
+  },
+  "cases": [
+    {
+      "case": "reported inventory comparison",
+      "question": "Show inventory versus sales.",
+      "passed": true,
+      "outcome": "PASS",
+      "answer_status": "SUCCESS",
+      "mode": "database_analysis",
+      "row_count": 10,
+      "service_issue": null,
+      "seconds": 10.97,
+      "sql_executed": true,
+      "sql": "WITH stock_source AS (\n  SELECT DISTINCT b.mandt, b.matnr, b.bwkey, b.bwtar, b.lbkum FROM \"MBEW\" b\n), material_units AS (\n  SELECT DISTINCT m.mandt, m.matnr, m.meins FROM \"MARA\" m\n), inventory AS (\n  SELECT s.mandt AS client, s.matnr AS product, m.meins AS base_unit,\n         SUM(CAST(NULLIF(TRIM(CAST(s.lbkum AS TEXT)), '') AS NUMERIC)) AS stock_qty\n  FROM stock_source s JOIN material_units m ON s.mandt = m.mandt AND s.matnr = m.matnr\n  WHERE COALESCE(TRIM(CAST(s.bwtar AS TEXT)), '') = ''\n     OR NOT EXISTS (SELECT 1 FROM stock_source total_stock\n                    WHERE total_stock.mandt = s.mandt AND total_stock.matnr = s.matnr\n                      AND total_stock.bwkey = s.bwkey AND COALESCE(TRIM(CAST(total_stock.bwtar AS TEXT)), '') = '')\n  GROUP BY s.mandt, s.matnr, m.meins\n), billing_items AS (\n  SELECT DISTINCT p.mandt, p.vbeln, p.posnr, p.matnr, p.meins, p.fklmg, p.netwr FROM \"vbrp\" p\n), billing_headers AS (\n  SELECT DISTINCT h.mandt, h.vbeln, h.waerk, h.fkdat FROM \"VBRK\" h\n), sales AS (\n  SELECT p.mandt AS client, p.matnr AS product, p.meins AS base_unit,\n         TRIM(CAST(h.waerk AS TEXT)) AS currency,\n         SUM(CAST(NULLIF(TRIM(CAST(p.fklmg AS TEXT)), '') AS NUMERIC)) AS billed_qty,\n         SUM(CAST(NULLIF(TRIM(CAST(p.netwr AS TEXT)), '') AS NUMERIC)) AS total_sales\n  FROM billing_items p JOIN billing_headers h ON p.mandt = h.mandt AND p.vbeln = h.vbeln\n  WHERE NULLIF(TRIM(CAST(p.matnr AS TEXT)), '') IS NOT NULL\n    \n  GROUP BY p.mandt, p.matnr, p.meins, TRIM(CAST(h.waerk AS TEXT))\n)\nSELECT COALESCE(i.client, s.client) AS client, COALESCE(i.product, s.product) AS product,\n       COALESCE(i.base_unit, s.base_unit) AS base_unit, s.currency,\n       i.stock_qty, s.billed_qty, s.total_sales,\n       CASE WHEN i.product IS NULL THEN 'No stock snapshot matched'\n            WHEN s.product IS NULL THEN 'No billing activity matched'\n            ELSE 'Stock and billing activity matched' END AS comparison_status\nFROM inventory i FULL OUTER JOIN sales s\n  ON i.client = s.client AND i.product = s.product AND i.base_unit = s.base_unit\nORDER BY i.stock_qty DESC NULLS LAST, client, product, currency\nLIMIT 10",
+      "error": null,
+      "error_kind": null,
+      "failure_class": "SUCCESS",
+      "column_names": [
+        "client",
+        "product",
+        "base_unit",
+        "currency",
+        "stock_qty",
+        "billed_qty",
+        "total_sales",
+        "comparison_status"
+      ],
+      "resolved_question": "Show inventory versus sales.",
+      "failure_summary": null,
+      "pipeline_diagnostics": {
+        "SQL_VALIDATION": {
+          "pass": true,
+          "errors": []
+        }
+      },
+      "semantic_dimensions": [],
+      "validation_warnings": null
+    },
+    {
+      "case": "reported supplier concentration",
+      "question": "Show supplier concentration.",
+      "passed": true,
+      "outcome": "PASS",
+      "answer_status": "SUCCESS",
+      "mode": "database_analysis",
+      "row_count": 94,
+      "service_issue": null,
+      "seconds": 6.05,
+      "sql_executed": true,
+      "sql": "WITH items AS (\n  SELECT DISTINCT p.mandt, p.ebeln, p.ebelp, p.matnr, p.netwr, p.loekz FROM \"EKPO\" p\n), headers AS (\n  SELECT DISTINCT h.mandt, h.ebeln, h.lifnr, h.waers, h.bedat, h.loekz FROM \"EKKO\" h\n), supplier_names AS (\n  SELECT mandt, lifnr, MAX(name1) AS supplier_name FROM \"LFA1\" GROUP BY mandt, lifnr\n), supplier_totals AS (\n  SELECT h.mandt AS client, TRIM(CAST(h.lifnr AS TEXT)) AS supplier,\n         MAX(n.supplier_name) AS supplier_name, TRIM(CAST(h.waers AS TEXT)) AS currency,\n         SUM(CAST(NULLIF(TRIM(CAST(p.netwr AS TEXT)), '') AS NUMERIC)) AS purchase_value,\n         COUNT(DISTINCT p.ebeln) AS purchase_order_count,\n         COUNT(DISTINCT p.matnr) AS product_count\n  FROM items p JOIN headers h ON p.mandt = h.mandt AND p.ebeln = h.ebeln\n  LEFT JOIN supplier_names n ON h.mandt = n.mandt AND h.lifnr = n.lifnr\n  WHERE NULLIF(TRIM(CAST(h.lifnr AS TEXT)), '') IS NOT NULL\n    AND COALESCE(TRIM(CAST(p.loekz AS TEXT)), '') = ''\n    AND COALESCE(TRIM(CAST(h.loekz AS TEXT)), '') = ''\n    \n  GROUP BY h.mandt, TRIM(CAST(h.lifnr AS TEXT)), TRIM(CAST(h.waers AS TEXT))\n), ranked AS (\n  SELECT supplier_totals.*,\n         ROW_NUMBER() OVER (PARTITION BY client, currency ORDER BY purchase_value DESC NULLS LAST, supplier) AS rank_within_currency,\n         ROUND(100.0 * purchase_value / NULLIF(SUM(purchase_value) OVER (PARTITION BY client, currency), 0), 2) AS share_of_po_value_pct\n  FROM supplier_totals\n)\nSELECT * FROM ranked WHERE rank_within_currency <= 10\nORDER BY client, currency, rank_within_currency",
+      "error": null,
+      "error_kind": null,
+      "failure_class": "SUCCESS",
+      "column_names": [
+        "client",
+        "supplier",
+        "supplier_name",
+        "currency",
+        "purchase_value",
+        "purchase_order_count",
+        "product_count",
+        "rank_within_currency",
+        "share_of_po_value_pct"
+      ],
+      "resolved_question": "Show supplier concentration.",
+      "failure_summary": null,
+      "pipeline_diagnostics": {
+        "SQL_VALIDATION": {
+          "pass": true,
+          "errors": []
+        }
+      },
+      "semantic_dimensions": [],
+      "validation_warnings": null
+    },
+    {
+      "case": "supplier year and currency",
+      "question": "Show supplier concentration in 2004 in EUR.",
+      "passed": true,
+      "outcome": "PASS",
+      "answer_status": "SUCCESS",
+      "mode": "database_analysis",
+      "row_count": 10,
+      "service_issue": null,
+      "seconds": 6.06,
+      "sql_executed": true,
+      "sql": "WITH items AS (\n  SELECT DISTINCT p.mandt, p.ebeln, p.ebelp, p.matnr, p.netwr, p.loekz FROM \"EKPO\" p\n), headers AS (\n  SELECT DISTINCT h.mandt, h.ebeln, h.lifnr, h.waers, h.bedat, h.loekz FROM \"EKKO\" h\n), supplier_names AS (\n  SELECT mandt, lifnr, MAX(name1) AS supplier_name FROM \"LFA1\" GROUP BY mandt, lifnr\n), supplier_totals AS (\n  SELECT h.mandt AS client, TRIM(CAST(h.lifnr AS TEXT)) AS supplier,\n         MAX(n.supplier_name) AS supplier_name, TRIM(CAST(h.waers AS TEXT)) AS currency,\n         SUM(CAST(NULLIF(TRIM(CAST(p.netwr AS TEXT)), '') AS NUMERIC)) AS purchase_value,\n         COUNT(DISTINCT p.ebeln) AS purchase_order_count,\n         COUNT(DISTINCT p.matnr) AS product_count\n  FROM items p JOIN headers h ON p.mandt = h.mandt AND p.ebeln = h.ebeln\n  LEFT JOIN supplier_names n ON h.mandt = n.mandt AND h.lifnr = n.lifnr\n  WHERE NULLIF(TRIM(CAST(h.lifnr AS TEXT)), '') IS NOT NULL\n    AND COALESCE(TRIM(CAST(p.loekz AS TEXT)), '') = ''\n    AND COALESCE(TRIM(CAST(h.loekz AS TEXT)), '') = ''\n     AND (TRIM(CAST(h.\"bedat\" AS TEXT)) LIKE '2004%') AND TRIM(CAST(h.\"waers\" AS TEXT)) = 'EUR'\n  GROUP BY h.mandt, TRIM(CAST(h.lifnr AS TEXT)), TRIM(CAST(h.waers AS TEXT))\n), ranked AS (\n  SELECT supplier_totals.*,\n         ROW_NUMBER() OVER (PARTITION BY client, currency ORDER BY purchase_value DESC NULLS LAST, supplier) AS rank_within_currency,\n         ROUND(100.0 * purchase_value / NULLIF(SUM(purchase_value) OVER (PARTITION BY client, currency), 0), 2) AS share_of_po_value_pct\n  FROM supplier_totals\n)\nSELECT * FROM ranked WHERE rank_within_currency <= 10\nORDER BY client, currency, rank_within_currency",
+      "error": null,
+      "error_kind": null,
+      "failure_class": "SUCCESS",
+      "column_names": [
+        "client",
+        "supplier",
+        "supplier_name",
+        "currency",
+        "purchase_value",
+        "purchase_order_count",
+        "product_count",
+        "rank_within_currency",
+        "share_of_po_value_pct"
+      ],
+      "resolved_question": "Show supplier concentration in 2004 in EUR.",
+      "failure_summary": null,
+      "pipeline_diagnostics": {
+        "SQL_VALIDATION": {
+          "pass": true,
+          "errors": []
+        }
+      },
+      "semantic_dimensions": [],
+      "validation_warnings": null
+    },
+    {
+      "case": "inventory billing period",
+      "question": "Compare inventory with sales in 2004.",
+      "passed": true,
+      "outcome": "PASS",
+      "answer_status": "SUCCESS",
+      "mode": "database_analysis",
+      "row_count": 10,
+      "service_issue": null,
+      "seconds": 7.88,
+      "sql_executed": true,
+      "sql": "WITH stock_source AS (\n  SELECT DISTINCT b.mandt, b.matnr, b.bwkey, b.bwtar, b.lbkum FROM \"MBEW\" b\n), material_units AS (\n  SELECT DISTINCT m.mandt, m.matnr, m.meins FROM \"MARA\" m\n), inventory AS (\n  SELECT s.mandt AS client, s.matnr AS product, m.meins AS base_unit,\n         SUM(CAST(NULLIF(TRIM(CAST(s.lbkum AS TEXT)), '') AS NUMERIC)) AS stock_qty\n  FROM stock_source s JOIN material_units m ON s.mandt = m.mandt AND s.matnr = m.matnr\n  WHERE COALESCE(TRIM(CAST(s.bwtar AS TEXT)), '') = ''\n     OR NOT EXISTS (SELECT 1 FROM stock_source total_stock\n                    WHERE total_stock.mandt = s.mandt AND total_stock.matnr = s.matnr\n                      AND total_stock.bwkey = s.bwkey AND COALESCE(TRIM(CAST(total_stock.bwtar AS TEXT)), '') = '')\n  GROUP BY s.mandt, s.matnr, m.meins\n), billing_items AS (\n  SELECT DISTINCT p.mandt, p.vbeln, p.posnr, p.matnr, p.meins, p.fklmg, p.netwr FROM \"vbrp\" p\n), billing_headers AS (\n  SELECT DISTINCT h.mandt, h.vbeln, h.waerk, h.fkdat FROM \"VBRK\" h\n), sales AS (\n  SELECT p.mandt AS client, p.matnr AS product, p.meins AS base_unit,\n         TRIM(CAST(h.waerk AS TEXT)) AS currency,\n         SUM(CAST(NULLIF(TRIM(CAST(p.fklmg AS TEXT)), '') AS NUMERIC)) AS billed_qty,\n         SUM(CAST(NULLIF(TRIM(CAST(p.netwr AS TEXT)), '') AS NUMERIC)) AS total_sales\n  FROM billing_items p JOIN billing_headers h ON p.mandt = h.mandt AND p.vbeln = h.vbeln\n  WHERE NULLIF(TRIM(CAST(p.matnr AS TEXT)), '') IS NOT NULL\n     AND (TRIM(CAST(h.\"fkdat\" AS TEXT)) LIKE '2004%')\n  GROUP BY p.mandt, p.matnr, p.meins, TRIM(CAST(h.waerk AS TEXT))\n)\nSELECT COALESCE(i.client, s.client) AS client, COALESCE(i.product, s.product) AS product,\n       COALESCE(i.base_unit, s.base_unit) AS base_unit, s.currency,\n       i.stock_qty, s.billed_qty, s.total_sales,\n       CASE WHEN i.product IS NULL THEN 'No stock snapshot matched'\n            WHEN s.product IS NULL THEN 'No billing activity matched'\n            ELSE 'Stock and billing activity matched' END AS comparison_status\nFROM inventory i FULL OUTER JOIN sales s\n  ON i.client = s.client AND i.product = s.product AND i.base_unit = s.base_unit\nORDER BY i.stock_qty DESC NULLS LAST, client, product, currency\nLIMIT 10",
+      "error": null,
+      "error_kind": null,
+      "failure_class": "SUCCESS",
+      "column_names": [
+        "client",
+        "product",
+        "base_unit",
+        "currency",
+        "stock_qty",
+        "billed_qty",
+        "total_sales",
+        "comparison_status"
+      ],
+      "resolved_question": "Compare inventory with sales in 2004.",
+      "failure_summary": null,
+      "pipeline_diagnostics": {
+        "SQL_VALIDATION": {
+          "pass": true,
+          "errors": []
+        }
+      },
+      "semantic_dimensions": [],
+      "validation_warnings": null
+    },
+    {
+      "case": "reported monthly revenue",
+      "question": "Show monthly revenue.",
+      "passed": true,
+      "outcome": "PASS",
+      "answer_status": "SUCCESS",
+      "mode": "database_analysis",
+      "row_count": 499,
+      "service_issue": null,
+      "seconds": 10.61,
+      "sql_executed": true,
+      "sql": "SELECT \"VBRK\".\"waerk\" AS currency, SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 6) AS \"month\", SUM(CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC)) AS \"total_sales\"\nFROM \"VBRK\"\nWHERE NULLIF(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), '') IS NOT NULL\nGROUP BY SUBSTRING(TRIM(CAST(\"VBRK\".\"fkdat\" AS TEXT)), 1, 6), \"VBRK\".\"waerk\"\nORDER BY \"month\" ASC",
+      "error": null,
+      "error_kind": null,
+      "failure_class": "SUCCESS",
+      "column_names": [
+        "currency",
+        "month",
+        "total_sales"
+      ],
+      "resolved_question": "Show monthly revenue.",
+      "failure_summary": null,
+      "pipeline_diagnostics": {
+        "SQL_VALIDATION": {
+          "pass": true,
+          "errors": []
+        }
+      },
+      "semantic_dimensions": [
+        "month"
+      ],
+      "validation_warnings": null
+    }
+  ]
+}

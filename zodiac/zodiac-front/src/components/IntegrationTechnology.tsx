@@ -25,7 +25,7 @@ const milestones = [
   ['', 'Subsequent Enterprise Implementations', 'Deployment across SAP/EDI environments including Swiss Krono, Nolte GmbH and HR Path France.'],
   ['', 'eInvoicing Evolution', 'Application of the technology to electronic invoicing and international formats including CFDI and UBL.'],
   ['2024', 'U.S. Patent Application', 'U.S. patent application 18/673,332 filed.'],
-  ['2026', 'USPTO Allowance', 'Claims allowed by the USPTO; issue fee paid and patent proceeding toward issuance.'],
+  ['2026', 'Patent Office Allowance', 'Claims allowed by the Patent Office; issue fee paid and patent proceeding toward issuance.'],
 ];
 const benefits = [
   ['For Global SAP Enterprises', 'Global Template', 'Extend a common SAP architecture across multiple countries and legal entities.'],
@@ -82,7 +82,7 @@ export default function IntegrationTechnology() {
           </div>
           <ArchitectureVisual />
         </div>
-        <p className={styles.heroFootnote}>U.S. Patent Application 18/673,332 · Allowed by USPTO; pending issuance</p>
+        <p className={styles.heroFootnote}>U.S. Patent Application 18/673,332 · Allowed by Patent Office; pending issuance</p>
       </section>
 
       <section id="solutions" className={styles.section} aria-labelledby="solutions-heading">
@@ -122,8 +122,8 @@ export default function IntegrationTechnology() {
           <div className={styles.document}>
             <div className={styles.documentHeader}><span className={styles.eyebrow}>U.S. Patent Application</span><ShieldCheck aria-hidden="true" /></div>
             <h3>{patentTitle}</h3>
-            <p className={styles.applicationNumber}>18/673,332</p><p className={styles.documentType}>United States Patent and Trademark Office</p>
-            <p className={styles.documentStatus}>Allowed by USPTO; pending issuance</p>
+            <p className={styles.applicationNumber}>18/673,332</p><p className={styles.documentType}>Patent Office</p>
+            <p className={styles.documentStatus}>Allowed by Patent Office; pending issuance</p>
           </div>
           <div>
             <dl className={styles.patentDetails}>
@@ -132,12 +132,12 @@ export default function IntegrationTechnology() {
                 ['Assignee/Owner', '[exact legal owner — this should match the patent records]'],
                 ['U.S. Patent Application', '18/673,332'],
                 ['Filing Date', 'May 24, 2024'],
-                ['Status', 'Allowed by USPTO; pending issuance'],
-                ['Patent Office', 'United States Patent and Trademark Office'],
+                ['Status', 'Allowed by Patent Office; pending issuance'],
+                ['Patent Office', 'Patent Office'],
                 ['Patent Number', 'Pending Issuance'],
               ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
             </dl>
-            <a className={styles.lightButton + ' ' + styles.filingButton} href="https://patentcenter.uspto.gov/applications/18673332" target="_blank" rel="noopener noreferrer">View USPTO Filing</a>
+            <a className={styles.lightButton + ' ' + styles.filingButton} href="https://patentcenter.uspto.gov/applications/18673332" target="_blank" rel="noopener noreferrer">View Patent Office Filing</a>
           </div>
         </div>
         <p className={styles.patentStatement}>The patented architecture addresses SAP-standard integration, electronic transaction processing, validation, automated exception handling and monitoring.</p>

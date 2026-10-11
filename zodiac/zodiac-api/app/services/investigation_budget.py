@@ -40,6 +40,7 @@ _REGISTRY_LOCK = threading.Lock()
 _REGISTRY: Dict[str, "InvestigationBudget"] = {}
 
 _STAGE_ALIASES = {
+    "agent_decision": "CHOOSING_ACTION",
     "intent_analysis": "UNDERSTANDING",
     "intent_analysis_done": "UNDERSTANDING",
     "schema_retrieval": "RETRIEVING_SCHEMA",

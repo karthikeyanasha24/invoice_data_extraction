@@ -21,3 +21,18 @@ test('category comparison respects server chart type even when line toggle is av
   assert.equal(defaultAnalystChartType('bar', ['bar', 'line', 'area', 'table']), 'bar');
   assert.equal(defaultAnalystChartType('line', ['bar', 'line', 'table']), 'line');
 });
+
+
+import { analystChartCurrency, defaultAnalystCurrency } from './analystPresentation.ts';
+
+test('currency selection keeps historical series separate and defaults to the broadest coverage', () => {
+  const charts = [
+    { title: 'Monthly revenue (PTE)', data: [{currency:'PTE', month:'199506', total_sales:10}] },
+    { title: 'Monthly revenue (EUR)', data: [{currency:'EUR', month:'202401', total_sales:20}, {currency:'EUR', month:'202402', total_sales:30}] },
+  ];
+  assert.equal(defaultAnalystCurrency(charts), 'EUR');
+  assert.equal(analystChartCurrency(charts[0]), 'PTE');
+  assert.equal(analystChartCurrency({title:'Sales (USD)', data:[]}), 'USD');
+  assert.equal(analystChartCurrency({title:'Customer counts', data:[{customer:'A', count:4}]}), 'Other');
+  assert.equal(charts.reduce((n, chart) => n + chart.data.length, 0), 3);
+});

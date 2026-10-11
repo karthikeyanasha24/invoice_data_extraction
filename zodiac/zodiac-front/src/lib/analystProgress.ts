@@ -11,6 +11,9 @@ export type AnalystProgress = {
 };
 
 export const ANALYST_STAGE_LABELS: Record<string, string> = {
+  CHOOSING_ACTION: 'Choosing the next step',
+  USING_TOOL: 'Working with your data',
+  CALCULATING: 'Calculating the result',
   UNDERSTANDING: 'Understanding your question',
   RETRIEVING_SCHEMA: 'Finding relevant data',
   SELECTING_TABLES: 'Finding the right tables',

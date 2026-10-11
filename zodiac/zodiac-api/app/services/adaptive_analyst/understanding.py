@@ -806,10 +806,10 @@ def understand_turn(
             is_greeting_or_chitchat,
             question_requires_database,
         )
-        from .database_metadata import classify_metadata_operation
+        from .database_metadata import classify_metadata_operation, resolve_metadata_followup
 
         has_prior = bool(prior_question or prior_summary or prior_plan)
-        metadata_plan = classify_metadata_operation(q)
+        metadata_plan = resolve_metadata_followup(q, prior_plan, prior_question) or classify_metadata_operation(q)
         if is_capability_or_help_question(q):
             data = {
                 "intent": "capability",
@@ -866,9 +866,9 @@ def understand_turn(
         q,
         has_prior=bool(prior_question or prior_summary or prior_plan),
     )
-    from .database_metadata import classify_metadata_operation
+    from .database_metadata import classify_metadata_operation, resolve_metadata_followup
 
-    metadata_plan = classify_metadata_operation(q)
+    metadata_plan = resolve_metadata_followup(q, prior_plan, prior_question) or classify_metadata_operation(q)
     if metadata_plan is not None and not is_prior_turn_discourse(
         q, has_prior=bool(prior_question or prior_summary or prior_plan)
     ):

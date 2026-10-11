@@ -490,6 +490,9 @@ def _single_fact_with_existence_filter(sql: str) -> bool:
             return False
         measured_family = next(iter(measured))
         for table in tree.find_all(exp.Table):
+            if table.name.upper() in set(UNSAFE_MONETARY_JOINS) | {"MBEW", "MARD", "VBEP"}:
+                if not table.find_ancestor(exp.Exists):
+                    return False
             family = families.get(table.name.upper())
             if family and family != measured_family:
                 if not table.find_ancestor(exp.Exists):

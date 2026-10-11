@@ -399,6 +399,9 @@ def _configured_calendar_date_column(question: str) -> Optional[str]:
 
 
 def _sql_has_year_predicate_for_column(sql: str, column: str, year: str) -> bool:
+    from .sql_structure import has_date_year_predicate
+    if has_date_year_predicate(sql, column, year):
+        return True
     for clause in re.split(r"\bWHERE\b", sql or "", flags=re.I)[1:]:
         scope = re.split(
             r"\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b",
@@ -481,35 +484,36 @@ def inject_fkdat_calendar_year_filter(sql: str, question: Optional[str]) -> Tupl
     date_column = _configured_calendar_date_column(question)
     if not date_column or _sql_has_year_predicate_for_column(sql, date_column, year):
         return sql, notes
-    alias = (
-        _infer_vbrk_alias(sql)
-        if date_column == "FKDAT"
-        else _alias_referencing_column(sql, date_column)
-    )
-    if not alias:
+    # Bind the predicate to the SELECT that actually owns the billing header.
+    # The first WHERE in a multi-CTE query may belong to inventory or a lookup.
+    # Never put a billing alias there or force one year onto a period comparison.
+    if len(set(re.findall(r"\b(?:19|20)\d{2}\b", question))) > 1:
         return sql, notes
-    cond = f'SUBSTRING(TRIM(CAST({alias}."{date_column.lower()}" AS TEXT)),1,4) = \'{year}\''
-    # Prefer: extend existing WHERE before GROUP BY / ORDER BY / LIMIT
-    if re.search(r"\bWHERE\b", sql, re.IGNORECASE):
-        new_sql, n = re.subn(
-            r"(\bWHERE\b)([\s\S]*?)(\s+(?:GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b)",
-            lambda m: m.group(1) + m.group(2) + f" AND ({cond})" + m.group(3),
-            sql,
-            count=1,
-            flags=re.IGNORECASE,
+    try:
+        from sqlglot import exp, parse_one
+        from ..data_catalog.physical import has_column
+        if not has_column('VBRK', date_column):
+            return sql, notes
+        tree = parse_one(sql, read='postgres')
+        headers = [table for table in tree.find_all(exp.Table) if table.name.upper() == 'VBRK']
+        if len(headers) != 1:
+            return sql, notes
+        table = headers[0]
+        target = table.find_ancestor(exp.Select)
+        if target is None:
+            return sql, notes
+        alias = table.alias_or_name
+        condition = parse_one(
+            f'SUBSTRING(TRIM(CAST({alias}."{date_column.lower()}" AS TEXT)),1,4) = \'{year}\'',
+            read='postgres',
         )
-        if n:
-            notes.append(f"Auto-injected {date_column} calendar year filter for {year}.")
-            return new_sql, notes
-        return sql, notes
-    m2 = re.search(r"(\s+)(GROUP\s+BY|ORDER\s+BY|LIMIT)\b", sql, re.IGNORECASE)
-    if m2:
-        new_sql = sql[: m2.start()] + f" WHERE ({cond})" + sql[m2.start() :]
+        existing = target.args.get('where')
+        predicate = exp.and_(existing.this, condition) if existing else condition
+        target.set('where', exp.Where(this=predicate))
         notes.append(f"Auto-injected {date_column} calendar year filter for {year}.")
-        return new_sql, notes
-    new_sql = sql.rstrip().rstrip(";") + f" WHERE ({cond})"
-    notes.append(f"Auto-injected {date_column} calendar year filter for {year}.")
-    return new_sql, notes
+        return tree.sql(dialect='postgres'), notes
+    except Exception:
+        return sql, notes
 
 
 def sanitize_netwr_sql(sql: str) -> str:

@@ -1,0 +1,130 @@
+{
+  "live_model_decisions": true,
+  "database_evidence_sent_to_configured_provider": true,
+  "database_writes": false,
+  "cases": [
+    {
+      "case": "general conversation",
+      "status": "PASS",
+      "seconds": 16.3,
+      "answer_status": "SUCCESS",
+      "mode": "general_chat",
+      "checks": {
+        "successful": true,
+        "agent_pipeline": true,
+        "expected_mode": true,
+        "no_sql": true
+      },
+      "tool_trace": [],
+      "service_issue": null
+    },
+    {
+      "case": "live catalog count",
+      "status": "PASS",
+      "seconds": 18.22,
+      "answer_status": "SUCCESS",
+      "mode": "database_metadata",
+      "checks": {
+        "successful": true,
+        "agent_pipeline": true,
+        "expected_mode": true,
+        "catalog_tool_used": true,
+        "grounded_count": true
+      },
+      "tool_trace": [
+        {
+          "tool": "list_tables",
+          "status": "completed",
+          "result_id": "result_1",
+          "row_count": 1,
+          "elapsed_ms": 6000
+        },
+        {
+          "tool": "list_tables",
+          "status": "completed",
+          "result_id": "result_2",
+          "row_count": 1,
+          "elapsed_ms": 1563
+        }
+      ],
+      "service_issue": null
+    },
+    {
+      "case": "catalog followup",
+      "status": "PASS",
+      "seconds": 21.67,
+      "answer_status": "SUCCESS",
+      "mode": "database_metadata",
+      "checks": {
+        "successful": true,
+        "agent_pipeline": true,
+        "expected_mode": true,
+        "catalog_tool_used": true,
+        "followup_matches_count": true
+      },
+      "tool_trace": [
+        {
+          "tool": "list_tables",
+          "status": "completed",
+          "result_id": "result_1",
+          "row_count": 129,
+          "elapsed_ms": 2110
+        },
+        {
+          "tool": "list_tables",
+          "status": "completed",
+          "result_id": "result_2",
+          "row_count": 129,
+          "elapsed_ms": 1578
+        }
+      ],
+      "service_issue": null
+    },
+    {
+      "case": "live SQL",
+      "status": "PASS",
+      "seconds": 15.8,
+      "answer_status": "SUCCESS",
+      "mode": "database_analysis",
+      "checks": {
+        "successful": true,
+        "agent_pipeline": true,
+        "expected_mode": true,
+        "sql_executed": true,
+        "aggregate_result": true
+      },
+      "tool_trace": [
+        {
+          "tool": "describe_tables",
+          "status": "completed",
+          "result_id": "result_1",
+          "row_count": 114,
+          "elapsed_ms": 2093
+        },
+        {
+          "tool": "run_readonly_sql",
+          "status": "completed",
+          "result_id": "result_2",
+          "row_count": 1,
+          "elapsed_ms": 2891
+        }
+      ],
+      "service_issue": null
+    },
+    {
+      "case": "general topic after SQL",
+      "status": "PASS",
+      "seconds": 4.47,
+      "answer_status": "SUCCESS",
+      "mode": "general_chat",
+      "checks": {
+        "successful": true,
+        "agent_pipeline": true,
+        "expected_mode": true,
+        "no_sql": true
+      },
+      "tool_trace": [],
+      "service_issue": null
+    }
+  ]
+}

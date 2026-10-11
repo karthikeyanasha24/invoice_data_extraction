@@ -122,6 +122,7 @@ def test_execution_trace_records_the_actual_sanitized_sql(monkeypatch, succeeded
 def test_endpoint_keeps_attempted_sql_and_clears_failed_result_visuals(monkeypatch):
     from app.api import adaptive_query as api
     from app.services import adaptive_analyst
+    monkeypatch.setenv("AI_ANALYST_AGENT_ENABLED", "false")  # Explicit legacy rollback contract.
 
     monkeypatch.setenv("OPEN_AI_KEY", "test-key")
     monkeypatch.setattr(api, "apply_statement_timeout", lambda *_args, **_kwargs: None)
@@ -162,6 +163,7 @@ def test_endpoint_keeps_attempted_sql_and_clears_failed_result_visuals(monkeypat
 def test_endpoint_rejects_wrong_ranking_but_preserves_sql_for_inspection(monkeypatch):
     from app.api import adaptive_query as api
     from app.services import adaptive_analyst
+    monkeypatch.setenv("AI_ANALYST_AGENT_ENABLED", "false")  # Explicit legacy rollback contract.
 
     monkeypatch.setenv("OPEN_AI_KEY", "test-key")
     monkeypatch.setattr("app.services.operational_query_resolver.resolve_operational_query", lambda *_args, **_kwargs: None)

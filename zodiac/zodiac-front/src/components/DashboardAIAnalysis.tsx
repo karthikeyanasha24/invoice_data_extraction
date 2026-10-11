@@ -3,7 +3,7 @@
 /**
  * DashboardAIAnalysis.tsx — Complete Re-Architecture
  * ===================================================
- * Power BI-style AI analytics interface.
+ * Conversational AI analytics with verified database evidence.
  *
  * Pipeline driven (no Schema Browser):
  *   1. User asks a natural language question
@@ -18,6 +18,7 @@ import { dashboardApi } from '@/lib/api';
 import { publicApiError } from '@/lib/apiErrors';
 import { ANALYST_STAGE_LABELS, mergeAnalystProgress, type AnalystProgress } from '@/lib/analystProgress';
 import { analystSqlEvidence, analystSqlFields, type AnalystSqlFields } from '@/lib/analystSql';
+import { additionalAgentResults, agentStepLabel, agentStepFeedback, type AgentResultSet, type AgentStep } from '@/lib/analystAgent';
 import { humanizeFollowups } from '@/lib/followupChips';
 import {
   analysisTrustFromResult,
@@ -38,7 +39,8 @@ import {
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
-import { analystAnswerText } from '@/lib/analystPresentation';
+import { analystAnswerText, analystChartCurrency, defaultAnalystCurrency } from '@/lib/analystPresentation';
+import { analystScrollPosition } from '@/lib/analystChatScroll';
 import remarkGfm from 'remark-gfm';
 import {
   Send, Sparkles, RotateCcw, Copy, Check, Loader2,
@@ -155,6 +157,8 @@ type QueryResult = AnalystSqlFields & {
   answer_status?: string;
   failure_class?: string;
   query_plan?: any;
+  agent_results?: AgentResultSet[];
+  agent_primary_result_id?: string;
   column_semantics?: Record<string, { semantic_type?: string; precision?: number; format?: string }>;
   mode?: string;
   route?: string;
@@ -177,6 +181,7 @@ type QueryResult = AnalystSqlFields & {
     mode?: string;
     investigation_status?: string;
     failure_class?: string;
+    service_issue?: string;
     data_gap?: boolean;
   };
 };
@@ -191,14 +196,31 @@ type Message = {
 // ─── Copy hook ────────────────────────────────────────────────────────────────
 function useCopy() {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);
   return {
     copied,
+    copyFailed,
     copy: (text: string) => {
+      setCopyFailed(false);
+      if (!navigator.clipboard) { setCopyFailed(true); return; }
       navigator.clipboard.writeText(text).then(() => {
-        setCopied(true); setTimeout(() => setCopied(false), 2000);
-      });
+        setCopied(true);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+      }).catch(() => setCopyFailed(true));
     },
   };
+}
+
+function CopyAnswer({ text }: { text: string }) {
+  const { copied, copyFailed, copy } = useCopy();
+  return <button type="button" onClick={() => copy(text)} aria-label="Copy answer"
+    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+    <span role="status">{copied ? 'Copied' : copyFailed ? 'Copy unavailable' : 'Copy answer'}</span>
+  </button>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -208,7 +230,7 @@ function KPICards({ kpis }: { kpis: KPI[] }) {
   if (!kpis?.length) return null;
   const icons = [TrendingUp, BarChart3, PieIcon, LineIcon];
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))' }}>
       {kpis.slice(0, 4).map((kpi, i) => {
         const Icon = icons[i % icons.length];
         const isPos = kpi.change?.startsWith('+');
@@ -223,9 +245,9 @@ function KPICards({ kpis }: { kpis: KPI[] }) {
               <div className="p-1.5 rounded-lg" style={{ background: PALETTE[i] + '20' }}>
                 <Icon className="h-4 w-4" style={{ color: PALETTE[i] }} />
               </div>
-              <span className="text-xs text-slate-500 font-semibold uppercase tracking-wide truncate">{kpi.label}</span>
+              <span className="text-xs text-slate-500 font-semibold tracking-wide break-words">{kpi.label}</span>
             </div>
-            <div className="text-2xl font-extrabold text-slate-900 mb-1 tabular-nums">{kpi.value}</div>
+            <div className="text-xl sm:text-2xl font-bold text-slate-900 mb-1 tabular-nums break-words">{kpi.value}</div>
             {kpi.change && (
               <div className={cn(
                 "text-xs font-bold",
@@ -245,6 +267,7 @@ function KPICards({ kpis }: { kpis: KPI[] }) {
 // Charts grid
 // ═══════════════════════════════════════════════════════════════════════════════
 function ChartsGrid({ charts }: { charts: any[] }) {
+  const [selectedCurrency, setSelectedCurrency] = useState('');
   if (!charts?.length) return null;
 
   // Backend now sends Recharts spec objects: { chart_type, title, data, x_key, y_keys, ... }.
@@ -279,9 +302,29 @@ function ChartsGrid({ charts }: { charts: any[] }) {
     .filter((c) => c && Array.isArray(c.data) && c.data.length > 0);
 
   if (!specs.length) return null;
+  const currencies = Array.from(new Set(specs.map(analystChartCurrency).filter(Boolean)));
+  const showSelector = currencies.length > 1;
+  const activeCurrency = currencies.includes(selectedCurrency)
+    ? selectedCurrency : defaultAnalystCurrency(specs);
+  const visible = showSelector
+    ? specs.filter(spec => analystChartCurrency(spec) === activeCurrency)
+    : specs;
   return (
-    <div className="mb-4">
-      <AIChartRenderer charts={specs as any} />
+    <div className="mb-4 min-w-0">
+      {showSelector && (
+        <div className="flex flex-wrap items-center gap-3 mb-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <label className="text-xs font-medium text-slate-700">
+            Chart currency
+            <select value={activeCurrency} onChange={event => setSelectedCurrency(event.target.value)}
+              className="ml-2 min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+              aria-label="Chart currency">
+              {currencies.map(currency => <option key={currency} value={currency}>{currency}</option>)}
+            </select>
+          </label>
+          <span className="text-xs text-slate-500">{currencies.length} currencies available. The table includes every currency.</span>
+        </div>
+      )}
+      <AIChartRenderer charts={visible as any} />
     </div>
   );
 }
@@ -364,8 +407,8 @@ function DataTable({
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-4">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 gap-2">
+    <div className="min-w-0 bg-white rounded-xl border border-slate-200 shadow-sm mb-4 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between px-3 sm:px-4 py-3 border-b border-slate-100 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <Table2 className="h-4 w-4 text-slate-400" />
           <span className="text-sm font-medium text-slate-700">
@@ -374,7 +417,7 @@ function DataTable({
               : `${heading || 'Results'} · ${data.length.toLocaleString()} ${rowCount && rowCount > data.length ? `sample rows of ${rowCount.toLocaleString()} returned` : 'rows'}`}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex w-full sm:w-auto items-center gap-2 min-w-0">
           {!isEmpty && (
             <input
               type="search"
@@ -382,14 +425,14 @@ function DataTable({
               onChange={(e) => { setFilter(e.target.value); setPage(0); }}
               placeholder="Filter rows"
               aria-label="Filter table rows"
-              className="hidden sm:block w-36 text-xs rounded-lg border border-slate-200 px-2 py-1.5 mr-1"
+              className="min-w-0 flex-1 sm:flex-none sm:w-44 min-h-10 text-xs rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
             />
           )}
           {!isEmpty && (
             <button
               type="button"
               onClick={() => exportCsv(sorted, 'bridgeedi-analysis.csv')}
-              className="text-xs text-slate-600 hover:text-slate-900 px-2.5 py-1.5 rounded-lg hover:bg-slate-50"
+              className="shrink-0 min-h-10 text-xs font-medium text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50"
             >
               Export CSV
             </button>
@@ -399,13 +442,13 @@ function DataTable({
 
       {!isEmpty && (
         <>
-          <div className="overflow-auto max-h-[420px]" style={{ scrollbarWidth: 'thin' }}>
+          <div className="overflow-auto max-h-[420px]" role="region" aria-label={`${heading || 'Results'} data table; scroll for more columns`} tabIndex={0} style={{ scrollbarWidth: 'thin' }}>
             <table className="min-w-full text-xs">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-slate-50">
                   {headers.map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-semibold text-slate-600 uppercase tracking-wide whitespace-nowrap border-b border-slate-200" scope="col" aria-sort={sortKey === h ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                      <button type="button" onClick={() => toggleSort(h)} className="hover:text-slate-900">
+                      <button type="button" onClick={() => toggleSort(h)} className="min-h-8 hover:text-slate-900">
                         {h.replace(/_/g, ' ')}{sortKey === h ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
                       </button>
                     </th>
@@ -443,8 +486,8 @@ function DataTable({
                         return String(v);
                       })();
                       return (
-                        <td key={h} className={cn(
-                          'px-3 py-2 whitespace-nowrap border-b border-slate-100 max-w-[260px] overflow-hidden text-ellipsis',
+                        <td key={h} title={display == null ? undefined : String(display)} className={cn(
+                          'px-3 py-3 whitespace-nowrap border-b border-slate-100 max-w-[320px] overflow-hidden text-ellipsis',
                           isNum ? 'text-right tabular-nums text-slate-800' : 'text-slate-700',
                           isNum && n < 0 ? 'text-red-700' : ''
                         )}>
@@ -463,8 +506,8 @@ function DataTable({
             <div className="flex items-center justify-between px-4 py-2 border-t border-slate-100 text-xs text-slate-600">
               <span>Page {page + 1} of {pageCount}</span>
               <div className="flex gap-2">
-                <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="disabled:opacity-40">Previous</button>
-                <button type="button" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="disabled:opacity-40">Next</button>
+                <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="min-h-10 px-3 rounded-lg hover:bg-slate-100 disabled:opacity-40">Previous</button>
+                <button type="button" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="min-h-10 px-3 rounded-lg hover:bg-slate-100 disabled:opacity-40">Next</button>
               </div>
             </div>
           )}
@@ -499,12 +542,21 @@ function humanizeFindings(findings?: string[]): string[] {
 }
 
 function AnswerMarkdown({ text }: { text: string }) {
+  const readableStyle = { maxWidth: '48rem' };
   return (
-    <div className="text-sm leading-relaxed break-words [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3 [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3 [&_h2]:font-semibold [&_h2]:text-base [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:bg-slate-50 [&_td]:px-3 [&_td]:py-2 [&_tr]:border-b [&_tr]:border-slate-200 [&_code]:text-xs [&_pre]:overflow-x-auto">
+    <div className="analyst-prose min-w-0 text-sm leading-7 break-words [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3 [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3 [&_h2]:font-semibold [&_h2]:text-base [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:bg-slate-50 [&_td]:px-3 [&_td]:py-2 [&_tr]:border-b [&_tr]:border-slate-200 [&_code]:text-xs [&_pre]:overflow-x-auto">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+        p: ({ children }) => <p style={readableStyle}>{children}</p>,
+        ul: ({ children }) => <ul style={readableStyle}>{children}</ul>,
+        ol: ({ children }) => <ol style={readableStyle}>{children}</ol>,
+        h1: ({ children }) => <h1 style={readableStyle}>{children}</h1>,
+        h2: ({ children }) => <h2 style={readableStyle}>{children}</h2>,
+        h3: ({ children }) => <h3 style={readableStyle}>{children}</h3>,
+        h4: ({ children }) => <h4 style={readableStyle}>{children}</h4>,
+        blockquote: ({ children }) => <blockquote style={readableStyle}>{children}</blockquote>,
         table: ({ children }) => (
-          <div className="max-w-full overflow-x-auto my-3">
-            <table className="w-full border-collapse whitespace-nowrap">{children}</table>
+          <div className="max-w-full overflow-x-auto my-4 rounded-xl border border-slate-200" role="region" aria-label="Answer table; scroll for more columns" tabIndex={0}>
+            <table className="w-full border-collapse whitespace-nowrap text-xs sm:text-sm">{children}</table>
           </div>
         ),
       }}>{text}</ReactMarkdown>
@@ -514,7 +566,7 @@ function AnswerMarkdown({ text }: { text: string }) {
 
 function ConversationCard({ message }: { message: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 mb-4">
+    <div className="py-1 mb-3">
       <div className="text-slate-800"><AnswerMarkdown text={message} /></div>
     </div>
   );
@@ -568,14 +620,7 @@ function InsightsPanel({ findings }: { findings: string[] }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function SummaryCard({ summary, intent }: { summary: string; intent?: string }) {
   return (
-    <div className="relative bg-gradient-to-br from-white via-amber-50/30 to-orange-50/40 rounded-xl border border-amber-100 p-4 shadow-sm mb-4 overflow-hidden">
-      <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-amber-400 to-orange-400" />
-      <div className="flex items-center gap-2 mb-2">
-        <div className="p-1 rounded-md bg-amber-100">
-          <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-        </div>
-        <span className="text-sm font-bold text-slate-800">What we found</span>
-      </div>
+    <div className="py-1 mb-4">
       <div className="prose prose-sm prose-slate max-w-none text-slate-700 text-sm leading-relaxed">
         <AnswerMarkdown text={humanizePublicSummary(summary, intent)} />
       </div>
@@ -757,7 +802,7 @@ function TrustPanel({ result }: { result: QueryResult }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Full result renderer (Power BI-style dashboard)
+// Conversational answer with inspectable data and execution evidence
 // ═══════════════════════════════════════════════════════════════════════════════
 function ResultDashboard({
   result,
@@ -769,6 +814,31 @@ function ResultDashboard({
   return (
     <div className="space-y-3">
       <ResultContent result={result} onAskFollowup={onAskFollowup} />
+      {additionalAgentResults(result).map(set => (
+        <details key={set.id} className="rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-slate-600">
+            Supporting data · {set.row_count ?? set.rows.length} rows
+          </summary>
+          <div className="space-y-2 px-2 pb-2 sm:px-3">
+          <DataTable data={set.rows} rowCount={set.row_count} heading="Supporting result" />
+          {set.truncated && <p className="text-xs text-slate-500">This table shows a bounded sample.</p>}
+          {set.sql && <SqlDisclosure result={{ sql: set.sql, sql_status: 'executed', answer_status: 'SUCCESS' }} />}
+          </div>
+        </details>
+      ))}
+      {Array.isArray(result.query_plan?.agent_trace) && result.query_plan.agent_trace.length > 0 && (
+        <details className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <summary className="cursor-pointer text-xs font-medium text-slate-700">Steps taken</summary>
+          <ol className="mt-3 space-y-2 text-xs text-slate-600">
+            {result.query_plan.agent_trace.map((step: AgentStep, index: number) => (
+              <li key={index}>
+                {index + 1}. {agentStepLabel(step)}
+                {agentStepFeedback(step) && <p className="mt-1 text-slate-500">{agentStepFeedback(step)}</p>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
       <SqlDisclosure result={result} />
     </div>
   );
@@ -780,14 +850,7 @@ function SqlDisclosure({ result }: { result: QueryResult }) {
   const { copied, copy } = useCopy();
   const evidence = analystSqlEvidence(result);
   if (!evidence) {
-    const failed = isInvestigationFailure(result) || result.answer_status === 'TIMEOUT';
-    return failed ? (
-      <p className="text-xs text-slate-500 px-1">
-        {result.sql_status === 'not_generated'
-          ? 'The service could not generate a database query for this investigation.'
-          : 'No SQL was returned for this investigation.'}
-      </p>
-    ) : null;
+    return null;
   }
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -888,7 +951,7 @@ function ResultContent({ result, onAskFollowup }: {
   if (isClarification) {
     return (
       <ClarificationCard
-        message={summary || 'I need one more detail to answer this accurately.'}
+        message={fullAnswer || 'I need one more detail to answer this accurately.'}
         followups={suggested_followups}
         onAskFollowup={onAskFollowup}
       />
@@ -910,7 +973,9 @@ function ResultContent({ result, onAskFollowup }: {
       result.failure_class || result.meta?.investigation_status || ''
     ).toUpperCase();
     const heading =
-      failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
+      result.meta?.service_issue
+        ? 'AI service unavailable'
+        : failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
         ? 'Query could not be completed'
         : failure === 'MODEL_FAILURE' || failure === 'SQL_GENERATION_FAILED'
           ? 'Analysis could not be planned'
@@ -948,7 +1013,12 @@ function ResultContent({ result, onAskFollowup }: {
       {hasSummary && <SummaryCard summary={fullAnswer} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} />}
-      {hasData && <DataTable data={data || []} rowCount={rowCount} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} />}
+      {hasData && <details className="rounded-xl border border-slate-200 bg-white mb-4">
+        <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-slate-600">
+          View verified data · {(rowCount ?? data?.length ?? 0).toLocaleString()} rows
+        </summary>
+        <div className="px-2 pb-2 sm:px-3"><DataTable data={data || []} rowCount={rowCount} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} /></div>
+      </details>}
       {hasInsights && <InsightsPanel findings={cleanFindings} />}
       {!isGeneral && <TrustPanel result={result} />}
       {followups.length > 0 && onAskFollowup && (
@@ -990,7 +1060,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const bottomRef   = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const conversationContentRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const [scrollPosition, setScrollPosition] = useState({ canGoUp: false, canGoDown: false, nearBottom: true });
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef    = useRef<HTMLTextAreaElement>(null);
   const initialSentRef = useRef<string | null>(null);
@@ -1029,6 +1102,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               summary: m.result.summary || m.content,
               answer: m.result.answer || m.content,
               query_plan: m.result.query_plan || m.result.queryPlan || null,
+              agent_results: m.result.agent_results || m.result.query_plan?.agent_results,
+              agent_primary_result_id: m.result.agent_primary_result_id || m.result.query_plan?.agent_primary_result_id,
               answer_status: m.result.answer_status
                 || (m.result.mode === 'general_chat' ? 'SUCCESS'
                   : ((m.result.sql || '').trim() ? 'SUCCESS' : 'SUCCESS')),
@@ -1065,10 +1140,41 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { cancelled = true; };
   }, [threadId, historyLoaded]);
 
-  // auto-scroll
+  const updateScrollPosition = useCallback(() => {
+    const el = conversationRef.current;
+    if (!el) return;
+    const next = analystScrollPosition(el.scrollTop, el.scrollHeight, el.clientHeight);
+    setScrollPosition(previous => previous.canGoUp === next.canGoUp && previous.canGoDown === next.canGoDown
+      && previous.nearBottom === next.nearBottom ? previous : next);
+  }, []);
+
+  const jumpTo = useCallback((edge: 'top' | 'bottom') => {
+    const el = conversationRef.current;
+    if (!el) return;
+    followLatestRef.current = edge === 'bottom';
+    el.scrollTo({ top: edge === 'top' ? 0 : el.scrollHeight,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }, []);
+
+  // Follow new replies only when the reader is already near the latest message.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+    const el = conversationRef.current;
+    if (el && followLatestRef.current) el.scrollTop = el.scrollHeight;
+    updateScrollPosition();
+  }, [messages, loading, updateScrollPosition]);
+
+  useEffect(() => {
+    const el = conversationRef.current;
+    const content = conversationContentRef.current;
+    if (!el || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (followLatestRef.current) el.scrollTop = el.scrollHeight;
+      updateScrollPosition();
+    });
+    observer.observe(content);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [updateScrollPosition]);
 
   // elapsed timer while loading
   useEffect(() => {
@@ -1091,7 +1197,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
     setError(null);
     setFailedQuestion(null);
+    followLatestRef.current = true;
     setInput('');
+    if (inputRef.current) inputRef.current.style.height = 'auto';
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: q, ts: Date.now() };
     if (!opts?.retry) setMessages(prev => [...prev, userMsg]);
     setLoading(true);
@@ -1211,6 +1319,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           warnings:      res.warnings || [],
         },
         query_plan: res.query_plan || res.queryPlan,
+        agent_results: isCannotAnswer || isTimeout ? [] : res.agent_results,
+        agent_primary_result_id: res.agent_primary_result_id,
       };
 
       const timeoutMessage = 'This analysis exceeded the allowed processing time and was stopped. No unsupported result was returned.';
@@ -1290,6 +1400,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   };
 
   const clearAll = () => {
+    followLatestRef.current = true;
+    setInput('');
+    if (inputRef.current) inputRef.current.style.height = 'auto';
     setMessages([]);
     lastSuccessfulAnalyticalRef.current = null;
     setError(null);
@@ -1316,20 +1429,20 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
   return (
     <div
-      className="flex flex-col h-full bg-slate-50"
+      className="flex flex-1 flex-col min-h-0 bg-white"
       data-adaptive-context-policy={ADAPTIVE_CONTEXT_POLICY}
     >
 
       {/* ── Header ── */}
-      <div className="flex-none bg-gradient-to-r from-indigo-50/80 via-white to-violet-50/60 border-b border-slate-200 px-5 py-3.5">
+      <div className="flex-none bg-white border-b border-slate-100 px-3 sm:px-5 py-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-lg shadow-sm">
               <Sparkles className="h-4 w-4 text-white" />
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
-              <p className="text-xs text-slate-500">Ask anything — conversation, schema, or business data</p>
+              <p className="hidden sm:block text-xs text-slate-500">Conversation, schema, and verified business data</p>
               {investigation?.analysisLabel && (
                 <p className="text-[11px] text-slate-600 mt-0.5">
                   Working on: {investigation.analysisLabel}
@@ -1344,13 +1457,23 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button type="button" onClick={() => jumpTo('top')} disabled={!scrollPosition.canGoUp}
+              aria-label="Jump to top" title="Jump to top"
+              className="h-10 w-10 flex items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-default">
+              <ChevronUp className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={() => jumpTo('bottom')} disabled={!scrollPosition.canGoDown}
+              aria-label="Jump to bottom" title="Jump to bottom"
+              className="h-10 w-10 flex items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-default">
+              <ChevronDown className="h-5 w-5" />
+            </button>
             {messages.length > 0 && (
               <button onClick={clearAll}
                 disabled={loading}
-                className="inline-flex items-center p-1.5 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                className="inline-flex items-center min-h-10 px-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-40 transition-colors"
                 title="New chat"
                 aria-label="New chat">
-                <RotateCcw className="h-4 w-4" /><span className="text-xs font-medium ml-1.5">New chat</span>
+                <RotateCcw className="h-4 w-4" /><span className="hidden sm:inline text-xs font-medium ml-1.5">New chat</span>
               </button>
             )}
           </div>
@@ -1358,7 +1481,15 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       </div>
 
       {/* ── Messages / Welcome ── */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6" style={{ scrollbarWidth: 'thin' }}>
+      <div className="relative flex-1 min-h-0">
+      <div ref={conversationRef} role="region" aria-label="Conversation" tabIndex={0}
+        onScroll={() => {
+          const el = conversationRef.current;
+          if (el) followLatestRef.current = analystScrollPosition(el.scrollTop, el.scrollHeight, el.clientHeight).nearBottom;
+          updateScrollPosition();
+        }}
+        className="h-full overflow-y-auto overscroll-contain px-3 sm:px-6 lg:px-8 py-6" style={{ scrollbarWidth: 'thin' }}>
+      <div ref={conversationContentRef} className="w-full max-w-7xl mx-auto space-y-8 pb-8">
 
         {messages.length === 0 && !loading && (
           <div className="max-w-3xl mx-auto text-center py-8">
@@ -1372,7 +1503,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               Ask a question, follow up naturally, or explore your SAP data — same continuous chat.
             </p>
             {/* Quick questions */}
-            <div className="grid grid-cols-2 gap-2 text-left">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
               {QUICK_QUESTIONS.map(({ label, q }, qi) => (
                 <button key={label}
                   onClick={() => sendQuestion(q, { source: 'typed-continue' })}
@@ -1392,7 +1523,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
         {messages.map(msg => (
           <div key={msg.id} className={cn(
-            "flex gap-3",
+            "flex gap-2 sm:gap-3",
             msg.role === 'user' ? 'justify-end' : 'justify-start'
           )}>
             {msg.role === 'assistant' && (
@@ -1403,11 +1534,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <div className={cn(
               "space-y-3",
               msg.role === 'user'
-                ? 'max-w-[75%] items-end flex flex-col'
-                : 'flex-1 min-w-0' /* assistant answers occupy the entire width */
-            )}>
+                ? 'max-w-[90%] sm:max-w-[80%] items-end flex flex-col'
+                : 'flex-1 min-w-0'
+            )} style={msg.role === 'user' ? { maxWidth: 'min(85%, 768px)' } : undefined}>
               {msg.role === 'user' ? (
-                <div className="bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm shadow-sm">
+                <div className="bg-slate-100 text-slate-900 rounded-3xl px-5 py-3 text-sm whitespace-pre-wrap break-words">
                   {msg.content}
                 </div>
               ) : (
@@ -1431,15 +1562,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                         />
                       ) : (
                         msg.content && (
-                          <div className="text-sm text-slate-700 leading-relaxed">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {humanizePublicSummary(msg.content, undefined)}
-                            </ReactMarkdown>
+                          <div className="text-slate-700">
+                            <AnswerMarkdown text={humanizePublicSummary(msg.content, undefined)} />
                           </div>
                         )
                       )}
                     </>
                   )}
+                  <CopyAnswer text={msg.result ? analystAnswerText(msg.result) || msg.content : msg.content} />
                 </>
               )}
             </div>
@@ -1492,12 +1622,22 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           </div>
         )}
 
-        <div ref={bottomRef} />
+      </div>
+      </div>
+      {scrollPosition.canGoDown && (
+        <div className="absolute bottom-3 inset-x-0 flex justify-center pointer-events-none">
+          <button type="button" onClick={() => jumpTo('bottom')} aria-label="Go to latest message"
+            className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-700 shadow-md hover:bg-slate-50">
+            <ChevronDown className="h-4 w-4" /> Latest message
+          </button>
+        </div>
+      )}
       </div>
 
       {/* ── Input bar ── */}
-      <div className="flex-none bg-white border-t border-slate-200 px-4 py-3">
-        <div className="flex items-end gap-2.5">
+      <div className="flex-none bg-white px-3 sm:px-6 pt-2 pb-[max(12px,env(safe-area-inset-bottom))]">
+      <div className="w-full max-w-4xl mx-auto">
+        <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
           <div className="flex-1 relative">
             <textarea
               ref={inputRef}
@@ -1505,13 +1645,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKey}
-              disabled={loading}
-              placeholder='Ask anything — e.g. "Hi", "How many tables?", "Top customers by sales"'
+              aria-label="Message AI Analyst"
+              placeholder="Message AI Analyst"
               className={cn(
-                "w-full resize-none rounded-xl border border-slate-200 bg-slate-50",
-                "px-4 py-3 pr-12 text-sm text-slate-800 placeholder:text-slate-400",
-                "focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent",
-                "disabled:opacity-50 max-h-32 overflow-y-auto",
+                "block w-full resize-none border-0 bg-transparent",
+                "px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400",
+                "focus:outline-none focus:ring-0",
+                "max-h-32 overflow-y-auto",
                 "transition-all leading-relaxed"
               )}
               style={{ scrollbarWidth: 'thin' }}
@@ -1526,7 +1666,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             <button
               type="button"
               onClick={stopAnalysis}
-              className="flex-none h-10 px-3 rounded-xl bg-slate-700 text-white text-xs font-medium hover:bg-slate-800"
+              className="flex-none h-10 px-3 rounded-full bg-slate-800 text-white text-xs font-medium hover:bg-slate-900"
               aria-label="Cancel analysis"
             >
               Cancel
@@ -1537,18 +1677,18 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               disabled={!input.trim() || !historyLoaded}
               aria-label="Send question"
               className={cn(
-                "flex-none w-10 h-10 rounded-xl flex items-center justify-center transition-all",
+                "flex-none w-10 h-10 rounded-full flex items-center justify-center transition-all",
                 input.trim()
-                  ? "bg-emerald-800 hover:bg-emerald-900 shadow-md"
+                  ? "bg-slate-900 hover:bg-slate-700"
                   : "bg-slate-200 cursor-not-allowed"
               )}>
               <Send className="h-4 w-4 text-white" />
             </button>
           )}
         </div>
-        <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-400 px-1">
-          <Zap className="h-3 w-3 text-amber-400" />
-          <span>Same continuous chat — follow-ups keep context. Use New chat (top right) to start fresh.</span>
+        <div className="mt-2 text-center text-[11px] text-slate-400">
+          <span>{loading ? 'You can draft your next question while I work.' : 'Enter to send · Shift + Enter for a new line · Follow-ups keep context'}</span>
+        </div>
         </div>
       </div>
 

@@ -194,7 +194,7 @@ def test_greeting_uses_llm_not_canned(mock_llm, monkeypatch):
     assert "Hi there! How can I help you today?" != (out.get("summary") or "")
 
 
-def test_greeting_has_plain_fallback_when_model_providers_are_unavailable(monkeypatch):
+def test_greeting_reports_model_unavailability_without_a_canned_success(monkeypatch):
     from app.services.adaptive_analyst import llm_provider as lp
 
     def unavailable(*_args, **_kwargs):
@@ -208,11 +208,11 @@ def test_greeting_has_plain_fallback_when_model_providers_are_unavailable(monkey
         use_sap=False,
     )
 
-    assert out["mode"] == "general_chat"
-    assert out["answer_status"] == "SUCCESS"
-    assert out["summary"] == "Hello! What would you like to explore?"
-    assert out["meta"]["provider"] == "local_greeting_fallback"
-    assert out["meta"]["response_model_called"] is False
+    assert out["mode"] == "error"
+    assert out["answer_status"] == "CANNOT_ANSWER"
+    assert "model service" in out["summary"]
+    assert out["meta"]["service_issue"] == "model_unavailable"
+    assert out["query_plan"]["investigation_state"]["recent_turns"][-2]["content"] == "Hi"
     assert not out.get("sql")
 
 

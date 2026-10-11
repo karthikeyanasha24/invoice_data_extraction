@@ -751,8 +751,24 @@
     "VBAK": {"keys": ["MANDT", "VBELN"], "attributes": ["NETWR", "WAERK", "VBTYP"]},
     "VBAP": {"keys": ["MANDT", "VBELN", "POSNR"], "attributes": ["NETWR", "WAERK", "MATNR", "KWMENG", "VRKME"]},
     "VBRK": {"keys": ["MANDT", "VBELN"], "attributes": ["NETWR", "WAERK", "VBTYP", "FKART", "FKSTO", "SFAKN"]},
-    "VBRP": {"keys": ["MANDT", "VBELN", "POSNR"], "attributes": ["NETWR", "AUBEL", "AUPOS", "MATNR", "FKIMG", "VRKME"]}
-  },
+    "VBRP": {"keys": ["MANDT", "VBELN", "POSNR"], "attributes": ["NETWR", "AUBEL", "AUPOS", "MATNR", "FKIMG", "VRKME"]},
+    "EKKO": {
+      "keys": ["MANDT","EBELN"],
+      "attributes": ["LIFNR","WAERS","BEDAT","LOEKZ"]
+    },
+    "EKPO": {
+      "keys": ["MANDT","EBELN","EBELP"],
+      "attributes": ["MATNR","NETWR","LOEKZ"]
+    },
+    "MBEW": {
+      "keys": ["MANDT","MATNR","BWKEY","BWTAR"],
+      "attributes": ["LBKUM"]
+    },
+    "MARA": {
+      "keys": ["MANDT","MATNR"],
+      "attributes": ["MEINS"]
+    }
+},
   "comparison_policies": [
     {
       "name": "sales_order_billing_reconciliation",

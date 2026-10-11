@@ -630,6 +630,18 @@ def pipeline1_table_selection(question: str, ctx: VerifiedDbContext) -> None:
     if budget is not None:
         budget.checkpoint("SELECTING_TABLES")
 
+    from .schema_backed_comparisons import build_schema_backed_comparison
+    comparison = build_schema_backed_comparison(question)
+    if comparison is not None:
+        ctx.tables = list(comparison.columns)
+        ctx.columns = [f"{table}.{col}" for table, cols in comparison.columns.items() for col in cols]
+        ctx.pipeline_log["schema_backed_comparison"] = {
+            "intent": comparison.intent, "explanation": comparison.explanation,
+            "limitation": comparison.limitation,
+        }
+        _log_stage(ctx, "PIPELINE_1_TABLE_SELECTION", {"source": "schema_backed_comparison", "selected_tables": ctx.tables})
+        return
+
     catalog = reg.lightweight_table_catalog(include_operational=include_ops)
     catalog_text = reg.compact_catalog_text(include_operational=include_ops)
 
@@ -689,7 +701,10 @@ def pipeline1_table_selection(question: str, ctx: VerifiedDbContext) -> None:
         },
     )
     if limitation and not ctx.tables:
-        ctx.pipeline_log["data_limitation"] = limitation
+        if "no tables in the indexed schema match" in str(limitation).lower():
+            ctx.pipeline_log["table_selection_failed"] = True
+        else:
+            ctx.pipeline_log["data_limitation"] = limitation
 
 
 def pipeline2_column_selection(question: str, ctx: VerifiedDbContext) -> None:
@@ -698,6 +713,9 @@ def pipeline2_column_selection(question: str, ctx: VerifiedDbContext) -> None:
     budget = current_budget()
     if budget is not None:
         budget.checkpoint("column_selection")
+    if ctx.pipeline_log.get("schema_backed_comparison") and ctx.columns:
+        _log_stage(ctx, "PIPELINE_2_COLUMN_SELECTION", {"source": "schema_backed_comparison", "columns": ctx.columns})
+        return
     reg = get_schema_registry()
     col_meta = reg.columns_for_tables(ctx.tables)
     column_text = reg.column_detail_for_selection(ctx.tables)
@@ -791,7 +809,10 @@ def pipeline25_query_plan(question: str, ctx: VerifiedDbContext, db: Optional[Se
     if db is not None and "document_identity_profiles" not in ctx.semantic_requirements:
         from .document_identity_quality import profile_document_identities
 
-        profiles = profile_document_identities(db, ctx.tables, ctx.columns)
+        if ctx.pipeline_log.get("schema_backed_comparison"):
+            profiles = profile_document_identities(db, ctx.tables, ctx.columns, required_tables=ctx.tables)
+        else:
+            profiles = profile_document_identities(db, ctx.tables, ctx.columns)
         if profiles:
             ctx.semantic_requirements["document_identity_profiles"] = profiles
             _log_stage(ctx, "DOCUMENT_IDENTITY_QUALITY", profiles)
@@ -1256,7 +1277,12 @@ def _validate_sql_against_context(sql: str, ctx: VerifiedDbContext, db: Session)
     errors.extend(detect_expression_as_column_errors(sql))
     from .document_identity_quality import document_identity_errors
 
-    errors.extend(document_identity_errors(sql, ctx.semantic_requirements.get("document_identity_profiles", {})))
+    identity_profiles = ctx.semantic_requirements.get("document_identity_profiles", {})
+    if ctx.pipeline_log.get("schema_backed_comparison"):
+        for table, profile in identity_profiles.items():
+            if profile.get("verified") is False:
+                errors.append(f"Source row identity could not be verified for {table}")
+    errors.extend(document_identity_errors(sql, identity_profiles))
     if errors:
         return errors
     allowed = _tables_in_verified_set(ctx.tables)
@@ -1563,6 +1589,12 @@ def pipeline3_sql_generation(
     budget = current_budget()
     if budget is not None and not templates_only:
         budget.checkpoint("sql_generation")
+
+    if not validation_feedback and ctx.pipeline_log.get("schema_backed_comparison"):
+        from .schema_backed_comparisons import build_schema_backed_comparison
+        comparison = build_schema_backed_comparison(question)
+        if comparison is not None:
+            return _template_sql(ctx, question, comparison.intent + "_template", comparison.sql)
 
     def _accept(source: str, sql: Optional[str]) -> Optional[str]:
         if not sql:
@@ -2076,7 +2108,11 @@ def _run_four_stage_body(
     from .plan_satisfaction import result_matches_analytical_intent
 
     budget = current_budget()
-    ctx = _apply_followup_to_context(question, prior_plan)
+    from .schema_backed_comparisons import build_schema_backed_comparison
+    # A self-contained comparison remains a new schema-backed request even
+    # when a year token resembles a short follow-up against an older result.
+    # Its referenced filters are explicit; the capability rejects pronouns.
+    ctx = None if build_schema_backed_comparison(question) is not None else _apply_followup_to_context(question, prior_plan)
     if ctx is not None:
         ctx.prior_sql = prior_sql
         ctx.semantic_requirements = extract_semantic_requirements(question)
@@ -2113,6 +2149,13 @@ def _run_four_stage_body(
     if ctx is None:
         ctx = VerifiedDbContext(question=question)
         pipeline1_table_selection(question, ctx)
+        if ctx.pipeline_log.get("table_selection_failed"):
+            return {
+                "error": "schema_resolution_failed", "error_kind": "pipeline_error",
+                "error_class": "SCHEMA_UNRESOLVED", "tables": [], "sql": "", "rows": [],
+                "user_message": "I couldn't map this request to verified database tables. This does not establish that the required data is absent. The analysis needs a working planner or a more specific source.",
+                "verified_context": ctx.to_dict(), "pipeline_log": ctx.pipeline_log,
+            }
         # Ambiguous semantics (growth periods, qualitative thresholds, …) → clarification
         clar = (ctx.semantic_requirements or {}).get("clarification")
         if isinstance(clar, dict) and clar.get("type"):
@@ -2826,6 +2869,12 @@ def _run_four_stage_body(
             f"{str(narrative.get('calculation_explanation') or '').strip()} {period_note}"
         ).strip()
     total_ms = int((time.perf_counter() - t0) * 1000)
+    comparison_info = ctx.pipeline_log.get("schema_backed_comparison")
+    if comparison_info and isinstance(narrative, dict):
+        disclosure = str(comparison_info["explanation"]) + "\n\n" + str(comparison_info["limitation"])
+        for field in ("summary", "answer"):
+            narrative[field] = (str(narrative.get(field) or "") + "\n\n" + disclosure).strip()
+        narrative["calculation_explanation"] = disclosure
     ctx.pipeline_log["total_ms"] = total_ms
     _log_stage(ctx, "FINAL_ANSWER", {"row_count": len(rows), "total_ms": total_ms})
 

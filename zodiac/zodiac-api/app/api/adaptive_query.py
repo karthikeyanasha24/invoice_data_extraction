@@ -1,16 +1,14 @@
 """
-Universal Adaptive Query API — answers ANY question about ALL 121 database tables.
+Conversational AI agent API with grounded, read-only database tools.
 
 POST /api/query/adaptive
 Body: { question, tableHint?, contextData?, overrideSql? }
 
-Architecture:
-  - Reads tables_columns.csv (121 tables, 9,352 columns) at startup, cached forever
-  - Generates a full schema context with data types (text/numeric/date/etc.)
-  - Sends complete schema + rich system prompt to GPT-4o
-  - Auto-retries up to 3x with exact PostgreSQL error fed back for self-correction
-  - Applies all SQL sanitizers (SAP text→numeric cast, HAVING alias fix, :: cast conversion)
-  - Fallback to orchestrator if all retries fail
+The authenticated page uses a Responses tool loop by default. It discovers the
+schema as needed, chooses read-only tools, and feeds errors/validation feedback
+back to the model. Existing sanitizers, trusted identity, request budgets,
+conversation persistence, and charts remain application-owned.
+AI_ANALYST_AGENT_ENABLED=false is an explicit rollback to the legacy pipeline.
 """
 
 from __future__ import annotations
@@ -1272,8 +1270,14 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         raise ValueError("SQL analytical validation failed: " + "; ".join(structure_errors))
     # Trusted identity binding for user-scoped app tables (never LLM-chosen).
     bind_params: Dict[str, Any] = {}
+    from ..services.investigation_budget import current_budget
+    budget = current_budget()
     try:
-        sanitized, bind_params = enforce_trusted_user_scope(sanitized)
+        if budget is not None and budget.diagnostics.get("agent_read_only"):
+            from ..services.analyst_agent_sql import enforce_agent_user_scope
+            sanitized, bind_params = enforce_agent_user_scope(sanitized, budget.diagnostics["agent_schema"])
+        else:
+            sanitized, bind_params = enforce_trusted_user_scope(sanitized)
     except PermissionError as denied:
         raise HTTPException(status_code=403, detail=str(denied)) from denied
     safe = prepare_sql_for_sqlalchemy_text_execution(sanitized)
@@ -1281,6 +1285,8 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         db.rollback()
     except Exception:
         pass
+    if budget is not None and budget.diagnostics.get("agent_read_only"):
+        db.execute(text("SET TRANSACTION READ ONLY"))
     apply_statement_timeout(db)
     from ..services.investigation_budget import current_budget
 
@@ -1294,7 +1300,11 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
         }
         budget.diagnostics["sql_status"] = "execution_failed"
     result = db.execute(text(safe), bind_params or {})
-    rows = result.fetchall()
+    rows = (
+        result.fetchmany(int(budget.diagnostics["agent_max_rows"]))
+        if budget is not None and budget.diagnostics.get("agent_read_only")
+        else result.fetchall()
+    )
     if budget is not None:
         budget.diagnostics["sql_execution"]["succeeded"] = True
         budget.diagnostics["sql_status"] = "executed"
@@ -1330,6 +1340,7 @@ CHART_COLORS = [
 
 
 _SAP_ID_NEVER_MEASURE = frozenset({
+    "client", "sap_client", "client_id",
     "mandt", "vbeln", "kunnr", "kunag", "lifnr", "matnr", "werks", "bukrs",
     "vkorg", "vtweg", "spart", "aubel", "vgbel", "fknum", "belnr",
     "buzei", "posnr", "aupos", "ebelp", "ebeln", "knumv",
@@ -1525,9 +1536,19 @@ def _auto_charts(
     n_numeric = len(y_candidates)
     x_key = x_candidates[0]
     y_keys = y_candidates[:4]  # max 4 series
+    quantity_comparison = all(key in cols for key in ("stock_qty", "billed_qty", "base_unit", "product"))
+    if quantity_comparison:
+        # Stock and billed quantities share each row's base unit. Money has a
+        # different unit and must not be plotted on this same quantity axis.
+        y_keys = [key for key in ("stock_qty", "billed_qty") if key in numeric_cols]
+        x_key = "product_unit"
+        n_numeric = len(y_keys)
 
-    # Truncate label for long datasets
-    chart_data = data[:50]  # max 50 points on a chart
+    # Preserve the complete time series; the renderer provides a range brush.
+    # Category charts retain a bounded preview, with the full result in the table.
+    chart_data = data if date_cols else data[:50]
+    if quantity_comparison:
+        chart_data = [{**row, "product_unit": f"{row.get('product')} ({row.get('base_unit') or 'unknown unit'})"} for row in chart_data]
 
     # ── Chart type selection ──────────────────────────────────────────────
 
@@ -2872,6 +2893,7 @@ def post_query_adaptive(
     # the highest sales?") to the governed canonical form before routing. The
     # user's original wording is preserved for display/history.
     _original_question = q
+    from ..services.analyst_agent_provider import agent_enabled
     try:
         from ..services.ranking_question_normalizer import normalize_ranking_question
         q = normalize_ranking_question(q)
@@ -2895,6 +2917,7 @@ def post_query_adaptive(
             conversation_history=conversationHistory if isinstance(conversationHistory, list) else None,
             new_question=newQuestion is True,
             background_tasks=background_tasks,
+            agent_mode=agent_enabled(),
         )
     finally:
         if _scope_token is not None:
@@ -2918,6 +2941,7 @@ def _post_query_adaptive_body(
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     new_question: bool = False,
     background_tasks: Optional[BackgroundTasks] = None,
+    agent_mode: bool = False,
 ) -> Dict[str, Any]:
     _original_question = original_question
     openai_key = (
@@ -3046,7 +3070,7 @@ def _post_query_adaptive_body(
                 pipe = str(payload.get("pipeline") or payload.get("sql_generation_method") or "").lower()
                 # Result-first follow-ups answer from prior rows; do not re-apply
                 # full analytical ranking/grouping gates meant for fresh SQL plans.
-                if "result_first" not in pipe:
+                if "result_first" not in pipe and pipe != "analyst_agent":
                     from ..services.plan_satisfaction import (
                         answer_consistent_with_rows,
                         result_matches_analytical_intent,
@@ -3145,6 +3169,9 @@ def _post_query_adaptive_body(
             _original_question, str(payload.get("answer") or payload.get("summary") or ""),
             str(payload.get("mode") or payload.get("route") or ""),
         )
+        if not str(payload.get("answer_status") or "").startswith("SUCCESS"):
+            payload["agent_results"] = []
+            payload["query_plan"]["agent_results"] = []
         result_rows = payload.get("data") or payload.get("rows") or []
         if isinstance(result_rows, list) and result_rows:
             try:
@@ -3333,6 +3360,21 @@ def _post_query_adaptive_body(
     from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
+    if agent_mode:
+        from ..services.analyst_agent import run_analyst_agent
+
+        agent = run_analyst_agent(
+            _original_question, db, _execute_sql, schema_loader=_load_schema,
+            context=contextData, conversation=memory_turns,
+            use_sap=USE_SAP_DB_FOR_AI, sap_session_factory=get_sap_session,
+        )
+        agent["tableHint"] = tableHint
+        if agent.get("sql") and str(agent.get("answer_status") or "").startswith("SUCCESS"):
+            try:
+                agent["charts"] = _ensure_charts(_original_question, agent["sql"], agent.get("data") or [], [])
+            except Exception:
+                agent["charts"] = []
+        return _persist_and_return(agent)
     # Self-contained arithmetic takes precedence over analytical follow-up
     # heuristics, including percentage reuse from a previous database result.
     from ..services.adaptive_analyst.calculator import calculate_question
@@ -3361,12 +3403,25 @@ def _post_query_adaptive_body(
     try:
         from ..services.adaptive_analyst.database_metadata import (
             answer_database_metadata,
+            build_metadata_payload,
+            execute_metadata_plan,
             is_database_metadata_question,
+            resolve_metadata_followup,
         )
-        if is_database_metadata_question(clean_q) and not metadata_is_prior_recall:
+        meta_context = contextData if isinstance(contextData, dict) else {}
+        meta_prior = meta_context.get("previousPlan") or meta_context.get("queryPlan") or {}
+        meta_prior = meta_prior if isinstance(meta_prior, dict) else {}
+        contextual_metadata = resolve_metadata_followup(
+            clean_q, {**meta_prior, "recent_turns": memory_turns},
+            str(meta_context.get("previousQuestion") or ""),
+        )
+        if (contextual_metadata or is_database_metadata_question(clean_q)) and not metadata_is_prior_recall:
             from ..services.adaptive_analyst.live_schema import load_live_schema
             metadata_schema, metadata_source = load_live_schema(db, _load_schema())
-            meta_payload = answer_database_metadata(clean_q, schema=metadata_schema)
+            meta_payload = (
+                build_metadata_payload(clean_q, contextual_metadata, execute_metadata_plan(contextual_metadata, metadata_schema))
+                if contextual_metadata else answer_database_metadata(clean_q, schema=metadata_schema)
+            )
             if meta_payload is not None:
                 meta_payload["meta"] = {**(meta_payload.get("meta") or {}), "schema_source": metadata_source}
                 if metadata_source == "schema_snapshot":

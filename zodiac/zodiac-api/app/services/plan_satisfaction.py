@@ -108,6 +108,22 @@ def _grouped_selects(sql: str) -> List[tuple[List[str], List[str]]]:
 
 def _expression_time_grain(expression: str) -> Optional[str]:
     value = expression or ""
+    # SQLGlot normalizes SUBSTRING to PostgreSQL FROM/FOR syntax. Its grain
+    # must remain the same after normalization.
+    try:
+        from sqlglot import exp, parse_one
+        node = parse_one(value, read="postgres")
+        while isinstance(node, (exp.Alias, exp.Cast, exp.TryCast, exp.Paren)):
+            node = node.this
+        if isinstance(node, exp.Substring):
+            start, length = node.args.get("start"), node.args.get("length")
+            if isinstance(start, exp.Literal) and isinstance(length, exp.Literal) and start.name == "1":
+                if length.name == "4":
+                    return "year"
+                if length.name == "6":
+                    return "month"
+    except Exception:
+        pass
     if re.search(
         r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*4\s*\)\s*\|\|\s*'[-]?Q'|"
         r"DATE_TRUNC\s*\(\s*'quarter'|TO_CHAR\s*\([\s\S]*?'YYYY[^']*Q'",
@@ -253,6 +269,33 @@ def sql_has_calendar_year(sql: str, year: str) -> bool:
     if not y or not re.fullmatch(r"\d{4}", y):
         return False
     s = sql or ""
+    # SAP text dates commonly use a YYYY prefix. Check a real WHERE predicate,
+    # not a quoted year embedded in a title, comment, or unrelated identifier.
+    try:
+        from sqlglot import exp, parse_one
+        tree = parse_one(s, read="postgres")
+        for where in tree.find_all(exp.Where):
+            for predicate in where.find_all(exp.Between):
+                low, high = predicate.args.get("low"), predicate.args.get("high")
+                if isinstance(low, exp.Literal) and isinstance(high, exp.Literal):
+                    bounds = (str(low.this).replace("-", ""), str(high.this).replace("-", ""))
+                    if bounds == (y + "0101", y + "1231") and any(
+                        re.search(r"date|year|period|^(?:fkdat|erdat|audat|bedat|budat|bldat)$", col.name, re.I)
+                        for col in predicate.this.find_all(exp.Column)
+                    ):
+                        return True
+            for predicate in where.find_all(exp.EQ):
+                for value, scope in ((predicate.expression, predicate.this), (predicate.this, predicate.expression)):
+                    if isinstance(value, exp.Literal) and str(value.this) == y and _expression_time_grain(scope.sql(dialect="postgres")) == "year":
+                        return True
+            for predicate in where.find_all(exp.Like, exp.ILike):
+                literal = predicate.expression
+                if isinstance(literal, exp.Literal) and literal.this == y + "%":
+                    if any(re.search(r"date|year|month|period|^(?:fkdat|erdat|audat|bedat|budat|bldat)$", col.name, re.I)
+                           for col in predicate.this.find_all(exp.Column)):
+                        return True
+    except Exception:
+        pass
     if re.search(rf"['\"]{re.escape(y)}['\"]", s):
         return True
     if y in s and re.search(r"SUBSTRING\s*\([\s\S]{0,80}?,\s*1\s*,\s*4\s*\)", s, re.I):
@@ -346,6 +389,11 @@ def sql_satisfies_analytical_intent(
 
     if sql_structure_errors(sql, question):
         return False
+    from .inventory_sales import wants_inventory_vs_sales
+    if wants_inventory_vs_sales((question or "").lower()):
+        tables = set(_tables_in_sql(sql))
+        if not tables.intersection({"MBEW", "MARD"}) or not tables.intersection({"VBRK", "VBRP"}):
+            return False
     req = required_semantics(question, semantic)
     sem = merge_semantic_requirements(question, semantic or {})
     ops = sem.get("analytical_operations") or extract_analytical_operations(question)
@@ -432,7 +480,8 @@ def sql_satisfies_analytical_intent(
         if "ORDER BY" not in sql_u:
             return False
         limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.I)
-        if not limit_match or int(limit_match.group(1)) != int(ranking["limit"]):
+        from .analytical_operations import ranking_count_is_explicit
+        if ranking_count_is_explicit(question) and (not limit_match or int(limit_match.group(1)) != int(ranking["limit"])):
             from .sql_structure import has_ranking_bound
 
             if not has_ranking_bound(sql, int(ranking["limit"])):
@@ -564,9 +613,23 @@ def result_matches_analytical_intent(
     date_filter = req.get("date_filter")
     if sql and not sql_satisfies_analytical_intent(sql, question, sem):
         warnings.append("executed SQL does not satisfy the analytical plan")
+        if group_by and not _grouping_matches_required_grain(sql, group_by):
+            warnings.append("Group only at the requested grain: " + ", ".join(group_by) + "; do not add raw dates, measures, or unrelated entity dimensions")
+        if ranking:
+            from .analytical_operations import ranking_count_is_explicit
+            if ranking_count_is_explicit(question):
+                warnings.append(f"Requested top-N requires LIMIT {ranking.get('limit')} or an ordered ROW_NUMBER filter <= {ranking.get('limit')}; currency partitions may have their own top-N")
+        if date_filter:
+            warnings.append("Required date scope: " + str(date_filter))
     if not rows:
         return warnings
     keys = [str(k).lower() for k in rows[0].keys()]
+    from .inventory_sales import wants_inventory_vs_sales
+    if wants_inventory_vs_sales((question or "").lower()):
+        if not any("stock" in key or "inventory" in key for key in keys):
+            warnings.append("inventory comparison is missing the stock measure")
+        if not any("sales" in key or "revenue" in key or "billed" in key for key in keys):
+            warnings.append("inventory comparison is missing the sales measure")
     if "month" in group_by:
         if not any("month" in k or re.fullmatch(r"(yyyymm|period|ym)", k) for k in keys):
             warnings.append("monthly grouping missing from result columns")
@@ -656,8 +719,12 @@ def result_matches_analytical_intent(
                 )
                 if limit_match:
                     currency_rank_limit = int(limit_match.group(1))
+            from .sql_structure import has_ranking_bound
+            if has_ranking_bound(sql or "", lim, partition_dimension="currency"):
+                currency_rank_limit = lim
 
-            if not partition_by and len(rows) > lim:
+            from .analytical_operations import ranking_count_is_explicit
+            if not partition_by and len(rows) > lim and ranking_count_is_explicit(question):
                 if currency_rank_limit == lim:
                     currency_key = next(
                         (key for key in rows[0].keys() if str(key).lower() == "currency"),
@@ -666,10 +733,8 @@ def result_matches_analytical_intent(
                     if currency_key is None:
                         warnings.append("currency-partitioned ranking omitted currency from results")
                     else:
-                        counts = Counter(
-                            str(row.get(currency_key) if isinstance(row, dict) else "")
-                            for row in rows
-                        )
+                        client_key = next((key for key in rows[0] if str(key).lower() in {"client", "mandt", "sap_client", "client_id"}), None)
+                        counts = Counter((str(row.get(client_key, "")), str(row.get(currency_key, ""))) for row in rows)
                         if any(count > lim for count in counts.values()):
                             warnings.append(f"currency-partitioned top-n exceeded limit {lim}")
                 else:
@@ -693,8 +758,10 @@ def result_matches_analytical_intent(
                 lim = int((ranking or {}).get("limit") or 5)
             except (TypeError, ValueError):
                 lim = 5
-            counts = Counter(str(r.get(part_key) if isinstance(r, dict) else "") for r in rows)
-            over = {k: c for k, c in counts.items() if k and c > lim}
+            client_key = next((key for key in rows[0] if str(key).lower() in {"client", "mandt", "sap_client", "client_id"}), None)
+            currency_key = next((key for key in rows[0] if str(key).lower() in {"currency", "waerk", "waers"}), None)
+            counts = Counter((str(r.get(client_key, "")), str(r.get(currency_key, "")), str(r.get(part_key, ""))) for r in rows)
+            over = {k: c for k, c in counts.items() if k[-1] and c > lim}
             if over:
                 warnings.append(f"partitioned top-n exceeded limit {lim} within partition(s)")
             # If only 5 total rows but many partitions expected from SQL PARTITION BY — heuristic:

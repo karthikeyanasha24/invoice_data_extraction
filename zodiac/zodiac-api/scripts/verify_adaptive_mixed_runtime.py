@@ -30,11 +30,17 @@ CASES = [
     ('database follow-up', 'Show only the top 3 from that result.', 'followup', None),
     ('arithmetic after database result', 'Compute (12 + 8) / 5', 'calc', '4'),
     ('division by zero', 'Calculate 5 / 0', 'undefined', None),
+    ('reported inventory comparison', 'Show inventory versus sales.', 'inventory', None),
+    ('reported supplier concentration', 'Show supplier concentration.', 'supplier', None),
+    ('supplier year and currency', 'Show supplier concentration in 2004 in EUR.', 'supplier', None),
+    ('inventory billing period', 'Compare inventory with sales in 2004.', 'inventory', None),
+    ('reported monthly revenue', 'Show monthly revenue.', 'monthly', None),
 ]
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--local-db-only', action='store_true', help='Disable both external model transports; keep all database results local.')
+    parser.add_argument('--case-filter', default='', help='Comma-separated substrings of case labels for targeted diagnosis.')
     args = parser.parse_args()
     if args.local_db_only:
         from app.services import ai_native_pipeline
@@ -60,6 +66,7 @@ def main():
         names = inspect(db.bind).get_table_names()
         print('Database connectivity: OK; table_count:', len(names), flush=True)
         for label, question, kind, expected in CASES:
+            if args.case_filter and not any(term in label for term in args.case_filter.split(',')): continue
             started = time.monotonic()
             reference = None
             if kind == 'count' and expected in names:
@@ -94,10 +101,17 @@ def main():
                     else:
                         passed = passed and 0 < len(rows) <= 5 and bool(result.get('sql'))
                 elif kind == 'followup': passed = passed and len(rows) == 3
+                elif kind == 'inventory':
+                    passed = passed and bool(rows) and all(all(key in row for key in ('stock_qty','billed_qty','base_unit','currency','comparison_status')) for row in rows) and 'as-of date is not verified' in answer.lower() and 'independently' in answer.lower()
+                elif kind == 'supplier':
+                    passed = passed and bool(rows) and all(all(key in row for key in ('supplier','currency','purchase_value','share_of_po_value_pct')) for row in rows) and 'denominator' in answer.lower()
+                elif kind == 'monthly':
+                    chart_rows = sum(len(chart.get('data') or []) for chart in result.get('charts') or [])
+                    passed = passed and bool(rows) and chart_rows == len(rows) and all('month' in row and 'currency' in row for row in rows)
                 blocked = not passed and issue in {'quota_exhausted', 'rate_limited', 'model_unavailable', 'provider_configuration'}
                 entry = {'case':label,'question':question,'passed':passed,'outcome':'PASS' if passed else 'BLOCKED' if blocked else 'FAIL',
                          'answer_status':status,'mode':mode,'row_count':len(rows),'service_issue':issue,
-                         'seconds':round(time.monotonic()-started,2),'sql_executed':bool(result.get('sql')), 'sql':result.get('sql') or '', 'error':result.get('error'), 'error_kind':result.get('error_kind'), 'failure_class':result.get('failure_class'), 'column_names':list(rows[0]) if rows else [], 'validation_warnings':(result.get('meta') or {}).get('validation_warnings')}
+                         'seconds':round(time.monotonic()-started,2),'sql_executed':result.get('sql_status') == 'executed', 'sql':result.get('sql') or '', 'error':result.get('error'), 'error_kind':result.get('error_kind'), 'failure_class':result.get('failure_class'), 'column_names':list(rows[0]) if rows else [], 'resolved_question':result.get('resolved_question'), 'failure_summary':answer if not passed else None, 'pipeline_diagnostics':{key:value for key,value in ((result.get('query_plan') or {}).get('pipeline_log') or {}).items() if key in {'SQL_EXECUTION_ERROR','SQL_EXECUTION_FAILED','RESULT_VALIDATION_FAILED','result_plan_warnings','SQL_VALIDATION','SQL_EXECUTION_REPAIR','SQL_EXECUTION_FINAL_FALLBACK'}}, 'semantic_dimensions':((result.get('query_plan') or {}).get('verified_db_context') or {}).get('semantic_requirements', {}).get('dimensions'), 'validation_warnings':(result.get('meta') or {}).get('validation_warnings')}
                 history.extend([{'role':'user','content':question},{'role':'assistant','content':answer}])
                 ctx={'previousQuestion':question,'previousSQL':result.get('sql') or '',
                      'previousPlan':result.get('query_plan') or {},'previousAnswerStatus':status,'data':rows}
@@ -112,7 +126,7 @@ def main():
     finally:
         db.close()
     output={'external_model_transport_disabled': args.local_db_only, 'counts':{k:sum(r['outcome']==k for r in report) for k in ('PASS','BLOCKED','FAIL')},'cases':report}
-    Path(__file__).with_name('adaptive_local_runtime_report.json' if args.local_db_only else 'adaptive_mixed_runtime_report.json').write_text(json.dumps(output,indent=2),encoding='utf-8')
+    Path(__file__).with_name('adaptive_debug_runtime_report.json' if args.case_filter else 'adaptive_local_runtime_report.json' if args.local_db_only else 'adaptive_mixed_runtime_report.json').write_text(json.dumps(output,indent=2),encoding='utf-8')
     print(json.dumps(output['counts']),flush=True)
     return 0 if all(r['passed'] for r in report) else 1
 

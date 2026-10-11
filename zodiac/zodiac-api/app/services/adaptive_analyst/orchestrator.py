@@ -900,6 +900,18 @@ def run_adaptive_orchestrator(
         state.conversation_id = thread_id
     prior_summary = _prior_summary_from_state(state, prior_plan)
 
+    def model_failure(error: BaseException) -> Dict[str, Any]:
+        failure = technical_understanding_failure(q, error)
+        state.remember_turn(q, failure["answer"], mode="understanding_error")
+        failure["query_plan"].update({
+            "investigation_state": state.to_dict(),
+            **({"metadata_context": outer_plan["metadata_context"]}
+               if isinstance(outer_plan.get("metadata_context"), dict) else {}),
+        })
+        if pending_request:
+            failure["query_plan"]["pending_analysis"] = pending_request
+        return failure
+
     from ...data_catalog.source_selector import (
         _ambiguous_sales,
         _explicit_invoice,
@@ -934,7 +946,6 @@ def run_adaptive_orchestrator(
     # Fast path: short greetings = ONE LLM reply (not understand JSON + respond).
     # Still model-generated — not a canned template — ChatGPT-like latency.
     if is_greeting_or_chitchat(q):
-        greeting_fallback = False
         try:
             from .llm_provider import complete_text
             from ..investigation_budget import checkpoint
@@ -952,13 +963,9 @@ def run_adaptive_orchestrator(
             if not reply:
                 raise RuntimeError("response model returned empty text")
         except Exception as greet_err:
-            reply = "Hello! What would you like to explore?"
-            provider = "local_greeting_fallback"
-            greeting_fallback = True
-            logger.warning(
-                "[adaptive-orch] greeting model unavailable; used a no-data greeting: %s",
-                type(greet_err).__name__,
-            )
+            # A canned successful greeting hides a broken model and makes every
+            # retry look identical. Report the service failure and keep memory.
+            return model_failure(greet_err)
         state.remember_turn(q, reply, mode="general_chat")
         out = {
             "mode": "general_chat",
@@ -974,20 +981,22 @@ def run_adaptive_orchestrator(
             "keyFindings": [],
             "charts": [],
             "pipeline": "adaptive_orchestrator",
-            "sql_generation_method": "connected_catalog_greeting_fallback" if greeting_fallback else "llm_greeting_fast",
+            "sql_generation_method": "llm_greeting_fast",
             "llm_calls": 1,
             "query_plan": {
                 "investigation_state": {**state.to_dict(), "mode": "general_chat"},
                 "last_mode": "general_chat",
+                **({"metadata_context": outer_plan["metadata_context"]}
+                   if isinstance(outer_plan.get("metadata_context"), dict) else {}),
             },
             "meta": {
                 "mode": "general_chat",
                 "failure_class": "SUCCESS",
                 "understanding_model_called": False,
-                "response_model_called": not greeting_fallback,
+                "response_model_called": True,
                 "selected_capability": "greeting",
                 "provider": provider,
-                "fast_path": "connected_catalog_fallback" if greeting_fallback else "greeting_single_llm",
+                "fast_path": "greeting_single_llm",
             },
             "suggested_followups": [
                 "What can you help with?",
@@ -1077,10 +1086,7 @@ def run_adaptive_orchestrator(
             capability_context=capability_facts(),
         )
     except Exception as understand_err:
-        failure = technical_understanding_failure(q, understand_err)
-        if pending_request:
-            failure["query_plan"]["pending_analysis"] = pending_request
-        return failure
+        return model_failure(understand_err)
 
     intent = understanding.intent
     if pending_request and understanding.turn_relation == "new_request":
@@ -1298,9 +1304,9 @@ def run_adaptive_orchestrator(
                         type(resp_err).__name__,
                     )
                 except Exception:
-                    return technical_understanding_failure(q, resp_err)
+                    return model_failure(resp_err)
             else:
-                return technical_understanding_failure(q, resp_err)
+                return model_failure(resp_err)
         state.remember_turn(q, reply, mode="general_chat")
         out = {
             "mode": "general_chat",
@@ -1346,7 +1352,10 @@ def run_adaptive_orchestrator(
     # An analytical request may need schema inspection as a prerequisite.
     # That does not change its destination into a schema-only answer.
     if intent == "metadata" or (understanding.requires_metadata and not analytical_turn):
-        from .database_metadata import answer_database_metadata
+        from .database_metadata import (
+            answer_database_metadata, build_metadata_payload, execute_metadata_plan,
+            resolve_metadata_followup,
+        )
 
         schema = schema_for_metadata if isinstance(schema_for_metadata, dict) else {}
         if not schema:
@@ -1356,7 +1365,13 @@ def run_adaptive_orchestrator(
                 schema = load_physical_schema() or {}
             except Exception:
                 schema = {}
-        meta_payload = answer_database_metadata(q, schema=schema)
+        contextual_metadata = resolve_metadata_followup(
+            q, {**(prior_plan or {}), "recent_turns": state.recent_turns}, prior_question,
+        )
+        meta_payload = (
+            build_metadata_payload(q, contextual_metadata, execute_metadata_plan(contextual_metadata, schema))
+            if contextual_metadata else answer_database_metadata(q, schema=schema)
+        )
         if meta_payload is None and re.search(
             r"(?i)\b(all|entire|full|complete)\b|\blist\b|\b\d+\s+to\s+be\s+listed\b",
             q,

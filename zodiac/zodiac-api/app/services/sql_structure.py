@@ -58,7 +58,7 @@ def has_date_year_predicate(sql: str, column: str, year: str) -> bool:
     except ParseError:
         return False
     for where in tree.find_all(exp.Where):
-        for predicate in where.find_all(exp.EQ, exp.GTE, exp.GT, exp.LTE, exp.LT, exp.In, exp.Between):
+        for predicate in where.find_all(exp.EQ, exp.GTE, exp.GT, exp.LTE, exp.LT, exp.In, exp.Between, exp.Like, exp.ILike):
             if not any(c.name.lower() == column.lower() for c in predicate.this.find_all(exp.Column)):
                 continue
             if isinstance(predicate, exp.In):
@@ -67,6 +67,10 @@ def has_date_year_predicate(sql: str, column: str, year: str) -> bool:
                 operands = [predicate.args.get("low"), predicate.args.get("high")]
             else:
                 operands = [predicate.expression]
+            if isinstance(predicate, (exp.Like, exp.ILike)):
+                if any(isinstance(v, exp.Literal) and v.name == year + '%' for v in operands):
+                    return True
+                continue
             if any(isinstance(v, exp.Literal) and v.name.replace("-", "")[:4] == year for v in operands):
                 return True
     return False
@@ -87,7 +91,7 @@ def _window_aggregate(node):
     return False
 
 
-def has_ranking_bound(sql: str, limit: int) -> bool:
+def has_ranking_bound(sql: str, limit: int, *, partition_dimension: str | None = None) -> bool:
     """Recognize a top-N row-number filter in a reachable query scope.
 
     Partitioned cohorts use a rank predicate instead of a global LIMIT. The
@@ -142,6 +146,11 @@ def has_ranking_bound(sql: str, limit: int) -> bool:
                     window = projection.this
                     if (isinstance(window, exp.Window) and isinstance(window.this, exp.RowNumber)
                             and window.args.get('order') is not None):
+                        if partition_dimension:
+                            from .semantic_requirements import result_has_dimension
+                            columns = [c.name for part in window.args.get('partition_by') or [] for c in part.find_all(exp.Column)]
+                            if not result_has_dimension(columns, partition_dimension):
+                                continue
                         return True
     except (ParseError, ValueError):
         return False
@@ -208,6 +217,19 @@ def sql_structure_errors(sql: str, question: str = "") -> list[str]:
     from .analytical_sql_safety import identity_period_errors, text_join_errors
 
     errors = text_join_errors(tree)
+    from sqlglot.optimizer.scope import traverse_scope
+    try:
+        for scope in traverse_scope(tree):
+            visible = set()
+            ancestor = scope
+            while ancestor is not None:
+                visible.update(str(alias).lower() for alias in ancestor.selected_sources)
+                ancestor = ancestor.parent
+            for column in scope.columns:
+                if column.table and column.table.lower() not in visible:
+                    errors.append(f"Table qualifier is not bound in this SELECT scope: {column.table}")
+    except Exception:
+        errors.append("SQL table qualifiers could not be verified")
     if question:
         from .semantic_requirements import required_semantics
 
