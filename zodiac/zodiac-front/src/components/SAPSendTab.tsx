@@ -6,6 +6,7 @@ import { satCanonicalApi, satSimpleMergeApi } from '@/lib/api';
 import {
   RefreshCw,
   Send,
+  Clock,
   Calendar,
   DollarSign,
   Building2,
@@ -68,13 +69,13 @@ export default function SAPSendTab() {
   const [sapResponseData, setSapResponseData] = useState<any>(null);
 
   // Filters
-  const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear());
-  const [periodFilter, setPeriodFilter] = useState<number>(new Date().getMonth() + 1);
+  const [yearFilter, setYearFilter] = useState<number>(0);
+  const [periodFilter, setPeriodFilter] = useState<number>(0);
   const [activeSection, setActiveSection] = useState<'canonical' | 'simple'>('canonical');
 
   useEffect(() => {
     fetchData();
-  }, [yearFilter, periodFilter]);
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -82,8 +83,8 @@ export default function SAPSendTab() {
       setError(null);
 
       const [canonicalResponse, simpleResponse] = await Promise.all([
-        satCanonicalApi.list(yearFilter, periodFilter),
-        satSimpleMergeApi.list(yearFilter, periodFilter)
+        satCanonicalApi.list(undefined, undefined, 0, 200),
+        satSimpleMergeApi.list(undefined, undefined, 0, 200),
       ]);
 
       setCanonicalDocs(canonicalResponse.documents || []);
@@ -180,14 +181,70 @@ export default function SAPSendTab() {
     return new Date(2000, month - 1, 1).toLocaleString('default', { month: 'long' });
   };
 
-  // Filter out already sent documents
+  const formatWhen = (value: string | null) => {
+    if (!value) return 'Time not recorded';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  };
+
+  const matchesPeriod = (year: number, period: number) =>
+    (yearFilter === 0 || year === yearFilter) && (periodFilter === 0 || period === periodFilter);
+
   const pendingCanonicalDocs = canonicalDocs.filter(
-    doc => doc.status === 'MERGED' && !doc.sap_document_number
+    (doc) => matchesPeriod(doc.fiscal_year, doc.fiscal_period) && doc.status === 'MERGED' && !doc.sap_document_number
   );
 
   const pendingSimpleDocs = simpleDocs.filter(
-    doc => !doc.sent_to_sap && !doc.sap_document_number
+    (doc) => matchesPeriod(doc.fiscal_year, doc.fiscal_period) && !doc.sent_to_sap && !doc.sap_document_number
   );
+
+  type SentRow = {
+    id: string;
+    kind: 'Canonical' | 'Simple';
+    vendor: string;
+    rfc: string;
+    period: string;
+    amount: number;
+    currency: string;
+    sapDoc: string | null;
+    sentAt: string | null;
+    href: string;
+  };
+
+  const sentRows: SentRow[] = [
+    ...canonicalDocs
+      .filter((doc) => Boolean(doc.sent_to_sap_at || doc.sap_document_number || doc.status === 'SAP_SENT' || doc.status === 'SAP_CONFIRMED'))
+      .map((doc) => ({
+        id: `canonical-${doc.id}`,
+        kind: 'Canonical' as const,
+        vendor: doc.vendor_name || doc.vendor_rfc,
+        rfc: doc.vendor_rfc,
+        period: `${getMonthName(doc.fiscal_period)} ${doc.fiscal_year}`,
+        amount: doc.net_amount,
+        currency: doc.currency,
+        sapDoc: doc.sap_document_number,
+        sentAt: doc.sent_to_sap_at,
+        href: `/sat-documents/canonical/${doc.id}`,
+      })),
+    ...simpleDocs
+      .filter((doc) => Boolean(doc.sent_to_sap || doc.sent_to_sap_at || doc.sap_document_number))
+      .map((doc) => ({
+        id: `simple-${doc.id}`,
+        kind: 'Simple' as const,
+        vendor: doc.vendor_name || doc.vendor_rfc,
+        rfc: doc.vendor_rfc,
+        period: `${getMonthName(doc.fiscal_period)} ${doc.fiscal_year}`,
+        amount: doc.total_amount,
+        currency: doc.currency,
+        sapDoc: doc.sap_document_number,
+        sentAt: doc.sent_to_sap_at,
+        href: `/sat-documents/simple-merge/${doc.id}`,
+      })),
+  ].sort((a, b) => {
+    const left = a.sentAt ? new Date(a.sentAt).getTime() : 0;
+    const right = b.sentAt ? new Date(b.sentAt).getTime() : 0;
+    return right - left;
+  });
 
   return (
     <div className="space-y-6">
@@ -240,6 +297,7 @@ export default function SAPSendTab() {
               onChange={(e) => setYearFilter(parseInt(e.target.value))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             >
+              <option value={0}>All years</option>
               {[2023, 2024, 2025, 2026].map((year) => (
                 <option key={year} value={year}>
                   {year}
@@ -257,6 +315,7 @@ export default function SAPSendTab() {
               onChange={(e) => setPeriodFilter(parseInt(e.target.value))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             >
+              <option value={0}>All months</option>
               {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
                 <option key={month} value={month}>
                   {getMonthName(month)}
@@ -561,6 +620,79 @@ export default function SAPSendTab() {
         )}
       </div>
 
+      <div className="bg-white rounded-lg shadow border border-slate-200 overflow-hidden">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Sent history</h3>
+            <p className="text-sm text-gray-600">
+              {sentRows.length} merge{sentRows.length === 1 ? '' : 's'} marked sent. This is inbound SAT send history, not a live SAP document browser.
+            </p>
+          </div>
+        </div>
+        {loading ? (
+          <div className="p-8 text-center text-gray-600">
+            <Loader2 className="w-6 h-6 animate-spin text-green-600 mx-auto mb-2" />
+            Loading sent records…
+          </div>
+        ) : sentRows.length === 0 ? (
+          <div className="p-8 text-center text-gray-600">No sent merges yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3 font-medium">When sent</th>
+                  <th className="px-4 py-3 font-medium">How</th>
+                  <th className="px-4 py-3 font-medium">Vendor</th>
+                  <th className="px-4 py-3 font-medium">Period</th>
+                  <th className="px-4 py-3 font-medium">Amount</th>
+                  <th className="px-4 py-3 font-medium">SAP document</th>
+                  <th className="px-4 py-3 font-medium" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sentRows.map((row) => (
+                  <tr key={row.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5 text-gray-800">
+                        <Clock className="w-4 h-4 text-slate-400" />
+                        {formatWhen(row.sentAt)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                        row.kind === 'Canonical' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                      }`}>
+                        {row.kind} merge
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900">{row.vendor}</div>
+                      <div className="font-mono text-xs text-gray-500">{row.rfc}</div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-700">{row.period}</td>
+                    <td className="px-4 py-3 whitespace-nowrap font-medium text-gray-900">
+                      {formatCurrency(row.amount, row.currency)}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-800">{row.sapDoc || '—'}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => router.push(row.href)}
+                        className="inline-flex items-center gap-1 text-emerald-800 hover:underline"
+                      >
+                        <Eye className="w-4 h-4" />
+                        Details
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Info Box */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
         <div className="flex gap-3">
@@ -571,7 +703,7 @@ export default function SAPSendTab() {
               <li>• <strong>Canonical Merge:</strong> Sends JSON payload with financial summary (invoices, credits, payments)</li>
               <li>• <strong>Simple Merge:</strong> Sends raw XML with all CFDI documents</li>
               <li>• Both are sent to the SAP endpoint: <code className="bg-blue-100 px-1 rounded">saperp.abor-tech.online</code></li>
-              <li>• Documents can only be sent once. After sending, they will not appear in this list.</li>
+              <li>• Documents can only be sent once. After sending, they move to Sent history below.</li>
             </ul>
           </div>
         </div>

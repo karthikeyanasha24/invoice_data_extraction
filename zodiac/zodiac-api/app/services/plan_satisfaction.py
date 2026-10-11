@@ -438,8 +438,8 @@ def sql_satisfies_analytical_intent(
     monetary = (
         agg != "COUNT"
         and (
-            concept in {"sales", "revenue", "amount", "billing", "turnover"}
-            or any(k in concept for k in ("revenue", "amount", "billing", "billed"))
+            concept in {"sales", "revenue", "amount", "billing", "turnover", "gross_profit", "profit"}
+            or any(k in concept for k in ("revenue", "amount", "billing", "billed", "profit"))
         )
     )
     quantity = any(k in concept for k in ("quant", "qty", "volume"))
@@ -668,8 +668,8 @@ def result_matches_analytical_intent(
     monetary = (
         agg != "COUNT"
         and (
-            concept in {"sales", "revenue", "amount", "billing", "turnover"}
-            or any(k in concept for k in ("revenue", "amount", "billing", "billed", "invoice"))
+            concept in {"sales", "revenue", "amount", "billing", "turnover", "gross_profit", "profit"}
+            or any(k in concept for k in ("revenue", "amount", "billing", "billed", "invoice", "profit"))
         )
     )
     if ranking and monetary:

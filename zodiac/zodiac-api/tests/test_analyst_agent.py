@@ -156,11 +156,11 @@ def test_unknown_tools_and_extra_identity_arguments_are_rejected():
 
 
 def test_tool_and_decision_limits_stop_an_infinite_loop(monkeypatch):
-    scripted(monkeypatch, [tool("calculate", {"expression": "2 + 2"})] * 10)
+    scripted(monkeypatch, [tool("calculate", {"expression": "2 + 2"})] * 14)
     result = run("Compute 2 + 2")
     assert result["answer_status"] == "CANNOT_ANSWER"
     assert result["meta"]["error_type"] == "ValueError"
-    assert len(result["query_plan"]["agent_trace"]) == 10
+    assert len(result["query_plan"]["agent_trace"]) == 14
     assert result["query_plan"]["agent_trace"][-1]["status"] == "cached"
 
 
@@ -349,6 +349,38 @@ def test_tool_purpose_is_not_parsed_as_a_second_user_request(monkeypatch):
     result = run("Show the highest sales by country",execute)
     assert result["answer_status"] == "SUCCESS"
     assert execute.call_args.args[2] == ""
+
+
+def test_decision_limit_uses_last_verified_query(monkeypatch):
+    scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT vbeln FROM "VBRK"', "purpose": "List billing documents"}, f"c{i}")
+        for i in range(14)
+    ])
+    result = run("Show billing documents", MagicMock(return_value=[{"vbeln": "A"}]))
+    assert result["answer_status"] == "SUCCESS"
+    assert result["meta"].get("evidence_fallback") is True
+    assert result["data"] == [{"vbeln": "A"}]
+
+
+def test_verified_sql_asks_the_model_to_stop_investigating(monkeypatch):
+    inputs = scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT vbeln FROM "VBRK"', "purpose": "List billing documents"}),
+        final("Document A is in the connected billing data.", "analysis", ["result_1"]),
+    ])
+    result = run("Show billing documents", MagicMock(return_value=[{"vbeln": "A"}]))
+    assert result["answer_status"] == "SUCCESS"
+    assert "already satisfies the request" in str(inputs[1])
+    assert result["meta"]["agent_turns"] >= 1
+
+
+def test_complete_ranking_does_not_inherit_prior_year(monkeypatch):
+    inputs = scripted(monkeypatch, [final("I need a database query.")] * 3)
+    run(
+        "Show me the lowest sales for the year 2000 by country, customer, and product.",
+        context={"previousQuestion": "Did the insurance company in 2004 have any sales?"},
+    )
+    assert "complete new analytical request" in str(inputs[0])
+    assert "do not inherit" in str(inputs[0])
 
 
 def test_numeric_evidence_blocks_invented_totals_and_accepts_rounding_and_calculations():

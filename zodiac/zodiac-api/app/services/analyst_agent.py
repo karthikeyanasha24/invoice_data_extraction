@@ -50,11 +50,21 @@ inferred relationship and verify its coverage rather than claiming it was docume
 Explain business assumptions, extraction/snapshot limitations, and result truncation.
 schema_source=schema_snapshot means cached configuration, not a verified live catalog;
 describe it as a snapshot and never claim that it proves current connected tables.
+Business contract (always):
+- Unqualified sales/revenue means billed VBRK/vbrp netwr. Do not use VBAK sales orders unless the user asks for orders.
+- Keep currencies and SAP clients (mandt) separate; never add amounts across currencies.
+- Profit means billed netwr minus a named cost field (prefer vbrp.wavwr). Name that cost field in the answer.
+- An empty result or a dash/blank in SAP is a valid answer: no billed activity. Do not treat it as a failure or keep searching.
+Wrong metric with a polished table is worse than one clarification.
+
 For unqualified sales or revenue, use billing values; use sales orders when requested.
 Use the catalog's metric contracts and retain signed source amounts. Do not
 invent currency, year, cancellation, or billing-type restrictions that narrow the
 request; if a business convention changes scope, disclose it and check its effect.
 When a ranking count is unspecified, choose a small useful bound and state it.
+An empty result or a zero count is a complete verified answer: state that no
+matching billed activity was found, then stop. Do not keep querying after the
+requested grain and period have already been executed successfully.
 For multiple currencies, rank separately within currency (and SAP client when
 needed) using an ordered ROW_NUMBER and a rank filter; never compare raw amounts
 across currencies. Preserve every requested grouping dimension, including lists
@@ -383,6 +393,89 @@ class AnalystTools:
                          truncated=len(rows) > MAX_RESULT_ROWS, schema_source=schema_source)
 
 
+def _analysis_candidates(tools: AnalystTools) -> list[dict]:
+    return [result for result in tools.results.values() if result.get("kind") == "analysis" and result.get("sql")]
+
+
+def _best_verified_analysis(question: str, tools: AnalystTools) -> tuple[dict | None, list[str]]:
+    from .plan_satisfaction import result_matches_analytical_intent
+
+    ranked: list[tuple[int, dict, list[str]]] = []
+    for result in _analysis_candidates(tools):
+        issues = result_matches_analytical_intent(result.get("rows") or [], question, sql=str(result.get("sql") or ""))
+        hard = [item for item in issues if "missing from result columns" not in item or result.get("rows")]
+        ranked.append((len(hard), result, hard))
+    if not ranked:
+        return None, ["no executed analysis"]
+    ranked.sort(key=lambda item: (item[0], -int(item[1].get("row_count") or 0)))
+    return ranked[0][1], ranked[0][2]
+
+
+def _answer_from_analysis(question: str, evidence: dict) -> str:
+    rows = evidence.get("rows") or []
+    purpose = str(evidence.get("purpose") or "database check").strip()
+    if not rows:
+        return (
+            f"No matching rows were found in the connected data for this request. "
+            f"The verified query ({purpose}) returned an empty result."
+        )
+    keys = [str(key) for key in rows[0].keys()]
+    header = "| " + " | ".join(keys) + " |"
+    divider = "| " + " | ".join("---" for _ in keys) + " |"
+    body = "\n".join(
+        "| " + " | ".join("" if row.get(key) is None else str(row.get(key)) for key in keys) + " |"
+        for row in rows[:25]
+    )
+    more = f"\n\nShowing 25 of {len(rows)} verified rows." if len(rows) > 25 else ""
+    return f"Verified result for: {question}\n\n{header}\n{divider}\n{body}{more}"
+
+
+def _fallback_verified_result(question: str, tools: AnalystTools, state: InvestigationState, calls: int, reason: str) -> dict:
+    evidence, issues = _best_verified_analysis(question, tools)
+    hard = [item for item in issues if "analytical plan" in item or "Group only" in item or "date scope" in item]
+    if evidence is None or hard:
+        raise ValueError(reason if evidence is None else reason + ": " + "; ".join(hard[:4]))
+    final = {
+        "kind": "analysis",
+        "answer": _answer_from_analysis(question, evidence),
+        "summary": "Verified database result.",
+        "result_ids": [evidence["id"]],
+        "followups": [],
+    }
+    result = _final_result(question, final, tools, state, calls)
+    result["meta"]["evidence_fallback"] = True
+    return result
+
+
+def _attach_loop_metrics(result: dict, *, started: float, calls: int, tool_count: int, feedback_count: int, tools: AnalystTools) -> dict:
+    trace = tools.trace if tools else []
+    result.setdefault("meta", {})
+    result["meta"].update(
+        agent_turns=calls,
+        tool_calls=tool_count,
+        validation_rejects=feedback_count,
+        tool_errors=sum(1 for step in trace if step.get("status") == "error"),
+        elapsed_ms=round((time.monotonic() - started) * 1000),
+    )
+    plan = result.setdefault("query_plan", {})
+    plan["agent_loop"] = {
+        "turns": calls,
+        "tool_calls": tool_count,
+        "validation_rejects": feedback_count,
+        "tool_errors": result["meta"]["tool_errors"],
+        "elapsed_ms": result["meta"]["elapsed_ms"],
+    }
+    return result
+
+
+def _is_complete_analytical_request(question: str) -> bool:
+    q = (question or "").lower()
+    has_metric = bool(re.search(r"\b(sales|revenue|profits?|billing|billed|turnover)\b", q))
+    has_entity = bool(re.search(r"\b(customers?|country|countries|products?|materials?|industry|company)\b", q))
+    has_period = bool(re.search(r"\b(?:19|20)\d{2}\b", q))
+    return (has_metric and has_entity and len(q.split()) >= 6) or (has_metric and has_period and has_entity)
+
+
 def _final_result(question: str, final: dict, tools: AnalystTools, state: InvestigationState, calls: int) -> dict:
     if set(final) != set(_FINAL_SCHEMA["properties"]):
         raise ValueError("The final answer must match its required response schema")
@@ -489,7 +582,14 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
         },
         "pending_request": pending if isinstance(pending, dict) else None,
         "user_preferences": user_conversation_preferences(state.recent_turns),
-        "instruction": "Prior supplied query/results are conversation context, not new verified database evidence.",
+        "instruction": (
+            "Prior supplied query/results are conversation context, not new verified database evidence. "
+            + (
+                "This is a complete new analytical request: do not inherit the previous year, customer, or ranking unless the user refers back."
+                if _is_complete_analytical_request(question)
+                else "This looks like a short follow-up: keep the prior customer/year/metric unless the user replaces them."
+            )
+        ),
     }
     from .semantic_requirements import required_semantics
     contract = required_semantics(question)
@@ -507,8 +607,9 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
         begin_investigation(question)
     calls, tool_count, feedback_count = 0, 0, 0
     model_failed = False
+    started = time.monotonic()
     try:
-        for _ in range(10):
+        for _ in range(14):
             checkpoint("CHOOSING_ACTION")
             calls += 1
             try:
@@ -525,7 +626,7 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
             if function_calls:
                 for call in function_calls:
                     tool_count += 1
-                    if tool_count > 16:
+                    if tool_count > 20:
                         raise ValueError("The agent reached its tool-call limit before completing a verified answer")
                     checkpoint("USING_TOOL")
                     try:
@@ -535,18 +636,52 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                     result = tools.call(call["name"], arguments)
                     input_items.append({"type": "function_call_output", "call_id": call["call_id"],
                                         "output": _model_evidence(result)})
+                evidence, issues = _best_verified_analysis(question, tools)
+                hard = [item for item in issues if "analytical plan" in item or "Group only" in item or "date scope" in item]
+                if evidence and not hard:
+                    input_items.append({
+                        "role": "user",
+                        "content": (
+                            f"Application notice: result {evidence['id']} already satisfies the request. "
+                            "Return the final JSON now using that result_id. Do not run more SQL or optional diagnostics."
+                        ),
+                    })
                 continue
             checkpoint("PREPARING_ANSWER")
             try:
                 final = json.loads(response.output_text)
-                result = _final_result(question, final, tools, state, calls)
+                result = _attach_loop_metrics(
+                    _final_result(question, final, tools, state, calls),
+                    started=started, calls=calls, tool_count=tool_count,
+                    feedback_count=feedback_count, tools=tools,
+                )
                 return result
             except (ValueError, TypeError, KeyError) as error:
                 feedback_count += 1
                 if feedback_count > 2:
-                    raise ValueError("The agent could not produce an answer supported by its tool results") from error
+                    try:
+                        return _attach_loop_metrics(
+                            _fallback_verified_result(
+                                question, tools, state, calls,
+                                "The agent could not produce an answer supported by its tool results",
+                            ),
+                            started=started, calls=calls, tool_count=tool_count,
+                            feedback_count=feedback_count, tools=tools,
+                        )
+                    except ValueError:
+                        raise ValueError("The agent could not produce an answer supported by its tool results") from error
                 input_items.append({"role": "user", "content": "Application validation feedback: " + str(error) + ". Correct the final answer or use the tools to obtain the required evidence."})
-        raise ValueError("The agent reached its decision limit before completing a verified answer")
+        try:
+            return _attach_loop_metrics(
+                _fallback_verified_result(
+                    question, tools, state, calls,
+                    "The agent reached its decision limit before completing a verified answer",
+                ),
+                started=started, calls=calls, tool_count=tool_count,
+                feedback_count=feedback_count, tools=tools,
+            )
+        except ValueError:
+            raise ValueError("The agent reached its decision limit before completing a verified answer")
     except InvestigationTimeout as error:
         result = timeout_response(error.stage, error.elapsed_s, question=question, extra={"pipeline": "analyst_agent"})
         result["query_plan"]["agent_trace"] = tools.trace
@@ -597,7 +732,10 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
         result["query_plan"].update(investigation_state=state.to_dict(), agent_trace=tools.trace)
         if pending:
             result["query_plan"]["pending_analysis"] = pending
-        return result
+        return _attach_loop_metrics(
+            result, started=started, calls=calls, tool_count=tool_count,
+            feedback_count=feedback_count, tools=tools,
+        )
     finally:
         try:
             tools.close()

@@ -77,10 +77,14 @@ export default function SATDocumentsPage() {
                 <p className="text-slate-500">Waiting to send</p>
                 <p className="text-base font-semibold tabular-nums text-slate-900">{pending}</p>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('send-to-sap')}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-left hover:border-emerald-700"
+              >
                 <p className="text-slate-500">Sent to SAP</p>
                 <p className="text-base font-semibold tabular-nums text-slate-900">{sent}</p>
-              </div>
+              </button>
             </div>
           )}
 
