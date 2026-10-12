@@ -1585,6 +1585,7 @@ def pipeline3_sql_generation(
         build_total_measure_sql,
         detect_filter_list_intent,
     )
+    from .basic_grouped_billing import build_grouped_billing_sql as _build_grouped_billing_sql
 
     budget = current_budget()
     if budget is not None and not templates_only:
@@ -1673,6 +1674,7 @@ def pipeline3_sql_generation(
         ("multi_entity_having_template", lambda: build_multi_entity_having_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("partitioned_topn_template", lambda: build_partitioned_topn_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("above_average_template", lambda: build_above_average_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("grouped_billing_template", lambda: _build_grouped_billing_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("filter_list_template", lambda: build_filter_list_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("document_count_period_template", lambda: build_document_count_by_period_sql(question, ctx.tables, ctx.semantic_requirements)),
     )
@@ -1709,9 +1711,6 @@ def pipeline3_sql_generation(
             accepted = _accept(source, builder())
             if accepted:
                 return accepted
-
-    if templates_only:
-        return ""
 
     # Primary path: render from the validated structured query plan
     if ctx.query_plan and not validation_feedback:
@@ -1782,6 +1781,9 @@ def pipeline3_sql_generation(
         )
         if accepted:
             return accepted
+
+    if templates_only:
+        return ""
 
     if budget is not None and not budget.allow_llm():
         _log_stage(ctx, "PIPELINE_3_SQL_GENERATION", {"source": "llm_skipped_budget"})

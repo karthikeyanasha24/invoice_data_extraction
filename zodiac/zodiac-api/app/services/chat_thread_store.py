@@ -267,6 +267,37 @@ def load_thread(
         return []
 
 
+def recent_verified_questions(db: Any, user_id: int, limit: int = 200) -> List[Dict[str, str]]:
+    """Prior questions whose saved SELECT actually ran. Used as a credit-free cache."""
+    from sqlalchemy import text
+    try:
+        ensure_chat_tables(db)
+        rows = db.execute(text("""
+            SELECT u.content AS question, a.sql_executed AS sql
+            FROM ai_chat_turns u
+            JOIN ai_chat_turns a
+              ON a.user_id = u.user_id
+             AND a.thread_id = u.thread_id
+             AND a.turn_index = u.turn_index + 1
+             AND a.role = 'assistant'
+            WHERE u.user_id = :uid
+              AND u.role = 'user'
+              AND a.sql_executed IS NOT NULL
+              AND length(btrim(a.sql_executed)) > 12
+              AND upper(left(btrim(a.sql_executed), 6)) = 'SELECT'
+            ORDER BY a.created_at DESC
+            LIMIT :n
+        """), {"uid": int(user_id), "n": int(limit)}).mappings().all()
+        return [
+            {"question": str(row["question"] or ""), "sql": str(row["sql"] or "")}
+            for row in rows
+            if row.get("question") and row.get("sql")
+        ]
+    except Exception as exc:
+        logger.debug("chat_thread_store.recent_verified_questions: %s", exc)
+        return []
+
+
 def get_last_assistant_turn(
     db: Any,
     user_id: int,

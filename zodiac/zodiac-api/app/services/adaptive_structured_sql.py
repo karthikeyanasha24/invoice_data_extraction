@@ -1247,6 +1247,9 @@ def build_dimension_ranking_sql(
     q = (question or "").lower()
     if not re.search(r"\b(top|bottom|highest|lowest|most|least|best|worst|largest|biggest|smallest|leading|rank|ranking|list)\b", q):
         return None
+    # "List customers in Germany" is a filtered master list, not a sales ranking.
+    if not re.search(r"\b(top|bottom|highest|lowest|most|least|best|worst|largest|biggest|smallest|leading|rank|ranking)\b", q):
+        return None
 
     dimension = detect_ranking_dimension(question, semantic)
     if not dimension:
@@ -1571,7 +1574,7 @@ def build_dimension_ranking_sql(
             'SELECT * FROM ranked\n'
             f'WHERE "rank_within_currency" <= {safe_limit}\n'
             'ORDER BY "currency", "rank_within_currency"\n'
-            f'LIMIT {safe_limit} * (SELECT COUNT(DISTINCT "currency") FROM grouped)'
+            f'LIMIT {min(safe_limit * 20, 500)}'
         )
     else:
         sql += f'\nORDER BY "{alias}" {direction} NULLS LAST'

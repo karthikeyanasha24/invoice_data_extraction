@@ -76,14 +76,43 @@ class TrustedAiExecutionScope:
     user_id: int
     allowed_customer_ids: List[str] = field(default_factory=list)
     sap_connection_bound: bool = True
+    sap_access: str = "none"
+    allowed_sap_pairs: List[Dict[str, str]] = field(default_factory=list)
 
     def to_public_dict(self) -> Dict[str, Any]:
         return {
             "user_id": int(self.user_id),
             "allowed_customer_count": len(self.allowed_customer_ids),
             "sap_connection_bound": bool(self.sap_connection_bound),
+            "sap_access": self.sap_access,
             "user_scoped_tables": sorted(USER_SCOPED_TABLES),
         }
+
+
+def analyst_scope_for_user(user, customer_ids=None):
+    """Only server-owned role/configuration can grant SAP access.
+
+    Portal customer IDs may be tax IDs, not SAP KUNNR. Never equate them.
+    AI_ANALYST_SAP_CUSTOMER_MAP explicitly maps assigned portal IDs to
+    [{"client":"800","customer":"0000003034"}], maintained by the operator.
+    Staff/admin users retain access to the deployment's configured extract.
+    """
+    import json
+    import os
+    restricted = bool(getattr(user, 'is_customer_user', False)) and not bool(getattr(user, 'is_admin', False))
+    pairs = []
+    if restricted and customer_ids:
+        try:
+            mapping = json.loads(os.getenv('AI_ANALYST_SAP_CUSTOMER_MAP', '{}'))
+            for customer in customer_ids:
+                for pair in mapping.get(str(customer), []):
+                    if isinstance(pair, dict) and str(pair.get('client', '')).strip() and str(pair.get('customer', '')).strip():
+                        pairs.append({'client':str(pair['client']).strip(), 'customer':str(pair['customer']).strip()})
+        except (ValueError, TypeError, AttributeError):
+            pairs = []
+    return TrustedAiExecutionScope(user_id=int(getattr(user, 'id', 0) or 0),
+        allowed_customer_ids=list(customer_ids or []),
+        sap_access=('limited' if pairs else 'none') if restricted else 'full', allowed_sap_pairs=pairs)
 
 
 def set_trusted_scope(scope: Optional[TrustedAiExecutionScope]):

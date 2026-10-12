@@ -253,6 +253,7 @@ def test_application_sql_requires_authenticated_scope():
 
 
 def test_actual_executor_sets_readonly_and_fetches_bounded_rows(monkeypatch):
+    monkeypatch.setattr('app.services.analyst_agent_sql.get_trusted_scope',lambda:TrustedAiExecutionScope(user_id=1,sap_access='full'))
     from app.api import adaptive_query as api
     monkeypatch.setattr(api, "apply_statement_timeout", lambda *_a, **_k: None)
     budget = begin_investigation("Show billing documents")
@@ -273,7 +274,7 @@ def test_public_endpoint_runs_agent_by_default(monkeypatch):
     runner = MagicMock(return_value={"answer_status": "SUCCESS", "mode": "general_chat", "answer": "Hello.", "summary": "Hello.", "data": [], "rowCount": 0, "pipeline": "analyst_agent"})
     monkeypatch.delenv("AI_ANALYST_AGENT_ENABLED", raising=False)
     monkeypatch.setattr(agent, "run_analyst_agent", runner)
-    result = api.post_query_adaptive(question="Hai", db=MagicMock(), current_user=None,
+    result = api.post_query_adaptive(question="What is an invoice?", db=MagicMock(), current_user=None,
                                     tableHint=None, contextData=None, overrideSql=None, threadId=None,
                                     investigationId=None, conversationHistory=None, newQuestion=False)
     assert result["pipeline"] == "analyst_agent"
@@ -439,6 +440,77 @@ def test_multiple_selected_queries_do_not_bypass_primary_validation():
             "kind": "analysis", "answer": "Here are the documents.", "summary": "Documents",
             "result_ids": ["result_1", "result_2"], "followups": [],
         }, tools, agent.InvestigationState(), 1)
+
+
+def test_conditional_empty_period_does_not_finish_before_available_years(monkeypatch):
+    schema = {"VBRK": SCHEMA["VBRK"] + [{"col": "fkdat", "type": "text"}]}
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (schema, "live_database_metadata"))
+    inputs = scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT vbeln FROM VBRK WHERE fkdat LIKE '2005%'", "purpose": "Check the requested year"}),
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT SUBSTRING(fkdat,1,4) AS sales_year, COUNT(DISTINCT vbeln) AS billing_documents FROM VBRK GROUP BY SUBSTRING(fkdat,1,4)", "purpose": "Find available years"}, "years"),
+        final("There are no matching documents in 2005. The available year is 2000 with 1 document.", "analysis", ["result_1", "result_2"]),
+    ])
+    result = run("What about 2005, if it is empty which years have billing documents?",
+                 MagicMock(side_effect=[[], [{"sales_year": "2000", "billing_documents": 1}]]),
+                 context={"previousQuestion": "Show billing documents in 2004"})
+    assert result["answer_status"] == "SUCCESS"
+    assert len(inputs) == 3 and len(result["agent_results"]) == 2
+    assert "second part" in str(inputs[1])
+    assert result["query_plan"]["conditional_request"]["when_empty"]
+
+
+def test_conditional_final_cannot_claim_completion_with_only_empty_first_step():
+    tools = agent.AnalystTools(MagicMock(), MagicMock(), lambda: SCHEMA)
+    tools.save([], kind="analysis", source="business", sql="SELECT vbeln FROM VBRK WHERE fkdat LIKE '2005%'")
+    with pytest.raises(ValueError, match="second part"):
+        agent._final_result("What about 2005 if it is empty which years have billing documents?", {
+            "kind": "analysis", "answer": "No matching records.", "summary": "No matches",
+            "result_ids": ["result_1"], "followups": [],
+        }, tools, agent.InvestigationState(), 1, prior_question="Show billing documents in 2004")
+
+
+def test_only_year_confirmation_cannot_be_proved_by_querying_only_that_year():
+    evidence = {"rows": [{"sales_year": "2000", "billed_sales": 299}],
+                "sql": "SELECT SUBSTRING(fkdat,1,4) AS sales_year,SUM(CAST(netwr AS NUMERIC)) AS billed_sales FROM VBRK WHERE fkdat LIKE '2000%' GROUP BY SUBSTRING(fkdat,1,4)"}
+    assert any("all years" in issue for issue in agent._analysis_issues("Is 2000 the only year with sales?", evidence))
+    assert not agent._available_period_request("Only for year 2000")
+    assert not agent._has_period_restriction("SELECT SUBSTRING(fkdat,1,4) FROM VBRK WHERE fkdat ~ '^[0-9]{8}$'")
+
+
+def test_standalone_count_rejects_silently_inherited_customer_filter():
+    evidence = {"rows": [{"billing_documents": 1}], "sql": "SELECT COUNT(DISTINCT vbeln) AS billing_documents FROM VBRK WHERE kunag='0000003034'"}
+    assert any("inherit" in issue for issue in agent._analysis_issues("How many billing documents are there?", evidence))
+    assert any("inherit" in issue for issue in agent._analysis_issues("No, overall I am asking", evidence))
+    assert not agent._analysis_issues("How many billing documents for customer 0000003034?", evidence)
+    evidence["sql"] = "SELECT COUNT(DISTINCT vbeln) AS billing_documents FROM VBRK WHERE mandt='800'"
+    assert any("SAP client" in issue for issue in agent._analysis_issues("How many billing documents are there?", evidence))
+    assert not agent._analysis_issues("How many billing documents in client 800?", evidence)
+
+
+def test_effective_request_survives_chained_followups(monkeypatch):
+    inputs = scripted(monkeypatch, [final("I can continue that analysis.")])
+    run("Only for year 2000", context={"previousQuestion": "Break down by country",
+        "previousPlan": {"effective_question": "Top 10 customers by billed sales. Break down by country"}})
+    assert "Top 10 customers" in str(inputs[0]) and "2000" in str(inputs[0])
+
+
+def test_public_endpoint_keeps_conditional_evidence_through_its_final_gate(monkeypatch):
+    from app.api import adaptive_query as api
+    schema = {"VBRK": SCHEMA["VBRK"] + [{"col": "fkdat", "type": "text"}]}
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (schema, "live_database_metadata"))
+    monkeypatch.setattr(api, "_execute_sql", MagicMock(side_effect=[[], [{"sales_year": "2000", "billing_documents": 1}]]))
+    scripted(monkeypatch, [
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT vbeln FROM VBRK WHERE fkdat LIKE '2005%'", "purpose": "Check the requested year"}),
+        tool("run_readonly_sql", {"source": "business", "sql": "SELECT SUBSTRING(fkdat,1,4) AS sales_year, COUNT(DISTINCT vbeln) AS billing_documents FROM VBRK GROUP BY SUBSTRING(fkdat,1,4)", "purpose": "Find all available years"}, "years"),
+        final("No matching documents in 2005. The available year is 2000 with 1 document.", "analysis", ["result_1", "result_2"]),
+    ])
+    result = api.post_query_adaptive(
+        question="What about 2005 if it is empty which years have billing documents?", db=MagicMock(), current_user=None,
+        tableHint=None, contextData={"previousQuestion": "Show billing documents in 2004"}, overrideSql=None,
+        threadId=None, investigationId=None, conversationHistory=None, newQuestion=False,
+    )
+    assert result["answer_status"] == "SUCCESS"
+    assert len(result["query_plan"]["agent_results"]) == 2
 
 
 def test_complete_ranking_does_not_inherit_prior_year(monkeypatch):

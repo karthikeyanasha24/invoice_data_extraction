@@ -36,6 +36,20 @@ CANCELLED_USER_MESSAGE = (
 _CURRENT: ContextVar[Optional["InvestigationBudget"]] = ContextVar(
     "investigation_budget", default=None
 )
+_PAID_MODELS_BLOCKED: ContextVar[bool] = ContextVar("analyst_paid_models_blocked", default=False)
+
+
+def block_paid_models():
+    """Basic mode must not call a paid model. The agent path does not set this."""
+    return _PAID_MODELS_BLOCKED.set(True)
+
+
+def restore_paid_models(token) -> None:
+    _PAID_MODELS_BLOCKED.reset(token)
+
+
+def paid_models_blocked() -> bool:
+    return _PAID_MODELS_BLOCKED.get()
 _REGISTRY_LOCK = threading.Lock()
 _REGISTRY: Dict[str, "InvestigationBudget"] = {}
 

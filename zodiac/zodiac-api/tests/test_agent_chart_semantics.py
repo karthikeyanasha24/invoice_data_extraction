@@ -19,3 +19,18 @@ def test_same_currency_sales_in_different_clients_remain_separate_charts():
     for chart in charts:
         assert {row["sap_client"] for row in chart["data"]} == {chart["sap_client"]}
         assert "Client " + chart["sap_client"] in chart["title"]
+
+
+def test_actual_billed_net_alias_excludes_diagnostic_count_and_quantity():
+    rows = [{'billing_document': str(i), 'billed_net': -5+i, 'item_net': -2+i,
+             'billed_quantity': 3, 'result_rows': 50} for i in range(3)]
+    for chart in _auto_charts('Lowest billing values', '', rows):
+        assert set(chart['y_keys']) == {'billed_net', 'item_net'}
+
+
+def test_different_or_missing_source_currencies_use_verified_table():
+    rows = [{'billing_document':'B1','billing_currency':'USD','order_currency':'EUR',
+             'billing_net_value':4,'order_net_value':6}]
+    assert _auto_charts('Compare documents', '', rows) == []
+    rows[0]['order_currency'] = None
+    assert _auto_charts('Compare documents', '', rows) == []

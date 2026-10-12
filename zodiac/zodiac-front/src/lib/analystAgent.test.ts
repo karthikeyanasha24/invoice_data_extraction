@@ -15,6 +15,8 @@ test('multiple tool results remain visible without repeating the primary table',
 test('steps explain actions and recovery without displaying reasoning or arguments', () => {
   assert.equal(agentStepLabel({tool:'run_readonly_sql', status:'error'}), 'Queried and checked the data — needed another attempt');
   assert.equal(agentStepLabel({tool:'describe_tables', status:'completed'}), 'Checked columns and relationships');
+  assert.equal(agentStepLabel({tool:'find_relationships', status:'completed'}), 'Verified the relationship path and document keys');
+  assert.equal(agentStepLabel({tool:'prepare_analysis', status:'completed'}), 'Checked the requested fields and comparison plan');
   assert.equal(agentStepLabel({tool:'unknown_private_argument', status:'completed'}), 'Used a tool');
 });
 

@@ -31,7 +31,7 @@ const IS_LOCAL  = !API_URL || API_URL.includes('localhost') || API_URL.includes(
 const ENV_COLOR = 'bg-amber-100 text-amber-800 border-amber-300';
 const ENV_DOT   = 'bg-amber-400';
 const ENV_TIP   =
-  `Connecting to: ${API_URL || 'localhost:8000'}\nLocal API. The database behind this API may still contain SAP demo data.`;
+  `Connecting to: ${API_URL || 'same-origin API proxy'}\nLocal API. The database behind this API may still contain SAP demo data.`;
 const ENV_LABEL = 'Local development';
 
 interface SidebarProps {

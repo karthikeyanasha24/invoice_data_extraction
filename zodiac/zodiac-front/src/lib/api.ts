@@ -1827,6 +1827,18 @@ export const dashboardApi = {
      * - New question: returns { sql, rowCount, data, summary?, retried?, originalSql? }
      * - Follow-up analysis (contextData): returns { type: "analysis", answer }
      */
+    teachBasic: async (resultId: string, question: string) => {
+        try {
+            const response = await api.post('/api/query/adaptive/basic/teach', { result_id: resultId, question }, { timeout: 15000 });
+            return response.data as { saved: boolean; message: string };
+        } catch (error) {
+            throw new Error(publicApiError(error, 'Could not save this teaching example.'));
+        }
+    },
+    getAnalystDocuments: async (resultId: string, selection: {row_index: number; measure: string; page_size?: number; after?: string[]; snapshot_id?: string}) => {
+        const response = await api.post(`/api/query/adaptive/results/${encodeURIComponent(resultId)}/documents`, selection, {timeout: 120000});
+        return response.data;
+    },
     postAdaptiveQuery: async (body: {
         question: string;
         tableHint?: string | null;
@@ -1842,6 +1854,7 @@ export const dashboardApi = {
         investigationId?: string | null;
         conversationHistory?: { role: 'user' | 'assistant'; content: string; mode?: string }[];
         newQuestion?: boolean;
+        analysisMode?: 'agent' | 'basic';
     }, config?: { signal?: AbortSignal }) => {
         try {
             const response = await api.post('/api/query/adaptive', body, { timeout: 0, signal: config?.signal });

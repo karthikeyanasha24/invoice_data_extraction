@@ -11,6 +11,21 @@ import {
 } from './analysisTrust.ts';
 
 describe('analysisTrustFromResult', () => {
+  it('shows the actual validated comparison plan and bridge in calculation details', () => {
+    const trust = analysisTrustFromResult({answer_status:'SUCCESS',rowCount:34,query_plan:{analysis_requirements:{
+      validated:true,tables:['VBRK','VBAK'],grain:'distinct document pair',filters:['billing year 2000'],limit:200,
+      fields:[{table:'VBRK',column:'netwr',alias:'billing_net_value',role:'measure'},
+              {table:'VBAK',column:'netwr',alias:'order_net_value',role:'measure'}],
+      relationships:[[{left:'VBRK',right:'vbrp',pairs:[['vbeln','vbeln'],['mandt','mandt']]},
+                      {left:'vbrp',right:'VBAK',pairs:[['aubel','vbeln'],['mandt','mandt']]}]],
+      assumptions:['Header values are not allocated'],missing_handling:'Missing orders remain null',
+    }}});
+    assert.match(trust.joins || '', /aubel = vbeln/);
+    assert.match(trust.calculation || '', /VBAK.netwr/);
+    assert.equal(trust.grain, 'distinct document pair');
+    assert.equal(trust.period, 'billing year 2000');
+    assert.ok(trust.limitations.includes('Missing orders remain null'));
+  });
   it('does not invent billing calculations when intent is missing or unsupported', () => {
     for (const intent of ['', 'count_documents', 'inventory_custom_unsupported']) {
       const trust = analysisTrustFromResult({

@@ -148,6 +148,16 @@ GLOSSARY: Dict[str, Dict[str, str]] = {
 
 # Production SQL joins: only when both tables exist and keys exist on both sides.
 _JOIN_CANDIDATES = [
+    {"source_table": "vbrp", "source_column": "aubel", "target_table": "VBAK", "target_column": "vbeln",
+     "cardinality": "N:1", "confidence": "verified",
+     "fanout": "originating order; deduplicate (mandt, billing vbeln, aubel) before displaying header pairs; do not sum header values across items",
+     "source": "DOCUMENTED originating-order field; connected key coverage checked 2026-10-11 (19772/19808 populated references)"},
+    {"source_table": "vbrp", "source_column": "aubel", "target_table": "VBAP", "target_column": "vbeln",
+     "cardinality": "N:1", "confidence": "verified", "fanout": "compound originating-order item key with aupos and mandt",
+     "source": "DOCUMENTED originating sales-order item reference"},
+    {"source_table": "vbrp", "source_column": "aupos", "target_table": "VBAP", "target_column": "posnr",
+     "cardinality": "N:1", "confidence": "verified", "fanout": "compound key with aubel and mandt",
+     "source": "DOCUMENTED originating sales-order item reference"},
     {"source_table": "VBAK", "source_column": "vbeln", "target_table": "VBAP", "target_column": "vbeln",
      "cardinality": "1:N", "confidence": "verified", "fanout": "header to items — aggregate at item before combining with other facts",
      "source": "VERIFIED FROM DATABASE (matching keys) + DOCUMENTATION"},
@@ -219,6 +229,10 @@ def _build_table_entries() -> Dict[str, Dict[str, Any]]:
             "primary_domain": primary,
             "secondary_domains": list((hint or {}).get("secondary") or []),
             "business_name": (hint or {}).get("business_name") or table,
+            "aliases": {"VBRK": ["billing document", "invoice header"],
+                        "VBAK": ["sales order", "sales document header"],
+                        "VBRP": ["billing item", "invoice item"],
+                        "VBAP": ["sales order item"]}.get(table.upper(), []),
             "description": (hint or {}).get("doc") or "",
             "grain": (hint or {}).get("grain") or "unknown — inspect columns",
             "keys": _keys(table),

@@ -22,6 +22,9 @@ const TOOL_LABELS: Record<string, string> = {
   describe_tables: 'Checked columns and relationships',
   run_readonly_sql: 'Queried and checked the data',
   calculate: 'Calculated the result',
+  find_relationships: 'Verified the relationship path and document keys',
+  prepare_analysis: 'Checked the requested fields and comparison plan',
+  research_public_context: 'Researched public industry sources using general terms',
 };
 
 export function agentStepLabel(step: AgentStep): string {

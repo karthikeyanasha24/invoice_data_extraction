@@ -275,6 +275,27 @@ def sql_has_calendar_year(sql: str, year: str) -> bool:
         from sqlglot import exp, parse_one
         tree = parse_one(s, read="postgres")
         for where in tree.find_all(exp.Where):
+            def conjuncts(node):
+                if isinstance(node, exp.Paren):
+                    return conjuncts(node.this)
+                if isinstance(node, exp.And):
+                    return conjuncts(node.this) + conjuncts(node.expression)
+                return [node]
+            bounds = {}
+            for predicate in conjuncts(where.this):
+                if not isinstance(predicate, (exp.GTE, exp.LT)):
+                    continue
+                value = predicate.expression
+                if isinstance(value, exp.Cast):
+                    value = value.this
+                if not isinstance(value, exp.Literal) or not any(
+                        re.search(r"date|period|^(?:fkdat|erdat|audat|bedat|budat|bldat)$", c.name, re.I)
+                        for c in predicate.this.find_all(exp.Column)):
+                    continue
+                identity = predicate.this.sql(dialect='postgres')
+                bounds.setdefault(identity, {})[type(predicate).__name__] = str(value.this).replace('-', '')
+            if any(b.get('GTE') == y + '0101' and b.get('LT') == str(int(y) + 1) + '0101' for b in bounds.values()):
+                return True
             for predicate in where.find_all(exp.Between):
                 low, high = predicate.args.get("low"), predicate.args.get("high")
                 if isinstance(low, exp.Literal) and isinstance(high, exp.Literal):

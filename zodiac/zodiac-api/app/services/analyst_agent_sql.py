@@ -32,6 +32,8 @@ def queryable_schema(schema: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
     """Credential/config tables and secret columns never enter model SQL tools."""
     result = {}
     for table, columns in schema.items():
+        if table.lower() == 'ai_analyst_results':
+            continue
         if _PRIVATE_TABLE.search(table) or table.lower().startswith(("pg_", "sql_")):
             continue
         safe = []
@@ -68,7 +70,7 @@ def _sql_tree(sql: str):
     return tree
 
 
-def validate_agent_sql(sql: str, schema: dict[str, Any]) -> tuple[str, list[str]]:
+def validate_agent_sql(sql: str, schema: dict[str, Any], max_rows: int | None = None) -> tuple[str, list[str]]:
     """Resolve sources/columns against the exact tool-visible schema, then bound rows."""
     tree = _sql_tree(sql)
     safe_schema = queryable_schema(schema)
@@ -99,9 +101,9 @@ def validate_agent_sql(sql: str, schema: dict[str, Any]) -> tuple[str, list[str]
         value = limit.expression
         if not isinstance(value, exp.Literal) or not value.is_int or int(value.this) < 1:
             raise ValueError("LIMIT must be a positive integer")
-        bound = min(int(value.this), MAX_RESULT_ROWS + 1)
+        bound = min(int(value.this), (MAX_RESULT_ROWS if max_rows is None else max_rows) + 1)
     else:
-        bound = MAX_RESULT_ROWS + 1
+        bound = (MAX_RESULT_ROWS if max_rows is None else max_rows) + 1
     tree = tree.limit(bound, copy=False)
     offset = tree.args.get("offset")
     if offset and (not isinstance(offset.expression, exp.Literal) or not offset.expression.is_int or not 0 <= int(offset.expression.this) <= 10000):
@@ -109,7 +111,7 @@ def validate_agent_sql(sql: str, schema: dict[str, Any]) -> tuple[str, list[str]
     return tree.sql(dialect="postgres"), sources
 
 
-def enforce_agent_user_scope(sql: str, schema: dict[str, Any]) -> tuple[str, dict[str, int]]:
+def enforce_agent_user_scope(sql: str, schema: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Filter every physical owner-scoped relation before joins, CTEs, OR, or UNION."""
     # Validation happened before execution sanitization. Re-parse its result and
     # wrap base sources rather than injecting a predicate in the outer SELECT.
@@ -128,6 +130,45 @@ def enforce_agent_user_scope(sql: str, schema: dict[str, Any]) -> tuple[str, dic
         if actual.lower() in USER_SCOPED_TABLES and not owner:
             raise PermissionError("User-scoped table is missing its ownership field")
         if not owner:
+            if trusted is None or trusted.user_id <= 0:
+                raise PermissionError("Authenticated execution scope is required")
+            if trusted.sap_access == 'full':
+                continue
+            # Reference labels contain no customer financial records.
+            if actual.upper() in {'T016T', 'T005', 'T005T'}:
+                continue
+            if trusted.sap_access != 'limited' or not trusted.allowed_sap_pairs:
+                raise PermissionError("SAP access requires an authorized customer/client mapping")
+            lowered = {str(c.get('col') or c.get('name')).lower():str(c.get('col') or c.get('name')) for c in columns}
+            base = source.copy()
+            base.set('alias', None)
+            name = actual.upper()
+            direct = {'VBRK':'kunag','VBAK':'kunnr','KNA1':'kunnr','KNVV':'kunnr'}
+            customer_column = direct.get(name)
+            if customer_column and customer_column in lowered and 'mandt' in lowered:
+                choices = []
+                for i, pair in enumerate(trusted.allowed_sap_pairs):
+                    parameters[f'_sap_client_{i}'] = pair['client']
+                    parameters[f'_sap_customer_{i}'] = pair['customer']
+                    # Normalize leading zeros without converting alphanumeric IDs.
+                    identifier = exp.func('LTRIM', exp.func('TRIM', exp.cast(exp.column(lowered[customer_column], quoted=True), 'TEXT')), exp.Literal.string('0'))
+                    value = exp.func('LTRIM', exp.Placeholder(this=f'_sap_customer_{i}'), exp.Literal.string('0'))
+                    choices.append(exp.and_(exp.EQ(this=exp.column(lowered['mandt'], quoted=True), expression=exp.Placeholder(this=f'_sap_client_{i}')), exp.EQ(this=identifier, expression=value)))
+                predicate = exp.or_(*choices)
+            elif name in {'VBRP','VBAP'} and {'mandt','vbeln'} <= set(lowered):
+                header = next((n for n in schema if n.upper() == ('VBRK' if name == 'VBRP' else 'VBAK')), None)
+                if not header:
+                    raise PermissionError('Authorized header metadata is required for item access')
+                header_sql, header_params = enforce_agent_user_scope(f'SELECT * FROM "{header}"', schema)
+                parameters.update(header_params)
+                allowed = parse(header_sql, read='postgres')[0].subquery('_allowed_header')
+                predicate = exp.Exists(this=exp.select('1').from_(allowed).where(exp.and_(
+                    exp.EQ(this=exp.column('mandt', table='_allowed_header', quoted=True), expression=exp.column(lowered['mandt'], table='_scoped_item', quoted=True)),
+                    exp.EQ(this=exp.column('vbeln', table='_allowed_header', quoted=True), expression=exp.column(lowered['vbeln'], table='_scoped_item', quoted=True)))))
+                base.set('alias', exp.TableAlias(this=exp.to_identifier('_scoped_item')))
+            else:
+                raise PermissionError(f'No approved customer isolation rule for {actual}')
+            source.replace(exp.select('*').from_(base).where(predicate).subquery(alias=source.alias_or_name))
             continue
         if trusted is None or trusted.user_id <= 0:
             raise PermissionError("Authenticated execution scope is required for application data")

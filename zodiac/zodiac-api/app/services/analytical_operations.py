@@ -283,8 +283,12 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
     }
 
     group_by: List[str] = []
+    # "Customer country" names an attribute, whereas "customer and country"
+    # names two dimensions. Do not turn the possessive/qualifying noun into an
+    # additional grouping key.
+    group_ql = re.sub(r"\bcustomer(?:'s)?\s+(country|industry|region)\b", r"\1", ql)
     for pat, dim in _GROUP_PATTERNS:
-        if re.search(pat, ql):
+        if re.search(pat, group_ql):
             if dim not in group_by:
                 group_by.append(dim)
     # A coordinated dimension list must not stop at the first noun after "by".
@@ -293,7 +297,7 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
                        "quarter": "quarter", "quarters": "quarter", "currency": "currency", "currencies": "currency"}
     entity_pattern = "(?:" + "|".join(sorted(dimension_words, key=len, reverse=True)) + ")"
     list_pattern = rf"\b(?:by|per|for each|with)\s+({entity_pattern}(?:\s*(?:,\s*(?:and\s+)?|and\s+|&\s*|/\s*){entity_pattern})*)\b"
-    for clause in re.finditer(list_pattern, ql):
+    for clause in re.finditer(list_pattern, group_ql):
         for word in re.findall(r"\b" + entity_pattern + r"\b", clause.group(1)):
             dim = dimension_words[word]
             if dim not in group_by:

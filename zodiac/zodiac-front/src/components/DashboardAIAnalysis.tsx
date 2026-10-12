@@ -51,6 +51,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import AIChartRenderer from './ai/AIChartRenderer';
+import AnalystDrilldown from './ai/AnalystDrilldown';
+import { analystNumeric, analystDecimal, matchingResultRow } from '@/lib/analystNumbers';
 
 /** Persist adaptive Full Chat thread id (reuses backend chat_thread_store via ada_ prefix). */
 const ADA_THREAD_KEY = 'zodiac_ada_thread_id';
@@ -129,9 +131,7 @@ function isMoneyName(col: string): boolean {
   return /\b(amount|total|value|revenue|sales|price|cost|net|gross|netwr|rmwwr|fkwrt|wert|betrag)\b/.test(lk);
 }
 function cellNum(v: any): number {
-  if (typeof v === 'number') return v;
-  const s = String(v ?? '').trim();
-  return /^-?[\d.,]+$/.test(s) ? parseFloat(s.replace(/,/g, '')) : NaN;
+  return analystNumeric(v);
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -172,6 +172,10 @@ type QueryResult = AnalystSqlFields & {
     limitations?: string[];
   };
   meta?: {
+    basic_training_reference?: {id: string; question: string};
+    result_reference?: {id: string; measures: string[]; created_at: string};
+    drilldown_unavailable?: string;
+    usage?: {total_tokens: number; input_tokens: number; cached_tokens: number; output_tokens: number; reasoning_tokens: number; calls: unknown[]; estimated_cost_usd: string | null; models?: string[]};
     domain?: string;
     intent?: string;
     schema_tables?: string[];
@@ -266,7 +270,7 @@ function KPICards({ kpis }: { kpis: KPI[] }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Charts grid
 // ═══════════════════════════════════════════════════════════════════════════════
-function ChartsGrid({ charts }: { charts: any[] }) {
+function ChartsGrid({ charts, onSelect }: { charts: any[]; onSelect?: (row: any) => void }) {
   const [selectedCurrency, setSelectedCurrency] = useState('');
   if (!charts?.length) return null;
 
@@ -324,7 +328,7 @@ function ChartsGrid({ charts }: { charts: any[] }) {
           <span className="text-xs text-slate-500">{currencies.length} currencies available. The table includes every currency.</span>
         </div>
       )}
-      <AIChartRenderer charts={visible as any} />
+      <AIChartRenderer charts={visible as any} onSelect={onSelect} />
     </div>
   );
 }
@@ -481,12 +485,12 @@ function DataTable({
                         if (isInt && Number.isFinite(n)) return Math.round(n).toLocaleString('en-US');
                         if (isNum) {
                           const digits = isMoneyName(h) || sem?.semantic_type === 'money' ? 2 : (sem?.precision ?? 2);
-                          return n.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: sem?.semantic_type === 'money' ? 2 : 0 });
+                          return analystDecimal(v, digits);
                         }
                         return String(v);
                       })();
                       return (
-                        <td key={h} title={display == null ? undefined : String(display)} className={cn(
+                        <td key={h} title={v == null ? undefined : String(v)} className={cn(
                           'px-3 py-3 whitespace-nowrap border-b border-slate-100 max-w-[320px] overflow-hidden text-ellipsis',
                           isNum ? 'text-right tabular-nums text-slate-800' : 'text-slate-700',
                           isNum && n < 0 ? 'text-red-700' : ''
@@ -804,6 +808,39 @@ function TrustPanel({ result }: { result: QueryResult }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Conversational answer with inspectable data and execution evidence
 // ═══════════════════════════════════════════════════════════════════════════════
+function TeachBasic({ reference }: { reference: { id: string; question: string } }) {
+  const [question, setQuestion] = useState(reference.question);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [failed, setFailed] = useState(false);
+  return (
+    <details className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <summary className="cursor-pointer text-xs font-medium text-slate-700">Teach Basic this checked answer</summary>
+      <form className="mt-3 space-y-2" onSubmit={async event => {
+        event.preventDefault();
+        setBusy(true); setMessage(''); setFailed(false);
+        try {
+          const result = await dashboardApi.teachBasic(reference.id, question.trim());
+          setMessage(result.message);
+        } catch (error) {
+          setFailed(true); setMessage(error instanceof Error ? error.message : 'Could not save this example.');
+        } finally { setBusy(false); }
+      }}>
+        <p className="text-xs text-slate-500">Check the SQL and result first. Save the question wording you want to use again, keeping the same filters. Basic will rerun the query with fresh data and no model tokens.</p>
+        <label className="block text-xs text-slate-700">
+          Question to remember
+          <textarea value={question} onChange={event => setQuestion(event.target.value)} minLength={3} maxLength={2000} required disabled={busy}
+            className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-sm" rows={2} />
+        </label>
+        <button type="submit" disabled={busy || question.trim().length < 3} className="rounded-full bg-slate-900 px-3 py-1.5 text-xs text-white disabled:opacity-50">
+          {busy ? 'Saving…' : 'Save checked example'}
+        </button>
+        {message && <p role={failed ? 'alert' : 'status'} className={cn('text-xs', failed ? 'text-red-700' : 'text-emerald-700')}>{message}</p>}
+      </form>
+    </details>
+  );
+}
+
 function ResultDashboard({
   result,
   onAskFollowup,
@@ -840,6 +877,7 @@ function ResultDashboard({
         </details>
       )}
       <SqlDisclosure result={result} />
+      {result.meta?.basic_training_reference && <TeachBasic reference={result.meta.basic_training_reference} />}
     </div>
   );
 }
@@ -893,6 +931,7 @@ function ResultContent({ result, onAskFollowup }: {
   result: QueryResult;
   onAskFollowup?: (q: string) => void;
 }) {
+  const [drillRow, setDrillRow] = useState<number | null>(null);
   if (!result) return null;
   const { kpis, charts, summary, keyFindings, data, totalCount, sqlStrategy, rowCount, meta, suggested_followups } = result;
 
@@ -950,11 +989,14 @@ function ResultContent({ result, onAskFollowup }: {
 
   if (isClarification) {
     return (
-      <ClarificationCard
-        message={fullAnswer || 'I need one more detail to answer this accurately.'}
-        followups={suggested_followups}
-        onAskFollowup={onAskFollowup}
-      />
+      <div className="space-y-3">
+        <ClarificationCard
+          message={fullAnswer || 'I need one more detail to answer this accurately.'}
+          followups={suggested_followups}
+          onAskFollowup={onAskFollowup}
+        />
+        {meta?.result_reference && <AnalystDrilldown reference={meta.result_reference} rows={data || []} selectedRow={null} />}
+      </div>
     );
   }
 
@@ -1012,7 +1054,10 @@ function ResultContent({ result, onAskFollowup }: {
     <div className="space-y-0">
       {hasSummary && <SummaryCard summary={fullAnswer} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
-      {hasCharts  && <ChartsGrid charts={charts!} />}
+      {hasCharts  && <ChartsGrid charts={charts!} onSelect={point => setDrillRow(matchingResultRow(data || [], point))} />}
+      {meta?.result_reference && <AnalystDrilldown reference={meta.result_reference} rows={data || []} selectedRow={drillRow} />}
+      {meta?.drilldown_unavailable && <p className="mb-3 text-xs text-amber-800">{meta.drilldown_unavailable}</p>}
+      {meta?.usage && <details className="mb-3 text-xs text-slate-600"><summary className="cursor-pointer">Usage · {meta.usage.total_tokens?.toLocaleString() || 0} tokens · {meta.usage.calls?.length || 0} model calls</summary><p className="mt-2">Input: {meta.usage.input_tokens} · Cached input: {meta.usage.cached_tokens} · Output: {meta.usage.output_tokens} · Reasoning (included in output): {meta.usage.reasoning_tokens}. {meta.usage.estimated_cost_usd != null ? `Estimated model cost: $${meta.usage.estimated_cost_usd}` : `Dollar cost needs a rate for ${(meta.usage.models || []).join(', ') || 'this model'} in analyst_model_rates.json. The token counts above are the measured usage.`}</p></details>}
       {hasData && <details className="rounded-xl border border-slate-200 bg-white mb-4">
         <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-slate-600">
           View verified data · {(rowCount ?? data?.length ?? 0).toLocaleString()} rows
@@ -1059,11 +1104,20 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [failedQuestion, setFailedQuestion] = useState<string | null>(null);
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
+  const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic'>('agent');
+  const analysisMethodRef = useRef<'agent' | 'basic'>('agent');
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const conversationContentRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const [scrollPosition, setScrollPosition] = useState({ canGoUp: false, canGoDown: false, nearBottom: true });
+  useEffect(() => {
+    const saved = window.localStorage.getItem('ai-analyst-method');
+    if (saved === 'basic' || saved === 'agent') {
+      analysisMethodRef.current = saved;
+      setAnalysisMethod(saved);
+    }
+  }, []);
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef    = useRef<HTMLTextAreaElement>(null);
   const initialSentRef = useRef<string | null>(null);
@@ -1264,6 +1318,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         threadId: tid,
         investigationId,
         newQuestion: treatAsNew,
+        analysisMode: analysisMethodRef.current,
         conversationHistory: treatAsNew ? [] : contextMessages.slice(-40).map(message => ({
           role: message.role, content: message.content.slice(0, 6000), mode: message.result?.mode,
         })),
@@ -1637,6 +1692,31 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       {/* ── Input bar ── */}
       <div className="flex-none bg-white px-3 sm:px-6 pt-2 pb-[max(12px,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-4xl mx-auto">
+        <div className="mb-2 flex flex-wrap items-center gap-2 px-1" role="group" aria-label="Analysis method">
+          {(['agent', 'basic'] as const).map(method => (
+            <button
+              key={method}
+              type="button"
+              aria-pressed={analysisMethod === method}
+              onClick={() => {
+                analysisMethodRef.current = method;
+                setAnalysisMethod(method);
+                window.localStorage.setItem('ai-analyst-method', method);
+              }}
+              className={cn(
+                'rounded-full px-3 py-1 text-xs font-medium',
+                analysisMethod === method ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              )}
+            >
+              {method === 'agent' ? 'Agentic' : 'Basic'}
+            </button>
+          ))}
+          <span className="text-xs text-slate-500">
+            {analysisMethod === 'agent'
+              ? 'Investigates with tools, then answers from verified SQL.'
+              : 'Taught questions use no model tokens. New questions use the configured model and free-tier quota.'}
+          </span>
+        </div>
         <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
           <div className="flex-1 relative">
             <textarea

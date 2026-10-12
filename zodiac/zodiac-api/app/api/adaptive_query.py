@@ -1274,7 +1274,10 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     budget = current_budget()
     try:
         if budget is not None and budget.diagnostics.get("agent_read_only"):
-            from ..services.analyst_agent_sql import enforce_agent_user_scope
+            from ..services.analyst_agent_sql import enforce_agent_user_scope, validate_agent_sql
+            sanitized, _ = validate_agent_sql(
+                sanitized, budget.diagnostics["agent_schema"], max_rows=budget.diagnostics.get("agent_row_ceiling"),
+            )
             sanitized, bind_params = enforce_agent_user_scope(sanitized, budget.diagnostics["agent_schema"])
         else:
             sanitized, bind_params = enforce_trusted_user_scope(sanitized)
@@ -1318,7 +1321,7 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
             if isinstance(v, (datetime.date, datetime.datetime)):
                 d[k] = v.isoformat()
             elif isinstance(v, decimal.Decimal):
-                d[k] = float(v)
+                d[k] = format(v, 'f')
             else:
                 d[k] = v
         out.append(d)
@@ -1463,6 +1466,12 @@ def _auto_charts(
         return []
 
     cols = list(data[0].keys())
+    pair_currency_keys = [c for c in cols if c.lower().endswith('_currency')]
+    if len(pair_currency_keys) > 1:
+        # Different source currencies cannot share a monetary axis. Keep the
+        # side-by-side verified table when even one pair is incompatible/unknown.
+        if any(not row.get(pair_currency_keys[0]) or len({row.get(c) for c in pair_currency_keys}) != 1 for row in data):
+            return []
     client_key = next((c for c in cols if c.lower() in {"mandt", "sap_client", "client", "client_id"}), None)
     if client_key:
         clients = list(dict.fromkeys(str(row.get(client_key) or "Unknown client") for row in data))
@@ -1475,7 +1484,7 @@ def _auto_charts(
                     spec["sap_client"] = client
                     separated.append(spec)
             return separated
-    currency_key = next((c for c in cols if c.lower() in {"currency", "waerk", "waers"}), None)
+    currency_key = next((c for c in cols if c.lower() in {"currency", "waerk", "waers"}), pair_currency_keys[0] if pair_currency_keys else None)
     if currency_key:
         currencies = list(dict.fromkeys(str(row.get(currency_key) or "Unknown currency") for row in data))
         if len(currencies) > 1:
@@ -1525,7 +1534,7 @@ def _auto_charts(
     # Amounts, percentages and document/quantity counts have different units.
     # Keep supporting counts in the verified table rather than on a money axis.
     monetary_cols = [c for c in numeric_cols
-                     if re.search(r"(?:^|_)(?:sales|revenue|amount|value|cost|profit|netwr|period_[ab])(?:_|$)", c, re.I)
+                     if re.search(r"(?:^|_)(?:sales|revenue|amount|value|cost|profit|net|netwr|period_[ab])(?:_|$)", c, re.I)
                      and not re.search(r"(?:^|_)(?:count|qty|quantity|pct|percent|ratio|growth|documents|records|rows)(?:_|$)", c, re.I)]
     if monetary_cols:
         numeric_cols = monetary_cols
@@ -2609,6 +2618,7 @@ def _followup_analysis(question: str, prev_q: str, prev_sql: str,
 
 @router.get("/api/query/health")
 async def adaptive_query_health() -> Dict[str, Any]:
+    from ..services.analyst_agent_provider import agent_enabled
     s = _load_schema()
     # Deployment identity: prefer Vercel/git env; fallback to static marker bumped with AI releases.
     build_id = (
@@ -2623,6 +2633,9 @@ async def adaptive_query_health() -> Dict[str, Any]:
         "columns": sum(len(v) for v in s.values()),
         "build_id": build_id[:40] if build_id else None,
         "ai_release": "adaptive-chatgpt-style-v2",
+        "agent_enabled": agent_enabled(),
+        "agent_runtime_version": "tool_loop_v2_sources",
+        "agent_capabilities": ["verified_relationship_paths", "comparison_plans", "identified_values", "independent_aggregates", "public_research_isolated"],
         "trusted_scope": True,
         "database_metadata": True,
         "llm_first_understanding": True,
@@ -2860,6 +2873,128 @@ def cancel_investigation_endpoint(
     }
 
 
+@router.post("/api/query/adaptive/basic/teach")
+def teach_basic_endpoint(
+    body: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from ..services.basic_rag import teach_verified_question
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user
+    from ..core.workspace.context import list_assigned_customer_ids
+    if not isinstance(body.get("question"), str) or not isinstance(body.get("result_id"), str):
+        raise HTTPException(status_code=400, detail="Select a verified result and enter its question wording")
+    scope = analyst_scope_for_user(current_user, list_assigned_customer_ids(db, current_user))
+    try:
+        return teach_verified_question(db.get_bind(), scope, body["result_id"], body["question"])
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _result_documents(db, current_user, result_id, selection):
+    from ..services.analyst_drilldown import (
+        FREEZE_LIMIT, load_artifact, store_artifact, compile_selection, page_sql, reconcile, list_sql, frozen_page,
+    )
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user, set_trusted_scope, reset_trusted_scope
+    from ..services.investigation_budget import begin_investigation, end_investigation, current_budget
+    from ..core.workspace.context import list_assigned_customer_ids
+    from ..services.analyst_agent import AnalystTools
+    scope = analyst_scope_for_user(current_user, list_assigned_customer_ids(db,current_user))
+    scope_token = set_trusted_scope(scope)
+    own_budget = current_budget() is None
+    if own_budget:
+        begin_investigation('Read contributing billing documents',owner_id=scope.user_id)
+    executor = AnalystTools(db,_execute_sql,_load_schema,use_sap=USE_SAP_DB_FOR_AI,sap_session_factory=get_sap_session)
+    try:
+        artifact = load_artifact(db.get_bind(),scope,result_id)
+        row_index = selection.get('row_index')
+        measure = selection.get('measure')
+        if isinstance(row_index,bool) or not isinstance(row_index,int) or not 0<=row_index<len(artifact.get('rows',[])) or measure not in artifact.get('measures',[]):
+            raise ValueError('Select a returned row and its available billed-sales measure')
+        schema, _ = executor.schema(artifact['source'])
+        compiled = compile_selection(artifact['sql'],artifact['rows'][row_index],measure,schema)
+        snapshot_id = selection.get('snapshot_id')
+        page_size = selection.get('page_size',50)
+        if isinstance(page_size,bool) or not isinstance(page_size,int):
+            raise ValueError('Invalid page size')
+        if snapshot_id:
+            snapshot = load_artifact(db.get_bind(),scope,snapshot_id)
+            if (snapshot.get('result_id'),snapshot.get('row_index'),snapshot.get('measure')) != (result_id,row_index,measure):
+                raise ValueError('Snapshot does not belong to this selected row')
+            if snapshot.get('documents') is not None:
+                result = frozen_page(compiled, snapshot['documents'], page_size, selection.get('after'),
+                    snapshot.get('frozen_at'), artifact.get('created_at'))
+                if snapshot.get('digest') and result['reconciliation']['snapshot_digest'] != snapshot['digest']:
+                    raise ValueError('The saved billing-document copy is incomplete; open the row again')
+                result.update(snapshot_id=snapshot_id, result_id=result_id, sql=snapshot.get('sql') or '',
+                    original_executed_at=artifact['created_at'], executed_at=snapshot.get('frozen_at'))
+                return result
+            baseline = snapshot['digest']
+        elif selection.get('after') is not None:
+            raise ValueError('A page cursor requires its original snapshot reference')
+        else:
+            baseline = None
+        budget = current_budget()
+        session = executor.session(artifact['source'])
+        listed = None
+        if not snapshot_id:
+            budget.diagnostics.update(agent_read_only=True, agent_schema=schema, agent_max_rows=FREEZE_LIMIT+1, agent_row_ceiling=FREEZE_LIMIT)
+            try:
+                listed = _execute_sql(session, list_sql(compiled), '')
+            finally:
+                for key in ('agent_read_only','agent_schema','agent_max_rows','agent_row_ceiling'):
+                    budget.diagnostics.pop(key, None)
+        if listed is not None and len(listed) <= FREEZE_LIMIT:
+            documents = [{k: str(row[k]) for k in ('sap_client','billing_document','currency','billed_sales')} for row in listed if row.get('billing_document') is not None]
+            frozen_at = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+            result = frozen_page(compiled, documents, page_size, None, frozen_at, artifact.get('created_at'))
+            snapshot_id = store_artifact(db.get_bind(), scope, {'kind':'drill_snapshot','result_id':result_id,
+                'row_index':row_index,'measure':measure,'digest':result['reconciliation']['snapshot_digest'],
+                'documents':documents,'frozen_at':frozen_at,'sql':budget.diagnostics.get('sql_execution',{}).get('sql','')})
+            result.update(snapshot_id=snapshot_id, result_id=result_id, sql=budget.diagnostics.get('sql_execution',{}).get('sql',''),
+                original_executed_at=artifact['created_at'], executed_at=frozen_at)
+            return result
+        sql = page_sql(compiled, selection.get('after'), page_size)
+        budget.diagnostics.update(agent_read_only=True, agent_schema=schema, agent_max_rows=101)
+        try:
+            rows = _execute_sql(session, sql, '')
+        finally:
+            for key in ('agent_read_only','agent_schema','agent_max_rows'):
+                budget.diagnostics.pop(key, None)
+        result = reconcile(compiled, rows, page_size, baseline)
+        result['reconciliation']['frozen'] = False
+        result['reconciliation']['source_executed_at'] = artifact.get('created_at')
+        captured = str(artifact.get('created_at') or 'the original query')
+        if listed is not None and len(listed) > FREEZE_LIMIT:
+            result['reconciliation']['note'] = 'More than 5000 billing documents contribute, so this list is read from the current extract and is not a saved copy. The total above is the full database sum, not the sum of this page. The original result was captured at ' + captured + '.'
+        else:
+            result['reconciliation']['note'] = 'This page was read from the current extract. The total above is the full database sum, not the sum of this page. The original result was captured at ' + captured + '.'
+        if not snapshot_id:
+            snapshot_id = store_artifact(db.get_bind(),scope,{'kind':'drill_snapshot','result_id':result_id,
+                'row_index':row_index,'measure':measure,'digest':result['reconciliation']['snapshot_digest']})
+        result.update(snapshot_id=snapshot_id, result_id=result_id, sql=budget.diagnostics['sql_execution']['sql'],
+            original_executed_at=artifact['created_at'], executed_at=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat())
+        return result
+    finally:
+        executor.close()
+        reset_trusted_scope(scope_token)
+        if own_budget:
+            end_investigation('completed')
+
+
+@router.post('/api/query/adaptive/results/{result_id}/documents')
+def result_documents_endpoint(result_id: str, selection: Dict[str,Any] = Body(...),
+    db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user)):
+    try:
+        return _result_documents(db,current_user,result_id,selection)
+    except PermissionError as error:
+        raise HTTPException(status_code=403,detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409,detail=str(error)) from error
+
+
 @router.post("/api/query/adaptive")
 def post_query_adaptive(
     question: str = Body(..., embed=True),
@@ -2870,6 +3005,7 @@ def post_query_adaptive(
     investigationId: Optional[str] = Body(default=None, embed=True),
     conversationHistory: Optional[List[Dict[str, Any]]] = Body(default=None, embed=True),
     newQuestion: bool = Body(default=False, embed=True),
+    analysisMode: Optional[str] = Body(default=None, embed=True),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: ZodiacUser = Depends(get_current_user),
@@ -2902,9 +3038,8 @@ def post_query_adaptive(
             allowed = list_assigned_customer_ids(db, current_user) if current_user is not None else []
         except Exception:
             allowed = []
-        _scope_token = set_trusted_scope(
-            TrustedAiExecutionScope(user_id=uid, allowed_customer_ids=allowed)
-        )
+        from ..services.adaptive_trusted_scope import analyst_scope_for_user
+        _scope_token = set_trusted_scope(analyst_scope_for_user(current_user, allowed))
     except Exception as scope_exc:
         logger.warning("[adaptive] trusted scope bind failed: %s", scope_exc)
 
@@ -2937,6 +3072,7 @@ def post_query_adaptive(
             new_question=newQuestion is True,
             background_tasks=background_tasks,
             agent_mode=agent_enabled(),
+            analysis_mode=(analysisMode if isinstance(analysisMode, str) else "agent").strip().lower(),
         )
     finally:
         if _scope_token is not None:
@@ -2961,6 +3097,7 @@ def _post_query_adaptive_body(
     new_question: bool = False,
     background_tasks: Optional[BackgroundTasks] = None,
     agent_mode: bool = False,
+    analysis_mode: str = "agent",
 ) -> Dict[str, Any]:
     _original_question = original_question
     openai_key = (
@@ -3045,6 +3182,9 @@ def _post_query_adaptive_body(
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
+        if analysis_mode == "basic":
+            payload.setdefault("meta", {}).update(analysis_method="basic", credits_used=False)
+            payload.setdefault("query_plan", {})["analysis_method"] = "basic"
         rank_rows = payload.get("data") or []
         if rank_rows and all(isinstance(row, dict) and "rank_within_currency" in row for row in rank_rows):
             currencies = {str(row.get("currency") or "") for row in rank_rows}
@@ -3056,6 +3196,14 @@ def _post_query_adaptive_body(
                     narrative = str(payload.get(field) or "")
                     if "per currency" not in narrative.lower():
                         payload[field] = (narrative + "\n\n" + note).strip()
+        if payload.get('pipeline') in {'analyst_agent', 'basic_sql'} and payload.get('data') and str(payload.get('answer_status','')).startswith('SUCCESS'):
+            try:
+                from ..services.analyst_drilldown import capture_result
+                from ..services.adaptive_trusted_scope import get_trusted_scope
+                capture_result(payload,db.get_bind(),get_trusted_scope(),_load_schema())
+            except Exception as artifact_error:
+                logger.warning('Analyst result reference unavailable: %s',type(artifact_error).__name__)
+                payload.setdefault('meta',{})['drilldown_unavailable'] = 'A durable result reference could not be saved; rerun the analysis before drilling down.'
         budget_now = current_budget()
         execution = (budget_now.diagnostics.get("sql_execution") or {}) if budget_now else {}
         displayed_sql = str(payload.get("sql") or payload.get("attempted_sql") or "")
@@ -3078,7 +3226,7 @@ def _post_query_adaptive_body(
         payload.setdefault("sql_status", "generated" if displayed_sql else "not_generated")
         if str(payload.get("answer_status") or "").upper() in {
             "CANNOT_ANSWER", "ERROR", "TIMEOUT", "CANCELLED", "CLARIFICATION",
-        }:
+        } and payload.get("pipeline") != "result_first_selection":
             payload.update({"data": [], "rows": [], "rowCount": 0, "charts": [], "kpis": [], "keyFindings": []})
         # Final hard gate: validate against the USER's original wording, not any
         # ranking normalizer rewrite. Wrong results must never become SUCCESS.
@@ -3089,7 +3237,7 @@ def _post_query_adaptive_body(
                 pipe = str(payload.get("pipeline") or payload.get("sql_generation_method") or "").lower()
                 # Result-first follow-ups answer from prior rows; do not re-apply
                 # full analytical ranking/grouping gates meant for fresh SQL plans.
-                if "result_first" not in pipe and pipe != "analyst_agent":
+                if "result_first" not in pipe and pipe not in {"analyst_agent", "basic_sql"}:
                     from ..services.plan_satisfaction import (
                         answer_consistent_with_rows,
                         result_matches_analytical_intent,
@@ -3133,9 +3281,22 @@ def _post_query_adaptive_body(
                         verified_ctx.get("semantic_requirements")
                         if isinstance(verified_ctx, dict) else None
                     )
-                    gate_warn = result_matches_analytical_intent(
-                        rows_chk, validation_question, verified_semantics, sql=sql_chk
-                    )
+                    if str(payload.get("pipeline") or "") == "analyst_agent":
+                        from ..services.analyst_agent import _analysis_issues, _conditional_issues
+                        conditional = query_plan_chk.get("conditional_request") or {}
+                        if isinstance(conditional, dict) and conditional.get("primary") and conditional.get("when_empty"):
+                            gate_warn = _conditional_issues(
+                                (conditional["primary"], conditional["when_empty"]),
+                                [item for item in (query_plan_chk.get("agent_results") or []) if item.get("kind") == "analysis"],
+                            )
+                        else:
+                            validation_question = str(query_plan_chk.get("effective_question") or validation_question)
+                            gate_warn = _analysis_issues(validation_question, {"rows": rows_chk, "sql": sql_chk,
+                                "truncated": bool((payload.get("meta") or {}).get("result_truncated"))})
+                    else:
+                        gate_warn = result_matches_analytical_intent(
+                            rows_chk, validation_question, verified_semantics, sql=sql_chk
+                        )
                     gate_warn.extend(
                         answer_consistent_with_rows(
                             str(payload.get("answer") or payload.get("summary") or ""),
@@ -3201,11 +3362,31 @@ def _post_query_adaptive_body(
             # undersized count alongside a non-empty result sample.
             coherent_row_count = max(reported_row_count, len(result_rows))
             payload["rowCount"] = coherent_row_count
-            payload["query_plan"]["result_artifact"] = {
+            previous_artifact = payload["query_plan"].get("result_artifact") or {}
+            payload["query_plan"]["result_artifact"] = {**previous_artifact,
                 "row_count": coherent_row_count,
-                "sample_row_count": min(30, len(result_rows)),
-                "truncated": len(result_rows) > 30,
+                "sample_row_count": min(_MAX_PERSISTED_ANALYST_RESULT_ROWS, len(result_rows)),
+                "truncated": bool(previous_artifact.get('truncated') or (payload.get('meta') or {}).get('result_truncated')),
+                "memory_sample_truncated": len(result_rows) > _MAX_PERSISTED_ANALYST_RESULT_ROWS,
             }
+        if (payload.get("answer_status") in {"SUCCESS", "SUCCESS_EMPTY"}
+                and payload.get("sql_status") == "executed" and payload.get("sql")
+                and payload.get("pipeline") in {"analyst_agent", "basic_sql"}
+                and len([r for r in payload.get("agent_results", []) if r.get("kind") == "analysis"]) <= 1
+                and not payload["query_plan"].get("conditional_request")):
+            try:
+                from ..services.basic_rag import save_verified_query
+                from ..services.adaptive_trusted_scope import get_trusted_scope
+                primary = next((r for r in payload.get("agent_results", [])
+                                if r.get("id") == payload.get("agent_primary_result_id")), {})
+                save_verified_query(db.get_bind(), get_trusted_scope(),
+                    primary.get("source") or ("business" if USE_SAP_DB_FOR_AI else "application"),
+                    str(payload["query_plan"].get("effective_question") or _original_question),
+                    str(payload["sql"]), primary.get("analysis_plan"))
+                from ..services.basic_rag import capture_training_reference
+                capture_training_reference(payload, db.get_bind(), get_trusted_scope())
+            except Exception as memory_error:
+                logger.warning("Basic verified query could not be saved: %s", type(memory_error).__name__)
         budget_now = current_budget()
         if budget_now is not None:
             payload["request_id"] = budget_now.request_id
@@ -3332,37 +3513,26 @@ def _post_query_adaptive_body(
             )
         # User-scoped app tables must run on the app DB with trusted scope.
         use_app_db = touches_user_scoped_table(overrideSql) or not USE_SAP_DB_FOR_AI
-        sess = None
+        from ..services.analyst_agent import AnalystTools
+        executor = AnalystTools(db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI, sap_session_factory=get_sap_session, question='')
         try:
-            if use_app_db:
-                data = _execute_sql(db, overrideSql, q)
-            else:
-                sess = get_sap_session()
-                data = _execute_sql(sess if sess is not None else db, overrideSql, q)
+            result = executor.call('run_readonly_sql', {'source':'application' if use_app_db else 'business',
+                'sql':overrideSql, 'purpose':'Administrator read-only query'})
+            if not result.get('ok'):
+                raise HTTPException(status_code=400, detail=result.get('error', 'Query rejected'))
+            data = result['rows']
+            overrideSql = result['sql']
         finally:
-            if sess is not None:
-                try:
-                    sess.close()
-                except Exception:
-                    pass
+            executor.close()
         summary = f"Custom SQL executed. {len(data)} row(s) returned."
-        try:
-            from openai import OpenAI
-            from ..utils.openai_chat_params import openai_chat_temperature_kwargs, openai_completion_limit_kwargs
-
-            c = OpenAI(api_key=api_key)
-            fast_model = os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini")
-            r = c.chat.completions.create(
-                model=fast_model,
-                messages=[{"role": "user", "content": f"SQL: {overrideSql[:400]}\nResults ({len(data)} rows): {data[:5]}\nSummarize in 2 sentences:"}],
-                **openai_chat_temperature_kwargs(fast_model, 0.1),
-                **openai_completion_limit_kwargs(fast_model, 200),
-            )
-            summary = r.choices[0].message.content.strip() or summary
-        except Exception:
-            pass
         charts = _ensure_charts(q, overrideSql, data, [])
         return _persist_and_return({
+            "pipeline": "basic_sql", "sql_status": "executed", "llm_calls": 0,
+            "query_plan": {"effective_question": _original_question},
+            "agent_results": [{"id": "result_1", "kind": "analysis",
+                "source": "application" if use_app_db else "business", "sql": overrideSql,
+                "unscoped_sql": overrideSql, "rows": data}],
+            "agent_primary_result_id": "result_1",
             "sql": overrideSql,
             "rowCount": len(data),
             "data": data,
@@ -3372,6 +3542,8 @@ def _post_query_adaptive_body(
             "meta": {
                 "trusted_scope": scope.to_public_dict(),
                 "cross_user_attempt": cross_attempt,
+                "result_truncated": result.get('truncated', False),
+                "model_calls": 0,
             },
             "answer_status": "SUCCESS",
         })
@@ -3379,6 +3551,123 @@ def _post_query_adaptive_body(
     from ..services.operational_query_resolver import _extract_user_question, resolve_operational_query
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
+    from ..services.adaptive_nl_sql_hardening import is_greeting_or_chitchat
+    if is_greeting_or_chitchat(_original_question):
+        if analysis_mode == "basic":
+            hello = "Hello. Basic retrieves taught queries and investigates new questions with its configured model. Taught questions run without model tokens. Ask about billed sales, customers, or a year."
+        else:
+            hello = "Hello. What would you like to know about your billing data?"
+        return _persist_and_return({
+            "pipeline": "local_greeting", "mode": "general_chat", "answer_status": "SUCCESS",
+            "answer": hello, "summary": hello, "sql": "", "data": [], "llm_calls": 0,
+            "meta": {"analysis_method": analysis_mode or "agent", "model_calls": 0, "credits_used": False},
+        })
+    if agent_mode or analysis_mode == "basic":
+        # A follow-up to a durable result can be resolved without model tokens.
+        plan_context = (contextData or {}).get('previousPlan') or {}
+        reference = plan_context.get('result_reference')
+        retained = plan_context.get('retained_analytical_context') or {}
+        reference = reference or (retained.get('previousPlan') or {}).get('result_reference')
+        if reference and isinstance(reference,dict) and reference.get('id'):
+            from ..services.analyst_drilldown import load_artifact, select_row
+            from ..services.adaptive_trusted_scope import get_trusted_scope
+            try:
+                original = load_artifact(db.get_bind(),get_trusted_scope(),reference['id'])
+                if re.fullmatch(r'\s*(?:show(?: me)?|what is)?\s*(?:the )?(?:sql|query)\??\s*',_original_question,re.I):
+                    answer = 'SQL used for the saved result:\n\n```sql\n'+original['displayed_sql']+'\n```'
+                    return _persist_and_return({'pipeline':'result_first_sql','mode':'general_chat','answer_status':'SUCCESS',
+                        'answer':answer,'summary':answer,'sql':'','data':[],'llm_calls':0,
+                        'query_plan':{'result_reference':reference},'meta':{'model_tokens':0,'deterministic':True}})
+                selected = select_row(original,_original_question)
+                if selected == 'scope_mismatch':
+                    answer = 'The requested year, currency, or amount does not match the saved result. Select the exact displayed row or run a new analysis before opening its billing documents.'
+                    return _persist_and_return({'pipeline':'result_first_selection','mode':'clarification','answer_status':'CLARIFICATION',
+                        'answer':answer,'summary':answer,'sql':'','data':[],'llm_calls':0,'meta':{'model_tokens':0,'deterministic':True}})
+                if selected == 'unavailable':
+                    answer = 'This result has no billed-net total that can be opened into billing documents.'
+                    return _persist_and_return({'pipeline':'result_first_selection','mode':'clarification','answer_status':'CLARIFICATION',
+                        'answer':answer,'summary':answer,'sql':'','data':[],'llm_calls':0,'meta':{'model_tokens':0,'deterministic':True}})
+                if selected == 'ambiguous':
+                    answer = 'Several rows match that request. Choose the exact row and amount below. The invoices keep that row’s currency, client, year and filters.'
+                    shown = dict(reference)
+                    shown['measures'] = original.get('measures') or reference.get('measures') or []
+                    rows = original.get('rows') or []
+                    return _persist_and_return({'pipeline':'result_first_selection','mode':'clarification','answer_status':'CLARIFICATION',
+                        'answer':answer,'summary':answer,'sql':'','data':rows,'rowCount':len(rows),'llm_calls':0,
+                        'query_plan':{'result_reference':shown},'meta':{'result_reference':shown,'model_tokens':0,'deterministic':True}})
+                if selected:
+                    drill = _result_documents(db,current_user,reference['id'],{'row_index':selected[0],'measure':selected[1]})
+                    totals = drill['reconciliation']
+                    answer = f"Contributing billing documents: {drill['totalCount']}. Original total: {totals['original_total']}; current document total: {totals['document_total']}; difference: {totals['difference']}. " + totals['note']
+                    drill.update(pipeline='result_first_drilldown',mode='database_analysis',answer=answer,summary=answer,
+                        query_plan={'result_reference':reference},sql_status='executed')
+                    return _persist_and_return(drill)
+            except (ValueError,PermissionError) as selection_error:
+                from ..services.analyst_drilldown import _document_followup
+                if _document_followup(_original_question):
+                    answer = str(selection_error)
+                    return _persist_and_return({'pipeline':'result_first_selection','mode':'clarification','answer_status':'CLARIFICATION',
+                        'answer':answer,'summary':answer,'sql':'','data':[],'llm_calls':0})
+
+    if analysis_mode == "basic":
+        from ..services.basic_sql_answer import run_basic_sql_answer
+        from ..services.analyst_agent import AnalystTools
+        prior = contextData if isinstance(contextData, dict) else {}
+        source = "business" if USE_SAP_DB_FOR_AI else "application"
+        prior_examples: list = []
+        if user_id:
+            try:
+                from ..services.basic_rag import load_verified_queries
+                from ..services.adaptive_trusted_scope import get_trusted_scope
+                prior_examples = load_verified_queries(db.get_bind(), get_trusted_scope(), source)
+            except Exception as memory_error:
+                logger.warning("Basic query memory unavailable: %s", type(memory_error).__name__)
+        from ..services.basic_hosted_provider import basic_llm_enabled
+        from ..services.analyst_agent import run_analyst_agent
+        def _basic_local_agent(examples):
+            return run_analyst_agent(
+                _original_question, db, _execute_sql, schema_loader=_load_schema,
+                context={**prior, "basic_rag_examples": [{k: item[k] for k in ("question", "sql")}
+                                                       for item in examples]}, conversation=memory_turns,
+                use_sap=USE_SAP_DB_FOR_AI, sap_session_factory=get_sap_session,
+            )
+        executor = AnalystTools(
+            db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
+            sap_session_factory=get_sap_session, question=_original_question,
+        )
+        def _execute_basic(sql):
+            cached = next((item for item in prior_examples
+                           if str(item.get("sql") or "").strip().rstrip(";") == sql and item.get("analysis_plan")), None)
+            if cached:
+                # This plan was loaded from server-owned, permission-bound memory.
+                # The normal SQL tool rechecks it against the connected catalog.
+                executor.plans[source] = cached["analysis_plan"]
+            executed = executor.call("run_readonly_sql", {"source": source, "sql": sql, "purpose": "Basic verified query"})
+            if executed.get("ok"):
+                from ..services.analyst_agent import _analysis_issues
+                issues = _analysis_issues(_original_question, executed)
+                if issues:
+                    return {**executed, "ok": False, "rows": [],
+                            "error": "The saved query did not satisfy the current request: " + "; ".join(issues[:4])}
+            return executed
+        try:
+            basic = run_basic_sql_answer(
+                _original_question,
+                execute=_execute_basic,
+                previous_question=str(prior.get("previousQuestion") or ""),
+                previous_sql=str(prior.get("previousSQL") or ""),
+                prior_examples=prior_examples,
+                local_agent=_basic_local_agent if basic_llm_enabled() else None,
+            )
+        finally:
+            executor.close()
+        basic["tableHint"] = tableHint
+        if basic.get("sql") and str(basic.get("answer_status") or "").startswith("SUCCESS"):
+            try:
+                basic["charts"] = _ensure_charts(_original_question, basic["sql"], basic.get("data") or [], [])
+            except Exception:
+                basic["charts"] = []
+        return _persist_and_return(basic)
     if agent_mode:
         from ..services.analyst_agent import run_analyst_agent
 

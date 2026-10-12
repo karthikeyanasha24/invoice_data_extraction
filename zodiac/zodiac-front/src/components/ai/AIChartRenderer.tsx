@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate } from '@/lib/analystPresentation';
 import { analystChartLayout, analystChartCsv, compactChartNumber, shortenChartLabel } from '@/lib/analystChartLayout';
+import { analystNumeric, analystDecimal } from '@/lib/analystNumbers';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -170,21 +171,7 @@ function fmtCell(key: string, v: number, rowCcy?: string): string {
  * Keeps chart math consistent with what the table displays.
  */
 function toNum(v: any): number {
-  if (typeof v === 'number') return v;
-  if (v === null || v === undefined || v === '') return NaN;
-  let s = String(v).trim();
-  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-  if (!/^-?\d[\d.,\s]*$/.test(s)) return Number(s); // not numeric-looking — let Number decide (NaN)
-  s = s.replace(/\s/g, '');
-  if (s.includes(',') && s.includes('.')) {
-    s = s.lastIndexOf(',') > s.lastIndexOf('.')
-      ? s.replace(/\./g, '').replace(',', '.') // EU: 1.234,56
-      : s.replace(/,/g, '');                   // US: 1,234.56
-  } else if (s.includes(',')) {
-    const tail = s.slice(s.lastIndexOf(',') + 1);
-    s = tail.length <= 2 ? s.replace(/,(\d{1,2})$/, '.$1').replace(/,/g, '') : s.replace(/,/g, '');
-  }
-  return Number(s);
+  return analystNumeric(v);
 }
 
 function getCcy(row: any): string | undefined {
@@ -323,7 +310,7 @@ function downloadChartData(chart: ChartData) {
 /* ═════════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ═════════════════════════════════════════════════════════════════ */
-export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
+export default function AIChartRenderer({ charts, onSelect }: { charts: ChartData[]; onSelect?: (row: any) => void }) {
   const [overrides, setOverrides] = useState<Record<number, string>>({});
 
   /* ── available toggle types per chart ─────────────────────── */
@@ -381,10 +368,10 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
     // Coerce measure values to real numbers (formatted strings like "1,234.56"
     // render fine in tables but break Recharts bar heights → chart ≠ table).
     const normalized = chart.data.map((r) => {
-      const out: any = { ...r };
+      const out: any = { ...r, __original: r };
       for (const k of yKeys) {
         const n = toNum(r?.[k]);
-        if (Number.isFinite(n)) out[k] = n;
+        out[k] = Number.isFinite(n) ? n : null;
       }
       return out;
     });
@@ -418,7 +405,8 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       const key = String(name ?? '');
       const lbl = key.replace(/_/g, ' ');
       const rc = getCcy(props?.payload) ?? currency;
-      return [fmtCell(key, toNum(value), rc), lbl];
+      const exact = props?.payload?.__original?.[key] ?? value;
+      return [`${isMoneycol(key) && rc ? rc + ' ' : ''}${analystDecimal(exact)}${isPercentCol(key) ? '%' : ''}`, lbl];
     };
 
     const grid = <CartesianGrid strokeDasharray="3 4" stroke="#e2e8f0" vertical={false} />;
@@ -494,6 +482,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
           <ResponsiveContainer width="100%" height={showBrush ? barH + 36 : barH}>
           <BarChart
             data={sorted}
+            onClick={(event: any) => { const row = event?.activePayload?.[0]?.payload; if (row) onSelect?.(row.__original || row); }}
             layout={isHoriz ? 'vertical' : 'horizontal'}
             margin={{
               top: 24,
@@ -624,7 +613,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       return (
         <div>
         <ResponsiveContainer width="100%" height={layout.height + (showLineBrush ? 36 : 0)}>
-          <LineChart data={sorted} margin={{ top: 24, right: layout.compact ? 8 : 20, bottom: showLineBrush ? 4 : 10, left: 0 }}>
+          <LineChart data={sorted} onClick={(event: any) => { const row = event?.activePayload?.[0]?.payload; if (row) onSelect?.(row.__original || row); }} margin={{ top: 24, right: layout.compact ? 8 : 20, bottom: showLineBrush ? 4 : 10, left: 0 }}>
             {grid}
             {xA}
             {dualLine ? <>{yLeft}{yRight}</> : yA}
@@ -697,7 +686,7 @@ export default function AIChartRenderer({ charts }: { charts: ChartData[] }) {
       return (
         <div>
         <ResponsiveContainer width="100%" height={layout.height + (showAreaBrush ? 36 : 0)}>
-          <AreaChart data={sorted} margin={{ top: 24, right: layout.compact ? 8 : 20, bottom: showAreaBrush ? 4 : 10, left: 0 }}>
+          <AreaChart data={sorted} onClick={(event: any) => { const row = event?.activePayload?.[0]?.payload; if (row) onSelect?.(row.__original || row); }} margin={{ top: 24, right: layout.compact ? 8 : 20, bottom: showAreaBrush ? 4 : 10, left: 0 }}>
             {grid}
             {xA}
             {dualArea ? <>{yLeft}{yRight}</> : yA}

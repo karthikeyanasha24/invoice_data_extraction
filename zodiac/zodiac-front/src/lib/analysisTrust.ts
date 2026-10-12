@@ -221,6 +221,23 @@ export function analysisTrustFromResult(result: any): AnalysisTrust {
   if (mode === 'general_chat' || mode === 'general') {
     return { limitations: [] };
   }
+  const requirements = qp.analysis_requirements;
+  if (requirements?.validated && String(result?.answer_status || '').startsWith('SUCCESS')) {
+    const paths = Array.isArray(requirements.relationships) ? requirements.relationships.flat() : [];
+    const uniquePaths = [...new Map(paths.map((edge: any) => [JSON.stringify(edge), edge])).values()] as any[];
+    const fields = Array.isArray(requirements.fields) ? requirements.fields : [];
+    const tables = Array.from(new Set([
+      ...(requirements.tables || []), ...uniquePaths.flatMap((edge: any) => [edge.left, edge.right]),
+    ]));
+    return {
+      analysisLabel: 'Verified comparison', source: 'Connected database', tables: tables.join(' → '),
+      joins: uniquePaths.map((edge: any) => `${edge.left} → ${edge.right} (${edge.pairs.map((pair: string[]) => pair.join(' = ')).join(', ')})`).join('; '),
+      calculation: fields.filter((field: any) => field.role === 'measure').map((field: any) => `${field.alias.replaceAll('_', ' ')}: ${field.table}.${field.column}`).join('; '),
+      grain: requirements.grain, period: (requirements.filters || []).join('; ') || 'No period filter',
+      rowLimit: `${result.rowCount ?? 0} rows returned; planned limit ${requirements.limit}`,
+      limitations: [...(requirements.assumptions || []), requirements.missing_handling].filter(Boolean),
+    };
+  }
   const intent = String(ac.intent || qp.intent || meta.intent || '').trim() || undefined;
   const gap = isDataGapResult(result);
   const metric = String(ac.metric || ac.primary_metric || ac.selected_metric || calc.definition || '').trim() || undefined;
