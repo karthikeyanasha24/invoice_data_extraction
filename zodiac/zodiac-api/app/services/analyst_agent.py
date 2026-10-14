@@ -588,7 +588,12 @@ def _analysis_issues(question: str, result: dict) -> list[str]:
         issues.append("A truncated period listing cannot verify all available years or exclusivity")
     standalone_count = bool(re.match(r"\s*(?:how many|count)\b", question, re.I) or re.search(r"\b(?:overall|entire|whole)\b", question, re.I)) and not re.search(
         r"\b(?:those|these|that|same|customer|company|client|mandt|for|in|during|between)\b|\b(?:19|20)\d{2}\b", question, re.I)
-    if standalone_count and (temporal or columns & {"kunag", "kunrg", "kunnr", "customer_id", "mandt", "sap_client", "client_id"}):
+    explicit_breakdown = bool(re.search(
+        r"\b(?:by|per|each)\s+(?:years?|months?|quarters?|customers?|countries|country|industries|industry|materials?|currency)\b",
+        question,
+        re.I,
+    ))
+    if standalone_count and not explicit_breakdown and (temporal or columns & {"kunag", "kunrg", "kunnr", "customer_id", "mandt", "sap_client", "client_id"}):
         issues.append("Standalone count must not inherit an earlier customer, SAP client, or period filter; count the whole accessible dataset")
     return issues
 

@@ -15,6 +15,8 @@
 import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { useRouter } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
+import AnalystQuestionPicker from './AnalystQuestionPicker';
+import AnalystRagHelp from './AnalystRagHelp';
 import { publicApiError } from '@/lib/apiErrors';
 import { ANALYST_STAGE_LABELS, mergeAnalystProgress, type AnalystProgress } from '@/lib/analystProgress';
 import { analystSqlEvidence, analystSqlFields, type AnalystSqlFields } from '@/lib/analystSql';
@@ -172,6 +174,10 @@ type QueryResult = AnalystSqlFields & {
     limitations?: string[];
   };
   meta?: {
+    provider?: string;
+    analysis_method?: string;
+    retrieval?: {reused?: boolean; examples?: number; method?: string; queries?: number};
+    basic_fallback?: string;
     basic_training_reference?: {id: string; question: string};
     result_reference?: {id: string; measures: string[]; created_at: string};
     drilldown_unavailable?: string;
@@ -809,35 +815,28 @@ function TrustPanel({ result }: { result: QueryResult }) {
 // Conversational answer with inspectable data and execution evidence
 // ═══════════════════════════════════════════════════════════════════════════════
 function TeachBasic({ reference }: { reference: { id: string; question: string } }) {
-  const [question, setQuestion] = useState(reference.question);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
+  const [saved, setSaved] = useState(false);
   return (
-    <details className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <summary className="cursor-pointer text-xs font-medium text-slate-700">Teach Basic this checked answer</summary>
-      <form className="mt-3 space-y-2" onSubmit={async event => {
-        event.preventDefault();
+    <div className="space-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <p className="text-xs text-slate-500">Happy with this result? Save its checked SQL, then ask the saved question in Basic for fresh data with no model tokens.</p>
+      <button type="button" disabled={busy || saved} onClick={async () => {
         setBusy(true); setMessage(''); setFailed(false);
         try {
-          const result = await dashboardApi.teachBasic(reference.id, question.trim());
+          const result = await dashboardApi.teachBasic(reference.id, reference.question);
           setMessage(result.message);
+          setSaved(true);
+          window.dispatchEvent(new Event('basic-queries-saved'));
         } catch (error) {
           setFailed(true); setMessage(error instanceof Error ? error.message : 'Could not save this example.');
         } finally { setBusy(false); }
-      }}>
-        <p className="text-xs text-slate-500">Check the SQL and result first. Save the question wording you want to use again, keeping the same filters. Basic will rerun the query with fresh data and no model tokens.</p>
-        <label className="block text-xs text-slate-700">
-          Question to remember
-          <textarea value={question} onChange={event => setQuestion(event.target.value)} minLength={3} maxLength={2000} required disabled={busy}
-            className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-sm" rows={2} />
-        </label>
-        <button type="submit" disabled={busy || question.trim().length < 3} className="rounded-full bg-slate-900 px-3 py-1.5 text-xs text-white disabled:opacity-50">
-          {busy ? 'Saving…' : 'Save checked example'}
-        </button>
-        {message && <p role={failed ? 'alert' : 'status'} className={cn('text-xs', failed ? 'text-red-700' : 'text-emerald-700')}>{message}</p>}
-      </form>
-    </details>
+      }} className="rounded-full bg-slate-900 px-3 py-1.5 text-xs text-white disabled:opacity-50">
+        {busy ? 'Saving…' : saved ? 'Saved in Basic Model' : 'Reuse it in Basic Model'}
+      </button>
+      {message && <p role={failed ? 'alert' : 'status'} className={cn('text-xs', failed ? 'text-red-700' : 'text-emerald-700')}>{message}</p>}
+    </div>
   );
 }
 
@@ -848,8 +847,19 @@ function ResultDashboard({
   result: QueryResult;
   onAskFollowup?: (q: string) => void;
 }) {
+  const basicPath = result.meta?.analysis_method === 'basic'
+    ? result.meta.retrieval?.reused
+      ? `Checked SQL replay${result.meta.retrieval.queries ? ` · ${result.meta.retrieval.queries} queries` : ''}`
+      : result.meta.provider === 'ollama' || result.meta.provider === 'groq'
+        ? 'Basic model investigation'
+        : result.sql_status === 'executed'
+          ? 'Basic SQL pattern'
+          : ''
+    : '';
   return (
     <div className="space-y-3">
+      {basicPath && <p className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800" aria-label={`Answer path: ${basicPath}`}>{basicPath}</p>}
+      {result.meta?.basic_fallback && <p role="status" className="text-xs text-slate-500">Basic could not safely reuse a saved query. Agentic handled this request; model calls may use credits.</p>}
       <ResultContent result={result} onAskFollowup={onAskFollowup} />
       {additionalAgentResults(result).map(set => (
         <details key={set.id} className="rounded-xl border border-slate-200 bg-white">
@@ -877,7 +887,7 @@ function ResultDashboard({
         </details>
       )}
       <SqlDisclosure result={result} />
-      {result.meta?.basic_training_reference && <TeachBasic reference={result.meta.basic_training_reference} />}
+      {result.meta?.basic_training_reference && <TeachBasic key={result.meta.basic_training_reference.id} reference={result.meta.basic_training_reference} />}
     </div>
   );
 }
@@ -1015,7 +1025,9 @@ function ResultContent({ result, onAskFollowup }: {
       result.failure_class || result.meta?.investigation_status || ''
     ).toUpperCase();
     const heading =
-      result.meta?.service_issue
+      result.meta?.provider === 'ollama' && result.meta?.service_issue
+        ? 'Local Basic model could not complete'
+        : result.meta?.service_issue
         ? 'AI service unavailable'
         : failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
         ? 'Query could not be completed'
@@ -1105,6 +1117,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic'>('agent');
+  const selectedSuggestionRef = useRef<string | null>(null);
   const analysisMethodRef = useRef<'agent' | 'basic'>('agent');
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -1261,7 +1274,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
     // Continuous chat (ChatGPT-style): typed messages always carry the latest
     // turn context. Only Overview / saved deep-links start an isolated ask.
-    const treatAsNew = Boolean(opts?.asNew) && (
+    const fromSuggestion = selectedSuggestionRef.current === q;
+    selectedSuggestionRef.current = null;
+    const treatAsNew = fromSuggestion || Boolean(opts?.asNew) && (
       opts?.source === 'overview-url'
       || opts?.source === 'overview-chip'
       || opts?.source === 'saved-restore'
@@ -1273,7 +1288,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       treatAsNew,
     );
     const dirty = lastSuccessfulAnalyticalRef.current != null || messages.length > 0;
-    const source = opts?.source
+    const source = (fromSuggestion ? 'saved-restore' : opts?.source)
       || (opts?.asNew ? 'overview-url' : dirty ? 'typed-continue' : 'typed-continue');
     const launch = investigationLaunch(source, dirty);
     if (launch.banner) setLaunchBanner(launch.banner);
@@ -1511,7 +1526,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <button type="button" onClick={() => jumpTo('top')} disabled={!scrollPosition.canGoUp}
               aria-label="Jump to top" title="Jump to top"
               className="h-10 w-10 flex items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-default">
@@ -1531,6 +1546,18 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                 <RotateCcw className="h-4 w-4" /><span className="hidden sm:inline text-xs font-medium ml-1.5">New chat</span>
               </button>
             )}
+            <AnalystRagHelp />
+            <AnalystQuestionPicker predefined={QUICK_QUESTIONS.map(item => item.q)} disabled={loading}
+              onSelect={(question, verified) => {
+                if (verified) {
+                  analysisMethodRef.current = 'basic';
+                  setAnalysisMethod('basic');
+                  window.localStorage.setItem('ai-analyst-method', 'basic');
+                }
+                selectedSuggestionRef.current = question;
+                setInput(question);
+                inputRef.current?.focus();
+              }} />
           </div>
         </div>
       </div>
@@ -1714,7 +1741,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           <span className="text-xs text-slate-500">
             {analysisMethod === 'agent'
               ? 'Investigates with tools, then answers from verified SQL.'
-              : 'Taught questions use no model tokens. New questions use the configured model and free-tier quota.'}
+              : 'Saved questions use no model tokens. New questions use the configured Basic model; without one, Agentic may use credits when fallback is enabled.'}
           </span>
         </div>
         <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">

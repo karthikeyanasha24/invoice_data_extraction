@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from .basic_local_provider import local_agent_enabled
+from .basic_local_provider import local_agent_enabled, ollama_endpoint_config
 
 
 def basic_provider():
@@ -25,7 +25,13 @@ def free_plan_declared():
 def basic_llm_enabled():
     if basic_provider() == "groq":
         return bool(os.getenv("GROQ_API_KEY", "").strip()) and free_plan_declared()
-    return basic_provider() == "ollama" and local_agent_enabled() and not os.getenv("VERCEL")
+    if basic_provider() != "ollama" or not local_agent_enabled():
+        return False
+    try:
+        ollama_endpoint_config()
+    except ValueError:
+        return False
+    return True
 
 
 _INSTRUCTIONS = """You are a database analyst. Use inspected schema and tools to answer the current request.

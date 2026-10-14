@@ -296,6 +296,10 @@ def compile_selection(sql, row, measure, schema):
 
 def drilldown_note(sql, rows, schema):
     """Why a verified result cannot be opened into billing documents, if it cannot."""
+    if len(rows) == 1 and isinstance(rows[0], dict) and set(rows[0]) in (
+        {"billing_document_count"}, {"sales_order_count"},
+    ):
+        return None
     if choices(sql, rows, schema):
         return None
     reasons = []

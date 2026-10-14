@@ -23,6 +23,7 @@ _SYNONYMS = {"revenue": "sales", "turnover": "sales", "billing": "billed", "bill
     "invoices": "invoice", "documents": "invoice", "document": "invoice",
     "customers": "customer", "countries": "country",
     "materials": "material", "products": "material", "product": "material", "industries": "industry",
+    "profits": "profit", "margins": "margin", "costs": "cost", "components": "component",
     "monthly": "month", "quarterly": "quarter", "yearly": "year", "annual": "year",
     "sum": "total", "overall": "total", "aggregate": "total", "highest": "top", "largest": "top",
     "lowest": "bottom", "smallest": "bottom", "versus": "compare", "vs": "compare"}
@@ -67,6 +68,51 @@ def readonly_candidate(sql):
         return False
 
 
+def mixed_currency_billing_total(sql):
+    """Detect a direct billed-net sum that collapses multiple currencies.
+
+    Complex investigations keep their own review path. This guards the legacy
+    single-SELECT totals that predate currency-aware Basic templates.
+    """
+    try:
+        tree = parse(sql, read="postgres")[0]
+        if not isinstance(tree, exp.Select) or len(list(tree.find_all(exp.Select))) != 1:
+            return False
+        if not {table.name.upper() for table in tree.find_all(exp.Table)}.intersection({"VBRK", "VBRP"}):
+            return False
+        if not any(column.name.lower() == "netwr" for summation in tree.find_all(exp.Sum)
+                   for column in summation.find_all(exp.Column)):
+            return False
+        currencies = {"waerk", "waers", "rtcur"}
+        projected = any(column.name.lower() in currencies for selection in tree.selects
+                        for column in selection.find_all(exp.Column))
+        grouping = tree.args.get("group")
+        grouped = bool(grouping and projected and any(
+            column.name.lower() in currencies for column in grouping.find_all(exp.Column)
+        ))
+        if grouped:
+            return False
+        where = tree.args.get("where")
+        terms = []
+        def flatten_and(node):
+            if isinstance(node, exp.And):
+                flatten_and(node.left)
+                flatten_and(node.right)
+            else:
+                terms.append(node)
+        if where:
+            flatten_and(where.this)
+        single_currency = any(
+            isinstance(term, exp.EQ)
+            and any(column.name.lower() in currencies for column in term.find_all(exp.Column))
+            and any(literal.is_string for literal in term.find_all(exp.Literal))
+            for term in terms
+        )
+        return not single_currency
+    except Exception:
+        return False
+
+
 def _cosine(a, b):
     if len(a) != len(b) or not a or not all(math.isfinite(x) for x in (*a, *b)):
         return 0.0
@@ -93,15 +139,16 @@ def _embeddings(url, model, questions):
 
 def retrieve_examples(question, examples, top_k=3, *, use_embeddings=True):
     wanted = set(intent_tokens(question))
-    if len(wanted) < 2:
-        return []
     candidates = [dict(e, sql=str(e.get("sql") or "").strip().rstrip(";")) for e in examples or []
-                  if e.get("question") and readonly_candidate(str(e.get("sql") or ""))]
+                  if e.get("question") and readonly_candidate(str(e.get("sql") or ""))
+                  and not mixed_currency_billing_total(str(e.get("sql") or ""))]
     # Exact canonical matches need no embedding call, even if Ollama is configured.
     exact = [dict(e, similarity=1.0, retrieval="canonical", reusable=True) for e in candidates
              if fingerprint(question) == fingerprint(e["question"])]
-    if exact:
+    if exact and wanted:
         return exact[:top_k]
+    if len(wanted) < 2:
+        return []
     ranked = []
     documents = [Counter(intent_tokens(e["question"])) for e in candidates]
     average_length = sum(sum(d.values()) for d in documents) / len(documents) if documents else 1
@@ -116,7 +163,7 @@ def retrieve_examples(question, examples, top_k=3, *, use_embeddings=True):
         ranked.append(dict(e, similarity=score / (1 + score), retrieval="bm25", reusable=False))
     ranked.sort(key=lambda e: e["similarity"], reverse=True)
     model = os.getenv("BASIC_EMBED_MODEL", "").strip()
-    if model and use_embeddings and ranked and not os.getenv("VERCEL"):
+    if model and use_embeddings and ranked:
         try:
             url = os.getenv("BASIC_OLLAMA_URL", "http://127.0.0.1:11434")
             vectors = _embeddings(url, model, (question, *(e["question"] for e in ranked[:6])))
@@ -131,11 +178,84 @@ def retrieve_examples(question, examples, top_k=3, *, use_embeddings=True):
         except Exception:
             # Missing runtime/model leaves the offline retriever usable.
             pass
-    return [e for e in ranked if e["similarity"] >= 0.20][:top_k]
+    # Several aliases of one checked SQL should not crowd out other useful
+    # examples in the small local model's limited context. This does not
+    # change which questions are allowed to replay SQL: only exact fingerprints
+    # receive reusable=True above.
+    distinct = []
+    seen_sql = set()
+    for example in ranked:
+        if example["similarity"] < 0.20 or example["sql"] in seen_sql:
+            continue
+        distinct.append(example)
+        seen_sql.add(example["sql"])
+        if len(distinct) >= top_k:
+            break
+    return distinct
 
 
 def recall_sql(question, examples):
     return next((e["sql"] for e in retrieve_examples(question, examples, use_embeddings=False) if e["reusable"]), "")
+
+
+def investigation_steps(payload):
+    """Ordered read-only queries that produced one checked answer.
+
+    A missing or writable query rejects the whole investigation so Basic cannot
+    replay part of a result as if it were the complete checked answer.
+    """
+    if payload.get("query_plan", {}).get("conditional_request"):
+        # A saved outcome cannot stand in for re-evaluating a branch tomorrow.
+        return []
+    sets = [item for item in (payload.get("agent_results") or [])
+            if isinstance(item, dict) and item.get("kind") == "analysis"]
+    if not sets and readonly_candidate(str(payload.get("sql") or "")):
+        source = str(payload.get("source") or "business")
+        if source not in {"business", "application"}:
+            return []
+        return [{"sql": str(payload["sql"]).strip().rstrip(";"), "source": source,
+                 "purpose": "", "analysis_plan": None}]
+    steps = []
+    for item in sets:
+        sql = str(item.get("sql") or "").strip().rstrip(";")
+        if not sql and len(sets) == 1:
+            sql = str(payload.get("sql") or "").strip().rstrip(";")
+        source = str(item.get("source") or "")
+        plan = item.get("analysis_plan")
+        if source not in {"business", "application"} or not readonly_candidate(sql):
+            return []
+        steps.append({"sql": sql, "source": source, "purpose": str(item.get("purpose") or "")[:400],
+                      "analysis_plan": plan if isinstance(plan, dict) else None,
+                      "primary": bool(payload.get("agent_primary_result_id")) and item.get("id") == payload.get("agent_primary_result_id")})
+    question = str(payload.get("query_plan", {}).get("effective_question") or "")
+    return steps if 1 <= len(steps) <= 6 and replayable_steps(question, steps) else []
+
+
+def replayable_steps(question, steps):
+    """Reject follow-on filters that may embed an earlier result's entity.
+
+    A ranking followed by WHERE product='yesterday's winner' is not a reusable
+    method. Independent queries or SQL subqueries/CTEs can be replayed; missing
+    dependency information must go back to Agentic.
+    """
+    if len(steps) <= 1:
+        return True
+    wording = (question or "").lower()
+    for step in steps[1:]:
+        try:
+            tree = parse(str(step.get("sql") or ""), read="postgres")[0]
+            for clause in tree.find_all(exp.Where, exp.Having, exp.Join):
+                for literal in clause.find_all(exp.Literal):
+                    value = str(literal.this).strip("%_").lower()
+                    if not value or value in wording:
+                        continue
+                    # Explicit year questions can use ISO dates in their SQL.
+                    if re.fullmatch(r"(?:19|20)\d{2}-\d{2}-\d{2}", value) and value[:4] in wording:
+                        continue
+                    return False
+        except Exception:
+            return False
+    return True
 
 
 metadata = MetaData()
@@ -148,12 +268,27 @@ plans = Table("ai_basic_query_plans", metadata,
     Column("id", String(64), primary_key=True), Column("plan_json", Text, nullable=False))
 
 
-def save_verified_query(engine, scope, source, question, sql, analysis_plan=None):
+def save_verified_query(engine, scope, source, question, sql, analysis_plan=None, steps=None):
     from .analyst_drilldown import scope_digest
     if not question or not readonly_candidate(sql):
         return False
+    supplied = list(steps or [])
+    if any(not isinstance(step, dict) for step in supplied) or len(supplied) > 6:
+        return False
+    normalized = []
+    for step in supplied:
+        sql_step = str(step.get("sql") or "").strip().rstrip(";")
+        step_source = str(step.get("source") or "")
+        plan = step.get("analysis_plan")
+        if step_source not in {"business", "application"} or not readonly_candidate(sql_step):
+            return False
+        normalized.append({"sql": sql_step, "source": step_source, "purpose": str(step.get("purpose") or "")[:400],
+                           "analysis_plan": plan if isinstance(plan, dict) else None,
+                           "primary": bool(step.get("primary"))})
+    checked = normalized if len(normalized) > 1 else []
     digest = scope_digest(scope)
-    identifier = hashlib.sha256((digest + source + repr(fingerprint(question)) + sql).encode()).hexdigest()
+    identity = json.dumps([(step["source"], step["sql"]) for step in checked]) if checked else sql
+    identifier = hashlib.sha256((digest + source + repr(fingerprint(question)) + identity).encode()).hexdigest()
     metadata.create_all(engine, tables=[memory, plans])
     with Session(engine) as session:
         old = session.execute(select(memory.c.id).where(memory.c.id == identifier)).first()
@@ -164,8 +299,9 @@ def save_verified_query(engine, scope, source, question, sql, analysis_plan=None
         else:
             session.execute(insert(memory).values(id=identifier, user_id=scope.user_id,
                 scope_digest=digest, source=source, question=question, sql=sql, use_count=1, updated_at=now))
-        if analysis_plan:
-            plan_json = json.dumps(analysis_plan)
+        stored_plan = {"kind": "basic_investigation", "analysis_plan": analysis_plan, "steps": checked} if checked else analysis_plan
+        if stored_plan:
+            plan_json = json.dumps(stored_plan)
             prior_plan = session.execute(select(plans.c.id).where(plans.c.id == identifier)).first()
             if prior_plan:
                 session.execute(update(plans).where(plans.c.id == identifier).values(plan_json=plan_json))
@@ -180,36 +316,55 @@ def load_verified_queries(engine, scope, source, limit=200):
     digest = scope_digest(scope)
     metadata.create_all(engine, tables=[memory, plans])
     with Session(engine) as session:
-        rows = session.execute(select(memory.c.question, memory.c.sql, plans.c.plan_json).select_from(
+        statement = select(memory.c.question, memory.c.sql, memory.c.updated_at, plans.c.plan_json).select_from(
             memory.outerjoin(plans, memory.c.id == plans.c.id)).where(
             memory.c.user_id == scope.user_id, memory.c.scope_digest == digest, memory.c.source == source
-        ).order_by(memory.c.updated_at.desc()).limit(min(max(limit, 1), 500))).mappings().all()
-        return [{"question": row["question"], "sql": row["sql"],
-                 "analysis_plan": json.loads(row["plan_json"]) if row["plan_json"] else None} for row in rows]
+        ).order_by(memory.c.updated_at.desc())
+        if limit is not None:
+            statement = statement.limit(min(max(limit, 1), 500))
+        rows = session.execute(statement).mappings().all()
+        loaded = []
+        for row in rows:
+            parsed = json.loads(row["plan_json"]) if row["plan_json"] else None
+            item = {"question": row["question"], "sql": row["sql"], "analysis_plan": parsed,
+                    "source": source, "updated_at": row["updated_at"]}
+            if isinstance(parsed, dict) and parsed.get("kind") == "basic_investigation":
+                item["analysis_plan"] = parsed.get("analysis_plan")
+                item["steps"] = parsed.get("steps") or []
+            loaded.append(item)
+        return loaded
+
+
+def load_basic_examples(engine, scope, use_sap):
+    sources = ["business", "application"] if use_sap else ["application"]
+    examples = [item for source in sources for item in load_verified_queries(engine, scope, source, None)]
+    examples = [item for item in examples if not any(
+        mixed_currency_billing_total(step.get("sql", "")) for step in (item.get("steps") or [item])
+    )]
+    return sorted(examples, key=lambda item: item.get("updated_at", 0), reverse=True)
 
 
 def capture_training_reference(payload, engine, scope):
     """Opaque, server-owned evidence used when a person teaches a question alias."""
     from .analyst_drilldown import store_artifact
-    sets = [r for r in payload.get("agent_results", []) if r.get("kind") == "analysis"]
-    if len(sets) > 1 or payload.get("query_plan", {}).get("conditional_request"):
+    steps = investigation_steps(payload)
+    if not steps:
         return
-    source = sets[0].get("source") if sets else None
-    if not source or not readonly_candidate(payload.get("sql", "")):
-        return
+    primary_id = str(payload.get("agent_primary_result_id") or "")
+    analyses = [item for item in payload.get("agent_results", []) if item.get("kind") == "analysis"]
+    primary = next((item for item in analyses if item.get("id") == primary_id), analyses[-1] if analyses else {})
+    primary_sql = str(primary.get("sql") or payload.get("sql") or steps[-1]["sql"]).strip().rstrip(";")
+    if not any(step["sql"] == primary_sql for step in steps):
+        primary_sql = steps[-1]["sql"]
     question = str(payload.get("query_plan", {}).get("effective_question") or "")
+    primary_step = next((step for step in steps if step.get("primary")),
+                        next(step for step in steps if step["sql"] == primary_sql))
     identifier = store_artifact(engine, scope, {"kind": "basic_training", "question": question,
-        "sql": payload["sql"], "source": source, "analysis_plan": sets[0].get("analysis_plan") if sets else None})
-    reference = {"id": identifier, "question": question}
+        "sql": primary_sql, "source": primary_step["source"], "analysis_plan": primary_step.get("analysis_plan"),
+        "steps": steps})
+    reference = {"id": identifier, "question": question, "queries": len(steps)}
     payload.setdefault("meta", {})["basic_training_reference"] = reference
     payload.setdefault("query_plan", {})["basic_training_reference"] = reference
-
-
-def _teaching_constraints(question):
-    guarded = {"customer", "country", "material", "industry", "month", "quarter", "year",
-        "top", "bottom", "count", "average", "not", "no", "without", "except", "excluding",
-        "above", "below", "before", "after", "compare", "usd", "eur", "dem", "gbp", "inr", "jpy", "chf"}
-    return sorted(t for t in intent_tokens(question) if t in guarded or re.fullmatch(r'[-+]?\d+(?:\.\d+)?', t))
 
 
 def teach_verified_question(engine, scope, identifier, question):
@@ -219,18 +374,16 @@ def teach_verified_question(engine, scope, identifier, question):
         raise ValueError("Enter a question between 3 and 2000 characters")
     original = load_artifact(engine, scope, identifier)
     if original.get("kind") != "basic_training":
-        raise ValueError("Choose a verified single-query result to teach Basic")
-    if _teaching_constraints(question) != _teaching_constraints(original["question"]):
-        raise ValueError("Keep the same year, amounts, currency, grouping, ranking, and conditions as the checked result. Run a new analysis to teach a different scope.")
-    # Named filters in the checked wording must survive a teaching alias too.
-    ignored = {"show", "please", "what", "which", "how", "give", "get", "list", "find", "tell", "total",
-               "sales", "revenue", "billed", "top", "bottom", "compare", "customers", "customer", "country",
-               "materials", "material", "products", "product", "industry", "profit", "profits", "margin"}
-    named = {word.lower() for word in re.findall(r'\b[A-Z][A-Za-z]+\b', original["question"]) if word.lower() not in ignored}
-    if not named.issubset(set(intent_tokens(question))):
-        raise ValueError("Keep the named filters from the checked result when teaching its question wording")
-    saved = save_verified_query(engine, scope, original["source"], question, original["sql"], original.get("analysis_plan"))
+        raise ValueError("Choose a verified result to teach Basic")
+    if fingerprint(question) != fingerprint(original["question"]):
+        raise ValueError("Keep the same year, amounts, named filters, metric, grouping, ranking, and conditions as the checked result. Run Agentic to check a different question.")
+    steps = original.get("steps") or []
+    if any(mixed_currency_billing_total(step.get("sql", "")) for step in (steps or [original])):
+        raise ValueError("This billed total mixes currencies. Check a result grouped by currency or filtered to one currency before teaching Basic.")
+    saved = save_verified_query(engine, scope, original["source"], question, original["sql"], original.get("analysis_plan"), steps)
     if not saved:
         raise ValueError("This result cannot be taught as a read-only query")
-    return {"saved": True, "question": question, "model_calls": 0,
-            "message": "Basic can now answer this taught question with fresh database results and no model tokens."}
+    query_count = len(steps) if len(steps) > 1 else 1
+    detail = f"all {query_count} checked queries" if query_count > 1 else "the checked query"
+    return {"saved": True, "question": question, "model_calls": 0, "queries": query_count,
+            "message": f"Basic can now answer this taught question by rerunning {detail} with fresh database results and no model tokens."}

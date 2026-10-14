@@ -48,3 +48,36 @@ def test_total_count_never_drops_extra_predicates(question):
 def test_document_count_keeps_an_explicit_year():
     sql = build_document_total_count_sql('How many sales orders in 2004?', [])
     assert '2004%' in sql and 'audat' in sql
+
+
+def test_distinct_billing_documents_issued_in_year_uses_header_count():
+    sql = build_document_total_count_sql(
+        'How many distinct billing documents were issued in 2001?', []
+    )
+    assert sql is not None
+    assert 'FROM "VBRK"' in sql
+    assert 'COUNT(DISTINCT' in sql
+    assert '2001%' in sql and 'fkdat' in sql
+
+
+@pytest.mark.parametrize('question', [
+    'How many billing documents are missing a currency code in 2001?',
+    'How many invoices have blank currency in 2001?',
+    'Count billing documents without a currency code for 2001',
+])
+def test_billing_count_with_missing_currency_keeps_both_filters(question):
+    sql = build_document_total_count_sql(question, [])
+    assert sql is not None
+    assert 'FROM "VBRK"' in sql
+    assert 'COUNT(DISTINCT' in sql
+    assert 'NULLIF(TRIM(CAST("VBRK"."waerk" AS TEXT)), \'\') IS NULL' in sql
+    assert '2001%' in sql and 'fkdat' in sql
+
+
+@pytest.mark.parametrize('question', [
+    'How many billing documents are missing a currency code for customer Acme in 2001?',
+    'How many sales orders are missing a currency code in 2001?',
+    'How many billing documents without a sales order in 2001?',
+])
+def test_missing_currency_count_does_not_discard_other_filters(question):
+    assert build_document_total_count_sql(question, []) is None

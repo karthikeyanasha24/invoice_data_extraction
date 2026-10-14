@@ -1,0 +1,96 @@
+{
+  "checked_at": "2026-10-13T18:01:39.288820+00:00",
+  "live_database": true,
+  "model_calls": 0,
+  "database_writes": false,
+  "cases": [
+    {
+      "category": "Billing documents",
+      "question": "top 5 customers by billed sales in 2003",
+      "sql_sha256": "b0abaa2121d59e16b8d9fb5f7e9430a01b168f61a6aefba254dcbf594a608c65",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 13,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "bottom 5 customers by billed sales in 2002",
+      "sql_sha256": "c209e9a084d7e91efa9ac071f9bcabe248d93cde41ee4ff281bacbc2bb8c2027",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many billing documents in 1999",
+      "sql_sha256": "fb5d49d423d211895e1c43d791a9f1de4ff5a517ce6889579b538d8fd4d3f72f",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "billing_document_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "billed sales by customer in 1999",
+      "sql_sha256": "70e44b042e49aa7b6143d6f911b858552ab8aaa4d954ab7ed1d4b48745be22fb",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 38,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "top 5 countries by billed sales in 1999",
+      "sql_sha256": "d5504779de8d203b91da25b7fff8ad2948b96a515b2d0d1b6929e959b60138a4",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 2,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "billed sales for Germany in 2002",
+      "sql_sha256": "cc8353b8e2c6e4b4dfc86183a5476a4cf03c64d1a2076abd3982609fc8c62116",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 2,
+      "columns": [
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    }
+  ],
+  "passed": 6
+}

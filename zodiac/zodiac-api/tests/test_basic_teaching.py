@@ -6,7 +6,7 @@ from app.services.adaptive_trusted_scope import TrustedAiExecutionScope
 
 
 def result():
-    return {"sql": 'SELECT SUM(netwr) FROM "VBRK" WHERE fkdat LIKE \'2001%\'',
+    return {"sql": 'SELECT waerk AS currency, SUM(netwr) AS total_sales FROM "VBRK" WHERE fkdat LIKE \'2001%\' GROUP BY waerk',
         "query_plan": {"effective_question": "total billed sales in 2001"},
         "agent_results": [{"kind": "analysis", "source": "business"}]}
 
@@ -38,7 +38,44 @@ def test_teaching_is_permission_bound_and_rejects_changed_year():
     assert not load_verified_queries(engine, owner, "business")
 
 
-def test_compound_results_are_not_taught_as_one_query():
+def test_compound_investigation_is_taught_and_replayed_without_a_model():
+    engine = create_engine("sqlite://")
+    scope = TrustedAiExecutionScope(user_id=1, sap_access="full")
+    first = 'SELECT waerk AS currency, SUM(netwr) AS profit FROM "VBRK" WHERE fkdat LIKE \'2001%\' GROUP BY waerk'
+    second = 'SELECT wavwr AS cost FROM "VBRP" WHERE fkdat LIKE \'2001%\''
+    payload = result()
+    payload["query_plan"]["effective_question"] = "show product profits and the component breakdown in 2001"
+    payload["sql"] = second
+    payload["agent_primary_result_id"] = "result_2"
+    payload["agent_results"] = [
+        {"id": "result_1", "kind": "analysis", "source": "business", "sql": first, "purpose": "profit"},
+        {"id": "result_2", "kind": "analysis", "source": "business", "sql": second, "purpose": "components",
+         "analysis_plan": {"strategy": "components", "tables": ["VBRP"]}},
+    ]
+    capture_training_reference(payload, engine, scope)
+    assert payload["meta"]["basic_training_reference"]["queries"] == 2
+    taught_question = "please show product profits and component breakdown during 2001"
+    taught = teach_verified_question(engine, scope, payload["meta"]["basic_training_reference"]["id"], taught_question)
+    assert taught["queries"] == 2 and taught["model_calls"] == 0
+    saved = load_verified_queries(engine, scope, "business")[0]
+    assert [step["sql"] for step in saved["steps"]] == [first, second]
+    assert saved["analysis_plan"]["strategy"] == "components"
+    assert recall_sql("profits and component breakdown in 2002", [saved]) == ""
+
+    from app.services.basic_sql_answer import run_basic_sql_answer
+    calls = []
+    def execute(sql, step=None):
+        calls.append((sql, step["purpose"], step["checked_investigation"]))
+        column = "profit" if "profit" in step["purpose"] else "cost"
+        return {"ok": True, "sql": sql, "rows": [{column: 5}], "source": "business"}
+    replay = run_basic_sql_answer(taught_question, execute=execute, prior_examples=[saved])
+    assert replay["llm_calls"] == 0 and replay["answer_status"] == "SUCCESS"
+    assert "2 checked queries" in replay["answer"]
+    assert [item["purpose"] for item in replay["agent_results"]] == ["profit", "components"]
+    assert len(calls) == 2 and all(item[2] for item in calls)
+
+
+def test_incomplete_compound_is_not_taught_as_a_partial_answer():
     engine = create_engine("sqlite://")
     payload = result()
     payload["agent_results"].append({"kind": "analysis", "source": "business"})
@@ -64,6 +101,16 @@ def test_teaching_rejects_changed_named_filter():
     capture_training_reference(payload, engine, scope)
     with pytest.raises(ValueError, match="named filters"):
         teach_verified_question(engine, scope, payload["meta"]["basic_training_reference"]["id"], "sales for France in 2001")
+
+
+def test_teaching_rejects_a_total_that_mixes_billing_currencies():
+    engine = create_engine("sqlite://")
+    scope = TrustedAiExecutionScope(user_id=1, sap_access="full")
+    payload = result()
+    payload["sql"] = 'SELECT SUM(netwr) AS total_sales FROM "VBRK" WHERE fkdat LIKE \'2001%\''
+    capture_training_reference(payload, engine, scope)
+    with pytest.raises(ValueError, match="mixes currencies"):
+        teach_verified_question(engine, scope, payload["meta"]["basic_training_reference"]["id"], "total billed sales in 2001")
 
 
 def test_basic_api_restores_cached_analysis_plan_without_model_calls(monkeypatch):

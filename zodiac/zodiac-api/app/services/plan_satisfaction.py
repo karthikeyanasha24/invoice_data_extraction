@@ -124,8 +124,11 @@ def _expression_time_grain(expression: str) -> Optional[str]:
                     return "month"
     except Exception:
         pass
+    # Execution rewrites SUBSTRING(..., 1, 4) into PostgreSQL FROM/FOR form.
+    # A quarter bucket is still that year prefix joined to '-Q'.
     if re.search(
-        r"SUBSTRING\s*\([\s\S]*?,\s*1\s*,\s*4\s*\)\s*\|\|\s*'[-]?Q'|"
+        r"SUBSTRING\s*\([\s\S]*?(?:,\s*1\s*,\s*4\s*\)|FROM\s+1\s+FOR\s+4\s*\))\s*\|\|\s*'[-]?Q'|"
+        r"CONCAT\s*\(\s*SUBSTRING\s*\([\s\S]*?(?:FROM\s+1\s+FOR\s+4|,\s*1\s*,\s*4)[\s\S]*?'[-]?Q'|"
         r"DATE_TRUNC\s*\(\s*'quarter'|TO_CHAR\s*\([\s\S]*?'YYYY[^']*Q'",
         value,
         re.I,

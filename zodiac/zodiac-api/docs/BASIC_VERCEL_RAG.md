@@ -1,47 +1,49 @@
-# Vercel Basic: LLM, RAG, and teaching
+# Basic saved-query reuse on Vercel
 
-Basic can run in the existing Vercel Python API. Retrieval uses a small standard-library BM25 index over verified examples stored in the existing application database. New investigations can call a hosted Groq model; Vercel does not load model weights, run an Ollama daemon, or require a writable local model cache. The frontend remains the existing Next.js application.
+The Andy Generative AI page keeps its existing Agentic execution path. Basic first retrieves a checked question and reruns its saved read-only SQL. If no safe match or billing template exists, or execution rejects the saved SQL, Basic uses its configured free model when available. Without a configured free model, Basic calls the existing Agentic entry point automatically. Agentic fallback may consume credits; the UI and response metadata identify that route. A successful empty query is a valid result and does not trigger a paid investigation.
 
-## Vercel environment variables
+## User flow
 
-Set these **server-side** variables on the backend project and redeploy:
+1. Ask Agentic a question and check the returned data, filters, currency, and SQL.
+2. Click **Reuse it in Basic Model** under an eligible answer.
+3. Open **Questions** at the top right. Search all **Verified saved questions** and **Predefined questions** from either mode.
+4. Select a saved question to switch to Basic and fill the message box, then send it. You can also type an equivalent question with the same filters. Predefined questions keep the currently selected method.
+5. Basic reruns the checked SQL against current data and renders a summary directly from the new rows, with zero model calls. It never serves the old answer as a current total.
 
-```dotenv
-BASIC_LLM_PROVIDER=groq
-GROQ_API_KEY=your-groq-free-plan-key
-BASIC_GROQ_FREE_PLAN=true
-BASIC_GROQ_MODEL=openai/gpt-oss-20b
-BASIC_MAX_MODEL_CALLS=6
-BASIC_MAX_PROMPT_BYTES=24000
-AI_ANALYST_DATASET_VERSION=your-current-extract-version
-```
+Clicking a suggestion starts a standalone question so an unrelated previous conversation cannot add filters. Typed follow-ups retain the existing conversation context. Invoice drill-down continues using the existing result references and reconciliation path.
 
-`BASIC_GROQ_FREE_PLAN=true` declares that the configured Groq account uses the free plan; the API cannot independently verify that account's billing tier. Do not set it for a paid account and assume calls become free. Groq publishes [free-plan quotas](https://console.groq.com/docs/rate-limits), including token and request limits. Basic still consumes those tokens for new questions. Quota exhaustion stops the investigation, with no retry loop or automatic paid-provider fallback. The key stays on the backend and is never exposed as a `NEXT_PUBLIC_` variable.
+Execution alone does not approve a new query for memory. The button saves it after human review. Existing permission-bound Basic memory remains usable. The authenticated teaching endpoint accepts only a server-owned result reference and a compatible question, never SQL supplied by the browser. The authenticated suggestions endpoint returns question text only.
 
-The existing `DATABASE_URL`/SAP connection and authenticated-user permission settings remain required. Training memory lives in `ai_basic_query_memory`, verified cross-source plans in `ai_basic_query_plans`, and teaching references in the existing `ai_analyst_results` artifact table. These tables are created using SQLAlchemy like the existing analyst artifacts. Cold starts do not erase training. Change the dataset version when switching extracts. Users cannot read or teach another user's result, or reuse memory after its authorization scope changes.
+## Retrieval and safeguards
 
-On Vercel, local Ollama inference and embedding calls are disabled. Local development can still select `BASIC_LLM_PROVIDER=ollama`; see [the local setup guide](BASIC_FREE_RAG.md). No additional Python package, large ML framework, or model download is required for the Vercel path. The existing `httpx` dependency supplies the transport.
+- Persistent memory uses the existing `ai_basic_query_memory` and `ai_basic_query_plans` tables. Teaching references use `ai_analyst_results`.
+- Memory is bound to the authenticated owner, current permission scope, data source, and `AI_ANALYST_DATASET_VERSION`.
+- Canonical wording matches preserve metric, entity, year, currency, grouping, ranking, negation, and numeric constraints. A merely similar question cannot authorize execution of an old query. Changed parameters require a new validated query; this feature does not substitute arbitrary values into SQL.
+- Existing BM25 retrieval and optional embedding utilities remain available. Direct reuse and the dashboard's fallback routing require no embedding service.
+- The existing SQL tool rechecks read-only safety, live schema, permissions, and saved analysis plans on each run. Validation failure goes to Agentic with the original question and context.
+- Independent multi-query results retain all queries, their sources, analysis plans, and the primary result. Partial replay failure is not displayed as a complete answer.
+- Conditional investigations are not saved as fixed outcomes. Follow-on filters absent from the question are conservatively rejected for multi-query reuse: for example, yesterday's top product ID cannot be reused as today's winner. Such work requires Agentic, or a validated SQL query that computes the dependency with a subquery/CTE.
 
-The API's normal deadline still bounds a request. Set the Vercel function duration above that deadline using your project's supported configuration. The repository currently uses the legacy `builds` configuration: do not mix it with a second `functions` configuration without migrating that setup. [Vercel's function configuration](https://vercel.com/docs/functions/configuring-functions) explains the supported duration settings. This change adds no background training process that must survive an HTTP response.
+The audit found older `ai_query_memory` approvals, `ai_training_data`, chat SQL history, and the OpenAI embedding store. Their historical rows do not establish the current owner/permission/dataset binding and complete execution plan required here, so they are not silently imported as checked answers. Recheck those questions through Agentic and save the result with the new button. Existing scoped Basic records are retained.
 
-## What Andy can train
+## Deployment
 
-1. Run a complex question once with the configured Basic model or Agentic.
-2. Check its SQL, filters, currencies, and returned values.
-3. Open **Teach Basic this checked answer** below the result.
-4. Save the question wording to remember. Keep the same named filters, year, amounts, ranking, and grouping.
-5. Ask that taught question again in Basic. It reruns the checked SQL against current data with **zero model calls**.
+Use the existing Vercel Python API, Next.js frontend, application database, SAP connection, and Agentic provider configuration. SQLAlchemy creates the memory/artifact tables in the application database using the existing mechanism. The deployment database role must permit that creation, or the tables must be provisioned before rollout.
 
-Successful single-query results are also remembered automatically. The explicit teaching action saves a human-reviewed wording, including a paraphrase the conservative automatic matcher would otherwise decline. Cross-source comparison queries retain their verified relationship/analysis plan; the normal execution tool rechecks it against the connected catalog when reused. Compound investigations with several result queries are not cached as if one SQL statement answered the whole request.
+Set `AI_ANALYST_DATASET_VERSION` to the deployed extract/schema version and change it when switching datasets or changing business definitions. Cold starts do not erase memory. Keep the existing request deadline and Vercel function duration configuration.
 
-An administrator who already knows the SQL can also use the existing authenticated `POST /api/query/adaptive` request with `question`, `overrideSql`, and `analysisMode: "basic"`. The read-only SQL validator and normal user-scope rules run before execution. A successful custom query now produces the teaching reference too, so this path needs no model call. Non-administrators cannot submit SQL overrides. The teaching endpoint, `POST /api/query/adaptive/basic/teach`, accepts a server-owned `result_id` and the question wording; it does not accept client-supplied SQL.
+For a downloaded model with no inference-provider token bill, run Ollama on a separate always-on server. Pull a tool-capable model there, such as `qwen3:4b`, and put an authenticated HTTPS reverse proxy in front of its API. On the Vercel **backend API project**, set `BASIC_LLM_PROVIDER=ollama`, `BASIC_LOCAL_MODEL=qwen3:4b`, `BASIC_OLLAMA_URL=https://<your-model-host>`, `BASIC_OLLAMA_API_KEY=<proxy bearer token>`, and `BASIC_ALLOW_PAID_FALLBACK=false`. Optionally pull `embeddinggemma` on the same server and set `BASIC_EMBED_MODEL=embeddinggemma` for semantic example retrieval; the checked-query memory also works without it. The Vercel function rejects localhost, plain HTTP, unauthenticated remote endpoints, and Ollama's hosted cloud domains. Your proxy must validate the bearer token before forwarding requests to Ollama. Keep the Ollama port private; do not expose it directly to the internet. The model host has hardware, hosting, and electricity costs. A Vercel deployment does not run the model weights itself.
 
-This teaches query memory and domain examples. It does **not** fine-tune neural network weights. Even a fine-tuned model still needs computation for inference. An unseen complex question may need the hosted model and consume free quota; training does not make unlimited cloud inference free. Similarity supplies examples to the model, but cannot silently change a cached query's year, customer, metric, currency, or ranking.
+For a hosted free-tier pilot instead, set server-side `BASIC_LLM_PROVIDER=groq`, `GROQ_API_KEY`, and `BASIC_GROQ_FREE_PLAN=true` only for a verified free-plan account. The flag is an operator declaration, not a billing-tier check. Basic uses that provider only after checked reuse and deterministic templates cannot answer. Free-provider quota failures stop without a paid retry. Set `BASIC_ALLOW_PAID_FALLBACK=false` if untaught Basic questions must never call paid Agentic. The Agentic button retains its own route.
 
-## Validation and limits of this environment
+The top-right question picker also includes 50 database-tested questions in `basic_question_catalog.py`. `scripts/verify_basic_catalog.py --live-db` checks their execution and result shape through the existing SQL tool with HTTP/model transports disabled. Its report contains SQL hashes, row counts, and column names, not cached row values. Test results apply to the configured extract; the normal permission and schema checks still apply on every user request. This library is separate from answers a user explicitly checked and saved.
 
-The tests exercise the hosted tool-call transport with scripted replies and real SQLite execution, teaching/cold-start persistence, permission isolation, quotas, and no paid fallback. They do not establish real Groq reasoning quality. There is no configured Groq key in the inspected environment.
+Short follow-ups retain the previous question. An explicit year comparison preserves the prior metric and filters; a comparison without a target year asks for clarification instead of assuming the following year. Teaching stores the resolved full question.
 
-`scripts/verify_basic_history.py --live-db` replays Andy's 25 questions from `andy_live_verify_results.json`, plus three billing questions, with every model transport blocked. The current configured database connection failed, so the report explicitly labels SQL-only validation instead of claiming live results. The report is in `scripts/basic_history_report.json`; unsupported untrained questions are marked `NEEDS_TAUGHT_QUERY_OR_MODEL`.
+This is reviewed query memory, not neural-network fine-tuning. Repeated safe queries require no model tokens. New reasoning uses the configured Basic model when available. Fine-tuning model weights would be a separate training job and would not remove the need to run the model for new questions.
 
-After setting the key and database connectivity, repeat representative complex questions through the deployed API, check the result, teach it, and repeat in Basic. The repeated request should show zero model calls; an invoice drill-down should reconcile to the selected row's exact amount.
+## Validation
+
+`tests/test_basic_reuse_flow.py` exercises the save endpoint, suggestions, owner isolation, persistence across a new database engine, changed live SQLite values, per-currency output, zero-model replay, failed-SQL fallback, new-question fallback, accurate credit metadata, and bypassing Basic when Agentic is selected. Existing teaching, SQL, retrieval, invoice reconciliation, provider, and Agentic regression suites also apply.
+
+`scripts/verify_basic_history.py --live-db` runs the historical question fixture with model transport blocked. Without taught SQL, unsupported questions are marked as needing a taught query or model. If the configured database cannot be reached, the report explicitly records SQL-only validation; it is not proof of live answer correctness. The fallback tests use a stubbed Agentic response rather than spending production credits.

@@ -229,7 +229,8 @@ def test_verified_latest_period_bounds_survive_semantic_merges_and_compilation()
     assert req["date_filter"]["start"] == "2001-01-01"
     assert req["date_filter"]["end"] == "2002-01-01"
     sql = build_dimension_ranking_sql(question, ["VBRK", "KNA1"], verified)
-    assert sql and "2001" in sql and "LIMIT 5" in sql
+    assert sql and "2001" in sql
+    assert '"rank_within_currency" <= 5' in sql
     assert 'AS "country"' in sql
     assert sql_satisfies_analytical_intent(sql, question, verified)
     assert not sql_satisfies_analytical_intent(sql.replace("'2001'", "'2000'"), question, verified)
@@ -580,7 +581,7 @@ def test_country_sales_ranking_uses_invoice_header_amount_for_monthly_consistenc
     assert 'SUM(CAST(NULLIF(TRIM(CAST(k."netwr" AS TEXT)), \'\') AS NUMERIC))' in sql
     assert 'FROM "vbrp" p' not in sql
     assert "'2017'" in sql
-    assert "LIMIT 5" in sql
+    assert '"rank_within_currency" <= 5' in sql
 
 
 def test_product_sales_ranking_keeps_billing_item_grain(monkeypatch):
@@ -633,6 +634,75 @@ def test_quarterly_billed_sales_use_quarter_buckets_from_billing_date(monkeypatc
     assert "'2017'" in sql and "'USD'" in sql
     assert "GROUP BY" in sql
     assert sql_satisfies_analytical_intent(sql, question)
+
+
+def test_rewritten_quarter_bucket_still_matches_quarter_grain():
+    import sqlglot
+    from app.services.plan_satisfaction import _grouping_matches_required_grain
+
+    date_expr = 'TRIM(CAST("VBRK"."fkdat" AS TEXT))'
+    bucket = (
+        f"SUBSTRING({date_expr}, 1, 4) || '-Q' || "
+        "CAST(CEIL(CAST(SUBSTRING(" + date_expr + ", 5, 2) AS NUMERIC) / 3) AS INTEGER)"
+    )
+    amount = "CAST(NULLIF(TRIM(CAST(\"VBRK\".\"netwr\" AS TEXT)), '') AS NUMERIC)"
+    sql = (
+        f'SELECT {bucket} AS "quarter", SUM({amount}) AS "total_sales"\n'
+        'FROM "VBRK"\n'
+        f"WHERE SUBSTRING({date_expr}, 1, 4) = '2000'\n"
+        f"GROUP BY {bucket}"
+    )
+    rewritten = sqlglot.parse_one(sql, read="postgres").sql(dialect="postgres")
+    assert "FROM 1 FOR 4" in rewritten
+    assert _grouping_matches_required_grain(rewritten, ["quarter"])
+    assert sql_satisfies_analytical_intent(rewritten, "billed sales by quarter in 2000")
+
+
+def test_basic_period_and_item_templates_survive_execution_rewrite(monkeypatch):
+    import sqlglot
+    import app.services.adaptive_structured_sql as structured
+    from app.services.analyst_agent import _analysis_issues
+    from app.services.adaptive_structured_sql import (
+        build_billing_item_ranking_sql,
+        build_document_count_by_period_sql,
+        build_total_measure_sql,
+    )
+
+    physical_columns = {
+        "VBRK": {"mandt", "vbeln", "fkdat", "kunag", "netwr", "waerk"},
+        "VBRP": {"mandt", "vbeln", "posnr", "netwr", "matnr"},
+        "VBAK": {"mandt", "vbeln", "erdat", "kunnr"},
+        "KNA1": {"kunnr", "name1", "land1"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in physical_columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+
+    def rewritten(sql):
+        return sqlglot.parse_one(sql, read="postgres").sql(dialect="postgres")
+
+    quarter = build_dimension_period_sales_sql("billed sales by quarter in 2000", ["VBRK"])
+    by_currency = build_dimension_period_sales_sql("billed sales by year and currency", ["VBRK"])
+    items = build_billing_item_ranking_sql("top 5 billing items by billed sales in 2000", ["VBRK", "VBRP", "KNA1"])
+    orders = build_document_count_by_period_sql("how many sales orders by year", ["VBAK"])
+    total = build_total_measure_sql("total billed sales in 2001", ["VBRK"])
+    assert quarter and by_currency and items and orders and total
+    assert 'AS "currency"' in by_currency and 'AS "currency"' in total
+    assert "SUM(" in items and "LIMIT 5" in items
+    cases = (
+        ("billed sales by quarter in 2000", rewritten(quarter), {"quarter": "2000-Q1", "total_billed_sales": 1, "currency": "DEM"}),
+        ("billed sales by year and currency", rewritten(by_currency), {"year": "2000", "total_billed_sales": 1, "currency": "DEM"}),
+        ("top 5 billing items by billed sales in 2000", rewritten(items), {"billing_document": "1", "billing_item": "10", "billing_item_net_value": 1, "currency": "DEM"}),
+        ("how many sales orders by year", rewritten(orders), {"year": "2000", "sales_order_count": 3}),
+        ("total billed sales in 2001", rewritten(total), {"total_sales": 1, "invoice_count": 1, "currency": "DEM"}),
+    )
+    for question, sql, row in cases:
+        issues = _analysis_issues(question, {"sql": sql, "rows": [row]})
+        assert issues == [], (question, issues)
 
 
 def test_month_number_bucket_is_valid_only_inside_a_single_fkdat_year():

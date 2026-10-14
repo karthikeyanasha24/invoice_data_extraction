@@ -1,0 +1,743 @@
+{
+  "checked_at": "2026-10-14T06:10:08.219285+00:00",
+  "live_database": true,
+  "model_calls": 0,
+  "database_writes": false,
+  "cases": [
+    {
+      "category": "Customers",
+      "question": "top 5 customers by billed sales in 2000",
+      "sql_sha256": "0396ba9e15936f5bd0835aa36b90524b4bf462def1fe44b405714e723e8ec353",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 16,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "bottom 5 customers by billed sales in 2000",
+      "sql_sha256": "51b9293725aeefe60937ee589fcf7eb5f81253cfd709bfd6d74eb147f2ff43a3",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 16,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "top 5 customers by billed sales in 2002",
+      "sql_sha256": "be4129be1b03c1526e15358d1045514fc9906335d9c78bcdb22a873ac78ba5c8",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "top 5 customers by billed sales in 1999",
+      "sql_sha256": "9c2a59f8088a5fa6f4ac965adb650c771046fb02aef1df80e6a255fcdb1384c9",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "bottom 5 customers by billed sales in 1999",
+      "sql_sha256": "4f721fabfeca25c532599a3977e3e0ee5dbb71f2549ac84304a1747fc4477cb2",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "top 5 customers by invoice count in 2001",
+      "sql_sha256": "d59ee7008cde641b1fadae7c57fda9074c00e85d700fb6eaf745f367e87f6199",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "billing_document",
+        "billing_date",
+        "customer_id",
+        "customer_name",
+        "billed_amount",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "bottom 5 customers by invoice count in 2001",
+      "sql_sha256": "20cb8b3aa941e3d9338bd5c7620f5279fed63641dbae84b6bc22e39cae40283c",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "billing_document",
+        "billing_date",
+        "customer_id",
+        "customer_name",
+        "billed_amount",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "top 5 customers by billed quantity in 2001",
+      "sql_sha256": "a740ef4a01d606e432ec07fdb849e4c5112c09fadd1680648830b0bd23abd6bb",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "quantity"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "billed sales by customer in 2000",
+      "sql_sha256": "d6747d5e3e1c202bb30b216369b874372f76bf76d258c8ac5866fc057610cdcb",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 63,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Customers",
+      "question": "billed sales by customer in 2002",
+      "sql_sha256": "d807c7b0e4843c6bef2c3cf9398ecaeddaff0fc32419ff8fd04b7f194d06d823",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 106,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "top 5 countries by billed sales in 2000",
+      "sql_sha256": "817546ec5215f7662f010a35318b1f9b2c6f4588acfeb233e88a6f818a152617",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 8,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "bottom 5 countries by billed sales in 2000",
+      "sql_sha256": "3b0dfe96f5c28b6a0dcb4b859d859eb89deeda521e53d931365362aa5ec76484",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 8,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "top 5 countries by billed sales in 2002",
+      "sql_sha256": "5573f499a5f0e67bd67b1f49d0f0792ec187dcece5460efbe04256c2f38b2027",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 7,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "top 5 countries by billed sales in 2003",
+      "sql_sha256": "66ab5bd642635184b6d1026caaf65c22b1c941ee72e9317084f0312a50b065fe",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "top 5 countries by billed quantity in 2001",
+      "sql_sha256": "da35dd0aea728adafeaef28d87bfe69c9745e366d62206894fe1ceb53609b7ec",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "country",
+        "currency",
+        "quantity"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "billed sales by country in 2000",
+      "sql_sha256": "c1c3b4a3cc7c8dbba933246bbdfd4244ec797c53d268db4850c3551df8d556dd",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "billed sales by country in 2002",
+      "sql_sha256": "9e3d4ba98c1173edfc3316d67f5dbfe58dc17c45366b9bbb245dcda7e11b175c",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Countries",
+      "question": "billed sales for Germany in 2000",
+      "sql_sha256": "ad2f26f72f829b47e415841c848dd1e6f050c9b306b543e6cf7267fdb80f7352",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 2,
+      "columns": [
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Industries",
+      "question": "top 5 industries by billed sales in 2000",
+      "sql_sha256": "e1aace11f11cf1e7ed40805684771aca935d3b725af51a82de26a6ba67b000cb",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 13,
+      "columns": [
+        "industry",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Industries",
+      "question": "bottom 5 industries by billed sales in 2000",
+      "sql_sha256": "a3ac512dfbe6debb1f60be107b400084e212901dca40d0b2b5dde228dc2ad47b",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 13,
+      "columns": [
+        "industry",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Industries",
+      "question": "top 5 industries by billed sales in 2002",
+      "sql_sha256": "813c116697a20e30ed94b06e36d314b7cc0fb11367deeffb2afc3ca8f1183064",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "industry",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Industries",
+      "question": "top 5 industries by billed quantity in 2001",
+      "sql_sha256": "da84778d89aa748b7cf656aff451249c14801fbcefd78ea7a104b485a449c002",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "industry",
+        "currency",
+        "quantity"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Industries",
+      "question": "billed sales by industry in 2001",
+      "sql_sha256": "b94357dfcf7aedba6d52b579af2b3bfc4fd04be203bb78ec946c118ed8f301e9",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 16,
+      "columns": [
+        "industry",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Industries",
+      "question": "billed sales by industry in 2002",
+      "sql_sha256": "17f0f021d1e793e506b0e0d1234da740510e1ccbe511f85a8985ccd6a0f9bdee",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 13,
+      "columns": [
+        "industry",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Materials",
+      "question": "top 5 materials by billed sales in 2000",
+      "sql_sha256": "4a917d974c9d391ef83c943bb097a55176ae6b5c421c0644fa510977ef963a90",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 16,
+      "columns": [
+        "material_id",
+        "material_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Materials",
+      "question": "bottom 5 materials by billed sales in 2000",
+      "sql_sha256": "bdb9b81f57818c7c729039fc2f6096639e96c615ebdd72f17824fb0411d91c6c",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 16,
+      "columns": [
+        "material_id",
+        "material_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Materials",
+      "question": "top 5 materials by billed sales in 2002",
+      "sql_sha256": "d8461e277d6a3b22f79bd6e1ecdae2a7978cae6778b4d1cea556d35fcdf0f5c6",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "material_id",
+        "material_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Materials",
+      "question": "billed sales by material in 2001",
+      "sql_sha256": "b5f38b6a5e31ac300cebf63508a5ef3fa0aadb58e311f708affb2b0f1d4dc64e",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 175,
+      "columns": [
+        "material_id",
+        "material_name",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Materials",
+      "question": "billed sales by material in 2002",
+      "sql_sha256": "88a0c1603929344c87129ee14a8edec8861bea9e66d1294a3f0f6b3b6acfdf57",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 200,
+      "columns": [
+        "material_id",
+        "material_name",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "top 5 billing documents by billed sales in 2000",
+      "sql_sha256": "dedb7ba3e5598cb71db92566e416f07fdeeddd8c4ff3ff44f76601a8045efa76",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "billing_document",
+        "billing_date",
+        "customer_id",
+        "customer_name",
+        "billed_amount",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "bottom 5 billing documents by billed sales in 2000",
+      "sql_sha256": "153a269097b82ed04e11836a057a454d0819ecd613152ac2bb7cb31bfbd49e08",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "billing_document",
+        "billing_date",
+        "customer_id",
+        "customer_name",
+        "billed_amount",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "top 5 billing documents by billed sales in 2001",
+      "sql_sha256": "d59ee7008cde641b1fadae7c57fda9074c00e85d700fb6eaf745f367e87f6199",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "billing_document",
+        "billing_date",
+        "customer_id",
+        "customer_name",
+        "billed_amount",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "bottom 5 billing documents by billed sales in 2001",
+      "sql_sha256": "20cb8b3aa941e3d9338bd5c7620f5279fed63641dbae84b6bc22e39cae40283c",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 5,
+      "columns": [
+        "billing_document",
+        "billing_date",
+        "customer_id",
+        "customer_name",
+        "billed_amount",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "top 5 customers by billed sales in 2003",
+      "sql_sha256": "b0abaa2121d59e16b8d9fb5f7e9430a01b168f61a6aefba254dcbf594a608c65",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 13,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Billing documents",
+      "question": "bottom 5 customers by billed sales in 2002",
+      "sql_sha256": "c209e9a084d7e91efa9ac071f9bcabe248d93cde41ee4ff281bacbc2bb8c2027",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 10,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many sales orders are there",
+      "sql_sha256": "a0c06580c8478df4cfa36d4dff5c2e03b1c4c88d2f562688c29841dded121e2c",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "sales_order_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many billing documents are there",
+      "sql_sha256": "59dd61484da184c24e7576643b39724c7eabfd1a22fe65c5931b5cb3045818ce",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "billing_document_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many sales orders in 2000",
+      "sql_sha256": "a4c3b925970716fb9d16d15617dd7b62fa6d70f8bc37a80a8ff106f8ae1b2b69",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "sales_order_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many sales orders in 2001",
+      "sql_sha256": "bc8a63a194e59634f0e5e7470e95cb3c26a22a84e99a5c182ecf97bb844241e8",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "sales_order_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many billing documents in 1999",
+      "sql_sha256": "fb5d49d423d211895e1c43d791a9f1de4ff5a517ce6889579b538d8fd4d3f72f",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "billing_document_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many billing documents in 2000",
+      "sql_sha256": "917ccd2a2567950ef0104819d65449d000a7546e1f53b51ff0b6f618febf3d0e",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "billing_document_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many billing documents in 2002",
+      "sql_sha256": "9a59b94eaa32ff730e941d49cf9cb60ef2eea9fbfc813e13a0be05ba8d02dd4a",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "billing_document_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Document counts",
+      "question": "how many billing documents in 2000 and 2001",
+      "sql_sha256": "0cc31fe86fca750b1ebf94867c87f08ddbf7fac62b0694691be9cff89a093c28",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 1,
+      "columns": [
+        "billing_document_count"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "billed sales by customer in 1999",
+      "sql_sha256": "70e44b042e49aa7b6143d6f911b858552ab8aaa4d954ab7ed1d4b48745be22fb",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 38,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "billed sales by month in 2000",
+      "sql_sha256": "d4ee598b7b4d8002aab37aabbabd674403bcd66ba3f8a050c2f3655756324ab9",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 32,
+      "columns": [
+        "month",
+        "total_billed_sales",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "top 5 countries by billed sales in 1999",
+      "sql_sha256": "d5504779de8d203b91da25b7fff8ad2948b96a515b2d0d1b6929e959b60138a4",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 2,
+      "columns": [
+        "country",
+        "currency",
+        "total_sales",
+        "rank_within_currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "billed sales by month in 2002",
+      "sql_sha256": "99ddd5c0751fb30b70b528dde7e3c45997fa3ef4523b15295fbfb3a7f5e646eb",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 24,
+      "columns": [
+        "month",
+        "total_billed_sales",
+        "currency"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Sales trends",
+      "question": "billed sales for Germany in 2002",
+      "sql_sha256": "cc8353b8e2c6e4b4dfc86183a5476a4cf03c64d1a2076abd3982609fc8c62116",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 2,
+      "columns": [
+        "currency",
+        "total_sales"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Master data",
+      "question": "list customers in France",
+      "sql_sha256": "8b57d57a1c1b02ad63a063e29c4ccf12cc3d3b00d957a7f315f9c4bafceba36e",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 128,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "country",
+        "city"
+      ],
+      "model_calls": 0
+    },
+    {
+      "category": "Order coverage",
+      "question": "customers with no billing in 2000",
+      "sql_sha256": "52fa5a1527197c72ca6b22115bee09c30ee0aef4f1b0e4290639511cf821ae2c",
+      "status": "SUCCESS",
+      "executed": true,
+      "row_count": 200,
+      "columns": [
+        "customer_id",
+        "customer_name"
+      ],
+      "model_calls": 0
+    }
+  ],
+  "passed": 50
+}

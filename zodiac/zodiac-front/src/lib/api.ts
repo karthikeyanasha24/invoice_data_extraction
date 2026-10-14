@@ -1827,6 +1827,10 @@ export const dashboardApi = {
      * - New question: returns { sql, rowCount, data, summary?, retried?, originalSql? }
      * - Follow-up analysis (contextData): returns { type: "analysis", answer }
      */
+    getBasicQuestions: async () => {
+        const response = await api.get('/api/query/adaptive/basic/questions', { timeout: 15000 });
+        return response.data as { questions: string[]; predefined_questions?: string[]; database_questions?: string[] };
+    },
     teachBasic: async (resultId: string, question: string) => {
         try {
             const response = await api.post('/api/query/adaptive/basic/teach', { result_id: resultId, question }, { timeout: 15000 });

@@ -40,6 +40,19 @@ def test_free_plan_requires_explicit_configuration(monkeypatch):
 def test_vercel_never_enables_a_local_daemon(monkeypatch):
     monkeypatch.setenv("BASIC_LLM_PROVIDER", "ollama")
     monkeypatch.setenv("BASIC_LOCAL_MODEL", "qwen3:4b")
+    monkeypatch.setenv("BASIC_OLLAMA_URL", "http://127.0.0.1:11434")
+    assert not hosted.basic_llm_enabled()
+
+
+def test_vercel_enables_only_authenticated_self_hosted_ollama(monkeypatch):
+    monkeypatch.setenv("BASIC_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("BASIC_LOCAL_MODEL", "qwen3:4b")
+    monkeypatch.setenv("BASIC_OLLAMA_URL", "https://model.example.org")
+    monkeypatch.delenv("BASIC_OLLAMA_API_KEY", raising=False)
+    assert not hosted.basic_llm_enabled()
+    monkeypatch.setenv("BASIC_OLLAMA_API_KEY", "test-secret")
+    assert hosted.basic_llm_enabled()
+    monkeypatch.setenv("BASIC_OLLAMA_URL", "http://model.example.org")
     assert not hosted.basic_llm_enabled()
 
 

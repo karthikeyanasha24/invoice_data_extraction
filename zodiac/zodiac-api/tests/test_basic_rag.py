@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from app.services import basic_rag as rag
 from app.services.adaptive_trusted_scope import TrustedAiExecutionScope
 
-SQL = 'SELECT SUM(netwr) AS total_sales FROM "VBRK"'
+SQL = 'SELECT waerk AS currency, SUM(netwr) AS total_sales FROM "VBRK" GROUP BY waerk'
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +20,45 @@ def test_paraphrased_revenue_reuses_query_but_never_cached_numbers():
     examples = [{"question": "total billed sales in 2001", "sql": SQL}]
     assert rag.recall_sql("Please show overall revenue during 2001", examples) == SQL
     assert rag.recall_sql("total revenue in 2002", examples) == ""
+
+
+def test_singular_plural_business_terms_reuse_the_same_checked_question():
+    examples = [{"question": "top products by profits in 2001", "sql": SQL}]
+    assert rag.recall_sql("top product by profit in 2001", examples) == SQL
+    assert rag.recall_sql("top product by profit in 2002", examples) == ""
+
+
+def test_related_examples_do_not_repeat_the_same_sql_for_the_local_model():
+    examples = [
+        {"question": "profits by product in 2001", "sql": SQL},
+        {"question": "profits by material in 2002", "sql": SQL},
+        {"question": "margin by product in 2001", "sql": 'SELECT AVG(margin) FROM "VBRK"'},
+    ]
+    related = rag.retrieve_examples("profit and margin by product in 2001", examples)
+    assert len({example["sql"] for example in related}) == len(related)
+    assert all(example["reusable"] is False for example in related)
+
+
+def test_legacy_billed_total_must_keep_currency_grain():
+    legacy = 'SELECT SUM(netwr) AS total_sales FROM "VBRK" WHERE fkdat LIKE \'2001%\''
+    grouped = 'SELECT waerk AS currency, SUM(netwr) AS total_sales FROM "VBRK" GROUP BY waerk'
+    filtered = 'SELECT SUM(netwr) AS total_sales FROM "VBRK" WHERE waerk = \'DEM\''
+    multi_currency = 'SELECT SUM(netwr) AS total_sales FROM "VBRK" WHERE waerk IN (\'DEM\', \'USD\')'
+    assert rag.mixed_currency_billing_total(legacy)
+    assert rag.mixed_currency_billing_total(multi_currency)
+    assert not rag.mixed_currency_billing_total(grouped)
+    assert not rag.mixed_currency_billing_total(filtered)
+
+
+def test_unsafe_legacy_total_is_excluded_from_basic_suggestions_and_retrieval():
+    engine = create_engine("sqlite://")
+    scope = TrustedAiExecutionScope(user_id=1, sap_access="full")
+    legacy = 'SELECT SUM(netwr) AS total_sales FROM "VBRK"'
+    grouped = 'SELECT waerk AS currency, SUM(netwr) AS total_sales FROM "VBRK" GROUP BY waerk'
+    assert rag.save_verified_query(engine, scope, "business", "total billed sales", legacy)
+    assert rag.save_verified_query(engine, scope, "business", "billed sales by currency", grouped)
+    examples = rag.load_basic_examples(engine, scope, True)
+    assert [example["sql"] for example in examples] == [grouped]
 
 
 @pytest.mark.parametrize("saved,new", [

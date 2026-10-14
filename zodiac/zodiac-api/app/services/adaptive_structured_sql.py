@@ -929,7 +929,7 @@ def build_billing_item_ranking_sql(
         'TRIM(CAST(i."vbeln" AS TEXT)) AS "billing_document"',
         'TRIM(CAST(i."posnr" AS TEXT)) AS "billing_item"',
         'TRIM(CAST(h."fkdat" AS TEXT)) AS "billing_date"',
-        f'{amount} AS "billing_item_net_value"',
+        f'SUM({amount}) AS "billing_item_net_value"',
     ]
     joins = [
         f'JOIN "{header}" h ON i."mandt" = h."mandt" '
@@ -959,6 +959,11 @@ def build_billing_item_ranking_sql(
     years = extract_question_years(question)
     if years:
         where.append(_sap_year_predicate("h", "fkdat", years))
+    grouped = [
+        re.sub(r'\s+AS\s+"[^"]+"\s*$', "", column, flags=re.I)
+        for column in select
+        if not column.startswith("SUM(")
+    ]
     return (
         'WITH "billing_item_rows" AS (\n'
         '  SELECT DISTINCT ' + ", ".join(f'src."{c}"' for c in row_columns) +
@@ -966,7 +971,8 @@ def build_billing_item_ranking_sql(
         ')\nSELECT ' + ", ".join(select) +
         '\nFROM "billing_item_rows" i\n' + "\n".join(joins) +
         '\nWHERE ' + "\n  AND ".join(where) +
-        f'\nORDER BY {amount} {direction}, i."vbeln", i."posnr"\nLIMIT {limit}'
+        '\nGROUP BY ' + ", ".join(grouped) +
+        f'\nORDER BY SUM({amount}) {direction}, "billing_document", "billing_item"\nLIMIT {limit}'
     )
 
 
@@ -1924,7 +1930,7 @@ def build_dimension_period_sales_sql(
     years = extract_question_years(q)
     if not years and time_filter.get("resolved_from_data") is True:
         years = [str(year) for year in (time_filter.get("years") or [])]
-    if not years or not has_column(header, "fkdat"):
+    if not has_column(header, "fkdat"):
         return None
 
     where: List[str] = []
@@ -1977,7 +1983,9 @@ def build_dimension_period_sales_sql(
         return None
 
     date_expr = 'TRIM(CAST(k."fkdat" AS TEXT))'
-    where.append(f"SUBSTRING({date_expr}, 1, 4) IN ({', '.join(repr(year) for year in years)})")
+    where.append(f"NULLIF({date_expr}, '') IS NOT NULL")
+    if years:
+        where.append(f"SUBSTRING({date_expr}, 1, 4) IN ({', '.join(repr(year) for year in years)})")
     currency_col = next((col for col in ("waerk", "waers", "rtcur") if has_column(header, col)), None)
     currency_match = re.search(r"\bcurrency\s+([A-Z]{3})\b", q)
     if not currency_match:
@@ -2491,12 +2499,18 @@ def build_period_compare_sql(
         period_a = f"SUM(CASE WHEN {yexpr} = '{y_a}' THEN {net} ELSE 0 END)"
         period_b = f"SUM(CASE WHEN {yexpr} = '{y_b}' THEN {net} ELSE 0 END)"
         change = f"({period_b} - {period_a})"
+        currency_col = next((col for col in ("waerk", "waers", "rtcur") if has_column(hdr, col)), None)
+        currency_select = ""
+        currency_group = ""
+        if currency_col:
+            currency_select = f', TRIM(CAST(k."{currency_col}" AS TEXT)) AS "currency"'
+            currency_group = f'\nGROUP BY TRIM(CAST(k."{currency_col}" AS TEXT))'
         return (
             f'SELECT {period_a} AS "period_a", {period_b} AS "period_b", '
-            f'{change} AS "change"\n'
+            f'{change} AS "change"{currency_select}\n'
             f'FROM "{hdr}" k\n'
             f"WHERE NULLIF(TRIM(CAST(k.\"fkdat\" AS TEXT)), '') IS NOT NULL\n"
-            f"  AND {yexpr} IN ('{y_a}', '{y_b}')"
+            f"  AND {yexpr} IN ('{y_a}', '{y_b}')" + currency_group
         )
 
     if force_dims is not None:
@@ -2528,7 +2542,11 @@ def build_period_compare_sql(
                 question, tables, semantic, aggregate_only=True
             )
         else:
-            dims = ["customer"]
+            # A year comparison that names no customer, country, or material
+            # compares the totals. It does not list every customer.
+            return build_period_compare_sql(
+                question, tables, semantic, aggregate_only=True
+            )
 
     sel: List[str] = []
     gb: List[str] = []
@@ -3017,18 +3035,26 @@ def build_document_total_count_sql(
     q = (question or "").lower()
     if not re.search(r"\b(?:count|how many|number of)\b", q):
         return None
-    # Only unfiltered totals and explicit years belong here. Other predicates
-    # must be planned normally rather than silently erased by this capability.
+    # Only supported filters belong here. Other predicates must be planned
+    # normally rather than silently erased by this capability.
+    missing_currency = bool(re.search(
+        r"\b(?:missing|blank|empty|without|no)\s+(?:(?:a|the)\s+)?currency(?:\s+code)?\b",
+        q,
+    ))
     allowed = {
         "count", "how", "many", "number", "of", "sales", "orders", "order",
         "billed", "billing", "invoices", "invoice", "documents", "document",
-        "are", "were", "there", "do", "we", "have", "the", "all", "total",
-        "in", "for", "year", "years", "and", "please",
+        "are", "were", "was", "there", "do", "we", "have", "the", "all", "total",
+        "distinct", "issued", "in", "for", "during", "year", "years", "and", "please",
     }
+    if missing_currency:
+        allowed.update({"missing", "blank", "empty", "without", "no", "a", "currency", "code", "with"})
     tokens = re.findall(r"[a-z0-9_]+", q)
     if any(token not in allowed and not re.fullmatch(r"(?:19|20)\d{2}", token) for token in tokens):
         return None
-    if re.search(r"\b(?:by|per|each|compare|top|highest|lowest|without|linked|supplier|vendor|sat|cfdi|edi)\b", q):
+    if re.search(r"\b(?:by|per|each|compare|top|highest|lowest|linked|supplier|vendor|sat|cfdi|edi)\b", q):
+        return None
+    if "without" in tokens and not missing_currency:
         return None
     if re.search(r"\b(?:last|latest|recent|this|previous|current)\b", q):
         return None
@@ -3037,6 +3063,8 @@ def build_document_total_count_sql(
     elif re.search(r"\b(?:billed|billing|invoices?)\b", q):
         table, alias, date_col = "VBRK", "billing_document_count", "fkdat"
     else:
+        return None
+    if missing_currency and (table != "VBRK" or not has_column(table, "waerk")):
         return None
     if not has_table(table) or not has_column(table, "vbeln"):
         return None
@@ -3047,6 +3075,8 @@ def build_document_total_count_sql(
         keys.insert(0, f'TRIM(CAST("{table}"."mandt" AS TEXT))')
     identity = '(' + ', '.join(keys) + ')' if len(keys) > 1 else keys[0]
     filters = [document_key + ' IS NOT NULL']
+    if missing_currency:
+        filters.append(f'NULLIF(TRIM(CAST("{table}"."waerk" AS TEXT)), \'\') IS NULL')
     years = extract_question_years(question)
     if years:
         if not has_column(table, date_col):
@@ -3505,12 +3535,22 @@ def build_total_measure_sql(
         pred = _sap_year_predicate(f'"{hdr}"', "fkdat", extract_question_years(question))
         if pred:
             where.append(pred)
+    currency_col = next((col for col in ("waerk", "waers") if has_column(hdr, col)), None)
+    currency_match = re.search(r"\b(?:in|currency)\s+([A-Z]{3})\b", question or "")
+    currency_select = ""
+    currency_group = ""
+    if currency_col and currency_match:
+        where.append(f'TRIM(CAST("{hdr}"."{currency_col}" AS TEXT)) = \'{currency_match.group(1)}\'')
+    elif currency_col:
+        # One row per currency so a billed total can open into that currency's documents.
+        currency_select = f', TRIM(CAST("{hdr}"."{currency_col}" AS TEXT)) AS "currency"'
+        currency_group = f'\nGROUP BY TRIM(CAST("{hdr}"."{currency_col}" AS TEXT))\nORDER BY "currency"'
 
     return (
         f'SELECT SUM({net}) AS "total_sales", '
-        f'COUNT(DISTINCT TRIM(CAST("{hdr}"."vbeln" AS TEXT))) AS "invoice_count"\n'
+        f'COUNT(DISTINCT TRIM(CAST("{hdr}"."vbeln" AS TEXT))) AS "invoice_count"{currency_select}\n'
         f'FROM "{hdr}"\n'
-        "WHERE " + "\n  AND ".join(where)
+        "WHERE " + "\n  AND ".join(where) + currency_group
     )
 
 

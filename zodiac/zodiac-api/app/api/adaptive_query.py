@@ -2873,6 +2873,24 @@ def cancel_investigation_endpoint(
     }
 
 
+@router.get("/api/query/adaptive/basic/questions")
+def basic_questions_endpoint(
+    db: Session = Depends(get_db),
+    current_user: ZodiacUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from ..services.basic_question_catalog import DATABASE_QUESTIONS
+    from ..services.basic_rag import load_basic_examples
+    from ..services.basic_sql_answer import _EXAMPLE_QUESTIONS
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user
+    from ..core.workspace.context import list_assigned_customer_ids
+    scope = analyst_scope_for_user(current_user, list_assigned_customer_ids(db, current_user))
+    examples = load_basic_examples(db.get_bind(), scope, USE_SAP_DB_FOR_AI)
+    # Expose question wording only; SQL and execution plans remain server-owned.
+    return {"questions": list(dict.fromkeys(item["question"] for item in examples)),
+            "database_questions": [question for _category, question in DATABASE_QUESTIONS],
+            "predefined_questions": list(_EXAMPLE_QUESTIONS)}
+
+
 @router.post("/api/query/adaptive/basic/teach")
 def teach_basic_endpoint(
     body: Dict[str, Any] = Body(...),
@@ -3182,7 +3200,7 @@ def _post_query_adaptive_body(
     def _persist_and_return(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
-        if analysis_mode == "basic":
+        if analysis_mode == "basic" and not payload.get("meta", {}).get("basic_fallback"):
             payload.setdefault("meta", {}).update(analysis_method="basic", credits_used=False)
             payload.setdefault("query_plan", {})["analysis_method"] = "basic"
         rank_rows = payload.get("data") or []
@@ -3371,19 +3389,11 @@ def _post_query_adaptive_body(
             }
         if (payload.get("answer_status") in {"SUCCESS", "SUCCESS_EMPTY"}
                 and payload.get("sql_status") == "executed" and payload.get("sql")
-                and payload.get("pipeline") in {"analyst_agent", "basic_sql"}
-                and len([r for r in payload.get("agent_results", []) if r.get("kind") == "analysis"]) <= 1
-                and not payload["query_plan"].get("conditional_request")):
+                and payload.get("pipeline") in {"analyst_agent", "basic_sql"}):
             try:
-                from ..services.basic_rag import save_verified_query
-                from ..services.adaptive_trusted_scope import get_trusted_scope
-                primary = next((r for r in payload.get("agent_results", [])
-                                if r.get("id") == payload.get("agent_primary_result_id")), {})
-                save_verified_query(db.get_bind(), get_trusted_scope(),
-                    primary.get("source") or ("business" if USE_SAP_DB_FOR_AI else "application"),
-                    str(payload["query_plan"].get("effective_question") or _original_question),
-                    str(payload["sql"]), primary.get("analysis_plan"))
                 from ..services.basic_rag import capture_training_reference
+                from ..services.adaptive_trusted_scope import get_trusted_scope
+                # Successful execution offers reuse; the user saves it after checking.
                 capture_training_reference(payload, db.get_bind(), get_trusted_scope())
             except Exception as memory_error:
                 logger.warning("Basic verified query could not be saved: %s", type(memory_error).__name__)
@@ -3554,13 +3564,49 @@ def _post_query_adaptive_body(
     from ..services.adaptive_nl_sql_hardening import is_greeting_or_chitchat
     if is_greeting_or_chitchat(_original_question):
         if analysis_mode == "basic":
-            hello = "Hello. Basic retrieves taught queries and investigates new questions with its configured model. Taught questions run without model tokens. Ask about billed sales, customers, or a year."
+            from ..services.basic_hosted_provider import basic_llm_enabled, basic_provider
+            local_usage = None
+            if basic_provider() == "ollama" and basic_llm_enabled():
+                try:
+                    from ..services.basic_local_provider import casual_local_reply
+                    local_usage = casual_local_reply(_original_question)
+                    hello = local_usage["answer"]
+                except Exception as casual_error:
+                    logger.warning("Basic local casual reply unavailable: %s", type(casual_error).__name__)
+                    hello = "Hello. What would you like to know about your billing data?"
+            else:
+                hello = "Hello. What would you like to know about your billing data?"
         else:
             hello = "Hello. What would you like to know about your billing data?"
+            local_usage = None
+        calls = []
+        if local_usage:
+            calls.append({
+                "provider": "ollama",
+                "model": local_usage["model"],
+                "purpose": "basic_casual_reply",
+                "input_tokens": local_usage["input_tokens"],
+                "output_tokens": local_usage["output_tokens"],
+                "total_tokens": local_usage["total_tokens"],
+                "estimated_cost_usd": "0",
+                "elapsed_ms": local_usage["elapsed_ms"],
+            })
         return _persist_and_return({
             "pipeline": "local_greeting", "mode": "general_chat", "answer_status": "SUCCESS",
-            "answer": hello, "summary": hello, "sql": "", "data": [], "llm_calls": 0,
-            "meta": {"analysis_method": analysis_mode or "agent", "model_calls": 0, "credits_used": False},
+            "answer": hello, "summary": hello, "sql": "", "data": [],
+            "llm_calls": len(calls),
+            "meta": {
+                "analysis_method": analysis_mode or "agent",
+                "provider": "ollama" if calls else "local_catalog",
+                "model_calls": len(calls),
+                "model_tokens": sum(call["total_tokens"] for call in calls),
+                "credits_used": False,
+                "usage": {
+                    "total_tokens": sum(call["total_tokens"] for call in calls),
+                    "estimated_cost_usd": "0",
+                    "calls": calls,
+                },
+            },
         })
     if agent_mode or analysis_mode == "basic":
         # A follow-up to a durable result can be resolved without model tokens.
@@ -3617,17 +3663,18 @@ def _post_query_adaptive_body(
         prior_examples: list = []
         if user_id:
             try:
-                from ..services.basic_rag import load_verified_queries
+                from ..services.basic_rag import load_basic_examples
                 from ..services.adaptive_trusted_scope import get_trusted_scope
-                prior_examples = load_verified_queries(db.get_bind(), get_trusted_scope(), source)
+                prior_examples = load_basic_examples(db.get_bind(), get_trusted_scope(), USE_SAP_DB_FOR_AI)
             except Exception as memory_error:
                 logger.warning("Basic query memory unavailable: %s", type(memory_error).__name__)
-        from ..services.basic_hosted_provider import basic_llm_enabled
         from ..services.analyst_agent import run_analyst_agent
-        def _basic_local_agent(examples):
+        from ..services.basic_hosted_provider import basic_llm_enabled
+        free_model_available = basic_llm_enabled()
+        def _basic_free_agent(examples):
             return run_analyst_agent(
                 _original_question, db, _execute_sql, schema_loader=_load_schema,
-                context={**prior, "basic_rag_examples": [{k: item[k] for k in ("question", "sql")}
+                context={**prior, "basic_rag_examples": [{"question": item["question"], "sql": item["sql"]}
                                                        for item in examples]}, conversation=memory_turns,
                 use_sap=USE_SAP_DB_FOR_AI, sap_session_factory=get_sap_session,
             )
@@ -3635,17 +3682,30 @@ def _post_query_adaptive_body(
             db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
             sap_session_factory=get_sap_session, question=_original_question,
         )
-        def _execute_basic(sql):
-            cached = next((item for item in prior_examples
-                           if str(item.get("sql") or "").strip().rstrip(";") == sql and item.get("analysis_plan")), None)
-            if cached:
+        def _execute_basic(sql, step=None):
+            step = step if isinstance(step, dict) else {}
+            step_source = step.get("source") if step.get("source") in {"business", "application"} else source
+            plan = step.get("analysis_plan")
+            if not plan:
+                cached = next((item for item in prior_examples
+                               if str(item.get("sql") or "").strip().rstrip(";") == sql and item.get("analysis_plan")
+                               and not item.get("steps")), None)
+                plan = cached.get("analysis_plan") if cached else None
+            if plan:
                 # This plan was loaded from server-owned, permission-bound memory.
                 # The normal SQL tool rechecks it against the connected catalog.
-                executor.plans[source] = cached["analysis_plan"]
-            executed = executor.call("run_readonly_sql", {"source": source, "sql": sql, "purpose": "Basic verified query"})
-            if executed.get("ok"):
+                executor.plans[step_source] = plan
+            else:
+                executor.plans.pop(step_source, None)
+            purpose = str(step.get("purpose") or "Basic verified query")
+            executed = executor.call("run_readonly_sql", {"source": step_source, "sql": sql, "purpose": purpose})
+            if executed.get("ok") and not step.get("checked_investigation"):
                 from ..services.analyst_agent import _analysis_issues
-                issues = _analysis_issues(_original_question, executed)
+                from ..services.basic_sql_answer import continue_basic_question, prepare_basic_question
+                check_question = prepare_basic_question(continue_basic_question(
+                    _original_question, str(prior.get("previousQuestion") or ""),
+                ))
+                issues = _analysis_issues(check_question, executed)
                 if issues:
                     return {**executed, "ok": False, "rows": [],
                             "error": "The saved query did not satisfy the current request: " + "; ".join(issues[:4])}
@@ -3657,10 +3717,25 @@ def _post_query_adaptive_body(
                 previous_question=str(prior.get("previousQuestion") or ""),
                 previous_sql=str(prior.get("previousSQL") or ""),
                 prior_examples=prior_examples,
-                local_agent=_basic_local_agent if basic_llm_enabled() else None,
+                local_agent=_basic_free_agent if free_model_available else None,
             )
         finally:
             executor.close()
+        allow_paid_fallback = os.getenv("BASIC_ALLOW_PAID_FALLBACK", "true").strip().lower() in {"true", "1", "yes"}
+        if not free_model_available and allow_paid_fallback and (basic.get("meta", {}).get("needs_agent") or basic.get("answer_status") == "CANNOT_ANSWER"):
+            # The model-free guard has been restored by run_basic_sql_answer.
+            # Call the existing Agentic entry point with its normal context.
+            reason = "saved_query_failed" if basic.get("sql") else "no_safe_match"
+            basic = run_analyst_agent(
+                _original_question, db, _execute_sql, schema_loader=_load_schema,
+                context=contextData, conversation=memory_turns,
+                use_sap=USE_SAP_DB_FOR_AI, sap_session_factory=get_sap_session,
+            )
+            basic.setdefault("meta", {}).update(
+                requested_analysis_method="basic", analysis_method="agent",
+                basic_fallback=reason, credits_used=bool(basic.get("llm_calls")),
+            )
+            basic.setdefault("query_plan", {})["analysis_method"] = "agent"
         basic["tableHint"] = tableHint
         if basic.get("sql") and str(basic.get("answer_status") or "").startswith("SUCCESS"):
             try:

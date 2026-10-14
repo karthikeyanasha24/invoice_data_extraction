@@ -41,15 +41,80 @@ _EXAMPLE_QUESTIONS = (
 
 
 def basic_scope_reply(question: str) -> str:
-    examples = "\n".join(f"- {item}" for item in _EXAMPLE_QUESTIONS)
+    from .basic_question_catalog import DATABASE_QUESTIONS
+    examples = "\n".join(f"- {item}" for item in (*_EXAMPLE_QUESTIONS, *(q for _, q in DATABASE_QUESTIONS)))
     if re.search(r"(?i)questions", question or ""):
         return "Basic can run these without API credits:\n" + examples
     return (
         "Basic retrieves verified questions and runs billing queries without API credits. Try one of these:\n"
         + examples
         + "\nEquivalent questions reuse a verified query with the same filters and fresh database results. "
-        "A configured Basic model can investigate new questions using retrieved examples and database tools. Teach a checked query to answer that question again without model tokens."
+        "New questions use the configured Basic model. If no Basic model is configured and paid fallback is enabled, Agentic may run and use credits. Save a checked result with Reuse it in Basic Model to answer that question again without model tokens."
     )
+
+
+def continue_basic_question(question: str, previous: str) -> str:
+    """Turn a short follow-up into a complete billing question. Full questions stay unchanged."""
+    q = re.sub(r"\s+", " ", (question or "").strip())
+    prev = re.sub(r"\s+", " ", (previous or "").strip())
+    if not q or not prev:
+        return q
+    ql = q.lower()
+    pronoun = bool(re.search(r"\b(?:it|that|those|them|same|this)\b", ql))
+    fragment = bool(pronoun or re.match(
+        r"(?:by|per|break|compare|what about|same for|and|in|for|show(?:\s+(?:that|it))?)\b",
+        ql,
+    ))
+    short = len(q.split()) <= 8
+    if not fragment:
+        return q
+    years = re.findall(r"\b(?:19|20)\d{2}\b", q)
+    prev_years = re.findall(r"\b(?:19|20)\d{2}\b", prev)
+    if re.search(r"\bcompare\b", ql) and (pronoun or short):
+        year = years[0] if years else ""
+        prior = prev_years[-1] if prev_years else ""
+        if len(prev_years) == 1 and year and prior != year:
+            # Preserve the metric, entities, currency, ranking, and grouping.
+            # Never turn a profit comparison into billed sales or invent a year.
+            return "compare " + re.sub(r"\b" + prior + r"\b", f"{prior} and {year}", prev, count=1)
+        return q
+    grains = (
+        ("quarter", r"\bquarters?\b|\bquarterly\b"),
+        ("month", r"\bmonths?\b|\bmonthly\b"),
+        ("year", r"\byears?\b|\byearly\b"),
+        ("customer", r"\bcustomers?\b"),
+        ("country", r"\bcountr(?:y|ies)\b"),
+        ("material", r"\bmaterials?\b"),
+        ("industry", r"\bindustr(?:y|ies)\b"),
+    )
+    grain = next((name for name, pattern in grains if re.search(pattern, ql)), None)
+    if grain and (pronoun or re.match(r"(?:by|per|break|show|and)\b", ql) or short):
+        same_kind = (
+            r"\bby\s+(?:months?|quarters?|years?)\b"
+            if grain in {"month", "quarter", "year"}
+            else r"\bby\s+(?:customers?|countr(?:y|ies)|materials?|industr(?:y|ies))\b"
+        )
+        base = re.sub(same_kind, f"by {grain}", prev, count=1, flags=re.I)
+        if not re.search(rf"\bby\s+{grain}s?\b", base, re.I):
+            base = f"{base} by {grain}"
+        return base
+    if years and (pronoun or short) and not re.search(r"\b(?:sales|revenue|billing|billed|invoice|customer|order)\b", ql):
+        if prev_years:
+            return re.sub(r"\b(?:19|20)\d{2}\b", years[0], prev, count=1)
+        return f"{prev} in {years[0]}"
+    currency = re.search(r"\b(?:in|for)\s+(?:currency\s+)?([A-Z]{3})\b", q)
+    if currency and (pronoun or short):
+        return f"{prev} in {currency.group(1)}"
+    country = re.search(
+        r"\b(?:in|for)\s+(Germany|France|Italy|Spain|United States|USA|United Kingdom|UK)\b",
+        q,
+        re.I,
+    )
+    if country and (pronoun or short):
+        return f"{prev} for {country.group(1)}"
+    if pronoun and short:
+        return f"{prev}. {q}"
+    return q
 
 
 def prepare_basic_question(question: str) -> str:
@@ -86,9 +151,15 @@ def run_basic_sql_answer(
         answer = basic_scope_reply(question)
         return _payload(question, "SUCCESS", answer, "", [], mode="general_chat")
 
+    if previous_question and re.search(r"\bcompare\b.*\b(?:it|that|those|them)\b.*\byear\b", question, re.I) and not re.search(r"\b(?:19|20)\d{2}\b", question):
+        return _payload(question, "CLARIFICATION", "Which year should I compare with the previous result? Include the year, for example: compare it with 2002.", "", [], mode="clarification")
+
     token = block_paid_models()
     try:
-        question = prepare_basic_question(question)
+        resolved = continue_basic_question(question, previous_question)
+        if resolved != (question or "").strip():
+            previous_sql = ""
+        question = prepare_basic_question(resolved)
         semantic = enrich_semantic_with_requirements(question)
         tables = [
             str(item.get("table") or "")
@@ -96,20 +167,39 @@ def run_basic_sql_answer(
             if item.get("table")
         ]
         ctx = VerifiedDbContext(question=question, tables=tables, semantic_requirements=semantic, prior_sql=previous_sql or "")
-        from .basic_rag import retrieve_examples
-        retrieved = retrieve_examples(question, prior_examples, use_embeddings=False)
-        sql = next((e["sql"] for e in retrieved if e["reusable"]), "")
+        from .basic_rag import mixed_currency_billing_total, retrieve_examples, replayable_steps
+        def safe_examples(embeddings=False):
+            candidates = retrieve_examples(question, prior_examples, use_embeddings=embeddings)
+            return [example for example in candidates if not any(
+                mixed_currency_billing_total(step.get("sql", ""))
+                for step in (example.get("steps") or [example])
+            )]
+
+        retrieved = safe_examples()
+        reused_example = next((e for e in retrieved if e["reusable"]), None)
+        taught_steps = [step for step in (reused_example or {}).get("steps") or [] if isinstance(step, dict)]
+        if len(taught_steps) > 1:
+            if not replayable_steps(question, taught_steps):
+                if local_agent is not None:
+                    return _run_local(local_agent, retrieved)
+                return _uncovered(question)
+            replay = _replay_investigation(question, taught_steps, execute)
+            if replay.get("answer_status") == "CANNOT_ANSWER" and local_agent is not None:
+                return _run_local(local_agent, retrieved)
+            return replay
+        sql = reused_example["sql"] if reused_example else ""
         reused = bool(sql)
         if not sql:
             sql = pipeline3_sql_generation(question, ctx, templates_only=True) or ""
         if not sql.strip():
             if local_agent is not None:
-                retrieved = retrieve_examples(question, prior_examples)
+                retrieved = safe_examples(embeddings=True)
                 return _run_local(local_agent, retrieved)
             return _uncovered(question)
         if not paid_models_blocked():
             raise RuntimeError("Basic mode failed to block paid models")
-        executed = execute(sql.strip().rstrip(";")) or {}
+        executed = (_invoke_execute(execute, sql.strip().rstrip(";"), reused_example) if reused_example
+                    else execute(sql.strip().rstrip(";"))) or {}
         if not executed.get("ok"):
             answer = "Basic mode did not call a model. The saved query was rejected by the database. " + str(executed.get("error") or "") + " " + _SWITCH
             if local_agent is not None:
@@ -117,8 +207,9 @@ def run_basic_sql_answer(
             return _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or sql, [])
         rows = executed.get("rows") or []
         if rows:
-            source_note = "a similar question you already asked" if reused else "a saved query pattern"
-            answer = f"Verified database result: {len(rows)} row(s). Basic reused {source_note} and did not call a model."
+            method_note = ("Basic reused a similar question you already asked" if reused
+                           else "Basic ran a supported SQL pattern")
+            answer = f"Verified database result: {len(rows)} row(s). {method_note} and did not call a model."
             status = "SUCCESS"
         else:
             answer = "No matching records were found in the connected data for this request. Basic mode did not call a model."
@@ -128,11 +219,82 @@ def run_basic_sql_answer(
         result["meta"]["result_truncated"] = bool(executed.get("truncated"))
         result["meta"]["retrieval"] = {"reused": reused, "examples": len(retrieved),
                                       "method": retrieved[0]["retrieval"] if retrieved else "none"}
+        from .analyst_evidence import grounded_answer
+        if rows:
+            count_row = rows[0] if len(rows) == 1 and isinstance(rows[0], dict) else {}
+            count_key = next((key for key in ("billing_document_count", "sales_order_count")
+                              if key in count_row and len(count_row) == 1), None)
+            if count_key is not None:
+                label = "billing documents" if count_key == "billing_document_count" else "sales orders"
+                result["answer"] = result["summary"] = (
+                    f"{count_row[count_key]} {label} match the requested filters.\n\n"
+                    f"Verified database count. {method_note} and did not call a model."
+                )
+            else:
+                result["answer"] = result["summary"] = grounded_answer([
+                    {"rows": rows, "truncated": bool(executed.get("truncated"))}
+                ]) + "\n\n" + answer
         if executed.get("analysis_plan") and result.get("agent_results"):
             result["agent_results"][0]["analysis_plan"] = executed["analysis_plan"]
         return result
     finally:
         restore_paid_models(token)
+
+
+def _invoke_execute(execute, sql, step):
+    import inspect
+    # Detect the callback signature before running it. Retrying on TypeError
+    # could execute SQL twice when the error originated inside the executor.
+    try:
+        inspect.signature(execute).bind(sql, step)
+    except TypeError:
+        return execute(sql) or {}
+    return execute(sql, step) or {}
+
+
+def _replay_investigation(question, steps, execute):
+    """Rerun every checked query from a taught investigation. No model call."""
+    results = []
+    for index, step in enumerate(steps, start=1):
+        sql = str(step.get("sql") or "").strip().rstrip(";")
+        executed = _invoke_execute(execute, sql, {**step, "checked_investigation": True})
+        if not executed.get("ok"):
+            answer = "Basic mode did not call a model. A checked query in this taught investigation was rejected by the database. " + str(executed.get("error") or "") + " " + _SWITCH
+            return _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or sql, [])
+        rows = executed.get("rows") or []
+        results.append({
+            "id": f"result_{index}",
+            "kind": "analysis",
+            "source": step.get("source") or executed.get("source") or "business",
+            "purpose": step.get("purpose") or "",
+            "unscoped_sql": sql,
+            "sql": executed.get("sql") or sql,
+            "rows": rows,
+            "row_count": len(rows),
+            "analysis_plan": executed.get("analysis_plan") or step.get("analysis_plan"),
+            "truncated": bool(executed.get("truncated")),
+            "primary": bool(step.get("primary")),
+        })
+    primary = next((item for item in results if item["primary"]), results[-1])
+    total_rows = sum(len(item["rows"]) for item in results)
+    if total_rows:
+        answer = (
+            f"Verified database result: {len(results)} checked queries, {total_rows} row(s). "
+            "Basic reused a similar question you already asked and did not call a model."
+        )
+        status = "SUCCESS"
+    else:
+        answer = "No matching records were found in the connected data for this request. Basic mode did not call a model."
+        status = "SUCCESS_EMPTY"
+    result = _payload(question, status, answer, primary["sql"], primary["rows"], primary["source"], primary["unscoped_sql"])
+    result["sql_status"] = "executed"
+    result["agent_results"] = results
+    result["agent_primary_result_id"] = primary["id"]
+    result["meta"]["retrieval"] = {"reused": True, "examples": 1, "method": "canonical", "queries": len(results)}
+    result["meta"]["result_truncated"] = any(item["truncated"] for item in results)
+    from .analyst_evidence import grounded_answer
+    result["answer"] = result["summary"] = grounded_answer(results) + "\n\n" + answer
+    return result
 
 
 def _run_local(local_agent, retrieved):
@@ -153,6 +315,14 @@ def _run_local(local_agent, retrieved):
             failure = str((budget.diagnostics.get("basic_provider_error") if budget else None) or "")
             if result.get("answer_status") == "CANNOT_ANSWER" and failure.startswith("Basic's"):
                 result["answer"] = result["summary"] = failure
+        elif (meta.get("provider") == "ollama"
+              and result.get("answer_status") == "CANNOT_ANSWER"
+              and result.get("failure_class") == "UNDERSTANDING_MODEL_FAILED"):
+            result["answer"] = result["summary"] = (
+                "Basic's local Ollama model could not complete this new question. "
+                "Checked questions and supported SQL patterns still work without a model call. "
+                "Try a simpler question or teach Basic a checked Agentic answer."
+            )
         meta["model_calls"] = result.get("llm_calls", 0)
         meta["retrieval"] = {"examples": len(retrieved), "method": retrieved[0]["retrieval"] if retrieved else "none"}
         return result
@@ -163,9 +333,11 @@ def _run_local(local_agent, retrieved):
 def _uncovered(question: str) -> dict[str, Any]:
     answer = (
         "Basic found no taught query or billing pattern for this request. Its model is not configured. "
-        "Configure Basic's free-tier model, or teach it a checked query, to answer this question. " + _SWITCH
+        "Configure Basic's model, or teach it a checked query, to answer this question. " + _SWITCH
     )
-    return _payload(question, "SUCCESS", answer, "", [], mode="general_chat")
+    result = _payload(question, "SUCCESS", answer, "", [], mode="general_chat")
+    result["meta"]["needs_agent"] = True
+    return result
 
 
 def _payload(question: str, status: str, answer: str, sql: str, rows: list, source: str = "business", unscoped: str = "", mode: str = "database_analysis") -> dict[str, Any]:
@@ -182,7 +354,7 @@ def _payload(question: str, status: str, answer: str, sql: str, rows: list, sour
         "query_plan": {"effective_question": question, "analysis_method": "basic"},
         "meta": {"analysis_method": "basic", "model_calls": 0, "credits_used": False, "usage": {"total_tokens": 0, "calls": []}},
     }
-    if rows and sql:
+    if sql and status.startswith("SUCCESS"):
         body["agent_results"] = [{
             "id": "result_1", "kind": "analysis", "source": source,
             "unscoped_sql": unscoped or sql, "sql": sql, "rows": rows,

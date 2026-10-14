@@ -1018,7 +1018,7 @@ def test_negative_billing_item_ranking_preserves_document_item_identity(monkeypa
     assert 'AS "billing_document"' in sql and 'AS "billing_item"' in sql
     assert 'AS "customer_id"' in sql and 'AS "customer_name"' in sql
     assert "< 0" in sql and "= '2000'" in sql
-    assert 'ORDER BY CAST(NULLIF(TRIM(CAST(i."netwr" AS TEXT)), \'\') AS NUMERIC) ASC' in sql
+    assert 'ORDER BY SUM(CAST(NULLIF(TRIM(CAST(i."netwr" AS TEXT)), \'\') AS NUMERIC)) ASC' in sql
     assert "LIMIT 10" in sql
 
 

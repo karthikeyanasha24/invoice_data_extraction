@@ -1,237 +1,236 @@
 {
   "model_calls": 0,
-  "live_database": false,
+  "live_database_attempted": true,
+  "live_database": true,
   "database_writes": false,
   "cases": [
     {
       "question": "Show me product with highest profits and show me the breakdown of components",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 17,
       "model_calls": 0,
-      "seconds": 1.2
+      "seconds": 8.84
     },
     {
       "question": "Show me cost of goods",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.06
+      "seconds": 0.03
     },
     {
       "question": "Show me products with lowest margins",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 84,
       "model_calls": 0,
-      "seconds": 0.25
+      "seconds": 4.55
     },
     {
       "question": "Show me products expiring by industry",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.0
+      "seconds": 0.03
     },
     {
       "question": "Show me customers with industry data and regions",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.02
     },
     {
       "question": "What type of products are bought by which customers?",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "And how long have they been buying them?",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.0
+      "seconds": 0.02
     },
     {
       "question": "Compare it with year",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "Show me the process involved behind selling it",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.02
+      "seconds": 0.0
     },
     {
       "question": "Show me the process involved behind buying it",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "Show me the buying process and selling process",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.0
+      "seconds": 0.02
     },
     {
       "question": "Show me logistics cost",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "Show me net profit",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.0
+      "seconds": 0.01
     },
     {
       "question": "Show the top 10 products by profit.",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 84,
       "model_calls": 0,
-      "seconds": 0.22
+      "seconds": 4.81
     },
     {
       "question": "Show their customers.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.0
+      "seconds": 0.03
     },
     {
       "question": "Break that down by industry.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
-      "model_calls": 0,
-      "seconds": 0.0
-    },
-    {
-      "question": "Show the regions.",
-      "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.02
     },
     {
-      "question": "Compare 2004 and 2005.",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
-      "model_calls": 0,
-      "seconds": 0.27
-    },
-    {
-      "question": "Show COGS.",
+      "question": "Show the regions.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
+      "question": "Compare 2004 and 2005.",
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 2,
+      "model_calls": 0,
+      "seconds": 3.56
+    },
+    {
+      "question": "Show COGS.",
+      "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
+      "answer_status": "SUCCESS",
+      "rows": 0,
+      "model_calls": 0,
+      "seconds": 0.03
+    },
+    {
       "question": "Show the margins.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "Which products had the biggest margin decline?",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 84,
       "model_calls": 0,
-      "seconds": 0.23
+      "seconds": 3.62
     },
     {
       "question": "Why did those margins decline?",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
-      "seconds": 0.02
+      "seconds": 0.03
     },
     {
       "question": "Show me the cost components.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "Show me the buying process behind these products.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "Show the selling process.",
       "verdict": "NEEDS_TAUGHT_QUERY_OR_MODEL",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "answer_status": "SUCCESS",
+      "rows": 0,
       "model_calls": 0,
       "seconds": 0.0
     },
     {
       "question": "total billed sales in 2001",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 4,
       "model_calls": 0,
-      "seconds": 0.08
+      "seconds": 3.17
     },
     {
       "question": "billed sales by customer in 2001",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 70,
       "model_calls": 0,
-      "seconds": 0.11
+      "seconds": 3.03
     },
     {
       "question": "billed sales by month in 2001",
-      "verdict": "SQL_VALIDATED_ONLY",
-      "answer_status": "NOT_EXECUTED",
-      "rows": null,
+      "verdict": "LIVE_EXECUTED",
+      "answer_status": "SUCCESS",
+      "rows": 37,
       "model_calls": 0,
-      "seconds": 0.06
+      "seconds": 2.88
     }
   ],
-  "database_unavailable": "OperationalError",
   "counts": {
-    "SQL_VALIDATED_ONLY": 8,
+    "LIVE_EXECUTED": 8,
     "NEEDS_TAUGHT_QUERY_OR_MODEL": 20
-  },
-  "live_database_attempted": true
+  }
 }

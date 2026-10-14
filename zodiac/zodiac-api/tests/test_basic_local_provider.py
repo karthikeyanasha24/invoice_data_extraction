@@ -26,6 +26,24 @@ def response(message):
     return {"done": True, "done_reason": "stop", "message": message, "prompt_eval_count": 12, "eval_count": 8}
 
 
+def test_casual_reply_uses_ollama_without_tools_or_thinking(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(local, "ollama_post", lambda endpoint, body, timeout: (
+        seen.update(endpoint=endpoint, body=body, timeout=timeout)
+        or response({"content": "Hi! What would you like to know about billing?"})
+    ))
+
+    result = local.casual_local_reply("hai")
+
+    assert result["answer"] == "Hi! What would you like to know about billing?"
+    assert result["model"] == "ollama/qwen3:4b"
+    assert result["total_tokens"] == 20
+    assert seen["endpoint"] == "/api/chat" and seen["timeout"] == 20
+    assert seen["body"]["think"] is False
+    assert "tools" not in seen["body"]
+    assert seen["body"]["options"]["num_ctx"] == 512
+
+
 def test_transport_serializes_tool_results_and_excludes_paid_research(monkeypatch):
     seen = []
     monkeypatch.setattr(local, "ollama_post", lambda endpoint, body, timeout: seen.append(body) or response({
@@ -62,6 +80,19 @@ def test_hosted_or_credential_urls_are_rejected(monkeypatch, url):
     monkeypatch.setenv("BASIC_OLLAMA_URL", url)
     with pytest.raises(ValueError):
         local.ollama_post("/api/chat", {}, 1)
+
+
+def test_remote_ollama_requires_https_and_bearer_key(monkeypatch):
+    monkeypatch.setenv("BASIC_OLLAMA_URL", "https://model.example.org")
+    monkeypatch.delenv("BASIC_OLLAMA_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="authenticated HTTPS|HTTPS endpoint"):
+        local.ollama_endpoint_config()
+    monkeypatch.setenv("BASIC_OLLAMA_API_KEY", "test-secret")
+    assert local.ollama_endpoint_config() == (
+        "https://model.example.org", {"Authorization": "Bearer test-secret"})
+    monkeypatch.setenv("BASIC_OLLAMA_URL", "http://model.example.org")
+    with pytest.raises(ValueError, match="HTTPS endpoint"):
+        local.ollama_endpoint_config()
 
 
 def test_unknown_question_runs_real_tool_loop_with_local_model_and_live_rows(monkeypatch):
