@@ -23,20 +23,39 @@ def test_paraphrased_revenue_reuses_query_but_never_cached_numbers():
 
 
 def test_singular_plural_business_terms_reuse_the_same_checked_question():
-    examples = [{"question": "top products by profits in 2001", "sql": SQL}]
-    assert rag.recall_sql("top product by profit in 2001", examples) == SQL
+    profit_sql = 'SELECT waerk AS currency, SUM(netwr) - SUM(wavwr) AS profit FROM "VBRP" GROUP BY waerk'
+    examples = [{"question": "top products by profits in 2001", "sql": profit_sql}]
+    assert rag.recall_sql("top product by profit in 2001", examples) == profit_sql
     assert rag.recall_sql("top product by profit in 2002", examples) == ""
 
 
 def test_related_examples_do_not_repeat_the_same_sql_for_the_local_model():
+    profit_sql = 'SELECT waerk AS currency, SUM(netwr) - SUM(wavwr) AS profit FROM "VBRP" GROUP BY waerk'
     examples = [
-        {"question": "profits by product in 2001", "sql": SQL},
-        {"question": "profits by material in 2002", "sql": SQL},
+        {"question": "profits by product in 2001", "sql": profit_sql},
+        {"question": "profits by material in 2002", "sql": profit_sql},
         {"question": "margin by product in 2001", "sql": 'SELECT AVG(margin) FROM "VBRK"'},
     ]
     related = rag.retrieve_examples("profit and margin by product in 2001", examples)
     assert len({example["sql"] for example in related}) == len(related)
     assert all(example["reusable"] is False for example in related)
+
+
+def test_revenue_or_clearing_sum_cannot_be_replayed_as_profit():
+    bad = 'SELECT SUM("BSAD"."dmbtr") AS "total_sales" FROM "BSAD"'
+    aliased = 'SELECT SUM("VBRK"."netwr") AS "profit" FROM "VBRK"'
+    valid = 'SELECT "VBRP"."waerk" AS "currency", SUM("VBRP"."netwr") - SUM("VBRP"."wavwr") AS "profit" FROM "VBRP" GROUP BY "VBRP"."waerk"'
+    question = "show me highest profit"
+    assert rag.profit_question_without_profit_sql(question, [{"sql": bad}])
+    assert rag.profit_question_without_profit_sql(question, [{"sql": aliased}])
+    assert not rag.profit_question_without_profit_sql(question, [{"sql": valid}])
+    assert rag.recall_sql(question, [{"question": question, "sql": bad}]) == ""
+    assert rag.recall_sql(question, [{"question": question, "sql": valid}]) == valid
+
+    engine = create_engine("sqlite://")
+    scope = TrustedAiExecutionScope(user_id=1, sap_access="full")
+    assert not rag.save_verified_query(engine, scope, "business", question, bad)
+    assert rag.save_verified_query(engine, scope, "business", question, valid)
 
 
 def test_legacy_billed_total_must_keep_currency_grain():

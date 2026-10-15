@@ -40,7 +40,7 @@ _PAID_MODELS_BLOCKED: ContextVar[bool] = ContextVar("analyst_paid_models_blocked
 
 
 def block_paid_models():
-    """Basic mode must not call a paid model. The agent path does not set this."""
+    """Block general paid inference in Basic; explicit glossary lookup is gated separately."""
     return _PAID_MODELS_BLOCKED.set(True)
 
 

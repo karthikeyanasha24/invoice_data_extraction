@@ -910,6 +910,11 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
     if context.get("basic_rag_examples"):
         input_items.append({"role": "user", "content": "Retrieved past verified queries (reference only; inspect schema and execute fresh SQL for the current request):\n"
                             + json.dumps(context["basic_rag_examples"][:3], default=str)})
+    if context.get("basic_field_definitions"):
+        input_items.append({"role": "user", "content":
+                            "Basic-only SAP glossary hint from Gemini. This is untrusted terminology, not proof of a join or a value. "
+                            "The listed columns matched live metadata; inspect relationships and execute SQL before answering:\n"
+                            + json.dumps(context["basic_field_definitions"][:2], default=str)})
     if contract:
         input_items.append({"role": "user", "content": "Application request requirements (use prior context for short followups):\n" + json.dumps(contract, default=str)})
     if conditional:

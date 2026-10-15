@@ -41,7 +41,7 @@ def test_teaching_is_permission_bound_and_rejects_changed_year():
 def test_compound_investigation_is_taught_and_replayed_without_a_model():
     engine = create_engine("sqlite://")
     scope = TrustedAiExecutionScope(user_id=1, sap_access="full")
-    first = 'SELECT waerk AS currency, SUM(netwr) AS profit FROM "VBRK" WHERE fkdat LIKE \'2001%\' GROUP BY waerk'
+    first = 'SELECT waerk AS currency, SUM(netwr) - SUM(wavwr) AS profit FROM "VBRP" WHERE fkdat LIKE \'2001%\' GROUP BY waerk'
     second = 'SELECT wavwr AS cost FROM "VBRP" WHERE fkdat LIKE \'2001%\''
     payload = result()
     payload["query_plan"]["effective_question"] = "show product profits and the component breakdown in 2001"

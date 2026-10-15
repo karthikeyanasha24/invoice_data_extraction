@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import { dashboardApi } from '@/lib/api';
 import AnalystQuestionPicker from './AnalystQuestionPicker';
 import AnalystRagHelp from './AnalystRagHelp';
+import BasicSqlTraining from './BasicSqlTraining';
 import { publicApiError } from '@/lib/apiErrors';
 import { ANALYST_STAGE_LABELS, mergeAnalystProgress, type AnalystProgress } from '@/lib/analystProgress';
 import { analystSqlEvidence, analystSqlFields, type AnalystSqlFields } from '@/lib/analystSql';
@@ -41,7 +42,7 @@ import {
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
-import { analystAnswerText, analystChartCurrency, defaultAnalystCurrency } from '@/lib/analystPresentation';
+import { analystAnswerText, analystChartCurrency, comparisonColumnLabel, comparisonYears, defaultAnalystCurrency, labelComparisonText } from '@/lib/analystPresentation';
 import { analystScrollPosition } from '@/lib/analystChatScroll';
 import remarkGfm from 'remark-gfm';
 import {
@@ -177,6 +178,7 @@ type QueryResult = AnalystSqlFields & {
     provider?: string;
     analysis_method?: string;
     retrieval?: {reused?: boolean; examples?: number; method?: string; queries?: number};
+    gemini_field_lookup?: {called?: boolean; status?: string; field?: string};
     basic_fallback?: string;
     basic_training_reference?: {id: string; question: string};
     result_reference?: {id: string; measures: string[]; created_at: string};
@@ -371,12 +373,14 @@ function DataTable({
   totalCount,
   heading,
   columnSemantics,
+  question = '',
 }: {
   data: any[];
   rowCount?: number;
   totalCount?: number;
   heading?: string;
   columnSemantics?: QueryResult['column_semantics'];
+  question?: string;
 }) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -459,7 +463,7 @@ function DataTable({
                   {headers.map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-semibold text-slate-600 uppercase tracking-wide whitespace-nowrap border-b border-slate-200" scope="col" aria-sort={sortKey === h ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                       <button type="button" onClick={() => toggleSort(h)} className="min-h-8 hover:text-slate-900">
-                        {h.replace(/_/g, ' ')}{sortKey === h ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                        {comparisonColumnLabel(h, question)}{sortKey === h ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
                       </button>
                     </th>
                   ))}
@@ -859,6 +863,11 @@ function ResultDashboard({
   return (
     <div className="space-y-3">
       {basicPath && <p className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800" aria-label={`Answer path: ${basicPath}`}>{basicPath}</p>}
+      {result.meta?.gemini_field_lookup?.called && <p className="text-xs text-slate-600" role="status">
+        {result.meta.gemini_field_lookup.status === 'validated'
+          ? `Gemini suggested a field for ${result.meta.gemini_field_lookup.field}; Basic confirmed that column exists in live schema before investigating. This lookup used Gemini API quota.`
+          : `Gemini could not provide a column confirmed by live schema for ${result.meta.gemini_field_lookup.field}. Basic continued without that hint; the lookup may have used Gemini API quota.`}
+      </p>}
       {result.meta?.basic_fallback && <p role="status" className="text-xs text-slate-500">Basic could not safely reuse a saved query. Agentic handled this request; model calls may use credits.</p>}
       <ResultContent result={result} onAskFollowup={onAskFollowup} />
       {additionalAgentResults(result).map(set => (
@@ -948,7 +957,9 @@ function ResultContent({ result, onAskFollowup }: {
   const hasKpis    = (kpis?.length ?? 0) > 0;
   const hasCharts  = (charts?.length ?? 0) > 0;
   const hasData    = (data?.length ?? 0) > 0;
-  const fullAnswer = analystAnswerText(result);
+  const question = String(result.query_plan?.effective_question || '');
+  const years = comparisonYears(question);
+  const fullAnswer = labelComparisonText(analystAnswerText(result), question);
   const hasSummary = !!fullAnswer;
   const cleanFindings = humanizeFindings(keyFindings).filter(f => f !== summary && f !== fullAnswer);
   const hasInsights = cleanFindings.length > 0 && cleanFindings[0] !== 'No results found.';
@@ -1064,6 +1075,10 @@ function ResultContent({ result, onAskFollowup }: {
 
   return (
     <div className="space-y-0">
+      {years && data?.some(row => row && 'period_a' in row && 'period_b' in row) &&
+        <p className="mb-3 rounded-xl bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-900">
+          Period A = {years[0]} · Period B = {years[1]} · Change = {years[1]} minus {years[0]}
+        </p>}
       {hasSummary && <SummaryCard summary={fullAnswer} intent={trust.intent} />}
       {hasKpis    && <KPICards kpis={kpis!} />}
       {hasCharts  && <ChartsGrid charts={charts!} onSelect={point => setDrillRow(matchingResultRow(data || [], point))} />}
@@ -1074,7 +1089,7 @@ function ResultContent({ result, onAskFollowup }: {
         <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-slate-600">
           View verified data · {(rowCount ?? data?.length ?? 0).toLocaleString()} rows
         </summary>
-        <div className="px-2 pb-2 sm:px-3"><DataTable data={data || []} rowCount={rowCount} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} /></div>
+        <div className="px-2 pb-2 sm:px-3"><DataTable data={data || []} rowCount={rowCount} totalCount={totalCount} heading={heading || 'Results'} columnSemantics={result.column_semantics} question={question} /></div>
       </details>}
       {hasInsights && <InsightsPanel findings={cleanFindings} />}
       {!isGeneral && <TrustPanel result={result} />}
@@ -1116,9 +1131,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [failedQuestion, setFailedQuestion] = useState<string | null>(null);
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
-  const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic'>('agent');
+  const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic' | 'training'>('agent');
   const selectedSuggestionRef = useRef<string | null>(null);
-  const analysisMethodRef = useRef<'agent' | 'basic'>('agent');
+  const analysisMethodRef = useRef<'agent' | 'basic' | 'training'>('agent');
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const conversationContentRef = useRef<HTMLDivElement>(null);
@@ -1126,7 +1141,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [scrollPosition, setScrollPosition] = useState({ canGoUp: false, canGoDown: false, nearBottom: true });
   useEffect(() => {
     const saved = window.localStorage.getItem('ai-analyst-method');
-    if (saved === 'basic' || saved === 'agent') {
+    if (saved === 'basic' || saved === 'agent' || saved === 'training') {
       analysisMethodRef.current = saved;
       setAnalysisMethod(saved);
     }
@@ -1333,7 +1348,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         threadId: tid,
         investigationId,
         newQuestion: treatAsNew,
-        analysisMode: analysisMethodRef.current,
+        analysisMode: analysisMethodRef.current === 'training' ? 'basic' : analysisMethodRef.current,
         conversationHistory: treatAsNew ? [] : contextMessages.slice(-40).map(message => ({
           role: message.role, content: message.content.slice(0, 6000), mode: message.result?.mode,
         })),
@@ -1443,6 +1458,11 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     const q = (initialQuestion || '').trim();
     if (q && historyLoaded && initialSentRef.current !== q && !loading) {
       initialSentRef.current = q;
+      if (analysisMethodRef.current === 'training') {
+        setLaunchBanner('Question copied into Basic SQL Training. Review the schema and SQL; no model was called.');
+        router.replace(analystPathWithoutQuery(), { scroll: false });
+        return;
+      }
       const dirty = lastSuccessfulAnalyticalRef.current != null || messages.length > 0;
       setLaunchBanner(investigationLaunch('overview-url', dirty).banner);
       void sendQuestion(q, { asNew: true, source: 'overview-url' });
@@ -1527,6 +1547,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            {analysisMethod === 'training' && <div className="flex rounded-full bg-slate-100 p-1" role="group" aria-label="Analysis method">
+              {(['agent', 'basic', 'training'] as const).map(method => <button key={method} type="button" aria-pressed={analysisMethod === method}
+                onClick={() => { analysisMethodRef.current = method; setAnalysisMethod(method); window.localStorage.setItem('ai-analyst-method', method); }}
+                className={cn('rounded-full px-2.5 py-1.5 text-xs font-medium', analysisMethod === method ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white')}>
+                {method === 'agent' ? 'Agentic' : method === 'basic' ? 'Basic' : 'SQL Training'}
+              </button>)}
+            </div>}
             <button type="button" onClick={() => jumpTo('top')} disabled={!scrollPosition.canGoUp}
               aria-label="Jump to top" title="Jump to top"
               className="h-10 w-10 flex items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-default">
@@ -1563,6 +1590,9 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       </div>
 
       {/* ── Messages / Welcome ── */}
+      {analysisMethod === 'training' ? (
+        <div className="flex-1 min-h-0"><BasicSqlTraining initialQuestion={initialQuestion} /></div>
+      ) : <>
       <div className="relative flex-1 min-h-0">
       <div ref={conversationRef} role="region" aria-label="Conversation" tabIndex={0}
         onScroll={() => {
@@ -1715,12 +1745,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         </div>
       )}
       </div>
+      </>}
 
       {/* ── Input bar ── */}
+      {analysisMethod !== 'training' && (
       <div className="flex-none bg-white px-3 sm:px-6 pt-2 pb-[max(12px,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-4xl mx-auto">
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1" role="group" aria-label="Analysis method">
-          {(['agent', 'basic'] as const).map(method => (
+          {(['agent', 'basic', 'training'] as const).map(method => (
             <button
               key={method}
               type="button"
@@ -1735,13 +1767,15 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                 analysisMethod === method ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
               )}
             >
-              {method === 'agent' ? 'Agentic' : 'Basic'}
+              {method === 'agent' ? 'Agentic' : method === 'basic' ? 'Basic' : 'Basic SQL Training'}
             </button>
           ))}
           <span className="text-xs text-slate-500">
             {analysisMethod === 'agent'
               ? 'Investigates with tools, then answers from verified SQL.'
-              : 'Saved questions use no model tokens. New questions use the configured Basic model; without one, Agentic may use credits when fallback is enabled.'}
+              : analysisMethod === 'basic'
+                ? 'Saved questions use no model tokens. New questions use the configured Basic model; without one, Agentic may use credits when fallback is enabled.'
+                : 'Manual schema and read-only SQL workflow; no model calls.'}
           </span>
         </div>
         <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
@@ -1798,6 +1832,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         </div>
         </div>
       </div>
+      )}
 
     </div>
   );

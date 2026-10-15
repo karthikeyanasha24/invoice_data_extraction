@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analystAnswerText, defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate } from './analystPresentation.ts';
+import { analystAnswerText, comparisonColumnLabel, comparisonYears, defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate, labelComparisonText } from './analystPresentation.ts';
 
 test('detailed answers survive alongside their concise overview', () => {
   const answer = ('# Findings\n\n' + 'Explain evidence and its limitations. '.repeat(200)).trim();
@@ -15,6 +15,17 @@ test('comparison amounts cannot become date axes', () => {
   for (const key of ['year', 'billing_date', 'period_label', 'month']) {
     assert.equal(isComparisonMeasure(key), false);
   }
+});
+
+test('two-year comparisons identify each returned period without changing its raw key', () => {
+  const question = 'compare billed sales in 2001 and 2002 (DEM)';
+  assert.deepEqual(comparisonYears(question), ['2001', '2002']);
+  assert.equal(comparisonColumnLabel('period_a', question), '2001 (period A)');
+  assert.equal(comparisonColumnLabel('period_b', question), '2002 (period B)');
+  assert.equal(comparisonColumnLabel('change', question), 'Change (2002 − 2001)');
+  assert.equal(labelComparisonText('period a, period b by currency', question),
+    '2001 (period A), 2002 (period B) by currency');
+  assert.equal(comparisonColumnLabel('period_a', 'billed sales by year'), 'period a');
 });
 
 test('client codes label charts while four-digit counts remain measures', () => {

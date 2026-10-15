@@ -113,6 +113,32 @@ def mixed_currency_billing_total(sql):
         return False
 
 
+def profit_question_without_profit_sql(question, steps):
+    """Keep revenue/clearing totals from being replayed as checked profit.
+
+    A saved profit answer needs a physical profit measure or an explicit
+    revenue-minus-cost expression. An alias named ``profit`` alone is not
+    evidence of that calculation.
+    """
+    if "profit" not in intent_tokens(question):
+        return False
+    for step in steps:
+        try:
+            tree = parse(str(step.get("sql") or ""), read="postgres")[0]
+            for selection in tree.selects:
+                expression = selection.this if isinstance(selection, exp.Alias) else selection
+                columns = {column.name.lower() for column in expression.find_all(exp.Column)}
+                if columns.intersection({"profit", "gross_profit", "net_profit", "profit_amount"}):
+                    return False
+                if columns.intersection({"cost", "cogs", "expense", "expenses", "wavwr", "vprs"}) \
+                        and columns.intersection({"netwr", "revenue", "sales", "net_sales"}) \
+                        and any(isinstance(node, exp.Sub) for node in expression.walk()):
+                    return False
+        except Exception:
+            continue
+    return True
+
+
 def _cosine(a, b):
     if len(a) != len(b) or not a or not all(math.isfinite(x) for x in (*a, *b)):
         return 0.0
@@ -141,7 +167,8 @@ def retrieve_examples(question, examples, top_k=3, *, use_embeddings=True):
     wanted = set(intent_tokens(question))
     candidates = [dict(e, sql=str(e.get("sql") or "").strip().rstrip(";")) for e in examples or []
                   if e.get("question") and readonly_candidate(str(e.get("sql") or ""))
-                  and not mixed_currency_billing_total(str(e.get("sql") or ""))]
+                  and not mixed_currency_billing_total(str(e.get("sql") or ""))
+                  and not profit_question_without_profit_sql(e["question"], e.get("steps") or [e])]
     # Exact canonical matches need no embedding call, even if Ollama is configured.
     exact = [dict(e, similarity=1.0, retrieval="canonical", reusable=True) for e in candidates
              if fingerprint(question) == fingerprint(e["question"])]
@@ -228,7 +255,8 @@ def investigation_steps(payload):
                       "analysis_plan": plan if isinstance(plan, dict) else None,
                       "primary": bool(payload.get("agent_primary_result_id")) and item.get("id") == payload.get("agent_primary_result_id")})
     question = str(payload.get("query_plan", {}).get("effective_question") or "")
-    return steps if 1 <= len(steps) <= 6 and replayable_steps(question, steps) else []
+    return steps if 1 <= len(steps) <= 6 and replayable_steps(question, steps) \
+        and not profit_question_without_profit_sql(question, steps) else []
 
 
 def replayable_steps(question, steps):
@@ -273,6 +301,8 @@ def save_verified_query(engine, scope, source, question, sql, analysis_plan=None
     if not question or not readonly_candidate(sql):
         return False
     supplied = list(steps or [])
+    if profit_question_without_profit_sql(question, supplied or [{"sql": sql}]):
+        return False
     if any(not isinstance(step, dict) for step in supplied) or len(supplied) > 6:
         return False
     normalized = []
@@ -340,7 +370,7 @@ def load_basic_examples(engine, scope, use_sap):
     examples = [item for source in sources for item in load_verified_queries(engine, scope, source, None)]
     examples = [item for item in examples if not any(
         mixed_currency_billing_total(step.get("sql", "")) for step in (item.get("steps") or [item])
-    )]
+    ) and not profit_question_without_profit_sql(item["question"], item.get("steps") or [item])]
     return sorted(examples, key=lambda item: item.get("updated_at", 0), reverse=True)
 
 
@@ -380,6 +410,8 @@ def teach_verified_question(engine, scope, identifier, question):
     steps = original.get("steps") or []
     if any(mixed_currency_billing_total(step.get("sql", "")) for step in (steps or [original])):
         raise ValueError("This billed total mixes currencies. Check a result grouped by currency or filtered to one currency before teaching Basic.")
+    if profit_question_without_profit_sql(question, steps or [original]):
+        raise ValueError("This SQL does not calculate profit. Check a result with an explicit profit measure or revenue-minus-cost calculation before teaching Basic.")
     saved = save_verified_query(engine, scope, original["source"], question, original["sql"], original.get("analysis_plan"), steps)
     if not saved:
         raise ValueError("This result cannot be taught as a read-only query")

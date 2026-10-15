@@ -153,6 +153,16 @@ def test_legacy_saved_mixed_currency_total_uses_the_current_safe_pattern():
     assert result["llm_calls"] == 0
 
 
+def test_bad_saved_profit_total_is_never_executed_as_checked_profit():
+    bad = 'SELECT SUM("BSAD"."dmbtr") AS "total_sales" FROM "BSAD"'
+    question = "show me highest profit"
+    result = run_basic_sql_answer(question,
+        execute=lambda *_: pytest.fail("Clearing total must not execute as checked profit"),
+        prior_examples=[{"question": question, "sql": bad}])
+    assert result["sql"] == "" and result["meta"]["needs_agent"] is True
+    assert result["llm_calls"] == 0
+
+
 def test_list_some_questions_returns_examples_without_a_model():
     called = {"n": 0}
 

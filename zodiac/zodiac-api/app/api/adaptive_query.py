@@ -2891,6 +2891,157 @@ def basic_questions_endpoint(
             "predefined_questions": list(_EXAMPLE_QUESTIONS)}
 
 
+def _basic_training_scope(db, current_user):
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user, set_trusted_scope
+    from ..core.workspace.context import list_assigned_customer_ids
+    return set_trusted_scope(analyst_scope_for_user(
+        current_user, list_assigned_customer_ids(db, current_user)))
+
+
+@router.get("/api/query/adaptive/basic/training/schema")
+def basic_training_schema_endpoint(
+    source: str = "business", db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from ..services.analyst_agent import AnalystTools
+    from ..services.adaptive_trusted_scope import reset_trusted_scope
+    from ..services.analyst_agent_sql import queryable_schema
+    from ..services.adaptive_analyst.database_metadata import _column_meanings, _table_semantics
+    if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
+        raise HTTPException(status_code=400, detail="Select an available database source")
+    token = _basic_training_scope(db, current_user)
+    tools = AnalystTools(db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
+                         sap_session_factory=get_sap_session, question="Manual SQL training schema")
+    try:
+        schema, origin = tools.schema(source)
+        safe = queryable_schema(schema)
+        inspector = __import__("sqlalchemy").inspect(tools.session(source))
+        details = []
+        for table, columns in safe.items():
+            meanings = _column_meanings(table)
+            try:
+                pk = set(inspector.get_pk_constraint(table).get("constrained_columns") or [])
+                foreign_keys = inspector.get_foreign_keys(table)
+                fks = {column for fk in foreign_keys for column in (fk.get("constrained_columns") or [])}
+            except Exception:
+                pk, fks, foreign_keys = set(), set(), []
+            details.append({"table": table, "description": _table_semantics(table), "columns": [{"name": str(col.get("col")), "type": str(col.get("type") or "unknown"),
+                "description": meanings.get(col.get("col"), meanings.get(str(col.get("col", "")).upper(), "")),
+                "primary_key": col.get("col") in pk, "foreign_key": col.get("col") in fks} for col in columns],
+                "relationships": [{"columns": fk.get("constrained_columns") or [],
+                    "references_table": fk.get("referred_table"),
+                    "references_columns": fk.get("referred_columns") or []} for fk in foreign_keys]})
+        return {"source": source, "dialect": "postgres", "schema_source": origin, "tables": details}
+    finally:
+        tools.close()
+        reset_trusted_scope(token)
+
+
+@router.post("/api/query/adaptive/basic/training/execute")
+def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Session = Depends(get_db),
+                                    current_user: ZodiacUser = Depends(get_current_user)) -> Dict[str, Any]:
+    from ..services.analyst_agent import AnalystTools
+    from ..services.basic_sql_training import check_query_scope, record_run, selected_schema
+    from ..services.adaptive_trusted_scope import get_trusted_scope, reset_trusted_scope
+    source, question, sql = body.get("source"), body.get("question"), body.get("sql")
+    if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
+        raise HTTPException(status_code=400, detail="Select an available database source")
+    if not isinstance(question, str) or not question.strip() or len(question) > 4000:
+        raise HTTPException(status_code=400, detail="Enter a question up to 4000 characters")
+    if not isinstance(sql, str) or not sql.strip() or len(sql) > 24000:
+        raise HTTPException(status_code=400, detail="Paste a SQL query up to 24000 characters")
+    token = _basic_training_scope(db, current_user)
+    from ..services.investigation_budget import begin_investigation, end_investigation
+    begin_investigation("Basic SQL Training: " + question[:200], owner_id=int(current_user.id))
+    tools = AnalystTools(db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
+                         sap_session_factory=get_sap_session, question=question)
+    try:
+        live_schema, origin = tools.schema(source)
+        if origin != "live_database_metadata":
+            raise ValueError("Manual SQL Training requires live database metadata; refresh the connected catalog first")
+        selection = selected_schema(live_schema, body.get("selected_schema"))
+        if not selection:
+            raise ValueError("Select at least one table and its columns")
+        sql = check_query_scope(sql, selection)
+        result = tools.call("run_readonly_sql", {"source": source, "sql": sql, "purpose": "User-authored SQL training query"})
+        if result.get("ok"):
+            from ..services.adaptive_analyst.database_metadata import _column_meanings, _table_semantics
+            inspector = __import__("sqlalchemy").inspect(tools.session(source))
+            schema_snapshot = {"source": source, "dialect": "postgres", "tables": {}, "relationships": {}}
+            for table, columns in selection.items():
+                meanings = _column_meanings(table)
+                try:
+                    primary = set(inspector.get_pk_constraint(table).get("constrained_columns") or [])
+                    foreign = inspector.get_foreign_keys(table)
+                    foreign_columns = {column for item in foreign for column in (item.get("constrained_columns") or [])}
+                except Exception:
+                    primary, foreign, foreign_columns = set(), [], set()
+                schema_snapshot["tables"][table] = {
+                    "description": _table_semantics(table),
+                    "columns": [{**column, "description": meanings.get(column["col"], ""),
+                                 "primary_key": column["col"] in primary,
+                                 "foreign_key": column["col"] in foreign_columns} for column in columns],
+                }
+                schema_snapshot["relationships"][table] = [{"columns": item.get("constrained_columns") or [],
+                    "references_table": item.get("referred_table"), "references_columns": item.get("referred_columns") or []}
+                    for item in foreign]
+            run_id = record_run(db.get_bind(), get_trusted_scope(), source, question.strip(), schema_snapshot,
+                                result.get("sql") or sql, result)
+            return {"status": "executed", "run_id": run_id, "sql": result.get("sql") or sql,
+                    "rows": result.get("rows") or [], "row_count": len(result.get("rows") or []),
+                    "columns": list((result.get("rows") or [{}])[0].keys()) if result.get("rows") else [],
+                    "schema_source": origin, "llm_calls": 0}
+        raw_error = str(result.get("error") or "Query failed")
+        if raw_error.startswith(("Query validation:", "Only one read-only", "Use only tables", "Table ", "Column ", "Provide one SELECT")):
+            safe_error = raw_error[:400]
+        else:
+            safe_error = "The database could not run this query. Check the selected tables, columns, joins, and SQL syntax."
+        return {"status": "failed", "sql": sql, "error": safe_error,
+                "rows": [], "row_count": 0, "llm_calls": 0}
+    except ValueError as error:
+        return {"status": "failed", "sql": sql, "error": str(error)[:500], "rows": [], "row_count": 0, "llm_calls": 0}
+    finally:
+        tools.close()
+        end_investigation("completed")
+        reset_trusted_scope(token)
+
+
+@router.get("/api/query/adaptive/basic/training/examples")
+def basic_training_examples_endpoint(q: str = "", db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user)):
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user
+    from ..services.basic_sql_training import list_examples
+    from ..core.workspace.context import list_assigned_customer_ids
+    scope = analyst_scope_for_user(current_user, list_assigned_customer_ids(db, current_user))
+    return {"examples": list_examples(db.get_bind(), scope, q)}
+
+
+@router.post("/api/query/adaptive/basic/training/examples")
+def basic_training_save_endpoint(body: Dict[str, Any] = Body(...), db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user)):
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user
+    from ..services.basic_sql_training import save_run
+    from ..core.workspace.context import list_assigned_customer_ids
+    scope = analyst_scope_for_user(current_user, list_assigned_customer_ids(db, current_user))
+    try:
+        return save_run(db.get_bind(), scope, str(body.get("run_id") or ""), str(body.get("question") or ""))
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.put("/api/query/adaptive/basic/training/examples/{example_id}")
+def basic_training_edit_endpoint(example_id: str, body: Dict[str, Any] = Body(...), db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user)):
+    from ..services.adaptive_trusted_scope import analyst_scope_for_user
+    from ..services.basic_sql_training import edit_example
+    from ..core.workspace.context import list_assigned_customer_ids
+    scope = analyst_scope_for_user(current_user, list_assigned_customer_ids(db, current_user))
+    try:
+        return edit_example(db.get_bind(), scope, example_id, body.get("sql"))
+    except PermissionError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.post("/api/query/adaptive/basic/teach")
 def teach_basic_endpoint(
     body: Dict[str, Any] = Body(...),
@@ -3201,7 +3352,9 @@ def _post_query_adaptive_body(
         """Attach thread_id, answer_status, and persist via existing chat_thread_store when possible."""
         payload = _annotate_answer_status(dict(payload or {}))
         if analysis_mode == "basic" and not payload.get("meta", {}).get("basic_fallback"):
-            payload.setdefault("meta", {}).update(analysis_method="basic", credits_used=False)
+            meta = payload.setdefault("meta", {})
+            gemini_called = bool((meta.get("gemini_field_lookup") or {}).get("called"))
+            meta.update(analysis_method="basic", credits_used=gemini_called)
             payload.setdefault("query_plan", {})["analysis_method"] = "basic"
         rank_rows = payload.get("data") or []
         if rank_rows and all(isinstance(row, dict) and "rank_within_currency" in row for row in rank_rows):
@@ -3671,17 +3824,30 @@ def _post_query_adaptive_body(
         from ..services.analyst_agent import run_analyst_agent
         from ..services.basic_hosted_provider import basic_llm_enabled
         free_model_available = basic_llm_enabled()
-        def _basic_free_agent(examples):
+        def _basic_free_agent(examples, field_hint=None):
             return run_analyst_agent(
                 _original_question, db, _execute_sql, schema_loader=_load_schema,
                 context={**prior, "basic_rag_examples": [{"question": item["question"], "sql": item["sql"]}
-                                                       for item in examples]}, conversation=memory_turns,
+                                                       for item in examples],
+                         "basic_field_definitions": [field_hint] if isinstance(field_hint, dict) and field_hint.get("columns") else []},
+                conversation=memory_turns,
                 use_sap=USE_SAP_DB_FOR_AI, sap_session_factory=get_sap_session,
             )
         executor = AnalystTools(
             db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
             sap_session_factory=get_sap_session, question=_original_question,
         )
+        def _basic_field_lookup(question):
+            from ..services.basic_sap_field_lookup import gemini_field_lookup_enabled, has_known_customer_terms, lookup_sap_field, unresolved_field
+            if source != "business" or not (has_known_customer_terms(question)
+                                              or (gemini_field_lookup_enabled() and unresolved_field(question))):
+                return {"called": False, "status": "skipped"}
+            try:
+                schema, origin = executor.schema(source)
+                return lookup_sap_field(question, schema, schema_source=origin)
+            except Exception as lookup_error:
+                logger.warning("Basic SAP field lookup unavailable: %s", type(lookup_error).__name__)
+                return {"called": False, "status": "schema_unavailable"}
         def _execute_basic(sql, step=None):
             step = step if isinstance(step, dict) else {}
             step_source = step.get("source") if step.get("source") in {"business", "application"} else source
@@ -3718,6 +3884,7 @@ def _post_query_adaptive_body(
                 previous_sql=str(prior.get("previousSQL") or ""),
                 prior_examples=prior_examples,
                 local_agent=_basic_free_agent if free_model_available else None,
+                field_lookup=_basic_field_lookup if free_model_available else None,
             )
         finally:
             executor.close()

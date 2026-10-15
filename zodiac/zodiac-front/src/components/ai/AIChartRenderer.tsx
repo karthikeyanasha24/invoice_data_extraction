@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate } from '@/lib/analystPresentation';
+import { comparisonColumnLabel, defaultAnalystChartType, isAnalystChartDimension, isAnalystChartDate, labelComparisonText } from '@/lib/analystPresentation';
 import { analystChartLayout, analystChartCsv, compactChartNumber, shortenChartLabel } from '@/lib/analystChartLayout';
 import { analystNumeric, analystDecimal } from '@/lib/analystNumbers';
 import {
@@ -403,7 +403,7 @@ export default function AIChartRenderer({ charts, onSelect }: { charts: ChartDat
 
     const tipFmt = (value: any, name?: string, props?: any) => {
       const key = String(name ?? '');
-      const lbl = key.replace(/_/g, ' ');
+      const lbl = comparisonColumnLabel(key, chart.title);
       const rc = getCcy(props?.payload) ?? currency;
       const exact = props?.payload?.__original?.[key] ?? value;
       return [`${isMoneycol(key) && rc ? rc + ' ' : ''}${analystDecimal(exact)}${isPercentCol(key) ? '%' : ''}`, lbl];
@@ -515,7 +515,7 @@ export default function AIChartRenderer({ charts, onSelect }: { charts: ChartDat
             )}
             {tip}
             {(chart.show_legend !== false && legendCount > 1) && (
-              <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" />
+              <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" formatter={value => comparisonColumnLabel(String(value), chart.title)} />
             )}
             {dualVertical ? (
               <>
@@ -619,7 +619,7 @@ export default function AIChartRenderer({ charts, onSelect }: { charts: ChartDat
             {dualLine ? <>{yLeft}{yRight}</> : yA}
             {tip}
             {(chart.show_legend !== false && yKeys.length > 1) && (
-              <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" />
+              <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" formatter={value => comparisonColumnLabel(String(value), chart.title)} />
             )}
             {dualLine ? (
               <>
@@ -692,7 +692,7 @@ export default function AIChartRenderer({ charts, onSelect }: { charts: ChartDat
             {dualArea ? <>{yLeft}{yRight}</> : yA}
             {tip}
             {(chart.show_legend !== false && yKeys.length > 1) && (
-              <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" />
+              <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', color: '#64748b' }} iconType="circle" formatter={value => comparisonColumnLabel(String(value), chart.title)} />
             )}
             {dualArea ? (
               <>
@@ -862,7 +862,7 @@ export default function AIChartRenderer({ charts, onSelect }: { charts: ChartDat
             <tr className="bg-gradient-to-r from-indigo-50 to-slate-50 border-b border-slate-200">
               {colKeys.map(k => (
                 <th key={k} className="px-4 py-2.5 text-left text-xs font-bold text-slate-600 uppercase tracking-wider whitespace-nowrap">
-                  {k.replace(/_/g, ' ')}
+                  {comparisonColumnLabel(k, chart.title)}
                 </th>
               ))}
             </tr>
@@ -956,7 +956,7 @@ export default function AIChartRenderer({ charts, onSelect }: { charts: ChartDat
                     )}
                   </div>
                   {chart.description && (
-                    <p className="text-xs leading-5 text-slate-500 mt-2 break-words">{chart.description}</p>
+                    <p className="text-xs leading-5 text-slate-500 mt-2 break-words">{labelComparisonText(chart.description, chart.title)}</p>
                   )}
                 </div>
 

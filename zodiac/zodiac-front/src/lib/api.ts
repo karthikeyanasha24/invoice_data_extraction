@@ -1839,6 +1839,41 @@ export const dashboardApi = {
             throw new Error(publicApiError(error, 'Could not save this teaching example.'));
         }
     },
+    getBasicTrainingSchema: async (source: 'business' | 'application') => {
+        const response = await api.get('/api/query/adaptive/basic/training/schema', { params: { source }, timeout: 120000 });
+        return response.data as { source: string; dialect: string; schema_source: string; tables: {
+            table: string; description?: Record<string, string>; columns: { name: string; type: string; description?: string; primary_key: boolean; foreign_key: boolean }[];
+            relationships: { columns: string[]; references_table?: string; references_columns: string[] }[];
+        }[] };
+    },
+    executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]> }) => {
+        try {
+            const response = await api.post('/api/query/adaptive/basic/training/execute', body, { timeout: 120000 });
+            return response.data as { status: 'executed' | 'failed'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; error?: string; llm_calls: 0 };
+        } catch (error) {
+            throw new Error(publicApiError(error, 'Could not run the training query.'));
+        }
+    },
+    getBasicTrainingExamples: async (q = '') => {
+        const response = await api.get('/api/query/adaptive/basic/training/examples', { params: { q }, timeout: 30000 });
+        return response.data as { examples: { id: string; source: 'business' | 'application'; question: string; sql: string; dialect: string; revision: number; validation_status: string; updated_at: string; schema: { tables?: Record<string, { columns: { col: string; type: string }[] }>; relationships?: Record<string, { columns: string[]; references_table?: string; references_columns: string[] }[]> } }[] };
+    },
+    saveBasicTrainingExample: async (runId: string, question: string) => {
+        try {
+            const response = await api.post('/api/query/adaptive/basic/training/examples', { run_id: runId, question }, { timeout: 30000 });
+            return response.data as { saved: boolean; id: string; revision: number };
+        } catch (error) {
+            throw new Error(publicApiError(error, 'Could not save this SQL training example.'));
+        }
+    },
+    editBasicTrainingExample: async (id: string, sql: string) => {
+        try {
+            const response = await api.put(`/api/query/adaptive/basic/training/examples/${encodeURIComponent(id)}`, { sql }, { timeout: 30000 });
+            return response.data as { saved: boolean; revision: number; validation_status: string };
+        } catch (error) {
+            throw new Error(publicApiError(error, 'Could not update this SQL training example.'));
+        }
+    },
     getAnalystDocuments: async (resultId: string, selection: {row_index: number; measure: string; page_size?: number; after?: string[]; snapshot_id?: string}) => {
         const response = await api.post(`/api/query/adaptive/results/${encodeURIComponent(resultId)}/documents`, selection, {timeout: 120000});
         return response.data;

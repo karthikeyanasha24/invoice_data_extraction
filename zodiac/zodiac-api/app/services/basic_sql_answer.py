@@ -1,4 +1,4 @@
-"""Credit-free answers. No paid model, including for questions Basic cannot cover."""
+"""Model-free replay and SQL patterns, with optional Basic-only model hints."""
 from __future__ import annotations
 
 import re
@@ -140,7 +140,8 @@ def run_basic_sql_answer(
     previous_question: str = "",
     previous_sql: str = "",
     prior_examples: list[dict] | None = None,
-    local_agent: Callable[[list[dict]], dict] | None = None,
+    local_agent: Callable[..., dict] | None = None,
+    field_lookup: Callable[[str], dict] | None = None,
 ) -> dict[str, Any]:
     from .four_stage_db_pipeline import VerifiedDbContext, pipeline3_sql_generation
     from .investigation_budget import block_paid_models, paid_models_blocked, restore_paid_models
@@ -167,7 +168,7 @@ def run_basic_sql_answer(
             if item.get("table")
         ]
         ctx = VerifiedDbContext(question=question, tables=tables, semantic_requirements=semantic, prior_sql=previous_sql or "")
-        from .basic_rag import mixed_currency_billing_total, retrieve_examples, replayable_steps
+        from .basic_rag import mixed_currency_billing_total, profit_question_without_profit_sql, retrieve_examples, replayable_steps
         def safe_examples(embeddings=False):
             candidates = retrieve_examples(question, prior_examples, use_embeddings=embeddings)
             return [example for example in candidates if not any(
@@ -191,10 +192,15 @@ def run_basic_sql_answer(
         reused = bool(sql)
         if not sql:
             sql = pipeline3_sql_generation(question, ctx, templates_only=True) or ""
+        if sql and profit_question_without_profit_sql(question, [{"sql": sql}]):
+            # The generic measure template can otherwise treat an AR clearing
+            # amount as "highest profit". Require a real profit calculation.
+            sql = ""
         if not sql.strip():
             if local_agent is not None:
                 retrieved = safe_examples(embeddings=True)
-                return _run_local(local_agent, retrieved)
+                field_hint = field_lookup(question) if field_lookup else None
+                return _run_local(local_agent, retrieved, field_hint)
             return _uncovered(question)
         if not paid_models_blocked():
             raise RuntimeError("Basic mode failed to block paid models")
@@ -297,14 +303,20 @@ def _replay_investigation(question, steps, execute):
     return result
 
 
-def _run_local(local_agent, retrieved):
+def _run_local(local_agent, retrieved, field_hint=None):
     from .basic_local_provider import use_local_agent, restore_local_agent
     local_token = use_local_agent()
     try:
-        result = local_agent(retrieved)
+        if field_hint is not None:
+            result = local_agent(retrieved, field_hint)
+        else:
+            result = local_agent(retrieved)
         result.setdefault("query_plan", {})["analysis_method"] = "basic"
         meta = result.setdefault("meta", {})
-        meta.update(analysis_method="basic", credits_used=False)
+        gemini_called = bool(isinstance(field_hint, dict) and field_hint.get("called"))
+        meta.update(analysis_method="basic", credits_used=gemini_called)
+        if isinstance(field_hint, dict) and field_hint.get("field"):
+            meta["gemini_field_lookup"] = {key: field_hint.get(key) for key in ("called", "status", "field")}
         if meta.get("provider") not in {"local_catalog", "local_calculator"}:
             from .basic_hosted_provider import basic_provider
             meta["provider"] = basic_provider()
@@ -323,7 +335,11 @@ def _run_local(local_agent, retrieved):
                 "Checked questions and supported SQL patterns still work without a model call. "
                 "Try a simpler question or teach Basic a checked Agentic answer."
             )
-        meta["model_calls"] = result.get("llm_calls", 0)
+        result["llm_calls"] = int(result.get("llm_calls") or 0) + int(gemini_called)
+        meta["model_calls"] = result["llm_calls"]
+        if gemini_called:
+            from .analyst_usage import usage_summary
+            meta["usage"] = usage_summary()
         meta["retrieval"] = {"examples": len(retrieved), "method": retrieved[0]["retrieval"] if retrieved else "none"}
         return result
     finally:
