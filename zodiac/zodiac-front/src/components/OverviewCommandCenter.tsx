@@ -25,24 +25,36 @@ function money(n: number | null | undefined): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
+type InboundSummary = { total_documents?: number; merges_pending?: number; merges_sent_to_sap?: number; merges_total?: number };
+type InboundOverview = { summary?: InboundSummary };
+type BusinessOverview = { trend?: { revenue_change_pct?: number | null; current_period_revenue?: number | null } };
+
 export default function OverviewCommandCenter() {
   const router = useRouter();
-  const [inbound, setInbound] = useState<any>(null);
-  const [business, setBusiness] = useState<any>(null);
+  const [inbound, setInbound] = useState<InboundOverview | null>(null);
+  const [business, setBusiness] = useState<BusinessOverview | null>(null);
   const [error, setError] = useState('');
+  const [partialErrors, setPartialErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
     try {
       setLoading(true);
       setError('');
-      const [inb, biz] = await Promise.all([
+      setPartialErrors([]);
+      const results = await Promise.allSettled([
         dashboardApi.getV2Inbound(0),
         dashboardApi.getV2Business(90),
       ]);
-      setInbound(inb);
-      setBusiness(biz);
-    } catch (err: any) {
+      const [inb, biz] = results;
+      if (inb.status === 'fulfilled') setInbound(inb.value);
+      else setPartialErrors(errors => [...errors, `Inbound operations: ${publicApiError(inb.reason, 'Could not load inbound activity.')}`]);
+      if (biz.status === 'fulfilled') setBusiness(biz.value);
+      else setPartialErrors(errors => [...errors, `Invoice activity: ${publicApiError(biz.reason, 'Could not load invoice activity.')}`]);
+      if (inb.status === 'rejected' && biz.status === 'rejected') {
+        setError('Overview data is temporarily unavailable. The inbound-operations and invoice-activity services both failed.');
+      }
+    } catch (err: unknown) {
       setError(publicApiError(err, 'We could not load the overview. Try again.'));
     } finally {
       setLoading(false);
@@ -90,7 +102,7 @@ export default function OverviewCommandCenter() {
     router.push(`/dashboard/ai?q=${encodeURIComponent(q)}`);
   };
 
-  if (loading) {
+  if (loading && !inbound && !business) {
     return (
       <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-slate-600">
         <RefreshCw className="h-6 w-6 animate-spin text-emerald-700" aria-hidden />
@@ -100,7 +112,7 @@ export default function OverviewCommandCenter() {
     );
   }
 
-  if (error) {
+  if (error && !inbound && !business) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 p-6">
         <p className="text-sm font-medium text-red-800">{error}</p>
@@ -117,6 +129,11 @@ export default function OverviewCommandCenter() {
 
   return (
     <div className="space-y-8">
+      {partialErrors.length > 0 && <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <p className="font-medium">Some overview data did not load. Available information is still shown below.</p>
+        {partialErrors.map(message => <p key={message} className="mt-1 text-xs">{message}</p>)}
+        <button type="button" onClick={() => void load()} className="mt-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-amber-100">Retry failed data</button>
+      </div>}
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Overview</h1>
         <p className="mt-1 text-sm text-slate-600">
