@@ -1,7 +1,10 @@
 import logging
 from ..config.config import USE_BLOB_STORAGE, MUST_USE_BLOB_STORAGE, UPLOAD_DIR, EDI_DIR
 from fastapi import HTTPException, status
-import vercel_blob
+try:
+    import vercel_blob
+except ImportError:  # Keep read-only API routes available if optional blob SDK is absent.
+    vercel_blob = None
 import os
 import traceback
 from typing import Union

@@ -218,6 +218,9 @@ def _register_router(
         ROUTER_STATUS[name] = {
             "loaded": False,
             "error_type": type(e).__name__,
+            # The missing package name is safe to expose and makes deployment
+            # packaging failures actionable without returning a traceback.
+            "missing_module": e.name if isinstance(e, ModuleNotFoundError) else None,
         }
         if unavailable_paths:
             async def _unavailable(router_name: str = name):

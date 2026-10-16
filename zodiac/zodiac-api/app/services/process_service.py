@@ -1,6 +1,5 @@
 import json
 import uuid
-import vercel_blob
 import time
 import trace
 import asyncio
