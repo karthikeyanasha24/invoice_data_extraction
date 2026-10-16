@@ -1839,12 +1839,17 @@ export const dashboardApi = {
             throw new Error(publicApiError(error, 'Could not save this teaching example.'));
         }
     },
-    getBasicTrainingSchema: async (source: 'business' | 'application') => {
-        const response = await api.get('/api/query/adaptive/basic/training/schema', { params: { source }, timeout: 120000 });
-        return response.data as { source: string; dialect: string; schema_source: string; tables: {
-            table: string; description?: Record<string, string>; columns: { name: string; type: string; description?: string; primary_key: boolean; foreign_key: boolean }[];
-            relationships: { columns: string[]; references_table?: string; references_columns: string[] }[];
-        }[] };
+    getBasicTrainingSchema: async (source: 'business' | 'application' | 'auto') => {
+        try {
+            const response = await api.get('/api/query/adaptive/basic/training/schema', { params: { source }, timeout: 120000 });
+            return response.data as { source: string; dialect: string; schema_source: string; tables: {
+                table: string; description?: Record<string, string>; columns: { name: string; type: string; description?: string; primary_key: boolean; foreign_key: boolean }[];
+                relationships: { columns: string[]; references_table?: string; references_columns: string[] }[];
+            }[] };
+        } catch (error: unknown) {
+            const detail = axios.isAxiosError<{ detail?: unknown }>(error) ? error.response?.data?.detail : undefined;
+            throw new Error(typeof detail === 'string' ? detail : publicApiError(error, 'Could not load the connected database schema.'));
+        }
     },
     executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]> }) => {
         try {

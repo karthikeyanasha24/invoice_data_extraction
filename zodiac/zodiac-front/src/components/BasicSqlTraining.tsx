@@ -27,24 +27,27 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
   const [exampleFilter, setExampleFilter] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const loadSchema = useCallback(async (nextSource: TrainingSource = source) => {
+  const loadSchema = useCallback(async (nextSource: TrainingSource | 'auto') => {
     setLoadingSchema(true); setError(''); setRun(null);
+    if (nextSource !== 'auto') setSource(nextSource);
     try {
       const result = await dashboardApi.getBasicTrainingSchema(nextSource);
+      setSource(result.source as TrainingSource);
       setTables(result.tables || []); setSchemaSource(result.schema_source || '');
-      const all = Object.fromEntries((result.tables || []).map(table => [table.table, table.columns.map(column => column.name)]));
-      setSelected(all); setExpanded(Object.fromEntries((result.tables || []).map(table => [table.table, true])));
+      // The live catalog can contain thousands of columns. Load it collapsed
+      // and let the user select only the tables/columns needed for the query.
+      setSelected({}); setExpanded({});
     } catch (cause) {
       setTables([]); setSelected({}); setError(cause instanceof Error ? cause.message : 'Could not load the database schema.');
     } finally { setLoadingSchema(false); }
-  }, [source]);
+  }, []);
 
   const loadExamples = useCallback(async (q: string) => {
     try { const result = await dashboardApi.getBasicTrainingExamples(q); setExamples(result.examples || []); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load saved SQL examples.'); }
   }, []);
 
-  useEffect(() => { void loadSchema(source); }, [loadSchema, source]);
+  useEffect(() => { void loadSchema('auto'); }, [loadSchema]);
   useEffect(() => { void loadExamples(''); }, [loadExamples]);
   useEffect(() => { if (initialQuestion.trim()) setQuestion(initialQuestion.trim()); }, [initialQuestion]);
 
@@ -123,8 +126,8 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><h3 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Database className="h-5 w-5 text-indigo-600"/>Basic SQL Training</h3>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">Explore the live schema, write or paste SQL, run it with read-only validation, then save successful wording and SQL for reuse. This workflow makes <strong>0 AI/model calls</strong>; it does not train model weights.</p></div>
-          <div className="flex items-center gap-2"><label className="sr-only" htmlFor="training-source">Database</label><select id="training-source" value={source} onChange={event => setSource(event.target.value as TrainingSource)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="business">Business database</option><option value="application">Application database</option></select>
-            <button type="button" onClick={() => void loadSchema()} disabled={loadingSchema} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loadingSchema ? 'animate-spin' : ''}`}/>Refresh</button></div>
+          <div className="flex items-center gap-2"><label className="sr-only" htmlFor="training-source">Database</label><select id="training-source" value={source} onChange={event => void loadSchema(event.target.value as TrainingSource)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="business">Business database</option><option value="application">Application database</option></select>
+            <button type="button" onClick={() => void loadSchema(source)} disabled={loadingSchema} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loadingSchema ? 'animate-spin' : ''}`}/>Refresh</button></div>
         </div>
         <p className="mt-2 text-xs text-slate-500">SQL dialect: PostgreSQL · Schema: {schemaSource || (loadingSchema ? 'loading…' : 'unavailable')} · Selected: {Object.keys(selectedSchema).length} tables, {selectedCount} columns</p>
       </section>

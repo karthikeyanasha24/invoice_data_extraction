@@ -2898,32 +2898,48 @@ def _basic_training_scope(db, current_user):
         current_user, list_assigned_customer_ids(db, current_user)))
 
 
+def _resolve_basic_training_source(source: str) -> str:
+    """Choose the configured database for the initial SQL-training view."""
+    if source == "auto":
+        return "business" if USE_SAP_DB_FOR_AI else "application"
+    if source not in {"business", "application"}:
+        raise HTTPException(status_code=400, detail="Select an available database source")
+    if source == "business" and not USE_SAP_DB_FOR_AI:
+        raise HTTPException(
+            status_code=400,
+            detail="Business database is not configured for AI analysis. Choose Application database or configure AI_CONTEXT_SOURCE=sap and SAP_DATABASE_URL.",
+        )
+    return source
+
+
 @router.get("/api/query/adaptive/basic/training/schema")
 def basic_training_schema_endpoint(
-    source: str = "business", db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user),
+    source: str = "auto", db: Session = Depends(get_db), current_user: ZodiacUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     from ..services.analyst_agent import AnalystTools
     from ..services.adaptive_trusted_scope import reset_trusted_scope
     from ..services.analyst_agent_sql import queryable_schema
     from ..services.adaptive_analyst.database_metadata import _column_meanings, _table_semantics
-    if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
-        raise HTTPException(status_code=400, detail="Select an available database source")
+    source = _resolve_basic_training_source(source)
     token = _basic_training_scope(db, current_user)
     tools = AnalystTools(db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
                          sap_session_factory=get_sap_session, question="Manual SQL training schema")
     try:
         schema, origin = tools.schema(source)
         safe = queryable_schema(schema)
-        inspector = __import__("sqlalchemy").inspect(tools.session(source))
+        inspector = __import__("sqlalchemy").inspect(tools.session(source).get_bind())
+        # Bulk reflection avoids issuing PK/FK catalog queries per table. On a
+        # remote PostgreSQL database, N tables × 2 metadata requests made this
+        # schema page time out even though the database was reachable.
+        primary_keys = inspector.get_multi_pk_constraint()
+        foreign_keys_by_table = inspector.get_multi_foreign_keys()
         details = []
         for table, columns in safe.items():
             meanings = _column_meanings(table)
-            try:
-                pk = set(inspector.get_pk_constraint(table).get("constrained_columns") or [])
-                foreign_keys = inspector.get_foreign_keys(table)
-                fks = {column for fk in foreign_keys for column in (fk.get("constrained_columns") or [])}
-            except Exception:
-                pk, fks, foreign_keys = set(), set(), []
+            pk_info = primary_keys.get((None, table)) or {}
+            foreign_keys = foreign_keys_by_table.get((None, table)) or []
+            pk = set(pk_info.get("constrained_columns") or [])
+            fks = {column for fk in foreign_keys for column in (fk.get("constrained_columns") or [])}
             details.append({"table": table, "description": _table_semantics(table), "columns": [{"name": str(col.get("col")), "type": str(col.get("type") or "unknown"),
                 "description": meanings.get(col.get("col"), meanings.get(str(col.get("col", "")).upper(), "")),
                 "primary_key": col.get("col") in pk, "foreign_key": col.get("col") in fks} for col in columns],
@@ -2965,16 +2981,15 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
         result = tools.call("run_readonly_sql", {"source": source, "sql": sql, "purpose": "User-authored SQL training query"})
         if result.get("ok"):
             from ..services.adaptive_analyst.database_metadata import _column_meanings, _table_semantics
-            inspector = __import__("sqlalchemy").inspect(tools.session(source))
             schema_snapshot = {"source": source, "dialect": "postgres", "tables": {}, "relationships": {}}
+            inspector = __import__("sqlalchemy").inspect(tools.session(source).get_bind())
+            primary_keys = inspector.get_multi_pk_constraint(filter_names=list(selection))
+            foreign_keys_by_table = inspector.get_multi_foreign_keys(filter_names=list(selection))
             for table, columns in selection.items():
                 meanings = _column_meanings(table)
-                try:
-                    primary = set(inspector.get_pk_constraint(table).get("constrained_columns") or [])
-                    foreign = inspector.get_foreign_keys(table)
-                    foreign_columns = {column for item in foreign for column in (item.get("constrained_columns") or [])}
-                except Exception:
-                    primary, foreign, foreign_columns = set(), [], set()
+                primary = set((primary_keys.get((None, table)) or {}).get("constrained_columns") or [])
+                foreign = foreign_keys_by_table.get((None, table)) or []
+                foreign_columns = {column for item in foreign for column in (item.get("constrained_columns") or [])}
                 schema_snapshot["tables"][table] = {
                     "description": _table_semantics(table),
                     "columns": [{**column, "description": meanings.get(column["col"], ""),
