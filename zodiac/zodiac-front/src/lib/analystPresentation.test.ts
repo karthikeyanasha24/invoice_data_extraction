@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analystAnswerText, comparisonColumnLabel, comparisonYears, defaultAnalystChartType, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate, labelComparisonText } from './analystPresentation.ts';
+import { analystAnswerText, analystDateCell, comparisonColumnLabel, comparisonYears, defaultAnalystChartType, isAnalystDateColumn, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate, labelComparisonText } from './analystPresentation.ts';
 
 test('detailed answers survive alongside their concise overview', () => {
   const answer = ('# Findings\n\n' + 'Explain evidence and its limitations. '.repeat(200)).trim();
@@ -26,6 +26,15 @@ test('two-year comparisons identify each returned period without changing its ra
   assert.equal(labelComparisonText('period a, period b by currency', question),
     '2001 (period A), 2002 (period B) by currency');
   assert.equal(comparisonColumnLabel('period_a', 'billed sales by year'), 'period a');
+});
+
+test('SAP date aliases render YYYYMMDD as dates instead of grouped numbers', () => {
+  for (const key of ['billing date', 'billing_date', 'FKDAT']) {
+    assert.equal(isAnalystDateColumn(key), true);
+    assert.equal(analystDateCell(key, '19990226'), '26 Feb 1999');
+  }
+  assert.equal(analystDateCell('invoice_number', '0099010736'), null);
+  assert.equal(analystDateCell('billing date', '19990231'), '19990231');
 });
 
 test('client codes label charts while four-digit counts remain measures', () => {

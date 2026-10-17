@@ -43,7 +43,7 @@ import {
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
-import { analystAnswerText, analystChartCurrency, comparisonColumnLabel, comparisonYears, defaultAnalystCurrency, labelComparisonText } from '@/lib/analystPresentation';
+import { analystAnswerText, analystChartCurrency, analystDateCell, comparisonColumnLabel, comparisonYears, defaultAnalystCurrency, isAnalystDateColumn, labelComparisonText } from '@/lib/analystPresentation';
 import { analystScrollPosition } from '@/lib/analystChatScroll';
 import remarkGfm from 'remark-gfm';
 import {
@@ -478,20 +478,14 @@ function DataTable({
                       const v = row[h];
                       const n = cellNum(v);
                       const sem = columnSemantics?.[h];
-                      const isDate = sem?.semantic_type === 'date' || /(_date|fkdat|audat|erdat|bedat)$/i.test(h);
+                      const isDate = isAnalystDateColumn(h, sem?.semantic_type);
                       const isPct = sem?.semantic_type === 'percentage';
                       const isInt = sem?.semantic_type === 'integer';
                       const isNum = !isIdLike(h, v) && !isDate && Number.isFinite(n);
                       const display = (() => {
                         if (v == null) return null;
                         if (isDate) {
-                          const s = String(v).trim();
-                          if (/^\d{8}$/.test(s)) {
-                            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-                            const mo = Number(s.slice(4, 6));
-                            if (mo >= 1 && mo <= 12) return `${s.slice(6, 8)} ${months[mo - 1]} ${s.slice(0, 4)}`;
-                          }
-                          return String(v);
+                          return analystDateCell(h, v, sem?.semantic_type) ?? String(v);
                         }
                         if (isPct && Number.isFinite(n)) return `${n.toFixed(2)}%`;
                         if (isInt && Number.isFinite(n)) return Math.round(n).toLocaleString('en-US');

@@ -23,6 +23,29 @@ export function comparisonColumnLabel(key: string, question: string): string {
   return key.replace(/_/g, ' ');
 }
 
+/** Format SAP YYYYMMDD values when the result column identifies a date. */
+export function analystDateCell(key: string, value: unknown, semanticType?: string): string | null {
+  if (value == null) return null;
+  const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const sapDateField = /^(fkdat|audat|erdat|aedat|budat|bldat|cpudt|wadat|lfdat|bedat|eindt|prdat|valdt|zfbdt|ersda|laeda)$/i.test(normalizedKey);
+  if (semanticType !== 'date' && !normalizedKey.includes('date') && !sapDateField) return null;
+
+  const text = String(value).trim();
+  const match = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
+  if (!match) return text;
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() !== Number(month) - 1 || date.getUTCDate() !== Number(day)) return text;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${day} ${months[Number(month) - 1]} ${year}`;
+}
+
+export function isAnalystDateColumn(key: string, semanticType?: string): boolean {
+  const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return semanticType === 'date' || normalizedKey.includes('date')
+    || /^(fkdat|audat|erdat|aedat|budat|bldat|cpudt|wadat|lfdat|bedat|eindt|prdat|valdt|zfbdt|ersda|laeda)$/i.test(normalizedKey);
+}
+
 export function labelComparisonText(value: string, question: string): string {
   const years = comparisonYears(question);
   if (!years) return value;
