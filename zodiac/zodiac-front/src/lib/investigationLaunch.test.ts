@@ -87,6 +87,11 @@ describe('shouldTreatAsNew', () => {
     assert.equal(shouldTreatAsNew({ newQuestionToggle: true }), true);
     assert.equal(shouldTreatAsNew({ asNewFlag: true }), true);
   });
+
+  it('explicit new-question action isolates prior conversation context', () => {
+    assert.equal(shouldTreatAsNew({ source: 'explicit-new' }), true);
+    assert.equal(shouldTreatAsNew({ source: 'typed-continue' }), false);
+  });
 });
 
 describe('overview deep link', () => {

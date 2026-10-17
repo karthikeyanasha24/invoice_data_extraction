@@ -33,6 +33,7 @@ import {
 import {
   analystPathWithoutQuery,
   investigationLaunch,
+  shouldTreatAsNew,
 } from '@/lib/investigationLaunch';
 import {
   ADAPTIVE_CONTEXT_POLICY,
@@ -1176,6 +1177,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic' | 'training'>('agent');
+  const [startFreshQuestion, setStartFreshQuestion] = useState(false);
   const [trainingQuestion, setTrainingQuestion] = useState(initialQuestion || '');
   const selectedSuggestionRef = useRef<string | null>(null);
   const analysisMethodRef = useRef<'agent' | 'basic' | 'training'>('agent');
@@ -1315,7 +1317,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue'; analysisMode?: 'agent' | 'basic'; approveBasicPattern?: boolean }) => {
+  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue'; analysisMode?: 'agent' | 'basic'; approveBasicPattern?: boolean; newQuestion?: boolean }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading || !historyLoaded) return;
 
@@ -1326,21 +1328,22 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setFailedQuestion(null);
     followLatestRef.current = true;
     setInput('');
+    setStartFreshQuestion(false);
     if (inputRef.current) inputRef.current.style.height = 'auto';
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: q, ts: Date.now() };
     if (!opts?.retry) setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     setProgress({ pipeline_stage: 'UNDERSTANDING', elapsed_s: 0, stages: [] });
 
-    // Continuous chat (ChatGPT-style): typed messages always carry the latest
-    // turn context. Only Overview / saved deep-links start an isolated ask.
+    // Continuous chat is the default; an explicit new-question choice isolates
+    // this ask from earlier messages, SQL, and filters while keeping visible history.
     const fromSuggestion = selectedSuggestionRef.current === q;
     selectedSuggestionRef.current = null;
-    const treatAsNew = fromSuggestion || Boolean(opts?.asNew) && (
-      opts?.source === 'overview-url'
-      || opts?.source === 'overview-chip'
-      || opts?.source === 'saved-restore'
-    );
+    const treatAsNew = fromSuggestion || shouldTreatAsNew({
+      source: opts?.source,
+      asNewFlag: opts?.asNew,
+      newQuestionToggle: opts?.newQuestion,
+    });
     const contextMessages = opts?.retry ? messages.slice(0, -1) : messages;
     const contextData = followupContextForSend(
       contextMessages,
@@ -1520,7 +1523,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      sendQuestion(input);
+      sendQuestion(input, startFreshQuestion ? { newQuestion: true, source: 'explicit-new' } : undefined);
     }
   };
 
@@ -1538,6 +1541,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const clearAll = () => {
     followLatestRef.current = true;
     setInput('');
+    setStartFreshQuestion(false);
+    selectedSuggestionRef.current = null;
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setMessages([]);
     lastSuccessfulAnalyticalRef.current = null;
@@ -1551,6 +1556,15 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       setThreadId(tid);
       setHistoryLoaded(true);
     }
+  };
+
+  const startNewChat = () => {
+    if (analysisMethod === 'training') {
+      analysisMethodRef.current = 'agent';
+      setAnalysisMethod('agent');
+      window.localStorage.setItem('ai-analyst-method', 'agent');
+    }
+    clearAll();
   };
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.result);
@@ -1577,7 +1591,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               <Sparkles className="h-4 w-4 text-white" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
+                <button type="button" onClick={startNewChat} disabled={loading}
+                  className="inline-flex min-h-7 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  title="Start a fresh chat" aria-label="New chat">
+                  <RotateCcw className="h-3.5 w-3.5" /><span className="text-[11px] font-medium">New chat</span>
+                </button>
+              </div>
               <p className="hidden sm:block text-xs text-slate-500">Conversation, schema, and verified business data</p>
               {investigation?.analysisLabel && (
                 <p className="text-[11px] text-slate-600 mt-0.5">
@@ -1610,15 +1631,6 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               className="h-10 w-10 flex items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-default">
               <ChevronDown className="h-5 w-5" />
             </button>
-            {messages.length > 0 && (
-              <button onClick={clearAll}
-                disabled={loading}
-                className="inline-flex items-center min-h-10 px-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-40 transition-colors"
-                title="New chat"
-                aria-label="New chat">
-                <RotateCcw className="h-4 w-4" /><span className="hidden sm:inline text-xs font-medium ml-1.5">New chat</span>
-              </button>
-            )}
             <AnalystRagHelp />
             <AnalystQuestionPicker predefined={QUICK_QUESTIONS.map(item => item.q)} disabled={loading}
               onSelect={(question, verified) => {
@@ -1840,6 +1852,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                 : 'Manual schema and read-only SQL workflow; no model calls.'}
           </span>
         </div>
+        <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 px-1 text-xs text-slate-600">
+          <input type="checkbox" checked={startFreshQuestion} onChange={event => setStartFreshQuestion(event.target.checked)} disabled={loading} className="rounded border-slate-300" />
+          New question · ignore earlier chat context
+        </label>
         <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
           <div className="flex-1 relative">
             <textarea
@@ -1876,7 +1892,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             </button>
           ) : (
             <button
-              onClick={() => sendQuestion(input)}
+              onClick={() => sendQuestion(input, startFreshQuestion ? { newQuestion: true, source: 'explicit-new' } : undefined)}
               disabled={!input.trim() || !historyLoaded}
               aria-label="Send question"
               className={cn(
