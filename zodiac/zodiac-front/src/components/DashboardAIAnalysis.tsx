@@ -1585,20 +1585,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
       {/* ── Header ── */}
       <div className="flex-none bg-white border-b border-slate-100 px-3 sm:px-5 py-3">
-        <div className="flex items-center justify-between">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-lg shadow-sm">
               <Sparkles className="h-4 w-4 text-white" />
             </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
-                <button type="button" onClick={startNewChat} disabled={loading}
-                  className="inline-flex min-h-7 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                  title="Start a fresh chat" aria-label="New chat">
-                  <RotateCcw className="h-3.5 w-3.5" /><span className="text-[11px] font-medium">New chat</span>
-                </button>
-              </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-slate-800">AI Analyst</h2>
               <p className="hidden sm:block text-xs text-slate-500">Conversation, schema, and verified business data</p>
               {investigation?.analysisLabel && (
                 <p className="text-[11px] text-slate-600 mt-0.5">
@@ -1613,7 +1607,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
               )}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          <button type="button" onClick={startNewChat} disabled={loading}
+            className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            title="Start a fresh chat" aria-label="New chat">
+            <RotateCcw className="h-3.5 w-3.5" /><span className="text-xs font-medium">New chat</span>
+          </button>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2">
             {analysisMethod === 'training' && <div className="flex rounded-full bg-slate-100 p-1" role="group" aria-label="Analysis method">
               {(['agent', 'basic', 'training'] as const).map(method => <button key={method} type="button" aria-pressed={analysisMethod === method}
                 onClick={() => { analysisMethodRef.current = method; setAnalysisMethod(method); window.localStorage.setItem('ai-analyst-method', method); }}
