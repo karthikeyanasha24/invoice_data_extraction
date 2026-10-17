@@ -3032,7 +3032,7 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
     from ..services.investigation_budget import begin_investigation, end_investigation
     begin_investigation("Basic SQL Training: " + question[:200], owner_id=int(current_user.id))
     tools = AnalystTools(db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
-                         sap_session_factory=get_sap_session, question=question)
+                         sap_session_factory=get_sap_session, question=question, manual_sql_training=True)
     try:
         live_schema, origin = tools.schema(source)
         if origin != "live_database_metadata":

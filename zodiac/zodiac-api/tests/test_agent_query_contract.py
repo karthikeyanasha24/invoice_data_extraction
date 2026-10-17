@@ -245,6 +245,75 @@ def test_repeated_failed_sql_alias_rename_is_blocked_without_another_execution(m
     assert not executed
 
 
+def test_manual_sql_training_accepts_proven_document_pair_values_without_agent_plan(monkeypatch):
+    from app.services import analyst_agent as agent
+    c = catalog()
+    c.inspect_keys = lambda *_: None
+    rows = [{'client':'800','billing_document':'B1','sales_order':'O1','linked_order_reference':'O1',
+             'billing_net_value':-5,'order_net_value':100,'billing_currency':'DEM','order_currency':'DEM'}]
+    tools = agent.AnalystTools(None, lambda *_: rows, lambda: SCHEMA, question=QUESTION, manual_sql_training=True)
+    monkeypatch.setattr(tools, 'schema', lambda _source: (SCHEMA, 'live_database_metadata'))
+    monkeypatch.setattr(tools, 'catalog', lambda _source: c)
+    result = tools.call('run_readonly_sql', {'source':'business','sql':SQL,'purpose':'Compare order and invoice values'})
+    assert result['ok']
+    assert result['rows'] == rows
+
+
+def test_manual_sql_training_still_rejects_unproven_document_pair_values(monkeypatch):
+    from app.services import analyst_agent as agent
+    c = catalog()
+    c.inspect_keys = lambda *_: None
+    executed = []
+    tools = agent.AnalystTools(None, lambda *_: executed.append(True), lambda: SCHEMA, question=QUESTION, manual_sql_training=True)
+    monkeypatch.setattr(tools, 'schema', lambda _source: (SCHEMA, 'live_database_metadata'))
+    monkeypatch.setattr(tools, 'catalog', lambda _source: c)
+    bad = SQL.replace('SELECT DISTINCT p.mandt,p.vbeln,p.aubel', 'SELECT p.mandt,p.vbeln,p.aubel')
+    result = tools.call('run_readonly_sql', {'source':'business','sql':bad,'purpose':'Unsafe document comparison'})
+    assert not result['ok']
+    assert 'deduplicate the non-monetary link' in result['error']
+    assert not executed
+
+
+def test_manual_training_proves_generic_order_invoice_value_pair_using_numeric_types(monkeypatch):
+    from app.services import analyst_agent as agent
+    generic_schema = {
+        'order_header': [{'col':'client_id','type':'text'}, {'col':'order_id','type':'text'},
+                         {'col':'order_net_value','type':'numeric'}, {'col':'order_currency','type':'text'}],
+        'invoice_header': [{'col':'client_id','type':'text'}, {'col':'invoice_id','type':'text'},
+                           {'col':'invoice_net_value','type':'numeric'}, {'col':'invoice_currency','type':'text'}],
+        'order_invoice_link': [{'col':'client_id','type':'text'}, {'col':'order_id','type':'text'}, {'col':'invoice_id','type':'text'}],
+    }
+    c = RelationshipCatalog(generic_schema)
+    c.keys = {'order_header':[{'client_id','order_id'}], 'invoice_header':[{'client_id','invoice_id'}],
+              'order_invoice_link':[{'client_id','order_id','invoice_id'}]}
+    c.add_edge('order_invoice_link','order_header',[('client_id','client_id'),('order_id','order_id')],'verified order link')
+    c.add_edge('order_invoice_link','invoice_header',[('client_id','client_id'),('invoice_id','invoice_id')],'verified invoice link')
+    c.inspect_keys = lambda *_: None
+    sql = '''WITH pairs AS (SELECT DISTINCT l.client_id,l.order_id,l.invoice_id FROM order_invoice_link l)
+             SELECT o.client_id,o.order_id,p.invoice_id,o.order_net_value,i.invoice_net_value,
+                    o.order_currency,i.invoice_currency,i.invoice_net_value-o.order_net_value AS value_difference FROM pairs p
+             JOIN order_header o ON o.client_id=p.client_id AND o.order_id=p.order_id
+             JOIN invoice_header i ON i.client_id=p.client_id AND i.invoice_id=p.invoice_id
+             WHERE o.order_currency=i.invoice_currency AND i.invoice_net_value<>o.order_net_value'''
+    assert not identified_value_proof(sql, c, [('order_header','order_net_value'),
+                                               ('invoice_header','invoice_net_value')])[0]
+    rows = [{'client_id':'C1','order_id':'O1','invoice_id':'I1','order_net_value':100,
+             'invoice_net_value':80,'order_currency':'USD','invoice_currency':'USD'}]
+    tools = agent.AnalystTools(None, lambda *_: rows, lambda: generic_schema,
+                               question='Compare order and invoice values', manual_sql_training=True)
+    monkeypatch.setattr(tools, 'schema', lambda _source: (generic_schema, 'live_database_metadata'))
+    monkeypatch.setattr(tools, 'catalog', lambda _source: c)
+    result = tools.call('run_readonly_sql', {'source':'business','sql':sql,'purpose':'Compare order and invoice values'})
+    assert result['ok']
+    assert result['rows'] == rows
+
+    incompatible = sql.replace('o.order_currency=i.invoice_currency AND ', '')
+    rejected = tools.call('run_readonly_sql', {'source':'business','sql':incompatible,
+                                               'purpose':'Compare amounts across unknown currencies'})
+    assert not rejected['ok']
+    assert 'currencies are explicitly matched and displayed' in rejected['error']
+
+
 def test_missing_industry_is_disclosed_without_filling_invented_values(monkeypatch):
     from app.services import analyst_agent as agent
     s = schema(customer_stats='industry')

@@ -250,7 +250,7 @@ def _unsupported_numbers(answer: str, selected: list[dict], question: str) -> li
 
 
 class AnalystTools:
-    def __init__(self, db: Any, execute_sql: Callable, schema_loader: Callable, *, use_sap=False, sap_session_factory=None, question="", context=None):
+    def __init__(self, db: Any, execute_sql: Callable, schema_loader: Callable, *, use_sap=False, sap_session_factory=None, question="", context=None, manual_sql_training=False):
         self.db, self.execute_sql, self.schema_loader = db, execute_sql, schema_loader
         self.use_sap, self.sap_session_factory = use_sap, sap_session_factory
         self.sap = None
@@ -260,6 +260,9 @@ class AnalystTools:
         self.trace: list[dict] = []
         self.question = question
         self.context = context or {}
+        # Manual SQL Training has no model-generated prepare_analysis call.
+        # Its authored SQL can still prove a safe cross-source grain directly.
+        self.manual_sql_training = manual_sql_training
         self.cohort = None
         self.catalogs = {}
         self.plans = {}
@@ -476,6 +479,20 @@ class AnalystTools:
         lineage = output_lineage(sql)
         plan = self.plans.get(source)
         money = {"netwr", "wavwr"} | {f['column'].lower() for f in (plan or {}).get('fields', []) if f['role'] == 'measure'}
+        training_measure_fields = []
+        if self.manual_sql_training:
+            output_origins = set().union(*lineage.values()) if lineage else set()
+            for table, columns in safe.items():
+                for column in columns:
+                    name = str(column.get('col') or '').lower()
+                    kind = str(column.get('type') or '').lower()
+                    identifier = bool(re.search(r'(^|_)(?:id|key|number|no|code|vbeln|mandt|posnr)(_|$)', name))
+                    numeric_type = any(token in kind for token in ('int', 'numeric', 'decimal', 'real', 'double', 'float', 'money'))
+                    monetary_name = bool(re.search(r'(?:netwr|wavwr|amount|value|revenue|sales|cost|price|total|gross|tax|balance|profit|turnover|charge|fee)', name))
+                    if not identifier and ((numeric_type and not re.search(r'(^|_)(?:year|month|quarter|day|count|quantity|qty)(_|$)', name)) or monetary_name):
+                        if (table, name) in output_origins:
+                            training_measure_fields.append((table, name))
+            money |= {column for _table, column in training_measure_fields}
         measured = {t for refs in lineage.values() for t, c in refs if c in money}
         from collections import Counter
         from sqlglot import exp, parse_one
@@ -489,12 +506,17 @@ class AnalystTools:
         issues = sql_structure_errors(sql)
         proof = False
         if independent_sources or (plan and measured):
-            if not plan:
+            if not plan and not self.manual_sql_training:
                 issues.append("Cross-source values require prepare_analysis with all requested fields and a verified relationship path before SQL")
             else:
                 catalog = self.catalog(source)
                 catalog.inspect_keys(self.session(source), tables)
-                proof, diagnostics = identified_value_proof(sql, catalog, [(f['table'], f['column']) for f in plan['fields'] if f['role'] == 'measure'])
+                planned_measure_fields = ([(f['table'], f['column']) for f in plan['fields'] if f['role'] == 'measure']
+                                          if plan else training_measure_fields)
+                proof, diagnostics = identified_value_proof(
+                    sql, catalog, planned_measure_fields,
+                    allow_currency_matched_difference=self.manual_sql_training,
+                )
                 if not proof:
                     # Independent aggregate proofs remain valid; the identified
                     # listing proof cannot authorize SUM over expanded headers.

@@ -366,7 +366,7 @@ def constrain_cohort(sql, cohort):
     return tree.sql(dialect='postgres')
 
 
-def identified_value_proof(sql, catalog, measure_fields=None):
+def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_matched_difference=False):
     """Prove a non-additive row listing's complete identity and verified joins.
 
     DISTINCT link projections define a pair grain. Monetary facts are never
@@ -408,8 +408,38 @@ def identified_value_proof(sql, catalog, measure_fields=None):
             if any(c in money for _, c in origins):
                 measures.update(t for t, c in origins if c in money)
                 measured_aliases.update(c.table for c in columns if any(name in money for _, name in infos[c.table][0].get(c.name.lower(), set())))
-                if len({t for t, c in origins if c in money}) > 1:
-                    raise ValueError('Compare independently sourced values side by side; arithmetic requires compatible currencies and an explicit calculation')
+                measure_tables = {t for t, c in origins if c in money}
+                if len(measure_tables) > 1:
+                    def source_tables(node):
+                        return {table for column in node.find_all(exp.Column) if column.table in infos
+                                for table, name in infos[column.table][0].get(column.name.lower(), set())
+                                if name in money}
+
+                    compatible_difference = False
+                    if allow_currency_matched_difference and isinstance(value, exp.Sub):
+                        left_sources, right_sources = source_tables(value.this), source_tables(value.expression)
+                        if len(left_sources) == 1 and len(right_sources) == 1 and left_sources != right_sources:
+                            currency_outputs = {table for output_origins in refs.values() for table, name in output_origins
+                                                if re.search(r'(?:currency|waerk|waers)', name, re.I)}
+                            exposes_both_currencies = (left_sources | right_sources) <= currency_outputs
+                            for equality in select.find_all(exp.EQ):
+                                if equality.find_ancestor(exp.Select) is not select:
+                                    continue
+                                left, right = equality.this, equality.expression
+                                if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
+                                    continue
+                                left_name, right_name = left.name.lower(), right.name.lower()
+                                if not (re.search(r'(?:currency|waerk|waers)', left_name)
+                                        and re.search(r'(?:currency|waerk|waers)', right_name)):
+                                    continue
+                                left_origins = infos.get(left.table, ({}, [], set()))[0].get(left_name, set())
+                                right_origins = infos.get(right.table, ({}, [], set()))[0].get(right_name, set())
+                                if exposes_both_currencies and (any(a in left_sources and b in right_sources for a, _ in left_origins for b, _ in right_origins) or any(
+                                        b in left_sources and a in right_sources for a, _ in left_origins for b, _ in right_origins)):
+                                    compatible_difference = True
+                                    break
+                    if not compatible_difference:
+                        raise ValueError('Compare independently sourced values side by side; calculate a difference only when both currencies are explicitly matched and displayed')
         parent = {}
         def find(x):
             parent.setdefault(x, x)
