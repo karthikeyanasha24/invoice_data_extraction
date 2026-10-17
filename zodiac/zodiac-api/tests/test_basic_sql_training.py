@@ -6,6 +6,7 @@ from app.services.basic_sql_training import (
     apply_training_filters, check_query_scope, edit_example, list_examples, record_run, save_run,
 )
 from app.services.basic_rag import adapt_training_year_filter, load_basic_examples
+from app.services.basic_rag import profit_question_without_profit_sql
 from app.services.basic_sql_answer import run_basic_sql_answer
 
 
@@ -220,3 +221,10 @@ def test_basic_discloses_builtin_pattern_and_waits_for_choice(monkeypatch):
     approved = run_basic_sql_answer(question, execute=execute, approve_predefined=True)
     assert approved["answer_status"] == "SUCCESS"
     assert executed == [sql]
+
+
+def test_profitability_synonym_does_not_accept_billed_sales_as_profit():
+    billed_sales_sql = 'SELECT matnr, SUM(netwr) AS total_billed_sales FROM "VBRP" GROUP BY matnr'
+    assert profit_question_without_profit_sql(
+        "show me products with the best profitability for year 2000", [{"sql": billed_sales_sql}],
+    )

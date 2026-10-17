@@ -1179,6 +1179,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic' | 'training'>('agent');
   const [startFreshQuestion, setStartFreshQuestion] = useState(false);
   const [trainingQuestion, setTrainingQuestion] = useState(initialQuestion || '');
+  const [trainedQueryPickerOpen, setTrainedQueryPickerOpen] = useState(false);
+  const [trainedQueries, setTrainedQueries] = useState<{ id: string; question: string; revision: number; source: string; validation_status: string; schema?: { tables?: Record<string, unknown> } }[]>([]);
+  const [trainedQueriesLoaded, setTrainedQueriesLoaded] = useState(false);
+  const [trainedQueriesLoading, setTrainedQueriesLoading] = useState(false);
+  const [trainedQuerySearch, setTrainedQuerySearch] = useState('');
+  const [trainedQueryError, setTrainedQueryError] = useState('');
   const selectedSuggestionRef = useRef<string | null>(null);
   const analysisMethodRef = useRef<'agent' | 'basic' | 'training'>('agent');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -1527,6 +1533,26 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     }
   };
 
+  const toggleTrainedQueryPicker = async () => {
+    if (trainedQueryPickerOpen) { setTrainedQueryPickerOpen(false); return; }
+    setTrainedQueryPickerOpen(true);
+    if (trainedQueriesLoaded || trainedQueriesLoading) return;
+    setTrainedQueriesLoading(true); setTrainedQueryError('');
+    try {
+      const result = await dashboardApi.getBasicTrainingExamples();
+      setTrainedQueries((result.examples || []).filter(example => example.validation_status === 'executed'));
+      setTrainedQueriesLoaded(true);
+    } catch (cause) {
+      setTrainedQueryError(cause instanceof Error ? cause.message : 'Could not load saved SQL Training queries.');
+    } finally { setTrainedQueriesLoading(false); }
+  };
+
+  const runTrainedQuery = (question: string) => {
+    setTrainedQueryPickerOpen(false);
+    setTrainedQuerySearch('');
+    void sendQuestion(question, { asNew: true, source: 'saved-restore', analysisMode: 'basic' });
+  };
+
   const stopAnalysis = () => {
     const id = investigationIdRef.current;
     if (id) void dashboardApi.cancelInvestigation(id);
@@ -1856,6 +1882,23 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
           <input type="checkbox" checked={startFreshQuestion} onChange={event => setStartFreshQuestion(event.target.checked)} disabled={loading} className="rounded border-slate-300" />
           New question · ignore earlier chat context
         </label>
+        {analysisMethod === 'basic' && <div className="mb-2">
+          <button type="button" onClick={() => void toggleTrainedQueryPicker()} disabled={loading || trainedQueriesLoading} aria-expanded={trainedQueryPickerOpen}
+            className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100 disabled:opacity-50">
+            {trainedQueriesLoading ? 'Loading saved SQL Training queries…' : 'Choose a saved SQL Training query'}
+          </button>
+          {trainedQueryPickerOpen && <div className="mt-2 rounded-xl border border-indigo-200 bg-white p-3 shadow-sm">
+            <p className="text-xs text-slate-600">Only queries that ran successfully and were saved with <strong>Save checked example</strong> appear here. Choosing one asks Basic using its saved wording.</p>
+            {trainedQueries.length > 0 && <input aria-label="Search saved SQL Training queries" value={trainedQuerySearch} onChange={event => setTrainedQuerySearch(event.target.value)} placeholder="Search saved questions" className="mt-2 w-full rounded-lg border px-3 py-2 text-xs"/>}
+            {trainedQueryError && <p role="alert" className="mt-2 text-xs text-red-700">{trainedQueryError}</p>}
+            {!trainedQueriesLoading && !trainedQueryError && trainedQueries.length === 0 && <p className="mt-2 text-xs text-slate-500">No saved SQL Training queries yet. In SQL Training, select every table and column your join uses, run the SQL successfully, then choose “Save checked example.”</p>}
+            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">{trainedQueries.filter(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())).map(example => <div key={example.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
+              <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-800">{example.question}</p><p className="mt-0.5 text-[10px] text-slate-500">Revision {example.revision} · {Object.keys(example.schema?.tables || {}).join(', ') || example.source}</p></div>
+              <button type="button" onClick={() => runTrainedQuery(example.question)} className="shrink-0 rounded-md bg-indigo-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-800">Run in Basic</button>
+            </div>)}</div>
+            {trainedQueriesLoaded && trainedQueries.length > 0 && !trainedQueries.some(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())) && <p className="mt-2 text-xs text-slate-500">No saved questions match that search.</p>}
+          </div>}
+        </div>}
         <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
           <div className="flex-1 relative">
             <textarea

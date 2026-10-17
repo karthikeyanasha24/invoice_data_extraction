@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy, Database, Loader2, Play, RefreshCw, Save, Search } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy, Database, Loader2, Play, RefreshCw, Save, Search, X } from 'lucide-react';
 import { dashboardApi } from '@/lib/api';
 
 type TrainingSource = 'business' | 'application';
@@ -71,6 +71,7 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
     return tables.filter(table => !needle || table.table.toLowerCase().includes(needle) || table.columns.some(column => column.name.toLowerCase().includes(needle)));
   }, [filter, tables]);
   const selectedSchema = useMemo(() => Object.fromEntries(Object.entries(selected).filter(([, columns]) => columns.length)), [selected]);
+  const selectedTableNames = useMemo(() => Object.keys(selectedSchema), [selectedSchema]);
   const selectedCount = Object.values(selectedSchema).reduce((sum, columns) => sum + columns.length, 0);
   const availableFilterFields = tables.flatMap(table => (selectedSchema[table.table] || []).map(name => ({ table: table.table, name, type: table.columns.find(column => column.name === name)?.type || '' })));
   const exactCandidate = useMemo(() => {
@@ -198,9 +199,13 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
       {activeTab === 'training' ? <div className="grid gap-4 xl:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.5fr)]">
         <section className="min-w-0 rounded-2xl border bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-2"><h4 className="font-semibold text-slate-900">Schema explorer</h4><div className="flex gap-2"><button type="button" title="Select every table and column currently shown by the search" onClick={() => setSelected(current => ({ ...current, ...Object.fromEntries(filteredTables.map(table => [table.table, table.columns.map(column => column.name)])) }))} className="text-xs text-indigo-700 hover:underline">Select all matching ({filteredTables.length})</button><button type="button" onClick={() => setSelected({})} className="text-xs text-slate-500 hover:underline">Clear</button></div></div>
+          <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3" role="status">
+            <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold text-indigo-950">Tables included in this SQL ({selectedTableNames.length})</p><p className="text-[11px] text-indigo-800">Select multiple tables for joins, such as VBRK + VBRP.</p></div>
+            {selectedTableNames.length > 0 ? <div className="mt-2 flex flex-wrap gap-1.5">{selectedTableNames.map(tableName => <span key={tableName} className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-white px-2 py-1 text-[11px] font-medium text-indigo-900">{tableName}<button type="button" aria-label={`Remove ${tableName} from selected tables`} onClick={() => setSelected(current => ({ ...current, [tableName]: [] }))} className="rounded-full p-0.5 text-indigo-600 hover:bg-indigo-100"><X className="h-3 w-3"/></button></span>)}</div> : <p className="mt-1 text-[11px] text-indigo-800">No tables selected yet. Search for each table and check it; searching for another table keeps your earlier selections.</p>}
+          </div>
           <label className="relative mt-3 block"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"/><input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search tables or columns" className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm"/></label>
-          <p className="mt-1 text-[11px] text-slate-500">Showing {filteredTables.length} of {tables.length} tables{filter.trim() ? ' matching your search' : ''}. Select only the tables and columns needed for your query; search narrows the list and “Select all matching” selects every column in the matching tables.</p>
-          <p className="mt-2 text-[11px] text-slate-500">For SQL that joins tables, select each table and the columns used in the query here. A table name in SQL alone does not add it to the allowed schema.</p>
+          <p className="mt-1 text-[11px] text-slate-500">Showing {filteredTables.length} of {tables.length} tables{filter.trim() ? ' matching your search' : ''}. Search for a table, check its box, then search for the next one. Earlier checked tables stay selected. “Select all matching” selects every column in every matching table.</p>
+          <p className="mt-2 text-[11px] text-slate-500">For a join, add every table and the columns your SQL uses here, then write the JOIN conditions in SQL. The SAP Data Browser tab previews one table at a time.</p>
           <div className="mt-3 max-h-[28rem] space-y-2 overflow-y-auto pr-1">
             {loadingSchema && <div className="flex items-center gap-2 p-4 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin"/>Loading live schema…</div>}
             {!loadingSchema && filteredTables.map(table => { const checked = selected[table.table] || []; const allChecked = table.columns.length > 0 && checked.length === table.columns.length; const isOpen = expanded[table.table] ?? false;

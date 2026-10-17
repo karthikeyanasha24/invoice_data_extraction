@@ -23,7 +23,8 @@ _SYNONYMS = {"revenue": "sales", "turnover": "sales", "billing": "billed", "bill
     "invoices": "invoice", "documents": "invoice", "document": "invoice",
     "customers": "customer", "countries": "country",
     "materials": "material", "products": "material", "product": "material", "industries": "industry",
-    "profits": "profit", "margins": "margin", "costs": "cost", "components": "component",
+    "profits": "profit", "profitability": "profit", "profitable": "profit",
+    "margins": "margin", "costs": "cost", "components": "component",
     "monthly": "month", "quarterly": "quarter", "yearly": "year", "annual": "year",
     "sum": "total", "overall": "total", "aggregate": "total", "highest": "top", "largest": "top",
     "lowest": "bottom", "smallest": "bottom", "versus": "compare", "vs": "compare"}
