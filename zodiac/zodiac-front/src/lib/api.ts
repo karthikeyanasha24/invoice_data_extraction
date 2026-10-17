@@ -1851,7 +1851,15 @@ export const dashboardApi = {
             throw new Error(typeof detail === 'string' ? detail : publicApiError(error, 'Could not load the connected database schema.'));
         }
     },
-    executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]> }) => {
+    previewBasicTrainingTable: async (body: { source: 'business' | 'application'; table: string; columns: string[]; limit?: number; filters?: { table: string; column: string; operator: 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than'; value: string; upper?: string }[] }) => {
+        try {
+            const response = await api.post('/api/query/adaptive/basic/training/preview', body, { timeout: 120000 });
+            return response.data as { status: 'executed' | 'failed'; sql?: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; limit?: number; error?: string; applied_filters?: number; llm_calls?: 0 };
+        } catch (error) {
+            throw new Error(publicApiError(error, 'Could not preview this table.'));
+        }
+    },
+    executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]>; filters?: { table: string; column: string; operator: 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than'; value: string; upper?: string }[] }) => {
         try {
             const response = await api.post('/api/query/adaptive/basic/training/execute', body, { timeout: 120000 });
             return response.data as { status: 'executed' | 'failed'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; error?: string; llm_calls: 0 };
@@ -1899,6 +1907,7 @@ export const dashboardApi = {
         conversationHistory?: { role: 'user' | 'assistant'; content: string; mode?: string }[];
         newQuestion?: boolean;
         analysisMode?: 'agent' | 'basic';
+        basicPresetApproved?: boolean;
     }, config?: { signal?: AbortSignal }) => {
         try {
             const response = await api.post('/api/query/adaptive', body, { timeout: 0, signal: config?.signal });

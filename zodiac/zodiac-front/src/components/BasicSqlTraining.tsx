@@ -6,8 +6,11 @@ import { dashboardApi } from '@/lib/api';
 
 type TrainingSource = 'business' | 'application';
 type SchemaColumn = { name: string; type: string; description?: string; primary_key: boolean; foreign_key: boolean };
-type SchemaTable = { table: string; description?: Record<string, string>; columns: SchemaColumn[]; relationships: { columns: string[]; references_table?: string; references_columns: string[] }[] };
+type SchemaTable = { table: string; description?: { description?: string; domain?: string; grain?: string; important_columns?: string }; columns: SchemaColumn[]; relationships: { columns: string[]; references_table?: string; references_columns: string[] }[] };
 type Example = { id: string; source: TrainingSource; question: string; sql: string; dialect: string; revision: number; validation_status: string; updated_at: string; schema: { tables?: Record<string, { columns: { col: string; type: string }[] }>; relationships?: Record<string, { columns: string[]; references_table?: string; references_columns: string[] }[]> } };
+type FilterOperator = 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than';
+type TrainingFilter = { id: string; table: string; column: string; operator: FilterOperator; value: string; upper: string };
+type PreviewResult = { sql?: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; limit?: number; applied_filters?: number };
 
 export default function BasicSqlTraining({ initialQuestion = '' }: { initialQuestion?: string }) {
   const [source, setSource] = useState<TrainingSource>('business');
@@ -18,6 +21,14 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
   const [filter, setFilter] = useState('');
   const [question, setQuestion] = useState(initialQuestion);
   const [sql, setSql] = useState('');
+  const [trainingFilters, setTrainingFilters] = useState<TrainingFilter[]>([]);
+  const [activeTab, setActiveTab] = useState<'training' | 'data'>('training');
+  const [previewTable, setPreviewTable] = useState('');
+  const [previewColumns, setPreviewColumns] = useState<string[]>([]);
+  const [previewFieldSearch, setPreviewFieldSearch] = useState('');
+  const [previewFilters, setPreviewFilters] = useState<TrainingFilter[]>([]);
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [loadingSchema, setLoadingSchema] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -28,12 +39,15 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
   const [saving, setSaving] = useState(false);
 
   const loadSchema = useCallback(async (nextSource: TrainingSource | 'auto') => {
-    setLoadingSchema(true); setError(''); setRun(null);
+    setLoadingSchema(true); setError(''); setRun(null); setPreviewFilters([]); setPreviewResult(null); setPreviewFieldSearch('');
     if (nextSource !== 'auto') setSource(nextSource);
     try {
       const result = await dashboardApi.getBasicTrainingSchema(nextSource);
       setSource(result.source as TrainingSource);
       setTables(result.tables || []); setSchemaSource(result.schema_source || '');
+      setPreviewTable(result.tables?.[0]?.table || '');
+      setPreviewColumns(result.tables?.[0]?.columns.slice(0, 12).map((column: SchemaColumn) => column.name) || []);
+      setPreviewResult(null);
       // The live catalog can contain thousands of columns. Load it collapsed
       // and let the user select only the tables/columns needed for the query.
       setSelected({}); setExpanded({});
@@ -57,6 +71,7 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
   }, [filter, tables]);
   const selectedSchema = useMemo(() => Object.fromEntries(Object.entries(selected).filter(([, columns]) => columns.length)), [selected]);
   const selectedCount = Object.values(selectedSchema).reduce((sum, columns) => sum + columns.length, 0);
+  const availableFilterFields = tables.flatMap(table => (selectedSchema[table.table] || []).map(name => ({ table: table.table, name, type: table.columns.find(column => column.name === name)?.type || '' })));
   const exactCandidate = useMemo(() => {
     const normalized = question.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
     return normalized ? examples.find(example => example.question.trim().toLocaleLowerCase().replace(/\s+/g, ' ') === normalized) : undefined;
@@ -70,6 +85,45 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
   const toggleTable = (table: SchemaTable, checked: boolean) => setSelected(current => ({
     ...current, [table.table]: checked ? table.columns.map(column => column.name) : [],
   }));
+  const currentPreviewTable = tables.find(table => table.table === previewTable);
+  const togglePreviewColumn = (name: string) => setPreviewColumns(current => current.includes(name) ? current.filter(column => column !== name) : [...current, name]);
+  const previewFilterFields = currentPreviewTable?.columns || [];
+  const visiblePreviewFilterFields = previewFilterFields.filter(column => !previewFieldSearch.trim()
+    || column.name.toLowerCase().includes(previewFieldSearch.trim().toLowerCase())
+    || column.type.toLowerCase().includes(previewFieldSearch.trim().toLowerCase()));
+  const addPreviewFilter = (column: string) => {
+    setPreviewFilters(current => [...current, { id: crypto.randomUUID(), table: previewTable, column, operator: 'include_value', value: '', upper: '' }]);
+    setPreviewResult(null); setError('');
+  };
+  const patchPreviewFilter = (id: string, patch: Partial<TrainingFilter>) => {
+    setPreviewFilters(current => current.map(item => item.id === id ? { ...item, ...patch } : item));
+    setPreviewResult(null); setError('');
+  };
+  const isDateColumn = (column?: SchemaColumn) => !!column && (/date|time/i.test(column.type) || /^(fkdat|fkdat_rl|erdat|aedat|budat|bldat|ftrms|gltrp|gstrp|gltrs|gstrs|gstri|getri|gltri|ftrmi|ftrmp|pdatv|sdatv|trmdt|valdt|kdatb|kdate|bedat|cpudt|audat|eindt|lfdat|prsdt|zfbdt|datuv|ersda|laeda|vdatu|prdat)$/i.test(column.name) || /(?:_date|_dt|date|dat|startd|endd)$/i.test(column.name));
+  const isNumberColumn = (column?: SchemaColumn) => !!column && (/int|numeric|decimal|float|double|real/i.test(column.type) || /^(netwr|mwsbk|rmwwr|wavwr|fkwrt|wrbtr|dmbtr|salk3|stprs|verpr|peinh|netpr|mwsbp|kwmeng|fkimg|lfimg|menge|gamng|bmenge|vfmng|lmeng|brgew|ntgew|kzwi[1-6])$/i.test(column.name));
+  const previewData = async () => {
+    if (!previewTable || !previewColumns.length) { setError('Choose a table and at least one column to preview.'); return; }
+    if (previewFilters.some(item => !item.value.trim() || ((item.operator === 'include_range' || item.operator === 'exclude_range') && !item.upper.trim()))) {
+      setError('Complete or remove each filter condition before previewing the table.'); return;
+    }
+    setError(''); setPreviewLoading(true); setPreviewResult(null);
+    try {
+      const result = await dashboardApi.previewBasicTrainingTable({ source, table: previewTable, columns: previewColumns, limit: 50, filters: previewFilters.map(({ table, column, operator, value, upper }) => ({ table, column, operator, value, upper })) });
+      if (result.status !== 'executed') { setError(result.error || 'Could not preview this table.'); return; }
+      if (previewFilters.length && result.applied_filters !== previewFilters.length) {
+        setError('The database service did not confirm that every filter was applied. Refresh the local API, then run this preview again. No unfiltered rows were shown.');
+        return;
+      }
+      setPreviewResult(result); setNotice(`Previewed ${result.row_count} row${result.row_count === 1 ? '' : 's'} from ${previewTable} · 0 model calls.`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not preview this table.'); }
+    finally { setPreviewLoading(false); }
+  };
+  const usePreviewInTraining = () => {
+    if (!previewResult?.sql || !previewTable) return;
+    setSql(previewResult.sql); setQuestion(`Preview selected columns from ${previewTable}`); setTrainingFilters([]); setRun(null);
+    setSelected(current => ({ ...current, [previewTable]: [...new Set([...(current[previewTable] || []), ...previewColumns])] }));
+    setActiveTab('training'); setNotice('Table and selected columns were added to SQL Training with a safe SELECT starter. Edit the question/SQL, run and check it, then save if correct.');
+  };
 
   const schemaContext = () => JSON.stringify({ source, dialect: 'PostgreSQL', tables: tables.filter(table => selectedSchema[table.table]).map(table => ({
     name: table.table, description: table.description, columns: table.columns.filter(column => selectedSchema[table.table].includes(column.name)), relationships: table.relationships,
@@ -91,9 +145,9 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
     if (!selectedCount) { setError('Select at least one table and column in the schema explorer.'); return; }
     setRunning(true);
     try {
-      const result = await dashboardApi.executeBasicTrainingSql({ source, question: question.trim(), sql, selected_schema: selectedSchema });
+      const result = await dashboardApi.executeBasicTrainingSql({ source, question: question.trim(), sql, selected_schema: selectedSchema, filters: trainingFilters.map(({ table, column, operator, value, upper }) => ({ table, column, operator, value, upper })) });
       if (result.status !== 'executed') { setError(result.error || 'The SQL could not be executed.'); return; }
-      setSql(result.sql || sql); setRun(result); setNotice(`${result.row_count} row${result.row_count === 1 ? '' : 's'} returned · 0 model calls.`);
+      setSql(result.sql || sql); setTrainingFilters([]); setRun(result); setNotice(`${result.row_count} row${result.row_count === 1 ? '' : 's'} returned · 0 model calls. The applied filters are visible in Executed SQL and will be saved with this checked example.`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Query execution failed.'); }
     finally { setRunning(false); }
   };
@@ -101,13 +155,13 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
   const saveExample = async () => {
     if (!run?.run_id) return;
     setSaving(true); setError('');
-    try { const result = await dashboardApi.saveBasicTrainingExample(run.run_id, question.trim()); setNotice(`Saved as revision ${result.revision}. Basic SQL Training library updated.`); await loadExamples(''); }
+    try { const result = await dashboardApi.saveBasicTrainingExample(run.run_id, question.trim()); setNotice(`Saved as revision ${result.revision}. In AI Analyst → Basic, find this wording under Questions → Verified saved questions.`); window.dispatchEvent(new Event('basic-queries-saved')); await loadExamples(''); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save this example.'); }
     finally { setSaving(false); }
   };
 
   const loadExample = (example: Example) => {
-    setQuestion(example.question); setSql(example.sql); setRun(null); setError('');
+    setQuestion(example.question); setSql(example.sql); setTrainingFilters([]); setRun(null); setError('');
     setSource(example.source);
     const restored = Object.fromEntries(Object.entries(example.schema?.tables || {}).map(([table, details]) => [table, details.columns.map(column => column.col).filter(Boolean)]));
     setSelected(restored); setNotice(`Loaded saved example, revision ${example.revision}. Run it to validate against current data.`);
@@ -135,7 +189,12 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
       {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
       {notice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</div>}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.5fr)]">
+      <div role="tablist" aria-label="Basic SQL Training views" className="flex w-fit gap-1 rounded-xl border bg-white p-1 shadow-sm">
+        <button type="button" role="tab" aria-selected={activeTab === 'training'} onClick={() => setActiveTab('training')} className={`rounded-lg px-4 py-2 text-sm font-medium ${activeTab === 'training' ? 'bg-indigo-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>SQL Training</button>
+        <button type="button" role="tab" aria-selected={activeTab === 'data'} onClick={() => setActiveTab('data')} className={`rounded-lg px-4 py-2 text-sm font-medium ${activeTab === 'data' ? 'bg-indigo-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>SAP Data Browser</button>
+      </div>
+
+      {activeTab === 'training' ? <div className="grid gap-4 xl:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.5fr)]">
         <section className="min-w-0 rounded-2xl border bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-2"><h4 className="font-semibold text-slate-900">Schema explorer</h4><div className="flex gap-2"><button type="button" onClick={() => setSelected(Object.fromEntries(tables.map(table => [table.table, table.columns.map(column => column.name)])))} className="text-xs text-indigo-700 hover:underline">Select all</button><button type="button" onClick={() => setSelected({})} className="text-xs text-slate-500 hover:underline">Clear</button></div></div>
           <label className="relative mt-3 block"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"/><input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Find table or column" className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm"/></label>
@@ -160,6 +219,18 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
             <h4 className="font-semibold text-slate-900">Write and run a query</h4>
             <label className="mt-3 block text-xs font-medium text-slate-600">Business question to save<input value={question} onChange={event => setQuestion(event.target.value)} maxLength={4000} placeholder="e.g. Show the top 10 customers by billed sales in 2001" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"/></label>
             {exactCandidate && <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900"><span>A matching saved question is available, revision {exactCandidate.revision}. This exact wording match is a candidate; run it to validate current data.</span><button type="button" onClick={() => loadExample(exactCandidate)} className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 font-medium">Load candidate SQL</button></div>}
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2"><div><h5 className="text-sm font-semibold text-slate-800">Selection filters (SAP style)</h5><p className="mt-0.5 text-xs text-slate-500">Add include or exclude values/ranges, or choose greater/less. Filters are added to your SQL before it runs.</p></div><button type="button" disabled={!availableFilterFields.length} onClick={() => { const first = availableFilterFields[0]; if (first) setTrainingFilters(current => [...current, { id: crypto.randomUUID(), table: first.table, column: first.name, operator: 'include_range', value: '', upper: '' }]); }} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-40">Add filter</button></div>
+              {trainingFilters.map(item => { const fields = availableFilterFields; const selectedField = fields.find(field => field.table === item.table && field.name === item.column); const isRange = item.operator === 'include_range' || item.operator === 'exclude_range'; return <div key={item.id} className="mt-2 grid gap-2 rounded-lg border bg-white p-2 sm:grid-cols-2 xl:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(10rem,1fr)_minmax(7rem,0.8fr)_minmax(7rem,0.8fr)_auto]">
+                <select aria-label="Filter table" value={item.table} onChange={event => { const table = event.target.value; const first = fields.find(field => field.table === table); setTrainingFilters(current => current.map(filter => filter.id === item.id ? { ...filter, table, column: first?.name || '' } : filter)); }} className="rounded-md border px-2 py-1.5 text-xs">{[...new Set(fields.map(field => field.table))].map(table => <option key={table} value={table}>{table}</option>)}</select>
+                <select aria-label="Filter field" value={item.column} onChange={event => setTrainingFilters(current => current.map(filter => filter.id === item.id ? { ...filter, column: event.target.value } : filter))} className="rounded-md border px-2 py-1.5 text-xs">{fields.filter(field => field.table === item.table).map(field => <option key={field.name} value={field.name}>{field.name} · {field.type}</option>)}</select>
+                <select aria-label="Filter operation" value={item.operator} onChange={event => setTrainingFilters(current => current.map(filter => filter.id === item.id ? { ...filter, operator: event.target.value as FilterOperator } : filter))} className="rounded-md border px-2 py-1.5 text-xs"><option value="include_value">Include value</option><option value="include_range">Include range</option><option value="exclude_value">Exclude value</option><option value="exclude_range">Exclude range</option><option value="greater_than">Greater than</option><option value="less_than">Less than</option></select>
+                <input aria-label="Filter value or lower limit" value={item.value} onChange={event => setTrainingFilters(current => current.map(filter => filter.id === item.id ? { ...filter, value: event.target.value } : filter))} placeholder={isRange ? 'From / lower limit' : selectedField?.type.toLowerCase().includes('date') ? 'DD.MM.YYYY' : 'Value'} className="min-w-0 rounded-md border px-2 py-1.5 text-xs"/>
+                {isRange && <input aria-label="Filter upper limit" value={item.upper} onChange={event => setTrainingFilters(current => current.map(filter => filter.id === item.id ? { ...filter, upper: event.target.value } : filter))} placeholder="To / upper limit" className="min-w-0 rounded-md border px-2 py-1.5 text-xs"/>}
+                <button type="button" onClick={() => setTrainingFilters(current => current.filter(filter => filter.id !== item.id))} className="rounded-md px-2 py-1 text-xs text-red-700 hover:bg-red-50">Remove</button>
+              </div>; })}
+              {trainingFilters.length === 0 && <p className="mt-2 text-xs text-slate-500">No extra filters. Use this when the SAP selection screen has date, value, customer, or billing-type criteria.</p>}
+            </div>
             <label className="mt-3 block text-xs font-medium text-slate-600">Read-only SQL<textarea value={sql} onChange={event => setSql(event.target.value)} maxLength={24000} rows={10} spellCheck={false} placeholder={'SELECT customer_id, SUM(net_value) AS billed_sales\nFROM billing_documents\nGROUP BY customer_id\nORDER BY billed_sales DESC\nLIMIT 10;'} className="mt-1 w-full rounded-xl border bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100 placeholder:text-slate-500"/></label>
             <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" onClick={() => void execute()} disabled={running || loadingSchema} className="inline-flex items-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-800 disabled:opacity-50">{running ? <Loader2 className="h-4 w-4 animate-spin"/> : <Play className="h-4 w-4"/>}{running ? 'Running read-only query…' : 'Run SQL'}</button>{run?.run_id && <button type="button" onClick={() => void saveExample()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin"/> : <Save className="h-4 w-4"/>}Save checked example</button>}<span className="text-xs text-slate-500">SELECT/WITH only · database scope and selected schema enforced · no model call</span></div>
           </section>
@@ -169,7 +240,46 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
             <details className="mt-3"><summary className="cursor-pointer text-xs text-slate-600">Executed SQL</summary><pre className="mt-2 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{run.sql}</pre></details>
           </section>}
         </div>
-      </div>
+      </div> : <section className="grid gap-4 xl:grid-cols-[minmax(18rem,0.75fr)_minmax(0,1.5fr)]">
+        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+          <h4 className="font-semibold text-slate-900">Choose SAP table and columns</h4>
+          <p className="mt-1 text-xs text-slate-500">Live schema fields and types. Select columns to preview up to 50 read-only rows.</p>
+          <label className="mt-3 block text-xs font-medium text-slate-600">Table<select value={previewTable} onChange={event => { const nextTable = tables.find(table => table.table === event.target.value); setPreviewTable(event.target.value); setPreviewColumns(nextTable?.columns.slice(0, 12).map(column => column.name) || []); setPreviewFilters([]); setPreviewFieldSearch(''); setPreviewResult(null); setError(''); }} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm">{tables.map(table => <option key={table.table} value={table.table}>{table.table}{table.description?.description ? ` · ${table.description.description}` : ''}</option>)}</select></label>
+          {currentPreviewTable && <><div className="mt-3 flex items-center justify-between"><h5 className="text-xs font-semibold text-slate-700">Columns ({currentPreviewTable.columns.length})</h5><div className="flex gap-2"><button type="button" onClick={() => setPreviewColumns(currentPreviewTable.columns.map(column => column.name).slice(0, 60))} className="text-xs text-indigo-700 hover:underline">Select up to 60</button><button type="button" onClick={() => setPreviewColumns([])} className="text-xs text-slate-500 hover:underline">Clear</button></div></div>
+            <div className="mt-2 max-h-[30rem] overflow-y-auto rounded-lg border p-2">{currentPreviewTable.columns.map(column => <label key={column.name} className="flex items-center gap-2 border-b py-1.5 text-xs last:border-0"><input type="checkbox" checked={previewColumns.includes(column.name)} onChange={() => togglePreviewColumn(column.name)}/><span className="font-medium text-slate-800">{column.name}</span><span className="text-slate-400">{column.type}</span>{column.primary_key && <span className="rounded bg-amber-100 px-1 text-amber-800">PK</span>}{column.foreign_key && <span className="rounded bg-sky-100 px-1 text-sky-800">FK</span>}<span className="ml-auto truncate text-slate-400">{column.description}</span></label>)}</div>
+            <p className="mt-2 text-[11px] text-slate-500">{previewColumns.length} selected · up to 60 columns per preview</p>
+            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+              <div className="flex flex-wrap items-end justify-between gap-2"><div><h5 className="text-xs font-semibold text-slate-800">Selection filters for {previewTable}</h5><p className="mt-1 text-[11px] leading-4 text-slate-600">This table’s fields are listed below. Add a condition beside any field; date, numeric, and text values get the matching inputs.</p></div><span className="text-[11px] text-slate-500">{previewFilterFields.length} fields</span></div>
+              <input aria-label="Search filter fields" value={previewFieldSearch} onChange={event => setPreviewFieldSearch(event.target.value)} placeholder="Find a filter field" className="mt-3 w-full rounded-md border bg-white px-3 py-2 text-xs"/>
+              <div className="mt-2 max-h-[32rem] space-y-2 overflow-y-auto pr-1">{visiblePreviewFilterFields.map(field => {
+                const fieldFilters = previewFilters.filter(item => item.column === field.name);
+                const inputType = isDateColumn(field) ? 'date' : isNumberColumn(field) ? 'number' : 'text';
+                const placeholder = isDateColumn(field) ? 'Choose date' : isNumberColumn(field) ? 'Enter amount' : 'Enter value';
+                return <div key={field.name} className="rounded-lg border bg-white p-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-xs font-semibold text-slate-800">{field.name}</span><span className="ml-2 text-[10px] text-slate-400">{field.type}</span></div><button type="button" onClick={() => addPreviewFilter(field.name)} className="rounded-md border px-2 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50">Add condition</button></div>
+                  {fieldFilters.map((item, index) => {
+                    const isRange = item.operator === 'include_range' || item.operator === 'exclude_range';
+                    return <div key={item.id} className="mt-2 grid gap-2 rounded-md bg-slate-50 p-2 sm:grid-cols-2">
+                      <label className="text-[10px] font-medium text-slate-600">Condition {index + 1}<select aria-label={`Selection for ${field.name}`} value={item.operator} onChange={event => patchPreviewFilter(item.id, { operator: event.target.value as FilterOperator, upper: '' })} className="mt-1 w-full rounded-md border bg-white px-2 py-2 text-xs"><option value="include_value">Include single value</option><option value="include_range">Include range</option><option value="exclude_value">Exclude single value</option><option value="exclude_range">Exclude range</option><option value="greater_than">Greater than</option><option value="less_than">Less than</option></select></label>
+                      <label className="text-[10px] font-medium text-slate-600">{isRange ? 'From / lower limit' : 'Value'}<input aria-label={`${field.name} value or lower limit`} type={inputType} step={inputType === 'number' ? 'any' : undefined} value={item.value} placeholder={placeholder} onInput={event => patchPreviewFilter(item.id, { value: event.currentTarget.value })} onChange={event => patchPreviewFilter(item.id, { value: event.currentTarget.value })} className="mt-1 w-full rounded-md border bg-white px-2 py-2 text-xs"/></label>
+                      {isRange && <label className="text-[10px] font-medium text-slate-600">To / upper limit<input aria-label={`${field.name} upper limit`} type={inputType} step={inputType === 'number' ? 'any' : undefined} value={item.upper} placeholder={placeholder} onInput={event => patchPreviewFilter(item.id, { upper: event.currentTarget.value })} onChange={event => patchPreviewFilter(item.id, { upper: event.currentTarget.value })} className="mt-1 w-full rounded-md border bg-white px-2 py-2 text-xs"/></label>}
+                      <button type="button" onClick={() => { setPreviewFilters(current => current.filter(filter => filter.id !== item.id)); setPreviewResult(null); setError(''); }} className="justify-self-start text-[10px] font-medium text-red-700 hover:underline">Remove condition</button>
+                    </div>;
+                  })}
+                </div>;
+              })}</div>
+              {previewFilterFields.length > 0 && visiblePreviewFilterFields.length === 0 && <p className="mt-2 text-[11px] text-slate-500">No fields match that search.</p>}
+              {previewFilters.length === 0 && <p className="mt-2 text-[11px] text-slate-500">No conditions yet. Choose a field above and add one or more SAP selection conditions.</p>}
+            </div>
+            <button type="button" onClick={() => void previewData()} disabled={previewLoading || !previewColumns.length} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{previewLoading ? <Loader2 className="h-4 w-4 animate-spin"/> : <Search className="h-4 w-4"/>}{previewLoading ? 'Loading rows…' : 'Show table data'}</button>
+          </>}
+        </div>
+        <div className="min-w-0 rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="font-semibold text-slate-900">{previewTable || 'Table'} data preview</h4><p className="mt-1 text-xs text-slate-500">Read-only preview · maximum 50 rows · 0 AI/model calls · nothing is saved until you train it.</p></div>{previewResult && <button type="button" onClick={usePreviewInTraining} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">Prefill SQL Training</button>}</div>
+          {!previewResult && <div className="mt-4 rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">Choose a table and columns, then select <strong>Show table data</strong>.</div>}
+          {previewResult && <><p className="mt-3 text-xs text-slate-500">Showing {previewResult.row_count} row{previewResult.row_count === 1 ? '' : 's'} · query limit {previewResult.limit || 50}</p><div className="mt-2 max-h-[36rem] overflow-auto rounded-lg border"><table className="min-w-full text-left text-xs"><thead className="sticky top-0 bg-slate-100"><tr>{previewResult.columns.map(column => <th key={column} className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700">{column}</th>)}</tr></thead><tbody>{previewResult.rows.map((row, index) => <tr key={index} className="border-t">{previewResult.columns.map(column => <td key={column} className="max-w-xs whitespace-nowrap px-3 py-2 text-slate-700">{row[column] == null ? '—' : String(row[column])}</td>)}</tr>)}</tbody></table>{previewResult.rows.length === 0 && <p className="p-4 text-sm text-slate-500">No rows found for the selected table.</p>}</div><details className="mt-3"><summary className="cursor-pointer text-xs text-slate-600">Preview SQL</summary><pre className="mt-2 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{previewResult.sql}</pre></details></>}
+        </div>
+      </section>}
 
       <section className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="font-semibold text-slate-900">Saved SQL examples</h4><p className="mt-1 text-xs text-slate-500">Saved wording and SQL are isolated to your accessible workspace. Load and rerun to check current figures.</p></div><div className="flex gap-2"><input value={exampleFilter} onChange={event => setExampleFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void loadExamples(exampleFilter); }} placeholder="Search saved wording or SQL" className="w-56 rounded-lg border px-3 py-2 text-xs"/><button type="button" onClick={() => void loadExamples(exampleFilter)} className="rounded-lg border px-3 py-2 text-xs">Search</button></div></div>
         <div className="mt-3 divide-y">{examples.map(example => <div key={example.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-sm font-medium text-slate-800">{example.question}</p><p className="mt-1 text-xs text-slate-500">Revision {example.revision} · {example.dialect} · {example.validation_status} · {new Date(example.updated_at).toLocaleString()}</p><code className="mt-1 block max-w-3xl truncate text-[11px] text-slate-500">{example.sql}</code></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => loadExample(example)} className="rounded-lg border px-3 py-2 text-xs">Load to editor</button><button type="button" onClick={() => void editExample(example)} className="rounded-lg border px-3 py-2 text-xs">Edit SQL</button></div></div>)}{examples.length === 0 && <p className="py-6 text-center text-sm text-slate-500">No saved examples yet. Run a query successfully, then save it here.</p>}</div>

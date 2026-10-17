@@ -2952,11 +2952,74 @@ def basic_training_schema_endpoint(
         reset_trusted_scope(token)
 
 
+@router.post("/api/query/adaptive/basic/training/preview")
+def basic_training_preview_endpoint(body: Dict[str, Any] = Body(...), db: Session = Depends(get_db),
+                                    current_user: ZodiacUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """Preview selected live table fields without saving a training run."""
+    from ..services.analyst_agent import AnalystTools
+    from ..services.basic_sql_training import apply_training_filters, check_query_scope, selected_schema
+    from ..services.adaptive_trusted_scope import reset_trusted_scope
+    source, table, columns, limit = body.get("source"), body.get("table"), body.get("columns"), body.get("limit", 50)
+    if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
+        raise HTTPException(status_code=400, detail="Select an available database source")
+    if not isinstance(table, str) or not table.strip() or not isinstance(columns, list) or not columns or len(columns) > 60:
+        raise HTTPException(status_code=400, detail="Select one table and between 1 and 60 columns to preview")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Preview row limit must be between 1 and 100")
+    token = _basic_training_scope(db, current_user)
+    tools = AnalystTools(db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
+                         sap_session_factory=get_sap_session, question="Read-only table preview")
+    try:
+        live_schema, origin = tools.schema(source)
+        if origin != "live_database_metadata":
+            raise ValueError("Table preview requires live database metadata; refresh the connected catalog first")
+        filters = body.get("filters") or []
+        if not isinstance(filters, list) or len(filters) > 30:
+            raise ValueError("Add no more than 30 filter conditions")
+        # The filter field may be useful even when it is not displayed as an
+        # output column. Validate it against live metadata and include it in
+        # the selected-schema boundary before composing SQL.
+        allowed_columns = list(columns)
+        for item in filters:
+            if not isinstance(item, dict):
+                raise ValueError("Each filter must select a schema field and an operation")
+            if str(item.get("table") or "").lower() != table.lower():
+                raise ValueError("Preview filters must use fields from the selected table")
+            filter_column = item.get("column")
+            if not isinstance(filter_column, str) or not filter_column:
+                raise ValueError("Choose a field for each preview filter")
+            allowed_columns.append(filter_column)
+        output_selection = selected_schema(live_schema, {table: columns})
+        selection = selected_schema(live_schema, {table: list(dict.fromkeys(allowed_columns))})
+        table_name, selected_columns = next(iter(output_selection.items()))
+        from sqlglot import exp
+        statement = exp.Select(expressions=[exp.Column(this=exp.Identifier(this=column["col"], quoted=True))
+                                            for column in selected_columns])
+        statement = statement.from_(exp.Table(this=exp.Identifier(this=table_name, quoted=True))).limit(limit)
+        sql = apply_training_filters(statement.sql(dialect="postgres"), filters, selection)
+        sql = check_query_scope(sql, selection)
+        result = tools.call("run_readonly_sql", {"source": source, "sql": sql,
+                                                  "purpose": "Preview selected table columns"})
+        if not result.get("ok"):
+            return {"status": "failed", "error": "The database could not preview this table. Check its access and selected columns.",
+                    "sql": sql, "rows": [], "columns": [], "row_count": 0}
+        rows = result.get("rows") or []
+        return {"status": "executed", "sql": result.get("sql") or sql, "rows": rows,
+                "columns": list(rows[0].keys()) if rows else [column["col"] for column in selected_columns],
+                "row_count": len(rows), "limit": limit, "schema_source": origin,
+                "applied_filters": len(filters), "llm_calls": 0}
+    except ValueError as error:
+        return {"status": "failed", "error": str(error)[:500], "rows": [], "columns": [], "row_count": 0}
+    finally:
+        tools.close()
+        reset_trusted_scope(token)
+
+
 @router.post("/api/query/adaptive/basic/training/execute")
 def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Session = Depends(get_db),
                                     current_user: ZodiacUser = Depends(get_current_user)) -> Dict[str, Any]:
     from ..services.analyst_agent import AnalystTools
-    from ..services.basic_sql_training import check_query_scope, record_run, selected_schema
+    from ..services.basic_sql_training import apply_training_filters, check_query_scope, record_run, selected_schema
     from ..services.adaptive_trusted_scope import get_trusted_scope, reset_trusted_scope
     source, question, sql = body.get("source"), body.get("question"), body.get("sql")
     if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
@@ -2977,6 +3040,7 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
         selection = selected_schema(live_schema, body.get("selected_schema"))
         if not selection:
             raise ValueError("Select at least one table and its columns")
+        sql = apply_training_filters(sql, body.get("filters"), selection)
         sql = check_query_scope(sql, selection)
         result = tools.call("run_readonly_sql", {"source": source, "sql": sql, "purpose": "User-authored SQL training query"})
         if result.get("ok"):
@@ -3190,6 +3254,7 @@ def post_query_adaptive(
     conversationHistory: Optional[List[Dict[str, Any]]] = Body(default=None, embed=True),
     newQuestion: bool = Body(default=False, embed=True),
     analysisMode: Optional[str] = Body(default=None, embed=True),
+    basicPresetApproved: bool = Body(default=False, embed=True),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: ZodiacUser = Depends(get_current_user),
@@ -3257,6 +3322,7 @@ def post_query_adaptive(
             background_tasks=background_tasks,
             agent_mode=agent_enabled(),
             analysis_mode=(analysisMode if isinstance(analysisMode, str) else "agent").strip().lower(),
+            basic_preset_approved=basicPresetApproved is True,
         )
     finally:
         if _scope_token is not None:
@@ -3282,6 +3348,7 @@ def _post_query_adaptive_body(
     background_tasks: Optional[BackgroundTasks] = None,
     agent_mode: bool = False,
     analysis_mode: str = "agent",
+    basic_preset_approved: bool = False,
 ) -> Dict[str, Any]:
     _original_question = original_question
     openai_key = (
@@ -3880,7 +3947,7 @@ def _post_query_adaptive_body(
                 executor.plans.pop(step_source, None)
             purpose = str(step.get("purpose") or "Basic verified query")
             executed = executor.call("run_readonly_sql", {"source": step_source, "sql": sql, "purpose": purpose})
-            if executed.get("ok") and not step.get("checked_investigation"):
+            if executed.get("ok") and not step.get("checked_investigation") and not step.get("training_example"):
                 from ..services.analyst_agent import _analysis_issues
                 from ..services.basic_sql_answer import continue_basic_question, prepare_basic_question
                 check_question = prepare_basic_question(continue_basic_question(
@@ -3900,6 +3967,7 @@ def _post_query_adaptive_body(
                 prior_examples=prior_examples,
                 local_agent=_basic_free_agent if free_model_available else None,
                 field_lookup=_basic_field_lookup if free_model_available else None,
+                approve_predefined=basic_preset_approved,
             )
         finally:
             executor.close()

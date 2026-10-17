@@ -225,6 +225,61 @@ def recall_sql(question, examples):
     return next((e["sql"] for e in retrieve_examples(question, examples, use_embeddings=False) if e["reusable"]), "")
 
 
+def adapt_training_year_filter(question, examples):
+    """Adapt a checked generic-year SQL Training query to explicit requested years.
+
+    Reuse is limited to matching question intent and a single SQL IN filter on
+    a recognized date/year field. Semantic similarity alone never authorizes
+    changing or executing a saved query.
+    """
+    requested_years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", question or "")))
+    if not requested_years:
+        return None
+
+    ignored = {"specific", "sap", "erp", "year", "years", "and", "between", "during"}
+    def core(text):
+        return {token for token in intent_tokens(text)
+                if not re.fullmatch(r"(?:19|20)\d{2}", token) and token not in ignored}
+
+    wanted = core(question)
+    if not wanted or not wanted.intersection({"sales", "profit", "margin", "cost", "invoice", "count"}):
+        return None
+
+    from sqlglot import exp, parse_one
+    for example in examples or []:
+        if not example.get("training_example") or not example.get("question"):
+            continue
+        saved_question = str(example["question"])
+        if re.search(r"\b(?:19|20)\d{2}\b", saved_question):
+            continue
+        if not re.search(r"\byears?\b", saved_question, re.I) or core(saved_question) != wanted:
+            continue
+        try:
+            tree = parse_one(str(example.get("sql") or ""), read="postgres")
+            if not isinstance(tree, exp.Select) or len(list(tree.find_all(exp.Select))) != 1:
+                continue
+            candidates = []
+            for condition in tree.find_all(exp.In):
+                refs = {column.name.lower() for column in condition.this.find_all(exp.Column)}
+                if not refs.intersection({"fkdat", "budat", "bldat", "salesyear", "fiscal_year", "year"}):
+                    continue
+                literals = list(condition.expressions)
+                if literals and all(isinstance(value, exp.Literal)
+                                    and re.fullmatch(r"(?:19|20)\d{2}", str(value.this))
+                                    for value in literals):
+                    candidates.append(condition)
+            if len(candidates) != 1:
+                continue
+            candidates[0].set("expressions", [exp.Literal.string(year) for year in requested_years])
+            adapted = dict(example)
+            adapted.update(sql=tree.sql(dialect="postgres"), reusable=True,
+                           retrieval="training_year_filter", training_year_adaptation=requested_years)
+            return adapted
+        except Exception:
+            continue
+    return None
+
+
 def investigation_steps(payload):
     """Ordered read-only queries that produced one checked answer.
 
@@ -368,6 +423,22 @@ def load_verified_queries(engine, scope, source, limit=200):
 def load_basic_examples(engine, scope, use_sap):
     sources = ["business", "application"] if use_sap else ["application"]
     examples = [item for source in sources for item in load_verified_queries(engine, scope, source, None)]
+    # SQL Training has its own UI and persistence table. Include only examples
+    # that were successfully executed and explicitly saved; otherwise Basic
+    # would miss them and unnecessarily fall through to the local model.
+    try:
+        from .basic_sql_training import list_examples
+        trained = [item for item in list_examples(engine, scope)
+                   if item.get("validation_status") == "executed" and item.get("source") in sources]
+        for item in trained:
+            examples.append({"question": item["question"], "sql": item["sql"],
+                "source": item["source"], "updated_at": item.get("updated_at"),
+                "training_example_id": item.get("id"), "training_revision": item.get("revision"),
+                "training_example": True})
+    except Exception:
+        # Training memory is optional; retain the existing verified RAG path if
+        # a legacy deployment has not created the SQL Training tables yet.
+        pass
     examples = [item for item in examples if not any(
         mixed_currency_billing_total(step.get("sql", "")) for step in (item.get("steps") or [item])
     ) and not profit_question_without_profit_sql(item["question"], item.get("steps") or [item])]

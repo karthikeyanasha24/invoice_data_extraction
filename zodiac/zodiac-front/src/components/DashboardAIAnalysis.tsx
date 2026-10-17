@@ -181,6 +181,7 @@ type QueryResult = AnalystSqlFields & {
     gemini_field_lookup?: {called?: boolean; status?: string; field?: string};
     basic_fallback?: string;
     basic_training_reference?: {id: string; question: string};
+    basic_pattern_confirmation?: {question: string; logic: string; warning?: string};
     result_reference?: {id: string; measures: string[]; created_at: string};
     drilldown_unavailable?: string;
     usage?: {total_tokens: number; input_tokens: number; cached_tokens: number; output_tokens: number; reasoning_tokens: number; calls: unknown[]; estimated_cost_usd: string | null; models?: string[]};
@@ -609,6 +610,36 @@ function ClarificationCard({ message, followups, onAskFollowup }: {
   );
 }
 
+function BasicPatternConfirmationCard({ confirmation, onUseBasicPattern, onUseAgentic, onOpenSqlTraining }: {
+  confirmation: { question: string; logic: string; warning?: string };
+  onUseBasicPattern?: (q: string) => void;
+  onUseAgentic?: (q: string) => void;
+  onOpenSqlTraining?: (q: string) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-4">
+      <h4 className="text-sm font-semibold text-amber-950">Basic found a predefined SQL pattern</h4>
+      <p className="mt-2 text-sm text-amber-950">Proposed logic: <strong>{confirmation.logic}</strong>.</p>
+      {confirmation.warning && <p role="alert" className="mt-2 text-sm font-medium text-red-800">{confirmation.warning}.</p>}
+      <p className="mt-2 text-sm text-amber-900">Basic has not run this query yet. The Basic pattern uses 0 model calls. Agentic may use API credits; SQL Training lets you define and check your own query.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={() => onUseBasicPattern?.(confirmation.question)}
+          className="rounded-lg bg-amber-800 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-900">
+          Run: {confirmation.logic}
+        </button>
+        <button type="button" onClick={() => onUseAgentic?.(confirmation.question)}
+          className="rounded-lg border border-indigo-300 bg-white px-3 py-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-50">
+          Ask Agentic to investigate
+        </button>
+        <button type="button" onClick={() => onOpenSqlTraining?.(confirmation.question)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+          Define it in SQL Training
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function InsightsPanel({ findings }: { findings: string[] }) {
   if (!findings?.length) return null;
   return (
@@ -847,9 +878,15 @@ function TeachBasic({ reference }: { reference: { id: string; question: string }
 function ResultDashboard({
   result,
   onAskFollowup,
+  onUseBasicPattern,
+  onUseAgentic,
+  onOpenSqlTraining,
 }: {
   result: QueryResult;
   onAskFollowup?: (q: string) => void;
+  onUseBasicPattern?: (q: string) => void;
+  onUseAgentic?: (q: string) => void;
+  onOpenSqlTraining?: (q: string) => void;
 }) {
   const basicPath = result.meta?.analysis_method === 'basic'
     ? result.meta.retrieval?.reused
@@ -869,7 +906,8 @@ function ResultDashboard({
           : `Gemini could not provide a column confirmed by live schema for ${result.meta.gemini_field_lookup.field}. Basic continued without that hint; the lookup may have used Gemini API quota.`}
       </p>}
       {result.meta?.basic_fallback && <p role="status" className="text-xs text-slate-500">Basic could not safely reuse a saved query. Agentic handled this request; model calls may use credits.</p>}
-      <ResultContent result={result} onAskFollowup={onAskFollowup} />
+      <ResultContent result={result} onAskFollowup={onAskFollowup} onUseBasicPattern={onUseBasicPattern}
+        onUseAgentic={onUseAgentic} onOpenSqlTraining={onOpenSqlTraining} />
       {additionalAgentResults(result).map(set => (
         <details key={set.id} className="rounded-xl border border-slate-200 bg-white">
           <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-slate-600">
@@ -946,9 +984,12 @@ function SqlDisclosure({ result }: { result: QueryResult }) {
   );
 }
 
-function ResultContent({ result, onAskFollowup }: {
+function ResultContent({ result, onAskFollowup, onUseBasicPattern, onUseAgentic, onOpenSqlTraining }: {
   result: QueryResult;
   onAskFollowup?: (q: string) => void;
+  onUseBasicPattern?: (q: string) => void;
+  onUseAgentic?: (q: string) => void;
+  onOpenSqlTraining?: (q: string) => void;
 }) {
   const [drillRow, setDrillRow] = useState<number | null>(null);
   if (!result) return null;
@@ -1011,11 +1052,14 @@ function ResultContent({ result, onAskFollowup }: {
   if (isClarification) {
     return (
       <div className="space-y-3">
-        <ClarificationCard
-          message={fullAnswer || 'I need one more detail to answer this accurately.'}
-          followups={suggested_followups}
-          onAskFollowup={onAskFollowup}
-        />
+        {meta?.basic_pattern_confirmation ? (
+          <BasicPatternConfirmationCard confirmation={meta.basic_pattern_confirmation}
+            onUseBasicPattern={onUseBasicPattern} onUseAgentic={onUseAgentic} onOpenSqlTraining={onOpenSqlTraining} />
+        ) : <ClarificationCard
+            message={fullAnswer || 'I need one more detail to answer this accurately.'}
+            followups={suggested_followups}
+            onAskFollowup={onAskFollowup}
+          />}
         {meta?.result_reference && <AnalystDrilldown reference={meta.result_reference} rows={data || []} selectedRow={null} />}
       </div>
     );
@@ -1132,6 +1176,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [launchBanner, setLaunchBanner] = useState<string | null>(null);
   const [threadId,   setThreadId]   = useState<string>('');
   const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic' | 'training'>('agent');
+  const [trainingQuestion, setTrainingQuestion] = useState(initialQuestion || '');
   const selectedSuggestionRef = useRef<string | null>(null);
   const analysisMethodRef = useRef<'agent' | 'basic' | 'training'>('agent');
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -1270,7 +1315,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue' }) => {
+  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue'; analysisMode?: 'agent' | 'basic'; approveBasicPattern?: boolean }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading || !historyLoaded) return;
 
@@ -1348,7 +1393,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         threadId: tid,
         investigationId,
         newQuestion: treatAsNew,
-        analysisMode: analysisMethodRef.current === 'training' ? 'basic' : analysisMethodRef.current,
+        analysisMode: opts?.analysisMode || (analysisMethodRef.current === 'training' ? 'basic' : analysisMethodRef.current),
+        basicPresetApproved: opts?.approveBasicPattern === true,
         conversationHistory: treatAsNew ? [] : contextMessages.slice(-40).map(message => ({
           role: message.role, content: message.content.slice(0, 6000), mode: message.result?.mode,
         })),
@@ -1591,7 +1637,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
       {/* ── Messages / Welcome ── */}
       {analysisMethod === 'training' ? (
-        <div className="flex-1 min-h-0"><BasicSqlTraining initialQuestion={initialQuestion} /></div>
+        <div className="flex-1 min-h-0"><BasicSqlTraining initialQuestion={trainingQuestion || initialQuestion} /></div>
       ) : <>
       <div className="relative flex-1 min-h-0">
       <div ref={conversationRef} role="region" aria-label="Conversation" tabIndex={0}
@@ -1661,6 +1707,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                       onAskFollowup={(fq) => {
                         void sendQuestion(fq, { source: 'followup-chip' });
                       }}
+                      onUseBasicPattern={(fq) => void sendQuestion(fq, { source: 'followup-chip', analysisMode: 'basic', approveBasicPattern: true })}
+                      onUseAgentic={(fq) => void sendQuestion(fq, { source: 'followup-chip', analysisMode: 'agent' })}
+                      onOpenSqlTraining={(fq) => {
+                        setTrainingQuestion(fq);
+                        analysisMethodRef.current = 'training';
+                        setAnalysisMethod('training');
+                        window.localStorage.setItem('ai-analyst-method', 'training');
+                      }}
                     />
                   ) : (
                     <>
@@ -1670,6 +1724,14 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
                           result={msg.result}
                           onAskFollowup={(fq) => {
                             void sendQuestion(fq, { source: 'followup-chip' });
+                          }}
+                          onUseBasicPattern={(fq) => void sendQuestion(fq, { source: 'followup-chip', analysisMode: 'basic', approveBasicPattern: true })}
+                          onUseAgentic={(fq) => void sendQuestion(fq, { source: 'followup-chip', analysisMode: 'agent' })}
+                          onOpenSqlTraining={(fq) => {
+                            setTrainingQuestion(fq);
+                            analysisMethodRef.current = 'training';
+                            setAnalysisMethod('training');
+                            window.localStorage.setItem('ai-analyst-method', 'training');
                           }}
                         />
                       ) : (

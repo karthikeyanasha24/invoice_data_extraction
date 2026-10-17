@@ -142,6 +142,7 @@ def run_basic_sql_answer(
     prior_examples: list[dict] | None = None,
     local_agent: Callable[..., dict] | None = None,
     field_lookup: Callable[[str], dict] | None = None,
+    approve_predefined: bool = False,
 ) -> dict[str, Any]:
     from .four_stage_db_pipeline import VerifiedDbContext, pipeline3_sql_generation
     from .investigation_budget import block_paid_models, paid_models_blocked, restore_paid_models
@@ -168,7 +169,8 @@ def run_basic_sql_answer(
             if item.get("table")
         ]
         ctx = VerifiedDbContext(question=question, tables=tables, semantic_requirements=semantic, prior_sql=previous_sql or "")
-        from .basic_rag import mixed_currency_billing_total, profit_question_without_profit_sql, retrieve_examples, replayable_steps
+        from .basic_rag import (adapt_training_year_filter, mixed_currency_billing_total,
+                                profit_question_without_profit_sql, retrieve_examples, replayable_steps)
         def safe_examples(embeddings=False):
             candidates = retrieve_examples(question, prior_examples, use_embeddings=embeddings)
             return [example for example in candidates if not any(
@@ -178,6 +180,10 @@ def run_basic_sql_answer(
 
         retrieved = safe_examples()
         reused_example = next((e for e in retrieved if e["reusable"]), None)
+        if reused_example is None:
+            reused_example = adapt_training_year_filter(question, prior_examples)
+            if reused_example is not None:
+                retrieved = [reused_example, *retrieved]
         taught_steps = [step for step in (reused_example or {}).get("steps") or [] if isinstance(step, dict)]
         if len(taught_steps) > 1:
             if not replayable_steps(question, taught_steps):
@@ -196,6 +202,18 @@ def run_basic_sql_answer(
             # The generic measure template can otherwise treat an AR clearing
             # amount as "highest profit". Require a real profit calculation.
             sql = ""
+        if sql.strip() and not reused_example and not approve_predefined:
+            logic, warning = _describe_predefined_pattern(question, sql)
+            answer = f"Basic matched a predefined SQL pattern. Proposed logic: {logic}."
+            if warning:
+                answer += f" Caution: {warning}."
+            answer += " I have not run it yet. Choose whether to use this pattern, ask Agentic to investigate, or define a checked query in SQL Training."
+            result = _payload(question, "CLARIFICATION", answer, "", [], mode="clarification")
+            result["meta"]["basic_pattern_confirmation"] = {
+                "question": question, "logic": logic, "warning": warning,
+            }
+            result["suggested_followups"] = []
+            return result
         if not sql.strip():
             if local_agent is not None:
                 retrieved = safe_examples(embeddings=True)
@@ -213,7 +231,9 @@ def run_basic_sql_answer(
             return _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or sql, [])
         rows = executed.get("rows") or []
         if rows:
-            method_note = ("Basic reused a similar question you already asked" if reused
+            method_note = ("Basic adapted the checked SQL Training example to the requested years" if reused_example and reused_example.get("training_year_adaptation")
+                           else "Basic reran the checked SQL Training example" if reused_example and reused_example.get("training_example")
+                           else "Basic reused a similar question you already asked" if reused
                            else "Basic ran a supported SQL pattern")
             answer = f"Verified database result: {len(rows)} row(s). {method_note} and did not call a model."
             status = "SUCCESS"
@@ -224,7 +244,8 @@ def run_basic_sql_answer(
         result["sql_status"] = "executed"
         result["meta"]["result_truncated"] = bool(executed.get("truncated"))
         result["meta"]["retrieval"] = {"reused": reused, "examples": len(retrieved),
-                                      "method": retrieved[0]["retrieval"] if retrieved else "none"}
+                                      "method": (reused_example.get("retrieval") if reused_example else
+                                                 retrieved[0]["retrieval"] if retrieved else "none")}
         from .analyst_evidence import grounded_answer
         if rows:
             count_row = rows[0] if len(rows) == 1 and isinstance(rows[0], dict) else {}
@@ -256,6 +277,49 @@ def _invoke_execute(execute, sql, step):
     except TypeError:
         return execute(sql) or {}
     return execute(sql, step) or {}
+
+
+def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
+    """Explain a supported SQL pattern and flag obvious metric mismatches."""
+    import re
+    normalized = re.sub(r"\s+", " ", sql.lower())
+    group = normalized.split(" group by ", 1)[1].split(" order by ", 1)[0] if " group by " in normalized else ""
+    dimensions = []
+    if any(name in group for name in ("salesyear", "fiscal_year", "extract(year", "year")) \
+            or ("fkdat" in group and any(name in group for name in ("substring", "date_part", "extract"))):
+        dimensions.append("year")
+    elif "fkdat" in group:
+        dimensions.append("billing date")
+    if any(name in group for name in ("waerk", "waers", "currency")):
+        dimensions.append("currency")
+    if any(name in group for name in ("kunag", "kunrg", "kunnr", "customer")):
+        dimensions.append("customer")
+    if any(name in group for name in ("matnr", "material", "product")):
+        dimensions.append("material")
+    if any(name in group for name in ("land1", "country")):
+        dimensions.append("country")
+
+    if "sum(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
+        measure = "total billed sales"
+    elif "min(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
+        measure = "lowest billed amount"
+    elif "max(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
+        measure = "highest billed amount"
+    elif "count(" in normalized:
+        measure = "billing document count"
+    else:
+        measure = "the measure defined by the SQL pattern"
+    logic = measure + (" by " + " and ".join(dimensions) if dimensions else " across the selected records")
+
+    asked_lowest = bool(re.search(r"\b(lowest|smallest|bottom)\b", question, re.I))
+    asked_highest = bool(re.search(r"\b(highest|largest|top)\b", question, re.I))
+    grouped_rank = bool(set(dimensions) & {"customer", "material", "country"})
+    warning = ""
+    if asked_lowest and measure == "total billed sales" and not grouped_rank:
+        warning = "your wording asks for the lowest sale, but this SQL totals billed sales and does not identify a lowest sale"
+    elif asked_highest and measure == "total billed sales" and not grouped_rank:
+        warning = "your wording asks for the highest sale, but this SQL totals billed sales and does not identify a highest sale"
+    return logic, warning
 
 
 def _replay_investigation(question, steps, execute):

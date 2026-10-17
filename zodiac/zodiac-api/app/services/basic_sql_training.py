@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import Column, Integer, MetaData, String, Table, Text, select, insert, update, delete
 from sqlalchemy.orm import Session
@@ -120,6 +122,143 @@ def selected_schema(schema, selected):
             selected_cols.append({"col": col.get("col"), "type": col.get("type", "unknown")})
         output[original] = selected_cols
     return output
+
+
+_FILTER_OPERATORS = {"include_value", "include_range", "exclude_value", "exclude_range", "greater_than", "less_than"}
+_SAP_DATE_FIELDS = {
+    "fkdat", "erdat", "aedat", "budat", "bldat", "ftrms", "gltrp", "gstrp", "gltrs", "gstrs",
+    "gstri", "getri", "gltri", "ftrmi", "ftrmp", "pdatv", "sdatv", "trmdt", "valdt",
+    "kdatb", "kdate", "bedat", "cpudt", "audat", "eindt", "lfdat", "prsdt", "zfbdt",
+    "datuv", "ersda", "laeda", "vdatu", "prdat", "fkdat_rl",
+}
+_SAP_AMOUNT_FIELDS = {
+    "netwr", "mwsbk", "rmwwr", "wavwr", "fkwrt", "wrbtr", "dmbtr", "salk3", "stprs", "verpr",
+    "peinh", "netpr", "mwsbp", "kwmeng", "fkimg", "lfimg", "menge", "gamng", "bmenge", "vfmng",
+    "lmeng", "brgew", "ntgew", "kzwi1", "kzwi2", "kzwi3", "kzwi4", "kzwi5", "kzwi6",
+}
+
+
+def _is_date_field(column_info: dict) -> bool:
+    name = str(column_info.get("col") or "").lower()
+    field_type = str(column_info.get("type") or "").lower()
+    return ("date" in field_type or "time" in field_type or name in _SAP_DATE_FIELDS
+            or name.endswith(("_date", "_date_time", "_dt", "dat", "date"))
+            or name.endswith(("startd", "endd")))
+
+
+def apply_training_filters(sql: str, filters, selection: dict) -> str:
+    """Add user-authored selection-screen filters to one selected-schema SELECT."""
+    if not filters:
+        return sql
+    if not isinstance(filters, list) or len(filters) > 30:
+        raise ValueError("Add no more than 30 filter conditions")
+
+    from sqlglot import exp, parse_one
+    from sqlglot.errors import SqlglotError
+    try:
+        tree = parse_one(sql, read="postgres")
+    except SqlglotError as error:
+        raise ValueError("SQL syntax could not be parsed before applying filters") from error
+    if not isinstance(tree, exp.Select) or len(list(tree.find_all(exp.Select))) != 1:
+        raise ValueError("Training filters can be applied to one SELECT without nested queries")
+
+    grouped = {}
+    for item in filters:
+        if not isinstance(item, dict):
+            raise ValueError("Each filter must select a schema field and an operation")
+        table_name = str(item.get("table") or "")
+        column_name = str(item.get("column") or "")
+        operator = str(item.get("operator") or "")
+        if operator not in _FILTER_OPERATORS:
+            raise ValueError("Choose an available include, exclude, or comparison filter")
+        columns = next((cols for table, cols in selection.items() if table.lower() == table_name.lower()), None)
+        column_info = next((col for col in columns or [] if str(col.get("col", "")).lower() == column_name.lower()), None)
+        if not column_info:
+            raise ValueError("Every filter field must be selected in the accessible schema")
+        matching_tables = [node for node in tree.find_all(exp.Table) if node.name.lower() == table_name.lower()]
+        if len(matching_tables) != 1:
+            raise ValueError(f"Filter table {table_name} must appear exactly once in the SQL query")
+        table_node = matching_tables[0]
+        alias = table_node.alias or table_node.name
+        field = exp.Column(this=exp.Identifier(this=column_info["col"], quoted=True),
+                           table=exp.Identifier(this=alias, quoted=True))
+        field_type = str(column_info.get("type") or "").lower()
+        numeric_field = any(kind in field_type for kind in ("numeric", "decimal", "integer", "float", "double")) \
+            or column_info["col"].lower() in _SAP_AMOUNT_FIELDS
+        date_field = _is_date_field(column_info)
+        comparable_field = exp.Cast(this=field.copy(), to=exp.DataType.build("DECIMAL")) if numeric_field else field
+        if date_field and any(kind in field_type for kind in ("timestamp", "datetime")):
+            comparable_field = exp.Cast(this=field.copy(), to=exp.DataType.build("DATE"))
+
+        def literal(raw):
+            value = str(raw or "").strip()
+            if not value or len(value) > 256:
+                raise ValueError("Enter a filter value up to 256 characters")
+            if date_field:
+                date_value = value
+                for date_format in ("%Y-%m-%d", "%d.%m.%Y", "%Y%m%d"):
+                    try:
+                        parsed_date = datetime.strptime(date_value, date_format)
+                        break
+                    except ValueError:
+                        parsed_date = None
+                if parsed_date is None:
+                    raise ValueError(f"Enter a valid date for {column_info['col']} (YYYY-MM-DD)")
+                value = parsed_date.strftime("%Y-%m-%d") if any(kind in field_type for kind in ("date", "time")) else parsed_date.strftime("%Y%m%d")
+            if numeric_field:
+                value = value.replace(" ", "")
+                if value.endswith("-"):
+                    value = "-" + value[:-1]
+                if "," in value and "." in value:
+                    value = value.replace(".", "").replace(",", ".") if value.rfind(",") > value.rfind(".") else value.replace(",", "")
+                elif "," in value:
+                    value = value.replace(",", ".")
+                if not re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", value):
+                    raise ValueError(f"Enter a valid numeric value for {column_info['col']}")
+                return exp.Literal.number(value)
+            return exp.Literal.string(value)
+
+        value = item.get("value")
+        upper = item.get("upper")
+        if operator.endswith("range") or operator == "include_range":
+            lower_literal, upper_literal = literal(value), literal(upper)
+            if numeric_field and Decimal(lower_literal.this) > Decimal(upper_literal.this):
+                raise ValueError(f"The lower limit must not exceed the upper limit for {column_info['col']}")
+            if date_field and str(lower_literal.this) > str(upper_literal.this):
+                raise ValueError(f"The lower date must not exceed the upper date for {column_info['col']}")
+            condition = exp.Between(this=comparable_field.copy(), low=lower_literal, high=upper_literal)
+            if operator == "exclude_range":
+                condition = exp.Not(this=condition)
+            positive = operator == "include_range"
+        else:
+            val = literal(value)
+            if operator == "include_value":
+                condition, positive = exp.EQ(this=comparable_field.copy(), expression=val), True
+            elif operator == "exclude_value":
+                condition, positive = exp.NEQ(this=comparable_field.copy(), expression=val), False
+            elif operator == "greater_than":
+                condition, positive = exp.GT(this=comparable_field.copy(), expression=val), True
+            else:
+                condition, positive = exp.LT(this=comparable_field.copy(), expression=val), True
+        key = (table_name.lower(), column_name.lower())
+        group = grouped.setdefault(key, {"positive": [], "negative": [], "comparisons": []})
+        if operator in {"greater_than", "less_than"}:
+            group["comparisons"].append(condition)
+        else:
+            group["positive" if positive else "negative"].append(condition)
+
+    conditions = []
+    for group in grouped.values():
+        if group["positive"]:
+            conditions.append(exp.or_(*group["positive"]))
+        conditions.extend(group["negative"])
+        # Bound comparisons on the same field are conjunctive (e.g. > lower
+        # AND < upper), unlike multiple SAP include choices, which are ORed.
+        conditions.extend(group["comparisons"])
+    filter_expression = exp.and_(*conditions)
+    prior_where = tree.args.get("where")
+    tree.set("where", exp.Where(this=exp.and_(prior_where.this, filter_expression) if prior_where else filter_expression))
+    return tree.sql(dialect="postgres")
 
 
 def check_query_scope(sql: str, selection: dict):
