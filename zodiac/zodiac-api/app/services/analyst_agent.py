@@ -276,7 +276,22 @@ class AnalystTools:
             schema, origin = self.schema(source)
             if origin == "schema_snapshot":
                 raise ValueError("Connected metadata is required to verify relationship keys")
-            self.catalogs[source] = RelationshipCatalog.connected(queryable_schema(schema), self.session(source))
+            catalog = RelationshipCatalog.connected(queryable_schema(schema), self.session(source))
+            if self.manual_sql_training:
+                # SQL Training authors and validates SQL directly. Keep its SAP
+                # document-flow relationships local to this mode so Agentic
+                # planning continues to use only the governed global catalog.
+                training_schema = queryable_schema(schema)
+                table_index = {name.lower(): name for name in training_schema}
+                for left, right, pairs, provenance in (
+                    ("VBAK", "VBFA", [("vbeln", "vbelv")],
+                     "SAP SD documented relationship: VBFA predecessor is the sales document"),
+                    ("VBFA", "VBRK", [("vbeln", "vbeln")],
+                     "SAP SD documented relationship: VBFA successor is the billing document"),
+                ):
+                    if left.lower() in table_index and right.lower() in table_index:
+                        catalog.add_edge(table_index[left.lower()], table_index[right.lower()], pairs, provenance)
+            self.catalogs[source] = catalog
         return self.catalogs[source]
 
     def close(self):

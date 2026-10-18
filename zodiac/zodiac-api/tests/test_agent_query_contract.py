@@ -274,6 +274,80 @@ def test_manual_sql_training_still_rejects_unproven_document_pair_values(monkeyp
     assert not executed
 
 
+def test_manual_sql_training_accepts_currency_matched_vbfa_order_invoice_pair(monkeypatch):
+    from app.services import analyst_agent as agent
+    flow_schema = schema(
+        VBAK='mandt vbeln audat netwr waerk',
+        VBFA='mandt vbelv vbeln vbtyp_v vbtyp_n posnv posnn',
+        VBRK='mandt vbeln fkdat netwr waerk',
+    )
+    c = RelationshipCatalog(flow_schema)
+    c.keys = {'VBAK': [{'mandt', 'vbeln'}], 'VBRK': [{'mandt', 'vbeln'}],
+              'VBFA': [{'mandt', 'vbelv', 'vbeln', 'posnv', 'posnn'}]}
+    c.add_edge('VBAK', 'VBFA', [('vbeln', 'vbelv')], 'documented SAP order predecessor')
+    c.add_edge('VBFA', 'VBRK', [('vbeln', 'vbeln')], 'documented SAP billing successor')
+    c.inspect_keys = lambda *_: None
+    sql = '''WITH document_pairs AS (
+                 SELECT DISTINCT f.mandt, f.vbelv AS sales_order, f.vbeln AS billing_document
+                 FROM VBFA f
+                 WHERE f.vbtyp_n = 'M'
+             )
+             SELECT o.mandt, o.vbeln AS sales_order, p.billing_document,
+                    o.netwr AS order_net_value, b.netwr AS invoice_net_value,
+                    o.waerk AS order_currency, b.waerk AS invoice_currency,
+                    o.netwr - b.netwr AS value_difference
+             FROM document_pairs p
+             JOIN VBAK o ON o.mandt = p.mandt AND o.vbeln = p.sales_order
+             JOIN VBRK b ON b.mandt = p.mandt AND b.vbeln = p.billing_document
+             WHERE o.audat >= '20000101' AND o.audat < '20010101'
+               AND o.waerk = b.waerk'''
+    assert identified_value_proof(sql, c, [('VBAK', 'netwr'), ('VBRK', 'netwr')],
+                                  allow_currency_matched_difference=True) == (True, [])
+    rows = [{'mandt': '800', 'sales_order': 'O1', 'billing_document': 'B1',
+             'order_net_value': 100, 'invoice_net_value': 80,
+             'order_currency': 'USD', 'invoice_currency': 'USD', 'value_difference': 20}]
+    tools = agent.AnalystTools(None, lambda *_: rows, lambda: flow_schema,
+                               question='Compare order and invoice header values for year 2000',
+                               manual_sql_training=True)
+    monkeypatch.setattr(tools, 'schema', lambda _source: (flow_schema, 'live_database_metadata'))
+    monkeypatch.setattr(tools, 'catalog', lambda _source: c)
+    result = tools.call('run_readonly_sql', {'source': 'business', 'sql': sql,
+                                             'purpose': 'List sales order and invoice header values'})
+    assert result['ok']
+    assert result['rows'] == rows
+
+    unsafe = sql.replace('AND o.waerk = b.waerk', '')
+    rejected = tools.call('run_readonly_sql', {'source': 'business', 'sql': unsafe,
+                                               'purpose': 'Compare values with different currencies'})
+    assert not rejected['ok']
+    assert 'currencies are explicitly matched and displayed' in rejected['error']
+
+
+def test_sap_document_flow_edges_are_available_only_in_manual_sql_training(monkeypatch):
+    from app.services import analyst_agent as agent
+    flow_schema = schema(VBAK='mandt vbeln audat netwr waerk',
+                         VBFA='mandt vbelv vbeln vbtyp_n',
+                         VBRK='mandt vbeln fkdat netwr waerk')
+    monkeypatch.setattr(RelationshipCatalog, 'connected',
+                        classmethod(lambda cls, *_: RelationshipCatalog(flow_schema)))
+    training = agent.AnalystTools(None, lambda *_: [], lambda: flow_schema, manual_sql_training=True)
+    monkeypatch.setattr(training, 'schema', lambda _source: (flow_schema, 'live_database_metadata'))
+    monkeypatch.setattr(training, 'session', lambda _source: object())
+    training_catalog = training.catalog('business')
+    paths = training_catalog.paths(['VBAK', 'VBFA', 'VBRK'])
+    assert len(paths) == 2
+    assert {edge['provenance'] for path in paths for edge in path} == {
+        'SAP SD documented relationship: VBFA predecessor is the sales document',
+        'SAP SD documented relationship: VBFA successor is the billing document',
+    }
+
+    agentic = agent.AnalystTools(None, lambda *_: [], lambda: flow_schema)
+    monkeypatch.setattr(agentic, 'schema', lambda _source: (flow_schema, 'live_database_metadata'))
+    monkeypatch.setattr(agentic, 'session', lambda _source: object())
+    with pytest.raises(ValueError, match='No verified relationship path'):
+        agentic.catalog('business').paths(['VBAK', 'VBFA', 'VBRK'])
+
+
 def test_manual_training_proves_generic_order_invoice_value_pair_using_numeric_types(monkeypatch):
     from app.services import analyst_agent as agent
     generic_schema = {
