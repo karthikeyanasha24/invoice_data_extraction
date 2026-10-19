@@ -210,6 +210,26 @@ def test_analysis_limits_after_tools_are_not_provider_outages(monkeypatch, error
     execute.assert_not_called()
 
 
+def test_analysis_limit_answers_from_executed_sql(monkeypatch):
+    schema = {"VBRK": SCHEMA["VBRK"] + [{"col": "fkdat", "type": "text"}]}
+    monkeypatch.setattr("app.services.adaptive_analyst.live_schema.load_live_schema", lambda *_: (schema, "live_database_metadata"))
+    responses = iter([
+        tool("run_readonly_sql", {"source": "business", "sql": 'SELECT vbeln FROM "VBRK"', "purpose": "Inspect billing documents"}),
+    ])
+    def respond(**_):
+        try:
+            return next(responses)
+        except StopIteration:
+            raise agent.AnalystResourceLimit("Model-call budget reached")
+    monkeypatch.setattr(agent, "create_agent_response", respond)
+    result = run("Show billing documents in 2000", MagicMock(return_value=[{"vbeln": "0090010427"}]))
+    assert result["answer_status"] == "SUCCESS"
+    assert result["data"] == [{"vbeln": "0090010427"}]
+    assert result["meta"].get("analysis_limit_recovered") is True
+    assert result.get("failure_class") != "ANALYSIS_LIMIT_REACHED"
+    assert "unavailable" not in result["answer"]
+
+
 def test_incomplete_response_does_not_mark_provider_unavailable(monkeypatch):
     from app.services import analyst_agent_provider as provider
     import openai

@@ -234,3 +234,5 @@ def test_actual_usage_accounts_cached_and_reasoning_without_double_counting(monk
     monkeypatch.setenv('AI_ANALYST_MAX_TOTAL_TOKENS','1200')
     with pytest.raises(AnalystResourceLimit):
         model_limits([])
+    monkeypatch.setenv('AI_ANALYST_MAX_TOTAL_TOKENS','120000')
+    assert model_limits([{'role':'user','content':'x'*80000}]) >= 512

@@ -118,11 +118,11 @@ def create_agent_response(*, instructions: str, input: list[Any], tools: list[di
                 max_output_tokens=output_limit,
                 text={"format": {"type": "json_schema", "name": "analyst_answer", "strict": True, "schema": output_schema}},
             )
-            record_response(response, model, round((time.monotonic()-started)*1000))
             if response.status != "completed":
                 raise AnalystResponseIncomplete(
                     "The model reached its response limit before completing this analysis. "
                     "No unverified answer was returned. Partial answers are not returned.")
+            record_response(response, model, round((time.monotonic()-started)*1000))
             _provider_recovered("openai")
             return response
         except (InvestigationTimeout, AnalystResourceLimit):

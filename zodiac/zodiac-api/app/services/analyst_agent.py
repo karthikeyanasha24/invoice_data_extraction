@@ -723,13 +723,23 @@ def _answer_from_analysis(question: str, evidence: dict) -> str:
     return answer
 
 
-def _fallback_verified_result(question: str, tools: AnalystTools, state: InvestigationState, calls: int, reason: str) -> dict:
-    if _conditional_parts(question) or _available_period_request(question):
+def _fallback_verified_result(
+    question: str,
+    tools: AnalystTools,
+    state: InvestigationState,
+    calls: int,
+    reason: str,
+    *,
+    allow_unresolved_issues: bool = False,
+) -> dict:
+    if not allow_unresolved_issues and (_conditional_parts(question) or _available_period_request(question)):
         raise ValueError("This multi-part or exclusivity request needs a complete model answer supported by all required evidence")
     evidence, issues = _best_verified_analysis(question, tools)
-    if evidence is None or issues:
+    if evidence is None or (issues and not allow_unresolved_issues):
         raise ValueError(reason if evidence is None else reason + ": " + "; ".join(issues[:4]))
     answer = _answer_from_analysis(question, evidence)
+    if issues:
+        answer += "\n\nRemaining checks from the executed query: " + "; ".join(issues[:4])
     final = {
         "kind": "analysis",
         "answer": answer,
@@ -737,8 +747,10 @@ def _fallback_verified_result(question: str, tools: AnalystTools, state: Investi
         "result_ids": [evidence["id"]],
         "followups": [],
     }
-    result = _final_result(question, final, tools, state, calls)
+    result = _final_result(question, final, tools, state, calls, allow_unresolved_issues=allow_unresolved_issues)
     result["meta"]["evidence_fallback"] = True
+    if issues:
+        result["meta"]["unresolved_checks"] = issues[:6]
     return result
 
 
@@ -794,7 +806,7 @@ def _scope_question(question: str, prior_question: str) -> str:
     return f"{prior}\nFollow-up: {current}"
 
 
-def _final_result(question: str, final: dict, tools: AnalystTools, state: InvestigationState, calls: int, scope_question: str | None = None, prior_question: str = "") -> dict:
+def _final_result(question: str, final: dict, tools: AnalystTools, state: InvestigationState, calls: int, scope_question: str | None = None, prior_question: str = "", *, allow_unresolved_issues: bool = False) -> dict:
     if set(final) != set(_FINAL_SCHEMA["properties"]):
         raise ValueError("The final answer must match its required response schema")
     kind = final["kind"]
@@ -847,8 +859,11 @@ def _final_result(question: str, final: dict, tools: AnalystTools, state: Invest
         issues.extend(_analysis_issues(check_question, analyses[-1]))
     evidence_rows = [row for result in analyses for row in result["rows"]]
     issues.extend(answer_consistent_with_rows(final["answer"], evidence_rows, check_question))
-    if issues:
+    if issues and not allow_unresolved_issues:
         raise ValueError("Final result does not satisfy the request: " + "; ".join(issues[:6]))
+    if issues:
+        final = dict(final)
+        final["answer"] = final["answer"].rstrip() + "\n\nRemaining checks from the executed query: " + "; ".join(issues[:4])
     if kind == "metadata":
         unsupported = _unsupported_numbers(final["answer"], selected, question)
         if unsupported:
@@ -1026,7 +1041,7 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                     if call['name'] == 'run_readonly_sql' and not result.get('ok') and str(result.get('error', '')).startswith(('Equivalent failed SQL', 'SQL repair limit')):
                         raise ValueError(result['error'])
                 evidence, issues = _best_verified_analysis(scope, tools)
-                if evidence and not issues and not evidence.get('analysis_plan') and not conditional and not _available_period_request(question) and not public_research_requested(question):
+                if evidence and not issues and not conditional and not _available_period_request(question) and not public_research_requested(question):
                     return _attach_loop_metrics(
                         _fallback_verified_result(
                             scope, tools, state, calls,
@@ -1118,6 +1133,21 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                     return result
                 except Exception:
                     pass  # Preserve the original model failure if schema access also fails.
+        if isinstance(error, (AnalystResourceLimit, AnalystResponseIncomplete)):
+            try:
+                recovered = _attach_loop_metrics(
+                    _fallback_verified_result(
+                        scope, tools, state, calls, str(error),
+                        allow_unresolved_issues=True,
+                    ),
+                    started=started, calls=calls, tool_count=tool_count,
+                    feedback_count=feedback_count, tools=tools,
+                )
+                recovered["meta"]["limit_reason"] = str(error)
+                recovered["meta"]["analysis_limit_recovered"] = True
+                return recovered
+            except ValueError:
+                pass
         result = technical_understanding_failure(question, error)
         if isinstance(error, (AnalystResourceLimit, AnalystResponseIncomplete)):
             message = ("This investigation reached its model-call, token or cost limit before a verified answer was ready. "

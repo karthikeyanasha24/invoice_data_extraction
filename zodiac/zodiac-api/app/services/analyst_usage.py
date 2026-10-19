@@ -24,20 +24,21 @@ def usage_summary():
 
 def model_limits(input, instructions='', tools=None, requested_output=8000, model=''):
     summary = usage_summary()
-    if summary['calls'] and not summary['usage_complete']:
-        raise AnalystResourceLimit('Provider did not report usage; further model calls are stopped')
-    if len(summary['calls']) >= int(os.getenv('AI_ANALYST_MAX_MODEL_CALLS', '10')):
+    if len(summary['calls']) >= int(os.getenv('AI_ANALYST_MAX_MODEL_CALLS', '16')):
         raise AnalystResourceLimit('Model-call budget reached; narrow the request or use the result drill-down')
-    # UTF-8 bytes are a deliberately conservative upper bound for textual input.
-    # Provider-reported usage is the accounting authority, never this estimate.
-    bound = len(json.dumps({'input':input,'instructions':instructions,'tools':tools or []}, default=str, ensure_ascii=False).encode('utf-8'))
-    remaining = int(os.getenv('AI_ANALYST_MAX_TOTAL_TOKENS', '120000')) - summary['total_tokens']
-    output = min(int(os.getenv('AI_ANALYST_MAX_OUTPUT_TOKENS', str(requested_output))), requested_output, remaining-bound)
+    # Provider-reported tokens are the accounting authority. Prompt byte length is
+    # not interchangeable with tokens and must not abort a finished SQL investigation.
+    remaining = int(os.getenv('AI_ANALYST_MAX_TOTAL_TOKENS', '250000')) - summary['total_tokens']
+    output = min(int(os.getenv('AI_ANALYST_MAX_OUTPUT_TOKENS', str(requested_output))), requested_output, max(0, remaining))
     if output < 512:
         raise AnalystResourceLimit('Token budget reached; start a narrower investigation')
     cap = os.getenv('AI_ANALYST_MAX_REQUEST_USD')
     if cap:
-        estimated = price(model, bound, output, 0, 0)
+        prompt_bytes = len(json.dumps(
+            {'input': input, 'instructions': instructions, 'tools': tools or []},
+            default=str, ensure_ascii=False,
+        ).encode('utf-8'))
+        estimated = price(model, max(1, prompt_bytes // 4), output, 0, 0)
         if estimated is None or (summary['calls'] and not summary['pricing_complete']):
             raise AnalystResourceLimit('A dollar budget requires configured prices for every enabled model')
         spent = Decimal(summary['estimated_cost_usd'] or '0')
