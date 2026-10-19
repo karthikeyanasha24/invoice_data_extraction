@@ -3919,6 +3919,11 @@ def _post_query_adaptive_body(
             db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
             sap_session_factory=get_sap_session, question=_original_question,
         )
+        training_executor = AnalystTools(
+            db, _execute_sql, _load_schema, use_sap=USE_SAP_DB_FOR_AI,
+            sap_session_factory=get_sap_session, question=_original_question,
+            manual_sql_training=True,
+        )
         def _basic_field_lookup(question):
             from ..services.basic_sap_field_lookup import gemini_field_lookup_enabled, has_known_customer_terms, lookup_sap_field, unresolved_field
             if source != "business" or not (has_known_customer_terms(question)
@@ -3933,6 +3938,12 @@ def _post_query_adaptive_body(
         def _execute_basic(sql, step=None):
             step = step if isinstance(step, dict) else {}
             step_source = step.get("source") if step.get("source") in {"business", "application"} else source
+            # SQL Training examples come from permission-bound server storage.
+            # Re-prove their authored SQL exactly as SQL Training does; these
+            # examples have no model-generated prepare_analysis plan to replay.
+            # Keep a separate executor so other Basic queries and Agentic retain
+            # their normal planning requirements and relationship catalogs.
+            active_executor = training_executor if step.get("training_example") else executor
             plan = step.get("analysis_plan")
             if not plan:
                 cached = next((item for item in prior_examples
@@ -3942,11 +3953,11 @@ def _post_query_adaptive_body(
             if plan:
                 # This plan was loaded from server-owned, permission-bound memory.
                 # The normal SQL tool rechecks it against the connected catalog.
-                executor.plans[step_source] = plan
+                active_executor.plans[step_source] = plan
             else:
-                executor.plans.pop(step_source, None)
+                active_executor.plans.pop(step_source, None)
             purpose = str(step.get("purpose") or "Basic verified query")
-            executed = executor.call("run_readonly_sql", {"source": step_source, "sql": sql, "purpose": purpose})
+            executed = active_executor.call("run_readonly_sql", {"source": step_source, "sql": sql, "purpose": purpose})
             if executed.get("ok") and not step.get("checked_investigation") and not step.get("training_example"):
                 from ..services.analyst_agent import _analysis_issues
                 from ..services.basic_sql_answer import continue_basic_question, prepare_basic_question
@@ -3971,6 +3982,7 @@ def _post_query_adaptive_body(
             )
         finally:
             executor.close()
+            training_executor.close()
         allow_paid_fallback = os.getenv("BASIC_ALLOW_PAID_FALLBACK", "true").strip().lower() in {"true", "1", "yes"}
         if not free_model_available and allow_paid_fallback and (basic.get("meta", {}).get("needs_agent") or basic.get("answer_status") == "CANNOT_ANSWER"):
             # The model-free guard has been restored by run_basic_sql_answer.
