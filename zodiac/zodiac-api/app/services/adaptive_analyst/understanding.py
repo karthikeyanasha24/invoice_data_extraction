@@ -1102,15 +1102,36 @@ _MEMORY_LANGUAGE_STOP_WORDS = frozenset(
 )
 
 
+def _provider_error_fields(cause: BaseException) -> tuple[str, int, str]:
+    code = str(getattr(cause, "code", "") or "").lower()
+    status_code = getattr(cause, "status_code", None)
+    text = str(cause or "").lower()
+    body = getattr(cause, "body", None)
+    payload = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else body
+    if isinstance(payload, dict):
+        code = str(payload.get("code") or payload.get("type") or code).lower()
+        text = str(payload.get("message") or text).lower()
+        if not status_code:
+            status_code = payload.get("status")
+    try:
+        status_code = int(status_code or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    return code, status_code, text
+
+
 def technical_understanding_failure(question: str, err: BaseException) -> Dict[str, Any]:
     """Infrastructure / model failure — never a business-metric clarification."""
     cause = err
     while cause.__cause__ is not None:
         cause = cause.__cause__
-    code = str(getattr(cause, "code", "") or "").lower()
-    status_code = getattr(cause, "status_code", None)
+    code, status_code, text = _provider_error_fields(cause)
     service_issue = "model_unavailable"
-    if code in {"insufficient_quota", "credit_balance_exhausted"}:
+    timeout_names = {
+        "APITimeoutError", "APIConnectionError", "ReadTimeout", "ConnectTimeout",
+        "WriteTimeout", "PoolTimeout", "TimeoutError",
+    }
+    if code in {"insufficient_quota", "credit_balance_exhausted"} or "insufficient_quota" in text or "credit_balance_exhausted" in text:
         service_issue = "quota_exhausted"
         msg = (
             "The AI model service has exhausted its API credits. Restore the configured "
@@ -1123,6 +1144,16 @@ def technical_understanding_failure(question: str, err: BaseException) -> Dict[s
     elif status_code in {401, 403, 404}:
         service_issue = "provider_configuration"
         msg = "The AI model service configuration needs attention. Check its API key and model access."
+    elif (
+        isinstance(cause, (TimeoutError, ConnectionError))
+        or type(cause).__name__ in timeout_names
+        or "timed out" in text
+    ):
+        service_issue = "timeout"
+        msg = (
+            "The AI model call timed out before a verified answer was ready. "
+            "Ask again; Agentic will retry the investigation automatically."
+        )
     else:
         msg = (
             "I couldn't answer because the AI model service is currently unavailable. "

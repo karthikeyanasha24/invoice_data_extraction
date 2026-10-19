@@ -140,7 +140,35 @@ def test_alias_renames_are_not_meaningful_sql_repairs():
 
 
 def test_unmatched_bridge_reference_cannot_be_hidden_by_nullable_order_id():
-    assert not identified_value_proof(SQL.replace('l.aubel AS linked_order_reference,',''), catalog())[0]
+    ok, errors = identified_value_proof(SQL.replace('l.aubel AS linked_order_reference,',''), catalog())
+    assert not ok
+    assert 'l.aubel' in errors[0]
+
+
+def test_connected_relationship_catalog_resolves_physical_table_case():
+    engine = create_engine('sqlite://')
+    with Session(engine) as session:
+        c = RelationshipCatalog.connected(SCHEMA, session)
+    paths = c.paths(['VBRK', 'VBAK'])
+    assert paths
+    assert all(('mandt', 'mandt') in edge['pairs'] for path in paths for edge in path)
+
+
+def test_agentic_plan_accepts_currency_matched_difference_and_preserves_null_links(monkeypatch):
+    from app.services import analyst_agent as agent
+    c = catalog()
+    c.inspect_keys = lambda *_: None
+    tools = agent.AnalystTools(None, lambda *_: [], lambda: SCHEMA, question=QUESTION)
+    monkeypatch.setattr(tools, 'schema', lambda _: (SCHEMA, 'live_database_metadata'))
+    monkeypatch.setattr(tools, 'catalog', lambda _: c)
+    assert tools.call('prepare_analysis', {'source': 'business', **plan()})['ok']
+    sql = SQL.replace('o.waerk AS order_currency',
+                      'o.waerk AS order_currency, CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC) AS difference')
+    sql = sql.replace('ORDER BY', 'AND b.waerk=o.waerk ORDER BY')
+    assert tools.call('run_readonly_sql', {'source': 'business', 'sql': sql, 'purpose': 'Compare amounts'})['ok']
+    unsafe = sql.replace('AND b.waerk=o.waerk ', '')
+    error = tools.call('run_readonly_sql', {'source': 'business', 'sql': unsafe, 'purpose': 'Invalid currency subtraction'})
+    assert not error['ok'] and 'currencies are explicitly matched' in error['error']
 
 
 def test_followup_freezes_document_cohort_and_requeries_it_without_injection():

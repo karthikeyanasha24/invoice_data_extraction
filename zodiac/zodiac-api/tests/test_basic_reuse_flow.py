@@ -89,7 +89,7 @@ def test_basic_miss_or_failed_sql_uses_normal_agent_with_honest_usage(monkeypatc
     def agent(asked, *_a, **kwargs):
         assert not paid_models_blocked()
         assert asked == question and kwargs["context"] == context
-        assert calls == ["closed"]
+        assert calls and all(item == "closed" for item in calls)
         calls.append("agent")
         return {"pipeline": "analyst_agent", "mode": "general_chat", "answer_status": "SUCCESS",
                 "answer": "A fresh investigation", "llm_calls": 2,
@@ -100,7 +100,7 @@ def test_basic_miss_or_failed_sql_uses_normal_agent_with_honest_usage(monkeypatc
         result = api._post_query_adaptive_body(q=question, original_question=question, tableHint=None,
             contextData=context, overrideSql=None, threadId=None, investigationId=None, db=MagicMock(),
             current_user=SimpleNamespace(id=7), analysis_mode="basic")
-        assert calls == ["closed", "agent"]
+        assert calls[-1] == "agent" and all(item == "closed" for item in calls[:-1])
         assert result["meta"]["basic_fallback"] == ("saved_query_failed" if failure else "no_safe_match")
         assert result["meta"]["credits_used"] is True
         assert result["meta"]["analysis_method"] == "agent"

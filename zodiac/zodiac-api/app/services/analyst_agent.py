@@ -12,6 +12,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from .analyst_agent_provider import create_agent_response
+from .analyst_agent_provider import AnalystResponseIncomplete
+from .analyst_usage import AnalystResourceLimit
 from .analyst_agent_sql import MAX_RESULT_ROWS, queryable_schema, validate_agent_sql
 from .investigation_budget import checkpoint, current_budget, InvestigationTimeout, timeout_response
 from .adaptive_analyst.chat_memory import relevant_conversation, user_conversation_preferences
@@ -56,6 +58,19 @@ output grain, missing-link handling and sorting. A billing-only answer cannot
 complete a billing-versus-order request. Discover additional sources for follow-ups.
 For an identified document-pair listing, deduplicate the non-monetary bridge keys,
 then display each header's value without SUM; project both IDs and currencies.
+For LEFT JOINs, also project the non-nullable-side bridge references, for example
+l.mandt and l.aubel as linked_client and linked_order_reference, separately from
+o.vbeln. The target ID may be null; it cannot replace the original link reference.
+Include every planned output alias exactly, including the client. A document-pair
+listing uses raw header values, never SUM or MAX over the joined pair. Compute a
+difference only with both currencies displayed and an explicit currency equality;
+otherwise display the amounts side by side and report the currency mismatch.
+For a specific invoice, filter its inspected document ID immediately and reuse
+already inspected schema. Prefer column_filter for just the keys and relevant
+amount/date/quantity/price fields rather than describing hundreds of columns.
+To explain WHY values differ, inspect linked item quantities, units, prices,
+discounts, tax and other recorded components as available. A header difference
+alone does not prove a business cause. Report missing evidence honestly.
 For totals, aggregate independent facts separately BEFORE joining. These are
 different grains. Do not substitute one for the other. Use exact inspected keys.
 A bridge may be one-to-many. State that header values repeat per distinct pair and
@@ -532,7 +547,7 @@ class AnalystTools:
                                           if plan else training_measure_fields)
                 proof, diagnostics = identified_value_proof(
                     sql, catalog, planned_measure_fields,
-                    allow_currency_matched_difference=self.manual_sql_training,
+                    allow_currency_matched_difference=bool(plan) or self.manual_sql_training,
                 )
                 if not proof:
                     # Independent aggregate proofs remain valid; the identified
@@ -961,8 +976,8 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
     tools = AnalystTools(db, execute_sql, schema_loader, use_sap=use_sap, sap_session_factory=sap_session_factory, question=scope, context=context)
     own_budget = current_budget() is None
     if own_budget:
-        from .investigation_budget import begin_investigation
-        begin_investigation(question)
+        from .investigation_budget import HARD_LIMIT_SECONDS, begin_investigation
+        begin_investigation(question, limit_s=max(float(HARD_LIMIT_SECONDS), 180.0))
     calls, tool_count, feedback_count, final_rejects = 0, 0, 0, 0
     model_failed = False
     started = time.monotonic()
@@ -970,13 +985,27 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
         for _ in range(14):
             checkpoint("CHOOSING_ACTION")
             calls += 1
-            try:
-                response = create_agent_response(instructions=_INSTRUCTIONS, input=input_items, tools=_TOOLS, output_schema=_FINAL_SCHEMA)
-            except InvestigationTimeout:
-                raise
-            except Exception:
-                model_failed = True
-                raise
+            turn_retries = 0
+            while True:
+                try:
+                    response = create_agent_response(instructions=_INSTRUCTIONS, input=input_items, tools=_TOOLS, output_schema=_FINAL_SCHEMA)
+                    break
+                except InvestigationTimeout:
+                    raise
+                except AnalystResourceLimit:
+                    raise
+                except AnalystResponseIncomplete:
+                    # Incomplete is not a provider outage; retry the same turn once.
+                    if turn_retries >= 1:
+                        raise
+                    turn_retries += 1
+                    continue
+                except Exception:
+                    if turn_retries >= 1:
+                        model_failed = True
+                        raise
+                    turn_retries += 1
+                    continue
             output = [_plain(item) for item in response.output]
             # Preserve all function calls AND reasoning items inside this turn.
             input_items.extend(output)
@@ -1090,8 +1119,16 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                 except Exception:
                     pass  # Preserve the original model failure if schema access also fails.
         result = technical_understanding_failure(question, error)
-        if not model_failed:
+        if isinstance(error, (AnalystResourceLimit, AnalystResponseIncomplete)):
+            message = ("This investigation reached its model-call, token or cost limit before a verified answer was ready. "
+                       "This is an analysis limit; adding API credits will not change this request limit."
+                       if isinstance(error, AnalystResourceLimit) else str(error))
+            result.update(failure_class="ANALYSIS_LIMIT_REACHED", summary=message, answer=message)
+            result["meta"].update(failure_class="ANALYSIS_LIMIT_REACHED", limit_reason=str(error))
+            result["meta"].pop("service_issue", None)
+        elif not model_failed:
             result.update(failure_class="AGENT_VALIDATION_FAILED", summary=str(error), answer=str(error))
+            result["meta"]["failure_class"] = "AGENT_VALIDATION_FAILED"
             result["meta"].pop("service_issue", None)
         result["pipeline"] = "analyst_agent"
         result["llm_calls"] = calls

@@ -3416,6 +3416,7 @@ def _post_query_adaptive_body(
 
     routing_meta: Dict[str, Any] = {}
     from ..services.investigation_budget import (
+        HARD_LIMIT_SECONDS,
         InvestigationTimeout,
         begin_investigation,
         end_investigation,
@@ -3423,8 +3424,12 @@ def _post_query_adaptive_body(
         current_budget,
     )
 
+    agentic_limit = None
+    if (analysis_mode or "agent") != "basic":
+        agentic_limit = max(float(HARD_LIMIT_SECONDS), 180.0)
     inv = begin_investigation(
         q,
+        limit_s=agentic_limit,
         request_id=(investigationId or "").strip(),
         owner_id=int(getattr(current_user, "id", 0) or 0) or None,
     )
@@ -3984,7 +3989,12 @@ def _post_query_adaptive_body(
             executor.close()
             training_executor.close()
         allow_paid_fallback = os.getenv("BASIC_ALLOW_PAID_FALLBACK", "true").strip().lower() in {"true", "1", "yes"}
-        if not free_model_available and allow_paid_fallback and (basic.get("meta", {}).get("needs_agent") or basic.get("answer_status") == "CANNOT_ANSWER"):
+        basic_unanswered = (
+            bool(basic.get("meta", {}).get("needs_agent"))
+            or basic.get("answer_status") == "CANNOT_ANSWER"
+            or bool(basic.get("meta", {}).get("service_issue"))
+        )
+        if not free_model_available and allow_paid_fallback and basic_unanswered:
             # The model-free guard has been restored by run_basic_sql_answer.
             # Call the existing Agentic entry point with its normal context.
             reason = "saved_query_failed" if basic.get("sql") else "no_safe_match"

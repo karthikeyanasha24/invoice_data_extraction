@@ -1074,11 +1074,20 @@ function ResultContent({ result, onAskFollowup, onUseBasicPattern, onUseAgentic,
     const failure = String(
       result.failure_class || result.meta?.investigation_status || ''
     ).toUpperCase();
+    const issue = result.meta?.service_issue
     const heading =
-      result.meta?.provider === 'ollama' && result.meta?.service_issue
+      result.meta?.provider === 'ollama' && issue
         ? 'Local Basic model could not complete'
-        : result.meta?.service_issue
+        : issue === 'quota_exhausted'
+        ? 'OpenAI credits needed'
+        : issue === 'timeout'
+        ? 'Analysis timed out'
+        : issue === 'rate_limited'
+        ? 'AI service is busy'
+        : issue
         ? 'AI service unavailable'
+        : failure === 'ANALYSIS_LIMIT_REACHED'
+        ? 'Analysis limit reached'
         : failure === 'TOOL_FAILURE' || failure === 'EXECUTION_FAILED'
         ? 'Query could not be completed'
         : failure === 'MODEL_FAILURE' || failure === 'SQL_GENERATION_FAILED'

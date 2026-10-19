@@ -186,6 +186,46 @@ def test_provider_quota_does_not_become_canned_chat_success(monkeypatch):
     assert run("How many tables are there?")["data"] == [{"table_count": 4}]
 
 
+@pytest.mark.parametrize('error', [
+    agent.AnalystResourceLimit('Model-call budget reached'),
+    agent.AnalystResourceLimit('Token budget reached'),
+    agent.AnalystResponseIncomplete('The model reached its response limit'),
+])
+def test_analysis_limits_after_tools_are_not_provider_outages(monkeypatch, error):
+    responses = iter([tool('describe_tables', {'source': 'business', 'tables': ['VBRK']})])
+    def respond(**_):
+        try:
+            return next(responses)
+        except StopIteration:
+            raise error
+    monkeypatch.setattr(agent, 'create_agent_response', respond)
+    execute = MagicMock()
+    result = run('Compare invoice 0090010427 with its order', execute)
+    assert result['failure_class'] == 'ANALYSIS_LIMIT_REACHED'
+    assert result['meta']['failure_class'] == 'ANALYSIS_LIMIT_REACHED'
+    assert 'service_issue' not in result['meta']
+    assert result['query_plan']['agent_trace'][0]['status'] == 'completed'
+    assert not result['data']
+    assert 'unavailable' not in result['answer']
+    execute.assert_not_called()
+
+
+def test_incomplete_response_does_not_mark_provider_unavailable(monkeypatch):
+    from app.services import analyst_agent_provider as provider
+    import openai
+    monkeypatch.setattr('app.services.basic_local_provider.local_agent_active', lambda: False)
+    monkeypatch.setattr(provider, '_openai_key', lambda: 'test-key')
+    monkeypatch.setattr(provider, '_provider_available', lambda _: True)
+    failed = MagicMock()
+    monkeypatch.setattr(provider, '_provider_failed', failed)
+    client = MagicMock()
+    client.responses.create.return_value = SimpleNamespace(status='incomplete', usage=None)
+    monkeypatch.setattr(openai, 'OpenAI', lambda **_: client)
+    with pytest.raises(provider.AnalystResponseIncomplete):
+        provider.create_agent_response(instructions='Test', input=[], tools=[], output_schema={})
+    failed.assert_not_called()
+
+
 def test_tool_output_compaction_always_remains_valid_json():
     result = {"ok": True, "id": "r", "rows": [{"large": "x" * 5000} for _ in range(200)]}
     compact = json.loads(agent._model_evidence(result))
@@ -310,8 +350,30 @@ def test_incomplete_model_response_is_not_accepted(monkeypatch):
     monkeypatch.setattr(provider, "_openai_key", lambda: "synthetic-test-key")
     monkeypatch.setattr(provider, "_provider_available", lambda _: True)
     monkeypatch.setattr(provider, "_provider_failed", MagicMock())
-    with pytest.raises(RuntimeError, match="partial answers"):
+    with pytest.raises(provider.AnalystResponseIncomplete, match="[Pp]artial answers"):
         provider.create_agent_response(instructions="test", input=[], tools=[], output_schema=agent._FINAL_SCHEMA)
+
+
+def test_transient_timeout_retries_then_answers(monkeypatch):
+    from app.services import analyst_agent_provider as provider
+    import openai
+    response = SimpleNamespace(status="completed", output=[], output_text="{}")
+    client = MagicMock()
+    client.responses.create.side_effect = [TimeoutError("timed out"), response]
+    monkeypatch.setattr(openai, "OpenAI", lambda **_: client)
+    monkeypatch.setattr("app.services.basic_local_provider.local_agent_active", lambda: False)
+    monkeypatch.setattr(provider, "_openai_key", lambda: "synthetic-test-key")
+    monkeypatch.setattr(provider, "_provider_available", lambda _: True)
+    recovered = MagicMock()
+    failed = MagicMock()
+    monkeypatch.setattr(provider, "_provider_recovered", recovered)
+    monkeypatch.setattr(provider, "_provider_failed", failed)
+    monkeypatch.setattr(provider.time, "sleep", lambda *_a, **_k: None)
+    result = provider.create_agent_response(instructions="test", input=[], tools=[], output_schema=agent._FINAL_SCHEMA)
+    assert result is response
+    assert client.responses.create.call_count == 2
+    recovered.assert_called_once_with("openai")
+    failed.assert_not_called()
 
 
 def test_final_validation_feedback_triggers_a_new_tool_query(monkeypatch):

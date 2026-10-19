@@ -222,6 +222,17 @@ def _is_gemini_quota(exc: BaseException) -> bool:
 
 _PROVIDER_FAILURE_UNTIL: Dict[str, float] = {}
 _PROVIDER_FAILURE_ERRORS: Dict[str, BaseException] = {}
+_LAST_PROBE_REQUEST: Dict[str, str] = {}
+_TRANSIENT_ERROR_NAMES = {
+    "APITimeoutError",
+    "APIConnectionError",
+    "ReadTimeout",
+    "ConnectTimeout",
+    "WriteTimeout",
+    "PoolTimeout",
+    "ConnectError",
+    "RemoteProtocolError",
+}
 
 
 def _provider_identity(provider: str) -> str:
@@ -231,18 +242,44 @@ def _provider_identity(provider: str) -> str:
     return f"{provider}:{model}:{hashlib.sha256(key.encode()).hexdigest()[:16]}"
 
 
+def _is_transient_provider_error(error: BaseException) -> bool:
+    if isinstance(error, (TimeoutError, ConnectionError, ConnectionResetError, BrokenPipeError)):
+        return True
+    if type(error).__name__ in _TRANSIENT_ERROR_NAMES:
+        return True
+    status = int(getattr(error, "status_code", 0) or 0)
+    if status in {500, 502, 503, 529}:
+        return True
+    text = str(error or "").lower()
+    return "timed out" in text or ("timeout" in text and "quota" not in text)
+
+
 def _provider_available(provider: str) -> bool:
-    return time.monotonic() >= _PROVIDER_FAILURE_UNTIL.get(_provider_identity(provider), 0.0)
+    identity = _provider_identity(provider)
+    until = _PROVIDER_FAILURE_UNTIL.get(identity, 0.0)
+    if time.monotonic() >= until:
+        return True
+    # A new investigation may follow a credit top-up. Probe once per request
+    # instead of failing every later question from an in-process cooldown.
+    from .investigation_budget import current_budget
+    budget = current_budget()
+    request_id = str(getattr(budget, "request_id", "") or "")
+    return bool(request_id) and _LAST_PROBE_REQUEST.get(identity) != request_id
+
+
+def _provider_recovered(provider: str) -> None:
+    identity = _provider_identity(provider)
+    _PROVIDER_FAILURE_UNTIL.pop(identity, None)
+    _PROVIDER_FAILURE_ERRORS.pop(identity, None)
+    _LAST_PROBE_REQUEST.pop(identity, None)
 
 
 def _provider_failed(provider: str, error: BaseException) -> None:
-    # A single slow request does not make the provider unavailable for the
-    # answer stage or the next turn. Quota/configuration outages still cool down.
-    if isinstance(error, TimeoutError) or type(error).__name__ in {
-        "APITimeoutError", "ReadTimeout", "ConnectTimeout", "WriteTimeout", "PoolTimeout",
-    }:
+    # A single slow or disconnected request does not make the provider
+    # unavailable for the answer stage or the next turn.
+    if _is_transient_provider_error(error):
         return
-    # Recover automatically after transient, configuration, and quota failures;
+    # Recover automatically after configuration and quota failures;
     # do not try the same broken provider at every stage of one investigation.
     try:
         transient_cooldown = max(
@@ -251,12 +288,22 @@ def _provider_failed(provider: str, error: BaseException) -> None:
         )
     except ValueError:
         transient_cooldown = 180.0
-    seconds = max(300.0, transient_cooldown) if (
-        _is_openai_quota(error) or _is_gemini_quota(error)
-    ) else transient_cooldown
+    quota = _is_openai_quota(error) or _is_gemini_quota(error)
+    status = int(getattr(error, "status_code", 0) or 0)
+    if status == 429 and not quota:
+        seconds = min(15.0, transient_cooldown or 15.0)
+    elif quota:
+        seconds = max(300.0, transient_cooldown)
+    else:
+        seconds = transient_cooldown
     identity = _provider_identity(provider)
     _PROVIDER_FAILURE_UNTIL[identity] = time.monotonic() + seconds
     _PROVIDER_FAILURE_ERRORS[identity] = error
+    from .investigation_budget import current_budget
+    budget = current_budget()
+    request_id = str(getattr(budget, "request_id", "") or "")
+    if request_id:
+        _LAST_PROBE_REQUEST[identity] = request_id
 
 
 def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, str]:
@@ -290,6 +337,7 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
             response = _gemini_chat(system, user)
             if not response:
                 raise RuntimeError("Gemini returned an empty response")
+            _provider_recovered("gemini")
             return response, "gemini"
         except Exception as exc:
             from .investigation_budget import InvestigationTimeout
@@ -312,6 +360,7 @@ def llm_text(system: str, user: str, *, json_mode: bool = False) -> Tuple[str, s
             response = _openai_chat(system, user, json_mode=json_mode)
             if not response:
                 raise RuntimeError("OpenAI returned an empty response")
+            _provider_recovered("openai")
             return response, "openai"
         except Exception as exc:
             from .investigation_budget import InvestigationTimeout

@@ -139,13 +139,8 @@ class RelationshipCatalog:
                 entry = grouped.setdefault((a, b), {'pairs': [], 'source': rel['source']})
                 entry['pairs'].append((rel['source_column'], rel['target_column']))
         for (a, b), entry in grouped.items():
-            # SAP document keys are only unique within a client. Keep the
-            # client predicate in every discovered path so a join cannot
-            # cross-match identical VBELN/POSNR values from another MANDT.
-            if 'mandt' in catalog.columns[a] and 'mandt' in catalog.columns[b] \
-                    and not any(left.lower() == 'mandt' and right.lower() == 'mandt'
-                                for left, right in entry['pairs']):
-                entry['pairs'].insert(0, ('mandt', 'mandt'))
+            # add_edge resolves physical table casing and adds MANDT when
+            # present on both sources. Registry names need not match DB case.
             catalog.add_edge(a, b, entry['pairs'], entry['source'])
         # Discover all declared FKs in one catalog read, including intermediate
         # tables not yet mentioned by the model. Constraints contain no records.
@@ -507,7 +502,9 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                     # into indistinguishable NULL pairs.
                     if any(left[1] in key for key in infos[left[0]][1]) and not any(
                             p[0] in seen and find(p) == find(left) for p in projected):
-                        raise ValueError('Preserve the left-side link reference in output; a missing target ID cannot identify an unmatched document pair')
+                        raise ValueError(f'Preserve the left-side link reference {left[0]}.{left[1]} in output; '
+                                         'a missing target ID cannot identify an unmatched document pair. '
+                                         'Project this bridge column with its own alias as well as the target document ID')
             seen.add(target)
         # A projected composite-key component can carry equivalent origins from
         # earlier verified joins. This is necessary for multi-hop bridge CTEs.
