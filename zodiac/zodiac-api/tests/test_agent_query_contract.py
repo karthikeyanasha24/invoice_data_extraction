@@ -327,6 +327,7 @@ def test_sap_document_flow_edges_are_available_only_in_manual_sql_training(monke
     from app.services import analyst_agent as agent
     flow_schema = schema(VBAK='mandt vbeln audat netwr waerk',
                          VBFA='mandt vbelv vbeln vbtyp_n',
+                         LIKP='mandt vbeln wadat',
                          VBRK='mandt vbeln fkdat netwr waerk')
     monkeypatch.setattr(RelationshipCatalog, 'connected',
                         classmethod(lambda cls, *_: RelationshipCatalog(flow_schema)))
@@ -340,6 +341,12 @@ def test_sap_document_flow_edges_are_available_only_in_manual_sql_training(monke
         'SAP SD documented relationship: VBFA predecessor is the sales document',
         'SAP SD documented relationship: VBFA successor is the billing document',
     }
+    delivery_path = training_catalog.paths(['VBAK', 'LIKP'])
+    assert len(delivery_path) == 1
+    assert [edge['provenance'] for edge in delivery_path[0]] == [
+        'SAP SD documented relationship: VBFA predecessor is the sales document',
+        'SAP SD documented relationship: VBFA successor is the delivery document',
+    ]
 
     agentic = agent.AnalystTools(None, lambda *_: [], lambda: flow_schema)
     monkeypatch.setattr(agentic, 'schema', lambda _source: (flow_schema, 'live_database_metadata'))

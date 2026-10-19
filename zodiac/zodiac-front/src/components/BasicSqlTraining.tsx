@@ -13,7 +13,11 @@ type TrainingFilter = { id: string; table: string; column: string; operator: Fil
 type PreviewResult = { sql?: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; limit?: number; applied_filters?: number };
 
 export default function BasicSqlTraining({ initialQuestion = '' }: { initialQuestion?: string }) {
-  const [source, setSource] = useState<TrainingSource>('business');
+  // The application database is the configured AI catalog in the normal
+  // deployment. The API still resolves `auto` from its environment, but the
+  // initial value must not briefly point at an unavailable business source
+  // when the user switches into SQL Training for the first time.
+  const [source, setSource] = useState<TrainingSource>('application');
   const [tables, setTables] = useState<SchemaTable[]>([]);
   const [schemaSource, setSchemaSource] = useState('');
   const [selected, setSelected] = useState<Record<string, string[]>>({});

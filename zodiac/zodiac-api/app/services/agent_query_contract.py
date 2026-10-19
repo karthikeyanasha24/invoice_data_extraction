@@ -139,6 +139,13 @@ class RelationshipCatalog:
                 entry = grouped.setdefault((a, b), {'pairs': [], 'source': rel['source']})
                 entry['pairs'].append((rel['source_column'], rel['target_column']))
         for (a, b), entry in grouped.items():
+            # SAP document keys are only unique within a client. Keep the
+            # client predicate in every discovered path so a join cannot
+            # cross-match identical VBELN/POSNR values from another MANDT.
+            if 'mandt' in catalog.columns[a] and 'mandt' in catalog.columns[b] \
+                    and not any(left.lower() == 'mandt' and right.lower() == 'mandt'
+                                for left, right in entry['pairs']):
+                entry['pairs'].insert(0, ('mandt', 'mandt'))
             catalog.add_edge(a, b, entry['pairs'], entry['source'])
         # Discover all declared FKs in one catalog read, including intermediate
         # tables not yet mentioned by the model. Constraints contain no records.

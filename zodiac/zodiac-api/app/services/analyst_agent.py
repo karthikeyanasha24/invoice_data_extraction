@@ -286,6 +286,8 @@ class AnalystTools:
                 for left, right, pairs, provenance in (
                     ("VBAK", "VBFA", [("vbeln", "vbelv")],
                      "SAP SD documented relationship: VBFA predecessor is the sales document"),
+                    ("VBFA", "LIKP", [("vbeln", "vbeln")],
+                     "SAP SD documented relationship: VBFA successor is the delivery document"),
                     ("VBFA", "VBRK", [("vbeln", "vbeln")],
                      "SAP SD documented relationship: VBFA successor is the billing document"),
                 ):

@@ -63,6 +63,12 @@ def test_metrics_do_not_alias_orders_to_billing():
     assert any(r["source_table"] == "VBAK" and r["target_table"] == "VBAP" for r in RELATIONSHIPS)
 
 
+def test_common_sd_order_delivery_invoice_relationships_are_catalogued():
+    pairs = {(r["source_table"].upper(), r["target_table"].upper()) for r in RELATIONSHIPS}
+    assert {("VBAK", "VBAP"), ("LIKP", "LIPS"), ("VBRK", "VBRP"),
+            ("LIPS", "VBAP"), ("VBRP", "LIKP")} <= pairs
+
+
 def test_client_question_is_not_too_short():
     ok, reason = is_supported_business_question(CLIENT_Q)
     assert ok is True
