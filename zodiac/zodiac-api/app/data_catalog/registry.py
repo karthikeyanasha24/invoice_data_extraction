@@ -146,6 +146,15 @@ GLOSSARY: Dict[str, Dict[str, str]] = {
              "source": "VERIFIED FROM DOCUMENTATION"},
 }
 
+# Customer, vendor, material, organisational and text tables. A relationship
+# path may end in them or continue to more master data, but may not use them to
+# connect two transactions (billing -> customer -> order is not a document link).
+MASTER_DATA_TABLES = frozenset({
+    "KNA1", "KNVV", "KNVP", "KNBK", "LFA1", "LFB1", "LFM1", "MARA", "MAKT", "MARC", "MARD",
+    "MBEW", "MBEWH", "MVKE", "MARM", "MLAN", "MEAN", "MCHB", "EINA", "EINE", "T016T",
+    "CSKS", "CSKT", "CEPC", "CRHD", "CABN", "KLAH", "AUSP",
+})
+
 # Production SQL joins: only when both tables exist and keys exist on both sides.
 _JOIN_CANDIDATES = [
     {"source_table": "vbrp", "source_column": "aubel", "target_table": "VBAK", "target_column": "vbeln",
@@ -180,14 +189,18 @@ _JOIN_CANDIDATES = [
      "cardinality": "N:1", "confidence": "verified", "fanout": "safe after header/item aggregation",
      "source": "VERIFIED FROM DATABASE (matching keys) + DOCUMENTATION"},
     {"source_table": "VBAP", "source_column": "matnr", "target_table": "MAKT", "target_column": "matnr",
-     "cardinality": "N:1", "confidence": "verified", "fanout": "safe N:1 text join",
-     "source": "VERIFIED FROM DATABASE (matching keys) + DOCUMENTATION"},
+     "cardinality": "N:N", "confidence": "verified",
+     "fanout": "MAKT has one row per material per language — filter MAKT.spras (e.g. 'E') before joining",
+     "source": "VERIFIED FROM DATABASE (matching keys) + DOCUMENTATION; (mandt, matnr) repeats per language, checked 2026-10-20"},
     {"source_table": "VBRK", "source_column": "vbeln", "target_table": "vbrp", "target_column": "vbeln",
      "cardinality": "1:N", "confidence": "verified", "fanout": "billing header to items",
      "source": "VERIFIED FROM DATABASE + R3/R4 contract"},
     {"source_table": "VBRP", "source_column": "vgbel", "target_table": "LIKP", "target_column": "vbeln",
      "cardinality": "N:1", "confidence": "verified", "fanout": "preceding delivery reference; pair with vgpos=posnr and mandt",
      "source": "VERIFIED FROM DATABASE (matching keys) + SAP SD billing-item reference"},
+    {"source_table": "VBRP", "source_column": "vgbel", "target_table": "LIPS", "target_column": "vbeln",
+     "cardinality": "N:1", "confidence": "verified", "fanout": "compound preceding delivery-item key with vgpos and mandt; only delivery-related billing items match",
+     "source": "SAP SD billing-item reference; connected coverage checked 2026-10-20 (18487/53156 billing items reference a delivery item)"},
     {"source_table": "VBRP", "source_column": "vgpos", "target_table": "LIPS", "target_column": "posnr",
      "cardinality": "N:1", "confidence": "verified", "fanout": "compound preceding delivery-item key with vgbel and mandt",
      "source": "VERIFIED FROM DATABASE (matching keys) + SAP SD billing-item reference"},
@@ -204,8 +217,57 @@ _JOIN_CANDIDATES = [
      "cardinality": "N:1", "confidence": "verified", "fanout": "vendor master",
      "source": "VERIFIED FROM DATABASE + R4-4 contract"},
     {"source_table": "AFKO", "source_column": "aufnr", "target_table": "AFPO", "target_column": "aufnr",
-     "cardinality": "1:N", "confidence": "inferred", "fanout": "PP header to item — verify before monetary SUM",
-     "source": "INFERRED from matching AUFNR"},
+     "cardinality": "1:N", "confidence": "verified", "fanout": "PP header to item — aggregate items before combining with other facts",
+     "source": "SAP PP order header/item; connected coverage checked 2026-10-20 (3102/3102 AFPO rows match a unique AFKO)"},
+    # Master-data lookups (connected coverage checked 2026-10-20; target keys unique on mandt + key).
+    *[{"source_table": src, "source_column": "matnr", "target_table": "MARA", "target_column": "matnr",
+       "cardinality": "N:1", "confidence": "verified", "fanout": "material master lookup",
+       "source": f"SAP material number; {coverage} of populated {src}.matnr match MARA, checked 2026-10-20"}
+      for src, coverage in (("VBRP", "52888/52906"), ("VBAP", "61163/61163"), ("LIPS", "27161/27161"),
+                            ("EKPO", "29483/29483"), ("AFPO", "1622/1622"), ("EINA", "7553/7560"),
+                            ("MAKT", "236594/236657"), ("MARD", "27582/27582"), ("MBEW", "29339/29339"),
+                            ("MVKE", "16974/16974"), ("MARM", "28125/28126"), ("MCHB", "4532/4532"),
+                            ("MARC", "1905/1905 sampled"))],
+    *[{"source_table": src, "source_column": column, "target_table": "KNA1", "target_column": "kunnr",
+       "cardinality": "N:1", "confidence": "verified", "fanout": f"customer master lookup ({role})",
+       "source": f"SAP customer number; {coverage} of populated {src}.{column} match KNA1, checked 2026-10-20"}
+      for src, column, role, coverage in (("LIKP", "kunnr", "ship-to", "15399/15399"),
+                                          ("KNVV", "kunnr", "sales area data", "67559/67559"),
+                                          ("KNVP", "kunnr", "partner functions", "22695/22696"),
+                                          ("KNBK", "kunnr", "bank details", "324/324"),
+                                          ("BSEG", "kunnr", "FI line item customer", "157170/157170"),
+                                          ("BSAD", "kunnr", "cleared customer item", "43390/43390"))],
+    *[{"source_table": src, "source_column": "lifnr", "target_table": "LFA1", "target_column": "lifnr",
+       "cardinality": "N:1", "confidence": "verified", "fanout": "vendor master lookup",
+       "source": f"SAP vendor number; {coverage} of populated {src}.lifnr match LFA1, checked 2026-10-20"}
+      for src, coverage in (("BSEG", "375931/375931"), ("RBKP", "5721/5721"), ("EINA", "7586/7591"),
+                            ("LFB1", "2931/2931"), ("LFM1", "2613/2613"))],
+    # Purchasing and logistics invoice documents.
+    *[{"source_table": src, "source_column": column, "target_table": tgt, "target_column": column,
+       "cardinality": "N:1", "confidence": "verified", "fanout": fanout, "live_checked": True,
+       "source": f"SAP MM document reference; {coverage}, checked 2026-10-20"}
+      for src, tgt, column, fanout, coverage in (
+          ("EBAN", "EKPO", "ebeln", "requisition to PO item; compound with ebelp and mandt", "451/457 converted requisitions match"),
+          ("EBAN", "EKPO", "ebelp", "requisition to PO item; compound with ebeln and mandt", "451/457 converted requisitions match"),
+          ("RSEG", "EKPO", "ebeln", "invoice item to PO item; compound with ebelp and mandt", "14796/14814 invoice items match"),
+          ("RSEG", "EKPO", "ebelp", "invoice item to PO item; compound with ebeln and mandt", "14796/14814 invoice items match"),
+          ("RSEG", "RBKP", "belnr", "invoice item to header; compound with gjahr and mandt", "14814/14814 invoice items match"),
+          ("RSEG", "RBKP", "gjahr", "invoice item to header; compound with belnr and mandt", "14814/14814 invoice items match"),
+          ("PSIF_INV_ITEM", "PSIF_INV_HDR", "vbeln", "interface invoice item to header", "53198/53198 items match"),
+          *[("BSAD", "BKPF", column, "cleared customer item to accounting header; compound bukrs, belnr, gjahr and mandt",
+             "1859/1886 sampled items match") for column in ("bukrs", "belnr", "gjahr")])],
+    {"source_table": "VBKD", "source_column": "vbeln", "target_table": "VBAK", "target_column": "vbeln",
+     "cardinality": "N:1", "confidence": "verified", "leaf_table": "VBKD",
+     "fanout": "sales business data; posnr='000000' is the header row (order pricing date prsdt), other posnr rows are item overrides",
+     "source": "SAP SD business data; connected coverage checked 2026-10-20 (68291/68337 rows match VBAK)"},
+    {"source_table": "KONV", "source_column": "knumv", "target_table": "VBRK", "target_column": "knumv",
+     "cardinality": "N:1", "confidence": "verified", "leaf_table": "KONV",
+     "fanout": "billing pricing conditions; many rows per document (kposn item, kschl condition type) — aggregate before joining other facts",
+     "source": "SAP pricing condition number; (mandt, knumv) unique in VBRK, checked 2026-10-20"},
+    {"source_table": "KONV", "source_column": "knumv", "target_table": "VBAK", "target_column": "knumv",
+     "cardinality": "N:1", "confidence": "verified", "leaf_table": "KONV",
+     "fanout": "order pricing conditions; many rows per document (kposn item, kschl condition type) — aggregate before joining other facts",
+     "source": "SAP pricing condition number; (mandt, knumv) unique in VBAK, checked 2026-10-20"},
     {"source_table": "VBAK", "source_column": "vbeln", "target_table": "VBRK", "target_column": "vbeln",
      "cardinality": "unknown", "confidence": "unverified", "fanout": "document numbers are different objects — do not join as equals",
      "source": "UNVERIFIED / UNSAFE — billing VBELN ≠ sales-order VBELN"},
@@ -300,10 +362,14 @@ def _build_relationships() -> List[Dict[str, Any]]:
     rels = []
     for cand in _JOIN_CANDIDATES:
         src, tgt = cand["source_table"], cand["target_table"]
-        if not has_table(src) or not has_table(tgt):
-            continue
-        if not has_column(src, cand["source_column"]) or not has_column(tgt, cand["target_column"]):
-            continue
+        # Links measured on the connected database are re-checked against live
+        # columns by RelationshipCatalog, so a table missing from the static
+        # snapshot does not hide them.
+        if not (cand.get("leaf_table") or cand.get("live_checked")):
+            if not has_table(src) or not has_table(tgt):
+                continue
+            if not has_column(src, cand["source_column"]) or not has_column(tgt, cand["target_column"]):
+                continue
         rels.append({**cand, "usable_in_sql": cand["confidence"] in {"verified"}})
     return rels
 

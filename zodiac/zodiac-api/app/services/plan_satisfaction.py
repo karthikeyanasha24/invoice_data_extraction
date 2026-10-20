@@ -30,6 +30,29 @@ def _tables_in_sql(sql: str) -> List[str]:
             seen.add(name)
             found.append(name)
     return found
+_COMPARISON = re.compile(r"\b(?:compare|comparison|compared|versus|vs\.?|against|difference\s+between|reconcile)\b", re.I)
+_DOCUMENT_FAMILIES = (
+    (re.compile(r"(?<!purchase )(?<!production )(?<!ascending )(?<!descending )(?<!sort )\b(?:sales\s+)?orders?\b(?!\s+by\b)", re.I),
+     {"VBAK", "VBAP"}),
+    (re.compile(r"(?<!supplier )(?<!vendor )\b(?:billing\s+documents?|billing\s+items?|invoices?|billed)\b", re.I),
+     {"VBRK", "VBRP"}),
+    (re.compile(r"\bdeliver(?:y|ies)\b", re.I), {"LIKP", "LIPS"}),
+    (re.compile(r"\bpurchase\s+orders?\b", re.I), {"EKKO", "EKPO"}),
+    (re.compile(r"\b(?:supplier|vendor)\s+invoices?\b", re.I), {"RBKP", "RSEG"}),
+)
+
+
+def missing_compared_documents(sql: str, question: str) -> List[str]:
+    """Document families a comparison question names but the SQL never reads."""
+    if not _COMPARISON.search(question or ""):
+        return []
+    named = [(pattern.pattern, tables) for pattern, tables in _DOCUMENT_FAMILIES if pattern.search(question or "")]
+    if len(named) < 2:
+        return []
+    present = set(_tables_in_sql(sql))
+    return [sorted(tables)[0] for _, tables in named if not present & tables]
+
+
 def sql_has_group_by(sql: str) -> bool:
     return bool(re.search(r"\bGROUP\s+BY\b", sql or "", re.I))
 def sql_has_aggregation(sql: str) -> bool:
@@ -418,6 +441,8 @@ def sql_satisfies_analytical_intent(
         tables = set(_tables_in_sql(sql))
         if not tables.intersection({"MBEW", "MARD"}) or not tables.intersection({"VBRK", "VBRP"}):
             return False
+    if missing_compared_documents(sql, question):
+        return False
     req = required_semantics(question, semantic)
     sem = merge_semantic_requirements(question, semantic or {})
     ops = sem.get("analytical_operations") or extract_analytical_operations(question)

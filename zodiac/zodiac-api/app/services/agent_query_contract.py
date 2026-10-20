@@ -21,6 +21,13 @@ class RelationshipCatalog:
     keys: dict[str, list[set[str]]] = field(default_factory=dict)
     edges: list[dict] = field(default_factory=list)
     key_evidence: dict = field(default_factory=dict)
+    # Lookup tables keyed by a shared number (e.g. KONV.knumv on both billing
+    # and order headers) must never bridge two documents in a path search.
+    leaf_tables: set = field(default_factory=set)
+    # Master data (customer, material, vendor) may end a path or lead to more
+    # master data, but never connect two transactions: billing -> customer ->
+    # order is not a document relationship.
+    master_tables: set = field(default_factory=set)
 
     def __post_init__(self):
         self.index = {t.lower(): t for t in self.schema}
@@ -32,8 +39,10 @@ class RelationshipCatalog:
             raise ValueError(f'Unknown source table: {name}')
         return self.index[name.lower()]
 
-    def add_edge(self, left, right, pairs, provenance):
+    def add_edge(self, left, right, pairs, provenance, leaf=None):
         left, right = self.table(left), self.table(right)
+        if leaf and leaf.lower() in self.index:
+            self.leaf_tables.add(self.table(leaf))
         pairs = [(a.lower(), b.lower()) for a, b in pairs]
         if not pairs or any(a not in self.columns[left] or b not in self.columns[right] for a, b in pairs):
             return
@@ -43,31 +52,73 @@ class RelationshipCatalog:
         if edge not in self.edges:
             self.edges.append(edge)
 
+    def priced_by(self, table):
+        """Tables whose currency applies to amounts in `table`: itself, and any
+        non-master document it joins N:1 by that document's full key (item to
+        header), because SAP item amounts carry the header currency. The link
+        must use the item's own key columns; a reference such as
+        vbrp.aubel -> VBAP points to another document with its own currency."""
+        table = self.table(table)
+        owners = {table}
+        own_keys = self.keys.get(table, [])
+        for edge in self.edges:
+            if table not in (edge['left'], edge['right']) or edge['left'] == edge['right']:
+                continue
+            other = edge['right'] if edge['left'] == table else edge['left']
+            if other in self.master_tables or other in self.leaf_tables:
+                continue
+            pairs = [(a, b) if edge['left'] == table else (b, a) for a, b in edge['pairs']]
+            mine, theirs = {a for a, _ in pairs}, {b for _, b in pairs}
+            own_document = (any(mine <= key for key in own_keys) if own_keys
+                            else all(a == b for a, b in pairs))
+            if own_document and any(key and key <= theirs for key in self.keys.get(other, [])):
+                owners.add(other)
+        return owners
+
     def paths(self, names):
         """BFS reaches previously unused intermediates; there is no two-hop limit."""
         names = [self.table(t) for t in names]
         paths = []
         for start, target in zip(names,names[1:]):
-            queue = deque([(start, [], {start})])
+            queue = deque([(start, [], {start}, False)])
             found = []
             shortest = None
             while queue:
-                table, path, visited = queue.popleft()
+                table, path, visited, in_master = queue.popleft()
                 if shortest is not None and len(path)>shortest:
                     continue
                 if table == target:
                     shortest = len(path)
                     found.append(path)
                     continue
+                if table in self.leaf_tables and table != start:
+                    continue
                 for edge in self.edges:
                     other = edge['right'] if edge['left'] == table else edge['left'] if edge['right'] == table else None
-                    if other and other not in visited:
-                        queue.append((other, path + [edge], visited | {other}))
+                    if not other or other in visited:
+                        continue
+                    if in_master and other not in self.master_tables:
+                        continue
+                    entering_master = table not in self.master_tables and other in self.master_tables
+                    queue.append((other, path + [edge], visited | {other}, in_master or entering_master))
                 if len(queue)>1000:
                     raise ValueError('Too many relationship alternatives; specify intermediate tables')
             if not found:
                 raise ValueError(f'No verified relationship path from {start} to {target}; inspect metadata or clarify the relationship')
             signatures = {tuple((e['left'],e['right'],tuple(e['pairs'])) for e in p):p for p in found}
+            if len(signatures)>1:
+                def document_hops(path, current=start):
+                    hops = 0
+                    for edge in path[:-1]:
+                        current = edge['right'] if edge['left'] == current else edge['left']
+                        hops += current not in self.master_tables
+                    return hops
+                # A lookup reached through master data beats one routed through
+                # another document; equally direct document routes stay ambiguous.
+                fewest = min(document_hops(p) for p in signatures.values())
+                direct = {k: p for k, p in signatures.items() if document_hops(p) == fewest}
+                if len(direct) == 1:
+                    signatures = direct
             if len(signatures)>1:
                 routes = [' -> '.join([start]+[f"{e['left']}/{e['right']}({e['pairs']})" for e in p]) for p in list(signatures.values())[:4]]
                 raise ValueError('Ambiguous relationships. Specify the intended intermediate tables in path order or clarify the business role: '+'; '.join(routes))
@@ -82,7 +133,17 @@ class RelationshipCatalog:
         # live-checked before entering a proof. Other tables use actual keys.
         imported_grains = {'VBRK': ['mandt', 'vbeln'], 'VBAK': ['mandt', 'vbeln'],
                            'VBRP': ['mandt', 'vbeln', 'posnr'], 'VBAP': ['mandt', 'vbeln', 'posnr'],
-                           'KNA1': ['mandt', 'kunnr'], 'T016T': ['brsch']}
+                           'KNA1': ['mandt', 'kunnr'], 'T016T': ['brsch'],
+                           'LIKP': ['mandt', 'vbeln'], 'LIPS': ['mandt', 'vbeln', 'posnr'],
+                           'VBEP': ['mandt', 'vbeln', 'posnr', 'etenr'], 'VBKD': ['mandt', 'vbeln', 'posnr'],
+                           'EKKO': ['mandt', 'ebeln'], 'EKPO': ['mandt', 'ebeln', 'ebelp'],
+                           'EBAN': ['mandt', 'banfn', 'bnfpo'], 'RBKP': ['mandt', 'belnr', 'gjahr'],
+                           'RSEG': ['mandt', 'belnr', 'gjahr', 'buzei'], 'BKPF': ['mandt', 'bukrs', 'belnr', 'gjahr'],
+                           'LFA1': ['mandt', 'lifnr'], 'MARA': ['mandt', 'matnr'], 'MAKT': ['mandt', 'matnr', 'spras'],
+                           'MARC': ['mandt', 'matnr', 'werks'], 'MARD': ['mandt', 'matnr', 'werks', 'lgort'],
+                           'KNVV': ['mandt', 'kunnr', 'vkorg', 'vtweg', 'spart'],
+                           'AFKO': ['mandt', 'aufnr'], 'AFPO': ['mandt', 'aufnr', 'posnr'],
+                           'PSIF_INV_HDR': ['mandt', 'vbeln'], 'PSIF_INV_ITEM': ['mandt', 'vbeln', 'posnr']}
         for name in names:
             table = self.table(name)
             if table in self.key_evidence:
@@ -99,21 +160,32 @@ class RelationshipCatalog:
             if not candidates and table.upper() in imported_grains:
                 candidates.append(imported_grains[table.upper()])
             checked = []
+            rejected = []
+            quote = inspector.dialect.identifier_preparer.quote
+            all_columns = [quote(name) for name in self.column_names[table].values()]
+            # A row whose every column is NULL (e.g. a blank import line) is not
+            # a record: it has no identity and no values to duplicate.
+            present = (f'COALESCE({", ".join(f"CAST({c} AS TEXT)" for c in all_columns)}) IS NOT NULL'
+                       if len(all_columns) > 1 else f'{all_columns[0]} IS NOT NULL')
             for candidate in candidates:
                 columns = [c.lower() for c in candidate if isinstance(c, str)]
                 if not columns or not set(columns) <= self.columns[table]:
                     continue
-                quote = inspector.dialect.identifier_preparer.quote
                 cols = ','.join(quote(self.column_names[table][c]) for c in columns)
                 nulls = ' OR '.join(f'{quote(self.column_names[table][c])} IS NULL' for c in columns)
-                # Metadata probes return one boolean, no business records.
-                sql = f'SELECT EXISTS (SELECT 1 FROM {quote(table)} WHERE {nulls}) OR EXISTS (SELECT 1 FROM {quote(table)} GROUP BY {cols} HAVING COUNT(*)>1)'
+                # Metadata probes return two booleans, no business records.
+                sql = (f'SELECT EXISTS (SELECT 1 FROM {quote(table)} WHERE ({nulls}) AND {present}) AS has_nulls, '
+                       f'EXISTS (SELECT 1 FROM {quote(table)} WHERE {present} GROUP BY {cols} HAVING COUNT(*)>1) AS has_duplicates')
                 from .analyst_agent_sql import enforce_agent_user_scope
                 scoped_sql, parameters = enforce_agent_user_scope(sql, self.schema)
-                if not session.execute(text(scoped_sql), parameters).scalar():
+                has_nulls, has_duplicates = session.execute(text(scoped_sql), parameters).one()
+                if not has_nulls and not has_duplicates:
                     checked.append(set(columns))
+                else:
+                    rejected.append({'columns': sorted(columns),
+                                     'reason': 'duplicate values' if has_duplicates else 'NULL values'})
             self.keys[table] = checked
-            self.key_evidence[table] = {'unique_keys': [sorted(k) for k in checked],
+            self.key_evidence[table] = {'unique_keys': [sorted(k) for k in checked], 'rejected_keys': rejected,
                                         'provenance': 'connected uniqueness/null check', 'request_local': True}
             for fk in inspector.get_foreign_keys(table):
                 if (fk.get('referred_schema') in {None, inspector.default_schema_name}
@@ -128,20 +200,21 @@ class RelationshipCatalog:
 
     @classmethod
     def connected(cls, schema, session):
-        from ..data_catalog.registry import RELATIONSHIPS
+        from ..data_catalog.registry import MASTER_DATA_TABLES, RELATIONSHIPS
         catalog = cls(schema)
+        catalog.master_tables = {catalog.index[t.lower()] for t in MASTER_DATA_TABLES if t.lower() in catalog.index}
         grouped = {}
         for rel in RELATIONSHIPS:
             if not rel.get('usable_in_sql'):
                 continue
             a, b = rel['source_table'].lower(), rel['target_table'].lower()
             if a in catalog.index and b in catalog.index:
-                entry = grouped.setdefault((a, b), {'pairs': [], 'source': rel['source']})
+                entry = grouped.setdefault((a, b), {'pairs': [], 'source': rel['source'], 'leaf': rel.get('leaf_table')})
                 entry['pairs'].append((rel['source_column'], rel['target_column']))
         for (a, b), entry in grouped.items():
             # add_edge resolves physical table casing and adds MANDT when
             # present on both sources. Registry names need not match DB case.
-            catalog.add_edge(a, b, entry['pairs'], entry['source'])
+            catalog.add_edge(a, b, entry['pairs'], entry['source'], leaf=entry['leaf'])
         # Discover all declared FKs in one catalog read, including intermediate
         # tables not yet mentioned by the model. Constraints contain no records.
         from sqlalchemy import text
@@ -382,9 +455,18 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
 
     def describe(scope):
         select = scope.expression
+        labels = {alias: (alias if isinstance(source, Scope) else f'{source.name} {alias}' if alias != source.name else source.name)
+                  for alias, (_, source) in scope.selected_sources.items()}
         aggregate_nodes = [n for n in select.find_all(exp.AggFunc) if n.find_ancestor(exp.Select) is select]
-        if not isinstance(select, exp.Select) or (aggregate_nodes and (len(scope.selected_sources) != 1 or select.args.get('joins'))):
-            raise ValueError('Listing proof cannot aggregate independent values; aggregate each fact separately before joining')
+
+        def aggregate_error():
+            functions = sorted({type(n).__name__.upper() for n in aggregate_nodes})
+            return ValueError('Listing proof cannot aggregate independent values; aggregate each fact separately before joining. '
+                              f'This SELECT uses {"/".join(functions) or "an aggregate"} over joined sources '
+                              f'{", ".join(labels.values())}: compute it in a CTE that reads one table only, '
+                              'then join that CTE on its GROUP BY keys')
+        if not isinstance(select, exp.Select):
+            raise aggregate_error()
         for window in select.find_all(exp.Window):
             if window.find_ancestor(exp.Select) is select and type(window.this).__name__ not in {'RowNumber', 'Rank', 'DenseRank'}:
                 raise ValueError('Unproven measure window over joined facts')
@@ -418,12 +500,21 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                                 if name in money}
 
                     compatible_difference = False
-                    if allow_currency_matched_difference and isinstance(value, exp.Sub):
-                        left_sources, right_sources = source_tables(value.this), source_tables(value.expression)
+                    difference = value
+                    # CASE WHEN <currencies equal> THEN a - b [ELSE NULL] END is
+                    # the same guarded difference written inline.
+                    if (isinstance(value, exp.Case) and len(value.args.get('ifs') or []) == 1
+                            and isinstance(value.args['ifs'][0].this, exp.EQ)
+                            and (value.args.get('default') is None or isinstance(value.args.get('default'), exp.Null))):
+                        difference = value.args['ifs'][0].args.get('true')
+                    if allow_currency_matched_difference and isinstance(difference, exp.Sub):
+                        left_sources, right_sources = source_tables(difference.this), source_tables(difference.expression)
                         if len(left_sources) == 1 and len(right_sources) == 1 and left_sources != right_sources:
                             currency_outputs = {table for output_origins in refs.values() for table, name in output_origins
                                                 if re.search(r'(?:currency|waerk|waers)', name, re.I)}
-                            exposes_both_currencies = (left_sources | right_sources) <= currency_outputs
+                            left_owners = catalog.priced_by(next(iter(left_sources)))
+                            right_owners = catalog.priced_by(next(iter(right_sources)))
+                            exposes_both_currencies = bool(currency_outputs & left_owners and currency_outputs & right_owners)
                             for equality in select.find_all(exp.EQ):
                                 if equality.find_ancestor(exp.Select) is not select:
                                     continue
@@ -436,8 +527,8 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                                     continue
                                 left_origins = infos.get(left.table, ({}, [], set()))[0].get(left_name, set())
                                 right_origins = infos.get(right.table, ({}, [], set()))[0].get(right_name, set())
-                                if exposes_both_currencies and (any(a in left_sources and b in right_sources for a, _ in left_origins for b, _ in right_origins) or any(
-                                        b in left_sources and a in right_sources for a, _ in left_origins for b, _ in right_origins)):
+                                if exposes_both_currencies and (any(a in left_owners and b in right_owners for a, _ in left_origins for b, _ in right_origins) or any(
+                                        b in left_owners and a in right_owners for a, _ in left_origins for b, _ in right_origins)):
                                     compatible_difference = True
                                     break
                     if not compatible_difference:
@@ -454,6 +545,9 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
         base = next(iter(infos), None)
         if base:
             seen.add(base)
+        # Joins whose target key is not fully matched can return several target
+        # rows per earlier row, so values summed across them would repeat.
+        multiplying = []
         for join in select.args.get('joins') or []:
             target = join.this.alias_or_name
             on = join.args.get('on')
@@ -493,7 +587,25 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             if not physical_pairs or not all(any((left, right) in approved
                     for left in infos[a][0].get(ac, set()) for right in infos[b][0].get(bc, set()))
                     for (a, ac), (b, bc) in pairs):
-                raise ValueError('Join lacks a verified relationship or complete composite keys; use find_relationships and retain every key (including client)')
+                def physical(alias, column=None):
+                    fields = infos[alias][0]
+                    origins = fields.get(column, set()) if column else set().union(*fields.values()) if fields else set()
+                    return {t for t, _ in origins}
+                target_tables, other_tables = set(), set()
+                for (a, ac), (b, bc) in pairs:
+                    for alias, column in ((a, ac), (b, bc)):
+                        (target_tables if alias == target else other_tables).update(physical(alias, column))
+                target_tables = target_tables or physical(target)
+                other_tables = other_tables or set().union(*(physical(alias) for alias in seen))
+                links = [' AND '.join(f"{e['left']}.{x} = {e['right']}.{y}" for x, y in e['pairs'])
+                         for e in catalog.edges
+                         if (e['left'] in target_tables and e['right'] in other_tables)
+                         or (e['right'] in target_tables and e['left'] in other_tables)]
+                hint = ('; the verified link needs ' + ' | '.join(links[:2])) if links else (
+                    f"; there is no verified link between {', '.join(sorted(other_tables)) or 'the previous sources'} "
+                    f"and {', '.join(sorted(target_tables)) or labels.get(target, target)}")
+                raise ValueError('Join lacks a verified relationship or complete composite keys; use find_relationships and retain every key (including client). '
+                                 f'Join to {labels.get(target, target)} ON {on.sql(dialect="postgres")}{hint}')
             if join.args.get('side') == 'LEFT':
                 for (a, ac), (b, bc) in pairs:
                     left = (a, ac) if a != target else (b, bc)
@@ -505,6 +617,9 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                         raise ValueError(f'Preserve the left-side link reference {left[0]}.{left[1]} in output; '
                                          'a missing target ID cannot identify an unmatched document pair. '
                                          'Project this bridge column with its own alias as well as the target document ID')
+            target_columns = {column for (a, ac), (b, bc) in pairs for alias, column in ((a, ac), (b, bc)) if alias == target}
+            if not any(key <= target_columns for key in infos[target][1]):
+                multiplying.append(target)
             seen.add(target)
         # A projected composite-key component can carry equivalent origins from
         # earlier verified joins. This is necessary for multi-hop bridge CTEs.
@@ -518,10 +633,16 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                             refs[p.alias_or_name.lower()].update(origins)
         exposed = {find(p) for p in projected}
         all_keys = set()
+        joined = bool(select.args.get('joins'))
+        single_table = len(infos) == 1 and not joined and not isinstance(scope.selected_sources[base][1], Scope)
         if aggregate_nodes:
+            # Summing the driving table's values across joins to unique rows
+            # (items to their header) cannot repeat them; anything else can.
+            if joined and measured_aliases and (multiplying or measured_aliases - {base}):
+                raise aggregate_error()
             if any(info[2] for info in infos.values()):
                 raise ValueError('Do not re-sum already aggregated facts')
-            if any(not infos[a][1] for a in measured_aliases):
+            if joined and any(not infos[a][1] for a in measured_aliases):
                 raise ValueError('Verify the source fact identity before aggregating its values')
             groups = (select.args.get('group').expressions if select.args.get('group') else [])
             output_keys = set()
@@ -533,12 +654,24 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             return refs, [output_keys], measures
         for alias, (_, keys, _) in infos.items():
             candidate = next((k for k in keys if {find((alias, c)) for c in k} <= exposed), None)
-            if candidate is None and (alias in measured_aliases or not select.args.get('distinct')):
-                raise ValueError('Unproven row grain: deduplicate the non-monetary link to the full document pair, retain fact identifiers and display values without SUM')
+            if candidate is None and not single_table and (alias in measured_aliases or not select.args.get('distinct')):
+                source = scope.selected_sources[alias][1]
+                if keys:
+                    detail = (f'show every column of a unique key of {labels[alias]} in the output '
+                              f'({", ".join(sorted(min(keys, key=len)))})')
+                elif not isinstance(source, Scope) and catalog.key_evidence.get(catalog.table(source.name), {}).get('rejected_keys'):
+                    rejected = catalog.key_evidence[catalog.table(source.name)]['rejected_keys'][0]
+                    detail = (f'{source.name} has no proven unique key: ({", ".join(rejected["columns"])}) has '
+                              f'{rejected["reason"]} in the live table, so its rows cannot be identified until that data is fixed')
+                else:
+                    detail = (f'{labels[alias]} has no proven unique key; select DISTINCT link columns from it '
+                              'or aggregate it in its own CTE before joining')
+                raise ValueError('Unproven row grain: deduplicate the non-monetary link to the full document pair, '
+                                 f'retain fact identifiers and display values without SUM. {detail}')
             if candidate:
                 all_keys.update((alias, c) for c in candidate)
         for table in measures:
-            if any(table in info[2] for info in infos.values()):
+            if single_table or any(table in info[2] for info in infos.values()):
                 continue
             keys = catalog.keys.get(table, [])
             def visible(column):

@@ -537,7 +537,7 @@ class AnalystTools:
         # the actual user request when assembling the final answer.
         issues = sql_structure_errors(sql)
         proof = False
-        if independent_sources or (plan and measured):
+        if independent_sources or (plan and measured) or (self.manual_sql_training and measured):
             if not plan and not self.manual_sql_training:
                 issues.append("Cross-source values require prepare_analysis with all requested fields and a verified relationship path before SQL")
             else:
@@ -553,7 +553,7 @@ class AnalystTools:
                     # Independent aggregate proofs remain valid; the identified
                     # listing proof cannot authorize SUM over expanded headers.
                     issues.extend(diagnostics or ["Unproven independent monetary grain"])
-        if not proof and sql_has_unsafe_monetary_fanout(sql):
+        if not proof and not issues and sql_has_unsafe_monetary_fanout(sql):
             issues.append("Aggregate independent facts before joining; for a document-pair listing deduplicate the link keys, expose both document identities and currencies, and display header values without SUM")
         if plan:
             issues.extend(plan_sql_issues(sql, plan))

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # SQL function names that can appear before '(' in a CAST-target expression
 _SQL_FUNC_NAMES = frozenset({
@@ -329,27 +329,47 @@ def sanitize_gjahr_sql(sql: str) -> str:
 
     sql = key_equality.sub(_protect_key_equality, sql)
 
+    # Only billing headers carry the unreliable fiscal year and an FKDAT to
+    # replace it with. FI/MM tables (BKPF, BSEG, RBKP, RSEG, VBKD, ...) store a
+    # real GJAHR and have no FKDAT, so their references stay untouched.
+    keywords = {"on", "where", "join", "left", "right", "inner", "outer", "full", "cross", "group",
+                "order", "limit", "having", "union", "using", "natural", "lateral", "window", "offset"}
+    sources: Dict[str, str] = {}
+    for match in re.finditer(r'\b(?:FROM|JOIN)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?(?:\s+(?:AS\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?)?',
+                             sql, flags=re.IGNORECASE):
+        table, alias = match.group(1), match.group(2)
+        sources[table.lower()] = table.upper()
+        if alias and alias.lower() not in keywords:
+            sources[alias.lower()] = table.upper()
+    tables = {table for table in sources.values()}
+
+    def _billing_alias(alias: str) -> bool:
+        return sources.get(alias.lower(), alias.upper()) == "VBRK"
+
     # alias."gjahr" or alias."GJAHR" (re.I matches quoted column case)
     sql = re.sub(
         r'(\b[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*"gjahr"',
-        lambda m: f'SUBSTRING(TRIM({m.group(1)}."fkdat"),1,4)',
+        lambda m: f'SUBSTRING(TRIM({m.group(1)}."fkdat"),1,4)' if _billing_alias(m.group(1)) else m.group(0),
         sql,
         flags=re.IGNORECASE,
     )
     # Unquoted: alias.gjahr
     sql = re.sub(
         r'(\b[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*gjahr\b',
-        lambda m: f'SUBSTRING(TRIM({m.group(1)}."fkdat"),1,4)',
+        lambda m: f'SUBSTRING(TRIM({m.group(1)}."fkdat"),1,4)' if _billing_alias(m.group(1)) else m.group(0),
         sql,
         flags=re.IGNORECASE,
     )
-    # Bare gjahr (SELECT gjahr, GROUP BY gjahr) — last resort; assumes fkdat is in scope
-    sql = re.sub(
-        r'(?<![a-zA-Z0-9_])gjahr(?![a-zA-Z0-9_])',
-        'SUBSTRING(TRIM(fkdat),1,4)',
-        sql,
-        flags=re.IGNORECASE,
-    )
+    # Bare gjahr (SELECT gjahr, GROUP BY gjahr) — only when the billing header
+    # is the one source that can own it.
+    sd_without_gjahr = {"VBRK", "VBRP", "VBAK", "VBAP", "KNA1", "LIKP", "LIPS", "MARA", "MAKT", "T016T", "KONV", "VBFA"}
+    if "VBRK" in tables and tables <= sd_without_gjahr:
+        sql = re.sub(
+            r'(?<![a-zA-Z0-9_."])gjahr(?![a-zA-Z0-9_"])',
+            'SUBSTRING(TRIM(fkdat),1,4)',
+            sql,
+            flags=re.IGNORECASE,
+        )
     for index, equality in enumerate(protected):
         sql = sql.replace(f"__SAP_GJAHR_KEY_{index}__", equality)
     return sql
@@ -942,7 +962,8 @@ def sanitize_generated_sap_sql(sql: str, question: Optional[str] = None) -> str:
     s = sanitize_having_alias_references(s)
     if question:
         s, _notes = inject_fkdat_calendar_year_filter(s, question)
-    from .analytical_sql_safety import canonicalize_text_joins
+    from .analytical_sql_safety import canonicalize_text_joins, scope_master_joins_to_client
 
+    s = scope_master_joins_to_client(s)
     s = canonicalize_text_joins(s)
     return s

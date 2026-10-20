@@ -108,6 +108,33 @@ def test_text_join_does_not_inflate_monetary_sums():
         db.close()
 
 
+def test_customer_master_join_is_scoped_to_the_billing_client():
+    from app.services.analytical_sql_safety import scope_master_joins_to_client
+    sql = '''SELECT c.land1, SUM(CAST(k.netwr AS NUMERIC)) AS total FROM "VBRK" k
+        LEFT JOIN "KNA1" c ON TRIM(CAST(k.kunag AS TEXT)) = TRIM(CAST(c.kunnr AS TEXT))
+        LEFT JOIN "T016T" t ON c.brsch = t.brsch GROUP BY c.land1'''
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('CREATE TABLE "VBRK" (mandt TEXT, vbeln TEXT, kunag TEXT, netwr TEXT)')
+        db.execute('CREATE TABLE "KNA1" (mandt TEXT, kunnr TEXT, land1 TEXT, brsch TEXT)')
+        db.execute('CREATE TABLE "T016T" (brsch TEXT, brtxt TEXT)')
+        db.executemany('INSERT INTO "VBRK" VALUES (?,?,?,?)', [("800", "B1", "1", "10"), ("810", "B2", "1", "5")])
+        db.executemany('INSERT INTO "KNA1" VALUES (?,?,?,?)', [("800", "1", "DE", "X"), ("810", "1", "FR", "X")])
+        assert sorted((r["land1"], r["total"]) for r in execute(db, sql)) == [("DE", 15), ("FR", 15)]
+        scoped = scope_master_joins_to_client(sql)
+        assert sorted((r["land1"], r["total"]) for r in execute(db, scoped)) == [("DE", 10), ("FR", 5)]
+        assert '"t"."mandt"' not in scoped
+        assert scope_master_joins_to_client(scoped) == scoped
+    finally:
+        db.close()
+    cte = '''WITH items AS (SELECT p.mandt, p.matnr FROM vbrp p) SELECT i.matnr, a.mtart
+        FROM items i JOIN "MARA" a ON a.matnr = i.matnr'''
+    assert '"a"."mandt" = "i"."mandt"' in scope_master_joins_to_client(cte)
+    unscoped_cte = cte.replace('p.mandt, ', '')
+    assert scope_master_joins_to_client(unscoped_cte) == unscoped_cte
+
+
 def test_different_document_periods_joined_by_customer_are_valid():
     sql = '''SELECT a.kunag, SUM(a.netwr), SUM(b.netwr) FROM "VBRK" a
         JOIN "VBRK" b ON a.kunag=b.kunag

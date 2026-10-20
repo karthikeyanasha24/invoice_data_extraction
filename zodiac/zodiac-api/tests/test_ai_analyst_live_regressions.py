@@ -330,11 +330,11 @@ def test_linked_order_comparison_keeps_invoice_rows_and_uses_verified_posting_da
     import app.services.adaptive_structured_sql as structured
 
     physical_columns = {
-        "VBRK": {"vbeln", "netwr", "waerk", "kunag", "belnr", "gjahr", "bukrs"},
+        "VBRK": {"mandt", "vbeln", "netwr", "waerk", "kunag", "belnr", "gjahr", "bukrs"},
         "VBFA": {"vbeln", "vbelv"},
         "VBAK": {"vbeln", "netwr", "waerk", "erdat"},
         "BKPF": {"belnr", "gjahr", "bukrs", "budat"},
-        "KNA1": {"kunnr", "name1"},
+        "KNA1": {"mandt", "kunnr", "name1"},
     }
     monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in physical_columns)
     monkeypatch.setattr(

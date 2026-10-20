@@ -3071,7 +3071,7 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
                     "schema_source": origin, "llm_calls": 0}
         raw_error = str(result.get("error") or "Query failed")
         if raw_error.startswith(("Query validation:", "Only one read-only", "Use only tables", "Table ", "Column ", "Provide one SELECT")):
-            safe_error = raw_error[:400]
+            safe_error = raw_error[:1500]
         else:
             safe_error = "The database could not run this query. Check the selected tables, columns, joins, and SQL syntax."
         return {"status": "failed", "sql": sql, "error": safe_error,

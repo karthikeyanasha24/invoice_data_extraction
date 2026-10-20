@@ -111,6 +111,69 @@ def _date_restriction(predicate):
     return next(iter(refs)), intervals
 
 
+def _source_columns(tree, source):
+    if isinstance(source, exp.Table):
+        cte = next((c for c in tree.find_all(exp.CTE) if c.alias_or_name.lower() == source.name.lower()), None)
+        if cte is None:
+            return {c.lower() for c in column_names(source.name)}
+        source = cte
+    body = source.this if isinstance(source, (exp.CTE, exp.Subquery)) else None
+    if isinstance(body, exp.Select) and not any(isinstance(e, exp.Star) or isinstance(e.this, exp.Star) for e in body.selects):
+        return {e.alias_or_name.lower() for e in body.selects}
+    return set()
+
+
+def scope_master_joins_to_client(sql: str) -> str:
+    """Add the client key to master-data joins that omit it.
+
+    Customer, vendor and material numbers repeat across SAP clients, so a join
+    on the number alone attaches every client's record to each fact row.
+    """
+    from ..data_catalog.registry import MASTER_DATA_TABLES
+
+    try:
+        tree = parse_one(sql, read="postgres")
+    except ParseError:
+        return sql
+    master = {t.upper() for t in MASTER_DATA_TABLES}
+    cte_names = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    changed = False
+    for select in list(tree.find_all(exp.Select)):
+        from_ = select.args.get("from") or select.args.get("from_")
+        joins = select.args.get("joins") or []
+        sources = {node.alias_or_name.lower(): node for node in ([from_.this] if from_ else []) + [j.this for j in joins]}
+        for join in joins:
+            target, on = join.this, join.args.get("on")
+            # Language-keyed texts are reduced to one row per key by
+            # canonicalize_text_joins, so only other master data needs this.
+            if (on is None or not isinstance(target, exp.Table) or target.name.lower() in cte_names
+                    or target.name.upper() not in master or _lookup_keys(target.name)
+                    or "mandt" not in {c.lower() for c in column_names(target.name)}):
+                continue
+            alias = target.alias_or_name
+            if (alias.lower(), "mandt") in _refs(on):
+                continue
+            partner = None
+            for term in _terms(on):
+                if not isinstance(term, exp.EQ):
+                    continue
+                for side, other in ((term.this, term.expression), (term.expression, term.this)):
+                    others = {t for t, _ in _refs(other)}
+                    if {t for t, _ in _refs(side)} == {alias.lower()} and len(others) == 1 and alias.lower() not in others:
+                        candidate = next(iter(others))
+                        if candidate in sources and "mandt" in _source_columns(tree, sources[candidate]):
+                            partner = sources[candidate].alias_or_name
+                            break
+                if partner:
+                    break
+            if not partner:
+                continue
+            join.set("on", exp.and_(on, exp.EQ(this=exp.column("mandt", table=alias, quoted=True),
+                                               expression=exp.column("mandt", table=partner, quoted=True))))
+            changed = True
+    return tree.sql(dialect="postgres") if changed else sql
+
+
 def canonicalize_text_joins(sql: str) -> str:
     """Choose one deterministic label row per joined key before facts join it.
 

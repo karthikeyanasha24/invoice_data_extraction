@@ -154,6 +154,96 @@ def test_connected_relationship_catalog_resolves_physical_table_case():
     assert all(('mandt', 'mandt') in edge['pairs'] for path in paths for edge in path)
 
 
+def test_condition_and_business_data_lookups_never_bridge_billing_to_orders():
+    pricing_schema = schema(VBRK='mandt vbeln knumv netwr waerk', vbrp='mandt vbeln posnr aubel aupos',
+                            VBAK='mandt vbeln knumv netwr waerk', KONV='mandt knumv kschl kwert',
+                            VBKD='mandt vbeln posnr prsdt')
+    engine = create_engine('sqlite://')
+    with Session(engine) as session:
+        c = RelationshipCatalog.connected(pricing_schema, session)
+    assert {'KONV', 'VBKD'} <= c.leaf_tables
+    billing_to_order = c.paths(['VBRK', 'VBAK'])
+    assert [[(e['left'], e['right']) for e in path] for path in billing_to_order] == [[('VBRK', 'vbrp'), ('vbrp', 'VBAK')]]
+    assert [(e['left'], e['right'], sorted(e['pairs'])) for e in c.paths(['KONV', 'VBRK'])[0]] == [
+        ('KONV', 'VBRK', [('knumv', 'knumv'), ('mandt', 'mandt')])]
+    assert [(e['left'], e['right'], sorted(e['pairs'])) for e in c.paths(['VBKD', 'VBAK'])[0]] == [
+        ('VBKD', 'VBAK', [('mandt', 'mandt'), ('vbeln', 'vbeln')])]
+
+
+def test_master_data_never_bridges_documents_and_lookups_prefer_master_routes():
+    sd_schema = schema(VBRK='mandt vbeln kunag netwr waerk', vbrp='mandt vbeln posnr aubel aupos matnr',
+                       VBAK='mandt vbeln kunnr netwr waerk', VBAP='mandt vbeln posnr matnr',
+                       KNA1='mandt kunnr brsch', T016T='brsch', MARA='mandt matnr', MAKT='mandt matnr spras')
+    engine = create_engine('sqlite://')
+    with Session(engine) as session:
+        c = RelationshipCatalog.connected(sd_schema, session)
+    route = lambda a, b: [(e['left'], e['right']) for e in c.paths([a, b])[0]]
+    assert route('VBRK', 'VBAK') == [('VBRK', 'vbrp'), ('vbrp', 'VBAK')]
+    assert route('VBRK', 'T016T') == [('VBRK', 'KNA1'), ('KNA1', 'T016T')]
+    assert route('vbrp', 'MAKT') == [('vbrp', 'MARA'), ('MAKT', 'MARA')]
+
+
+def test_uniqueness_probe_ignores_blank_rows_and_reports_why_a_key_fails(monkeypatch):
+    from app.services.adaptive_trusted_scope import TrustedAiExecutionScope
+    monkeypatch.setattr('app.services.analyst_agent_sql.get_trusted_scope', lambda: TrustedAiExecutionScope(user_id=1, sap_access='full'))
+    engine = create_engine('sqlite://')
+    with engine.begin() as c:
+        c.execute(text('CREATE TABLE vbrp(mandt TEXT,vbeln TEXT,posnr TEXT,netwr TEXT)'))
+        c.execute(text("INSERT INTO vbrp VALUES ('800','B1','10','4'),('800','B1','20','5'),(NULL,NULL,NULL,NULL),(NULL,NULL,NULL,NULL)"))
+        c.execute(text('CREATE TABLE VBRK(mandt TEXT,vbeln TEXT,netwr TEXT)'))
+        c.execute(text("INSERT INTO VBRK VALUES ('800','B1','9'),(NULL,NULL,'3')"))
+    with Session(engine) as session:
+        c = RelationshipCatalog(schema(vbrp='mandt vbeln posnr netwr', VBRK='mandt vbeln netwr'))
+        c.inspect_keys(session, ['vbrp', 'VBRK'])
+    assert c.keys['vbrp'] == [{'mandt', 'vbeln', 'posnr'}]
+    assert c.keys['VBRK'] == []
+    assert c.key_evidence['VBRK']['rejected_keys'] == [{'columns': ['mandt', 'vbeln'], 'reason': 'NULL values'}]
+    assert identified_value_proof('SELECT b.mandt, b.vbeln, b.netwr FROM VBRK b', c, [('VBRK', 'netwr')])[0]
+    c.add_edge('VBRK', 'vbrp', [('vbeln', 'vbeln')], 'test')
+    ok, errors = identified_value_proof('''SELECT p.mandt, p.vbeln, p.posnr, p.netwr AS item_net, b.netwr AS header_net
+        FROM vbrp p JOIN VBRK b ON b.mandt=p.mandt AND b.vbeln=p.vbeln''', c, [('VBRK', 'netwr')])
+    assert not ok and 'VBRK has no proven unique key: (mandt, vbeln) has NULL values' in errors[0]
+
+
+def test_validation_errors_name_the_join_and_the_aggregate_sources():
+    missing_client = SQL.replace('LEFT JOIN "VBAK" o ON o.mandt=l.mandt AND o.vbeln=l.aubel',
+                                 'LEFT JOIN "VBAK" o ON o.vbeln=l.aubel')
+    ok, errors = identified_value_proof(missing_client, catalog())
+    assert not ok
+    assert 'Join to VBAK o ON o.vbeln = l.aubel' in errors[0]
+    assert 'vbrp.aubel = VBAK.vbeln AND vbrp.mandt = VBAK.mandt' in errors[0]
+    summed = '''SELECT b.mandt, b.vbeln, SUM(b.netwr) AS repeated_header_net FROM "VBRK" b
+                JOIN vbrp p ON p.mandt=b.mandt AND p.vbeln=b.vbeln GROUP BY b.mandt, b.vbeln'''
+    ok, errors = identified_value_proof(summed, catalog(), [('VBRK', 'netwr')])
+    assert not ok
+    assert 'SUM over joined sources VBRK b, vbrp p' in errors[0]
+
+
+def test_item_difference_uses_header_currency_in_a_guarded_case():
+    c = RelationshipCatalog(schema(VBRK='mandt vbeln waerk', vbrp='mandt vbeln posnr aubel aupos netwr',
+                                   VBAK='mandt vbeln waerk', VBAP='mandt vbeln posnr netwr'))
+    c.keys = {'VBRK': [{'mandt', 'vbeln'}], 'VBAK': [{'mandt', 'vbeln'}],
+              'vbrp': [{'mandt', 'vbeln', 'posnr'}], 'VBAP': [{'mandt', 'vbeln', 'posnr'}]}
+    c.add_edge('VBRK', 'vbrp', [('vbeln', 'vbeln')], 'test')
+    c.add_edge('VBAK', 'VBAP', [('vbeln', 'vbeln')], 'test')
+    c.add_edge('vbrp', 'VBAP', [('aubel', 'vbeln'), ('aupos', 'posnr')], 'test')
+    assert c.priced_by('vbrp') == {'vbrp', 'VBRK'} and c.priced_by('VBAP') == {'VBAP', 'VBAK'}
+    sql = '''WITH i AS (SELECT p.mandt, p.vbeln, p.posnr, p.aubel, p.aupos, p.netwr AS invoice_net, b.waerk AS invoice_currency
+                        FROM vbrp p JOIN "VBRK" b ON b.mandt=p.mandt AND b.vbeln=p.vbeln),
+                  o AS (SELECT a.mandt, a.vbeln, a.posnr, a.netwr AS order_net, h.waerk AS order_currency
+                        FROM "VBAP" a JOIN "VBAK" h ON h.mandt=a.mandt AND h.vbeln=a.vbeln)
+             SELECT i.mandt, i.vbeln, i.posnr, o.vbeln AS order_no, o.posnr AS order_item, i.invoice_net, i.invoice_currency,
+                    o.order_net, o.order_currency,
+                    CASE WHEN i.invoice_currency = o.order_currency THEN i.invoice_net - o.order_net ELSE NULL END AS difference
+             FROM i JOIN o ON o.mandt=i.mandt AND o.vbeln=i.aubel AND o.posnr=i.aupos'''
+    proof = dict(allow_currency_matched_difference=True)
+    assert identified_value_proof(sql, c, **proof)[0]
+    unguarded = sql.replace('CASE WHEN i.invoice_currency = o.order_currency THEN i.invoice_net - o.order_net ELSE NULL END',
+                            'i.invoice_net - o.order_net')
+    ok, errors = identified_value_proof(unguarded, c, **proof)
+    assert not ok and 'currencies are explicitly matched' in errors[0]
+
+
 def test_agentic_plan_accepts_currency_matched_difference_and_preserves_null_links(monkeypatch):
     from app.services import analyst_agent as agent
     c = catalog()
