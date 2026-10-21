@@ -482,6 +482,37 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
         projected = set()
         measures = set()
         measured_aliases = set()
+        # A condition that mentions currencies is not a displayed currency.
+        # Inspect all projections up front so SELECT column order is irrelevant.
+        currency_outputs = set()
+        for p in select.selects:
+            value = p.this if isinstance(p, exp.Alias) else p
+            if isinstance(value, exp.Column) and value.table in infos:
+                currency_outputs.update(t for t, c in infos[value.table][0].get(value.name.lower(), set())
+                                        if re.search(r'(?:currency|waerk|waers)', c, re.I))
+
+        def conjuncts(node):
+            if isinstance(node, exp.Paren):
+                return conjuncts(node.this)
+            if isinstance(node, exp.And):
+                return conjuncts(node.this) + conjuncts(node.expression)
+            return [node]
+
+        def enforcing_equalities(value):
+            if isinstance(value, exp.Case):
+                return [e for e in conjuncts(value.args['ifs'][0].this) if isinstance(e, exp.EQ)]
+            where = select.args.get('where')
+            equalities = conjuncts(where.this) if where else []
+            for join in select.args.get('joins') or []:
+                target = join.this.alias_or_name
+                for condition in conjuncts(join.args.get('on')):
+                    # An unrelated LEFT JOIN cannot enforce currency equality
+                    # on two already joined monetary sources.
+                    if not join.args.get('side') or (
+                            join.args.get('side') == 'LEFT' and isinstance(condition, exp.EQ)
+                            and any(c.table == target for c in condition.find_all(exp.Column))):
+                        equalities.append(condition)
+            return [e for e in equalities if isinstance(e, exp.EQ)]
         for p in select.selects:
             value = p.this if isinstance(p, exp.Alias) else p
             columns = [c for c in value.find_all(exp.Column) if c.table in infos]
@@ -504,18 +535,16 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                     # CASE WHEN <currencies equal> THEN a - b [ELSE NULL] END is
                     # the same guarded difference written inline.
                     if (isinstance(value, exp.Case) and len(value.args.get('ifs') or []) == 1
-                            and isinstance(value.args['ifs'][0].this, exp.EQ)
+                            and isinstance(value.args['ifs'][0].this, (exp.EQ, exp.And, exp.Paren))
                             and (value.args.get('default') is None or isinstance(value.args.get('default'), exp.Null))):
                         difference = value.args['ifs'][0].args.get('true')
                     if allow_currency_matched_difference and isinstance(difference, exp.Sub):
                         left_sources, right_sources = source_tables(difference.this), source_tables(difference.expression)
                         if len(left_sources) == 1 and len(right_sources) == 1 and left_sources != right_sources:
-                            currency_outputs = {table for output_origins in refs.values() for table, name in output_origins
-                                                if re.search(r'(?:currency|waerk|waers)', name, re.I)}
                             left_owners = catalog.priced_by(next(iter(left_sources)))
                             right_owners = catalog.priced_by(next(iter(right_sources)))
                             exposes_both_currencies = bool(currency_outputs & left_owners and currency_outputs & right_owners)
-                            for equality in select.find_all(exp.EQ):
+                            for equality in enforcing_equalities(value):
                                 if equality.find_ancestor(exp.Select) is not select:
                                     continue
                                 left, right = equality.this, equality.expression
@@ -548,6 +577,7 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
         # Joins whose target key is not fully matched can return several target
         # rows per earlier row, so values summed across them would repeat.
         multiplying = []
+        determined = set()
         for join in select.args.get('joins') or []:
             target = join.this.alias_or_name
             on = join.args.get('on')
@@ -620,6 +650,10 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             target_columns = {column for (a, ac), (b, bc) in pairs for alias, column in ((a, ac), (b, bc)) if alias == target}
             if not any(key <= target_columns for key in infos[target][1]):
                 multiplying.append(target)
+            else:
+                # A full unique key matched to earlier sources yields at most one
+                # row per earlier row, so the earlier keys already identify it.
+                determined.add(target)
             seen.add(target)
         # A projected composite-key component can carry equivalent origins from
         # earlier verified joins. This is necessary for multi-hop bridge CTEs.
@@ -654,7 +688,7 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             return refs, [output_keys], measures
         for alias, (_, keys, _) in infos.items():
             candidate = next((k for k in keys if {find((alias, c)) for c in k} <= exposed), None)
-            if candidate is None and not single_table and (alias in measured_aliases or not select.args.get('distinct')):
+            if candidate is None and not single_table and alias not in determined and (alias in measured_aliases or not select.args.get('distinct')):
                 source = scope.selected_sources[alias][1]
                 if keys:
                     detail = (f'show every column of a unique key of {labels[alias]} in the output '

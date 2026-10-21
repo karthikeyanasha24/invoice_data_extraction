@@ -71,6 +71,17 @@ amount/date/quantity/price fields rather than describing hundreds of columns.
 To explain WHY values differ, inspect linked item quantities, units, prices,
 discounts, tax and other recorded components as available. A header difference
 alone does not prove a business cause. Report missing evidence honestly.
+For a reason/root-cause request, do not stop after selecting header amounts.
+Query the relevant item and pricing evidence too. Return the observations as
+named output columns (including an evidence-based observed_difference where
+useful), so the user can see the explanation and its supporting records. A
+pricing-date change is an observation, not proof of a price change: verify the
+actual prices/conditions. If evidence is absent, explain that the extract cannot
+establish the cause; never substitute a plausible generic cause.
+For a specific-document diagnosis, an empty JOIN does not prove the invoice is
+absent. Check the base document, retain unmatched references with LEFT JOIN, and
+inspect other verified document-reference paths when a bridge has no match.
+Do not stop at an empty bridge query when the base document still exists.
 For totals, aggregate independent facts separately BEFORE joining. These are
 different grains. Do not substitute one for the other. Use exact inspected keys.
 A bridge may be one-to-many. State that header values repeat per distinct pair and
@@ -305,6 +316,12 @@ class AnalystTools:
                      "SAP SD documented relationship: VBFA successor is the delivery document"),
                     ("VBFA", "VBRK", [("vbeln", "vbeln")],
                      "SAP SD documented relationship: VBFA successor is the billing document"),
+                    ("VBAP", "VBFA", [("vbeln", "vbelv"), ("posnr", "posnv")],
+                     "SAP SD documented relationship: VBFA predecessor item is the sales document item"),
+                    ("LIPS", "VBFA", [("vbeln", "vbelv"), ("posnr", "posnv")],
+                     "SAP SD documented relationship: VBFA predecessor item is the delivery item"),
+                    ("VBFA", "VBRP", [("vbeln", "vbeln"), ("posnn", "posnr")],
+                     "SAP SD documented relationship: VBFA successor item is the billing item"),
                 ):
                     if left.lower() in table_index and right.lower() in table_index:
                         catalog.add_edge(table_index[left.lower()], table_index[right.lower()], pairs, provenance)
@@ -604,6 +621,10 @@ def _available_period_request(question: str) -> bool:
     return bool(re.search(r"\b(?:which|what|all|any|available)\s+(?:calendar\s+)?years?\b|\b(?:only|sole)\b.{0,35}\byear\b.{0,35}\b(?:has|had|have|with|contains|exists|this|that)\b|\byear\b.{0,35}\b(?:only|sole)\b|^\s*is\b.{0,60}\b(?:only|sole)\s+year\b", question, re.I))
 
 
+def _diagnostic_request(question: str) -> bool:
+    return bool(re.search(r'\b(?:why|reasons?|root\s+causes?|explain\s+(?:the\s+)?difference)\b', question, re.I))
+
+
 def _predicate_columns(sql: str) -> set[str]:
     from sqlglot import exp, parse_one
     tree = parse_one(sql, read="postgres")
@@ -835,6 +856,12 @@ def _final_result(question: str, final: dict, tools: AnalystTools, state: Invest
         # context in a separately labelled section.
         final = dict(final)
         final['answer'] = grounded_answer(analyses)
+        if _diagnostic_request(scope_question or question):
+            # The grounded renderer preserves query-backed observations, but a
+            # bare pair of amounts must not become an invented business cause.
+            final['answer'] += ('\n\nThese are the verified observations from the connected extract. '
+                                'An amount difference alone does not establish its cause; any missing '
+                                'item, quantity, price or condition evidence remains unresolved.')
         research = [r for r in selected if r.get('kind')=='public_research']
         for item in research:
             final['answer'] += '\n\n**Public context — external sources:**\n\n' + str(item.get('answer') or '')
@@ -1041,7 +1068,7 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                     if call['name'] == 'run_readonly_sql' and not result.get('ok') and str(result.get('error', '')).startswith(('Equivalent failed SQL', 'SQL repair limit')):
                         raise ValueError(result['error'])
                 evidence, issues = _best_verified_analysis(scope, tools)
-                if evidence and not issues and not conditional and not _available_period_request(question) and not public_research_requested(question):
+                if evidence and not issues and not conditional and not _available_period_request(question) and not public_research_requested(question) and not _diagnostic_request(scope):
                     return _attach_loop_metrics(
                         _fallback_verified_result(
                             scope, tools, state, calls,
@@ -1050,6 +1077,12 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                         started=started, calls=calls, tool_count=tool_count,
                         feedback_count=feedback_count, tools=tools,
                     )
+                if evidence and not issues and _diagnostic_request(scope) and any(call.get('name') == 'run_readonly_sql' for call in function_calls):
+                    input_items.append({'role': 'user', 'content':
+                        'The query has verified data. This request asks for a reason, so verify the relevant '
+                        'item/quantity/unit/price/condition evidence before concluding. A header amount delta '
+                        'alone does not establish a cause. If the available extract cannot establish it, '
+                        'finish with the verified evidence and state the missing evidence explicitly.'})
                 if evidence and issues and any(call.get("name") == "run_readonly_sql" for call in function_calls):
                     feedback_count += 1
                     input_items.append({"role": "user", "content": "Application validation feedback: " + "; ".join(issues[:6]) + ". The executed result is incomplete for this request. Revise the query using the inspected schema; do not report this result as verified."})

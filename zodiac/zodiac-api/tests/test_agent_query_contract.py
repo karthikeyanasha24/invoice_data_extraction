@@ -261,6 +261,42 @@ def test_agentic_plan_accepts_currency_matched_difference_and_preserves_null_lin
     assert not error['ok'] and 'currencies are explicitly matched' in error['error']
 
 
+@pytest.mark.parametrize('guard', ['b.waerk=o.waerk', '(b.waerk=o.waerk) AND b.vbeln=b.vbeln'])
+def test_currency_difference_works_with_currency_outputs_after_difference(guard):
+    sql = SQL.replace('b.waerk AS billing_currency,o.waerk AS order_currency',
+                      'CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC) AS difference, '
+                      'b.waerk AS billing_currency,o.waerk AS order_currency')
+    sql = sql.replace('ORDER BY', f'AND ({guard}) ORDER BY')
+    assert identified_value_proof(sql, catalog(), allow_currency_matched_difference=True) == (True, [])
+
+
+@pytest.mark.parametrize('expression,guard', [
+    ('CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC)', "AND (b.waerk=o.waerk OR b.vbeln='B1')"),
+    ('CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC)', ''),
+    ('CASE WHEN b.vbeln=o.vbeln THEN CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC) ELSE NULL END', ''),
+    ('CASE WHEN b.waerk=o.waerk THEN CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC) ELSE 0 END', ''),
+])
+def test_currency_comparison_requires_an_enforced_guard(expression, guard):
+    sql = SQL.replace('b.waerk AS billing_currency,o.waerk AS order_currency',
+                      f'{expression} AS difference,b.waerk AS billing_currency,o.waerk AS order_currency')
+    sql = sql.replace('ORDER BY', f'{guard} ORDER BY')
+    assert not identified_value_proof(sql, catalog(), allow_currency_matched_difference=True)[0]
+
+
+def test_case_currency_condition_cannot_replace_displaying_both_currencies():
+    sql = SQL.replace('b.waerk AS billing_currency,o.waerk AS order_currency',
+                      'CASE WHEN b.waerk=o.waerk THEN CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC) ELSE NULL END AS difference')
+    assert not identified_value_proof(sql, catalog(), allow_currency_matched_difference=True)[0]
+
+
+def test_case_guard_accepts_parentheses_and_additional_conjunctive_conditions():
+    sql = SQL.replace('b.waerk AS billing_currency,o.waerk AS order_currency',
+                      'CASE WHEN (b.waerk=o.waerk) AND b.waerk IS NOT NULL '
+                      'THEN CAST(b.netwr AS NUMERIC)-CAST(o.netwr AS NUMERIC) ELSE NULL END AS difference,'
+                      'b.waerk AS billing_currency,o.waerk AS order_currency')
+    assert identified_value_proof(sql, catalog(), allow_currency_matched_difference=True) == (True, [])
+
+
 def test_followup_freezes_document_cohort_and_requeries_it_without_injection():
     from app.services.agent_query_contract import prior_cohort, constrain_cohort
     context = {'previousAnswerStatus':'SUCCESS','previousSQL':SQL,

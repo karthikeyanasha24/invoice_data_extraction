@@ -113,6 +113,21 @@ def test_sql_error_returns_feedback_then_agent_revises_query(monkeypatch):
     assert [step["status"] for step in result["query_plan"]["agent_trace"]] == ["completed", "error", "completed"]
 
 
+def test_reason_request_continues_after_header_query_and_does_not_invent_a_cause(monkeypatch):
+    inputs = scripted(monkeypatch, [
+        tool('run_readonly_sql', {'source': 'business', 'sql': 'SELECT vbeln, netwr FROM "VBRK"',
+                                  'purpose': 'Inspect the invoice amount'}),
+        final('A special discount caused the difference.', 'analysis', ['result_1']),
+    ])
+    result = run('Why does this invoice have this amount?', MagicMock(return_value=[{'vbeln': 'B1', 'netwr': '12.50'}]))
+    assert len(inputs) == 2
+    assert 'reason' in inputs[1][-1]['content']
+    assert result['answer_status'] == 'SUCCESS'
+    assert 'special discount' not in result['answer']
+    assert 'does not establish its cause' in result['answer']
+    assert result['data'] == [{'vbeln': 'B1', 'netwr': '12.50'}]
+
+
 def test_database_execution_error_can_be_repaired_in_same_turn(monkeypatch):
     inputs = scripted(monkeypatch, [
         tool("run_readonly_sql", {"source": "business", "sql": 'SELECT CAST(netwr AS NUMERIC) AS amount FROM "VBRK"', "purpose": "Inspect billed amounts"}),
