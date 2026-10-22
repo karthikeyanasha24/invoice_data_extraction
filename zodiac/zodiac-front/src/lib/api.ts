@@ -1908,6 +1908,8 @@ export const dashboardApi = {
         newQuestion?: boolean;
         analysisMode?: 'agent' | 'basic';
         basicPresetApproved?: boolean;
+        basicTrainingExampleId?: string;
+        basicTrainingRevision?: number;
     }, config?: { signal?: AbortSignal }) => {
         try {
             const response = await api.post('/api/query/adaptive', body, { timeout: 0, signal: config?.signal });
@@ -1921,6 +1923,12 @@ export const dashboardApi = {
             }
             if (error?.code === 'ECONNRESET' || error?.message === 'Network Error') {
                 throw new Error('Could not reach the analysis service. Please try again.');
+            }
+            if (body.basicTrainingExampleId && error?.response?.status === 404) {
+                throw new Error('This saved query is no longer available in your workspace. Refresh the page and choose a saved query again.');
+            }
+            if (body.basicTrainingExampleId && error?.response?.status === 409) {
+                throw new Error('This saved query cannot be replayed. Refresh the page and validate the example in SQL Training before running it in Basic.');
             }
             console.error('Adaptive query failed:', error);
             throw new Error(publicApiError(error, 'Could not complete this analysis. Please try again.'));

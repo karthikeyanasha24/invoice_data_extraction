@@ -143,13 +143,14 @@ def run_basic_sql_answer(
     local_agent: Callable[..., dict] | None = None,
     field_lookup: Callable[[str], dict] | None = None,
     approve_predefined: bool = False,
+    selected_training_example: dict | None = None,
 ) -> dict[str, Any]:
     from .four_stage_db_pipeline import VerifiedDbContext, pipeline3_sql_generation
     from .investigation_budget import block_paid_models, paid_models_blocked, restore_paid_models
     from .schema_intelligence_registry import get_schema_registry
     from .semantic_requirements import enrich_semantic_with_requirements
 
-    if _ABOUT.search(question or ""):
+    if selected_training_example is None and _ABOUT.search(question or ""):
         answer = basic_scope_reply(question)
         return _payload(question, "SUCCESS", answer, "", [], mode="general_chat")
 
@@ -158,6 +159,10 @@ def run_basic_sql_answer(
 
     token = block_paid_models()
     try:
+        # An explicit picker selection must replay that server-owned revision.
+        # It must not become a follow-up, fuzzy match, template or model request.
+        if selected_training_example is not None:
+            previous_question, previous_sql, local_agent = "", "", None
         resolved = continue_basic_question(question, previous_question)
         if resolved != (question or "").strip():
             previous_sql = ""
@@ -178,7 +183,8 @@ def run_basic_sql_answer(
                 for step in (example.get("steps") or [example])
             )]
 
-        retrieved = safe_examples()
+        retrieved = ([dict(selected_training_example, reusable=True, retrieval="selected_training")]
+                     if selected_training_example is not None else safe_examples())
         reused_example = next((e for e in retrieved if e["reusable"]), None)
         if reused_example is None:
             reused_example = adapt_training_year_filter(question, prior_examples)
@@ -225,10 +231,18 @@ def run_basic_sql_answer(
         executed = (_invoke_execute(execute, sql.strip().rstrip(";"), reused_example) if reused_example
                     else execute(sql.strip().rstrip(";"))) or {}
         if not executed.get("ok"):
-            answer = "Basic mode did not call a model. The saved query was rejected by the database. " + str(executed.get("error") or "") + " " + _SWITCH
-            if local_agent is not None:
+            training = bool((reused_example or {}).get("training_example"))
+            answer = "Basic mode did not call a model. The saved query was rejected by the database. " + str(executed.get("error") or "")
+            answer += (" Open this example in SQL Training to review and rerun it." if training else " " + _SWITCH)
+            if local_agent is not None and not (reused_example or {}).get("training_example"):
                 return _run_local(local_agent, retrieved)
-            return _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or sql, [])
+            result = _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or sql, [])
+            if training:
+                result["meta"]["training_example"] = {
+                    "id": reused_example.get("training_example_id"),
+                    "revision": reused_example.get("training_revision"),
+                }
+            return result
         rows = executed.get("rows") or []
         if rows:
             method_note = ("Basic adapted the checked SQL Training example to the requested years" if reused_example and reused_example.get("training_year_adaptation")
@@ -246,6 +260,11 @@ def run_basic_sql_answer(
         result["meta"]["retrieval"] = {"reused": reused, "examples": len(retrieved),
                                       "method": (reused_example.get("retrieval") if reused_example else
                                                  retrieved[0]["retrieval"] if retrieved else "none")}
+        if reused_example and reused_example.get("training_example"):
+            result["meta"]["training_example"] = {
+                "id": reused_example.get("training_example_id"),
+                "revision": reused_example.get("training_revision"),
+            }
         from .analyst_evidence import grounded_answer
         if rows:
             count_row = rows[0] if len(rows) == 1 and isinstance(rows[0], dict) else {}

@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 
 from app.services.adaptive_trusted_scope import TrustedAiExecutionScope
 from app.services.basic_sql_training import (
-    apply_training_filters, check_query_scope, edit_example, list_examples, record_run, save_run,
+    apply_training_filters, check_query_scope, edit_example, list_examples, load_replay_example, record_run, save_run,
 )
 from app.services.basic_rag import adapt_training_year_filter, load_basic_examples
 from app.services.basic_rag import profit_question_without_profit_sql
@@ -28,6 +28,29 @@ def test_schema_scoped_read_only_sql_validation():
         check_query_scope("DELETE FROM billing", SCHEMA)
     with pytest.raises(ValueError):
         check_query_scope("SELECT customer_id FROM billing; SELECT net_value FROM billing", SCHEMA)
+
+
+def test_picker_replay_is_bound_to_owner_scope_question_revision_and_configured_source():
+    engine = create_engine("sqlite://")
+    owner = TrustedAiExecutionScope(user_id=17, sap_access="full")
+    other = TrustedAiExecutionScope(user_id=18, sap_access="full")
+    question = "sales by customer"
+    sql = "SELECT customer_id, net_value FROM billing"
+    run = record_run(engine, owner, "business", question, SCHEMA, sql, {"ok": True, "rows": []})
+    saved = save_run(engine, owner, run, question)
+    example = load_replay_example(engine, owner, saved["id"], 1, question, True)
+    assert example["sql"] == sql and example["training_example"] is True
+    for scope in (other, None, TrustedAiExecutionScope(user_id=17, sap_access="none")):
+        with pytest.raises(PermissionError):
+            load_replay_example(engine, scope, saved["id"], 1, question, True)
+    for revision, wording, use_sap in ((2, question, True), (True, question, True),
+                                      (1, "sales in 2001", True), (1, question, False)):
+        with pytest.raises(ValueError):
+            load_replay_example(engine, owner, saved["id"], revision, wording, use_sap)
+    edit_example(engine, owner, saved["id"], "SELECT customer_id FROM billing")
+    with pytest.raises(ValueError, match="needs validation"):
+        load_replay_example(engine, owner, saved["id"], 2, question, True)
+    engine.dispose()
 
 
 def test_training_filters_apply_sap_include_exclude_ranges_and_comparisons():

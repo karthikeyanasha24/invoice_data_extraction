@@ -3255,6 +3255,8 @@ def post_query_adaptive(
     newQuestion: bool = Body(default=False, embed=True),
     analysisMode: Optional[str] = Body(default=None, embed=True),
     basicPresetApproved: bool = Body(default=False, embed=True),
+    basicTrainingExampleId: Optional[str] = Body(default=None, embed=True),
+    basicTrainingRevision: Optional[int] = Body(default=None, embed=True),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: ZodiacUser = Depends(get_current_user),
@@ -3323,6 +3325,8 @@ def post_query_adaptive(
             agent_mode=agent_enabled(),
             analysis_mode=(analysisMode if isinstance(analysisMode, str) else "agent").strip().lower(),
             basic_preset_approved=basicPresetApproved is True,
+            basic_training_example_id=basicTrainingExampleId if isinstance(basicTrainingExampleId, str) else None,
+            basic_training_revision=basicTrainingRevision if isinstance(basicTrainingRevision, int) else None,
         )
     finally:
         if _scope_token is not None:
@@ -3349,8 +3353,26 @@ def _post_query_adaptive_body(
     agent_mode: bool = False,
     analysis_mode: str = "agent",
     basic_preset_approved: bool = False,
+    basic_training_example_id: Optional[str] = None,
+    basic_training_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
     _original_question = original_question
+    selected_training_example = None
+    if basic_training_example_id is not None or basic_training_revision is not None:
+        if analysis_mode != "basic":
+            raise HTTPException(status_code=400, detail="Saved SQL Training replay requires Basic mode")
+        from ..services.basic_sql_training import load_replay_example
+        from ..services.adaptive_trusted_scope import get_trusted_scope
+        try:
+            selected_training_example = load_replay_example(
+                db.get_bind(), get_trusted_scope(), basic_training_example_id,
+                basic_training_revision, _original_question, USE_SAP_DB_FOR_AI)
+        except PermissionError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        new_question = True
+        contextData, overrideSql = None, None
     openai_key = (
         os.getenv("OPENAI_API_KEY") or os.getenv("OPEN_AI_KEY") or OPENAI_API_KEY or ""
     ).strip()
@@ -3802,7 +3824,7 @@ def _post_query_adaptive_body(
     clean_q = _extract_user_question(q)
     sap_locked = _is_sap_erp_intent(clean_q)
     from ..services.adaptive_nl_sql_hardening import is_greeting_or_chitchat
-    if is_greeting_or_chitchat(_original_question):
+    if selected_training_example is None and is_greeting_or_chitchat(_original_question):
         if analysis_mode == "basic":
             from ..services.basic_hosted_provider import basic_llm_enabled, basic_provider
             local_usage = None
@@ -3901,7 +3923,9 @@ def _post_query_adaptive_body(
         prior = contextData if isinstance(contextData, dict) else {}
         source = "business" if USE_SAP_DB_FOR_AI else "application"
         prior_examples: list = []
-        if user_id:
+        if selected_training_example is not None:
+            prior_examples = [selected_training_example]
+        elif user_id:
             try:
                 from ..services.basic_rag import load_basic_examples
                 from ..services.adaptive_trusted_scope import get_trusted_scope
@@ -3910,7 +3934,7 @@ def _post_query_adaptive_body(
                 logger.warning("Basic query memory unavailable: %s", type(memory_error).__name__)
         from ..services.analyst_agent import run_analyst_agent
         from ..services.basic_hosted_provider import basic_llm_enabled
-        free_model_available = basic_llm_enabled()
+        free_model_available = selected_training_example is None and basic_llm_enabled()
         def _basic_free_agent(examples, field_hint=None):
             return run_analyst_agent(
                 _original_question, db, _execute_sql, schema_loader=_load_schema,
@@ -3984,6 +4008,7 @@ def _post_query_adaptive_body(
                 local_agent=_basic_free_agent if free_model_available else None,
                 field_lookup=_basic_field_lookup if free_model_available else None,
                 approve_predefined=basic_preset_approved,
+                selected_training_example=selected_training_example,
             )
         finally:
             executor.close()
@@ -3994,7 +4019,8 @@ def _post_query_adaptive_body(
             or basic.get("answer_status") == "CANNOT_ANSWER"
             or bool(basic.get("meta", {}).get("service_issue"))
         )
-        if not free_model_available and allow_paid_fallback and basic_unanswered:
+        if (selected_training_example is None and not basic.get("meta", {}).get("training_example")
+                and not free_model_available and allow_paid_fallback and basic_unanswered):
             # The model-free guard has been restored by run_basic_sql_answer.
             # Call the existing Agentic entry point with its normal context.
             reason = "saved_query_failed" if basic.get("sql") else "no_safe_match"

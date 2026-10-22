@@ -110,13 +110,14 @@ def run_training(api, db, sql=SQL):
     }, db=db, current_user=USER)
 
 
-def run_basic(api, db):
+def run_basic(api, db, **kwargs):
     token = set_trusted_scope(TrustedAiExecutionScope(user_id=USER.id, sap_access="full"))
     try:
         return api._post_query_adaptive_body(
-            q=QUESTION, original_question=QUESTION, tableHint=None, contextData=None,
+            q=QUESTION, original_question=QUESTION, tableHint=None, contextData=kwargs.pop("contextData", None),
             overrideSql=None, threadId=None, investigationId=None, db=db,
             current_user=USER, analysis_mode="basic",
+            **kwargs,
         )
     finally:
         reset_trusted_scope(token)
@@ -281,3 +282,99 @@ def test_nontraining_basic_query_still_requires_cross_source_planning(comparison
     assert result["answer_status"] == "CANNOT_ANSWER"
     assert "prepare_analysis" in result["answer"]
     assert calls == []
+
+
+def test_selected_training_replay_uses_owned_revision_without_retrieval_or_models(comparison_db, monkeypatch):
+    from app.services.basic_sql_training import save_run
+    api, db, calls = comparison_db
+    trained = run_training(api, db)
+    saved = save_run(db.get_bind(), TrustedAiExecutionScope(user_id=USER.id, sap_access="full"), trained["run_id"], QUESTION)
+    def forbidden(*args, **kwargs):
+        pytest.fail("Explicit saved-query replay must not use retrieval or a model")
+    monkeypatch.setattr("app.services.basic_rag.load_basic_examples", forbidden)
+    monkeypatch.setattr("app.services.basic_rag.retrieve_examples", forbidden)
+    monkeypatch.setattr("app.services.analyst_agent.run_analyst_agent", forbidden)
+    monkeypatch.setattr("app.services.basic_hosted_provider.basic_llm_enabled", lambda: True)
+    monkeypatch.setenv("BASIC_ALLOW_PAID_FALLBACK", "true")
+    result = run_basic(api, db, basic_training_example_id=saved["id"], basic_training_revision=1,
+                       contextData={"previousQuestion": "sales in 2001", "previousSQL": "SELECT secret FROM other"})
+    assert result["answer_status"] == "SUCCESS", result
+    assert result["llm_calls"] == 0
+    assert result["meta"]["retrieval"]["method"] == "selected_training"
+    assert result["meta"]["training_example"] == {"id": saved["id"], "revision": 1}
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("local_model", [True, False])
+def test_selected_training_validation_failure_never_falls_back_to_model(comparison_db, monkeypatch, local_model):
+    from app.services.basic_sql_training import save_run
+    api, db, calls = comparison_db
+    trained = run_training(api, db)
+    saved = save_run(db.get_bind(), TrustedAiExecutionScope(user_id=USER.id, sap_access="full"), trained["run_id"], QUESTION)
+    db.execute(text("INSERT INTO VBRK VALUES ('800','B1','19990115','850','USD')"))
+    db.commit()
+    monkeypatch.setattr("app.services.basic_hosted_provider.basic_llm_enabled", lambda: local_model)
+    monkeypatch.setenv("BASIC_ALLOW_PAID_FALLBACK", "true")
+    monkeypatch.setattr("app.services.analyst_agent.run_analyst_agent", lambda **_: pytest.fail("No model fallback"))
+    result = run_basic(api, db, basic_training_example_id=saved["id"], basic_training_revision=1)
+    assert result["answer_status"] == "CANNOT_ANSWER", result
+    assert result["llm_calls"] == 0 and result["data"] == []
+    assert "SQL Training" in result["answer"]
+    assert len(calls) == 1  # Rejected before execution; original training run only.
+
+
+@pytest.mark.parametrize("defect,status", [("not_owned", 404), ("stale", 409), ("wording", 409), ("unvalidated", 409)])
+def test_selected_training_replay_rejects_unavailable_selection_before_query(comparison_db, defect, status):
+    from fastapi import HTTPException
+    from app.services.basic_sql_training import edit_example, save_run
+    api, db, calls = comparison_db
+    trained = run_training(api, db)
+    saved = save_run(db.get_bind(), TrustedAiExecutionScope(user_id=USER.id, sap_access="full"), trained["run_id"], QUESTION)
+    revision = 2 if defect == "stale" else 1
+    if defect == "not_owned":
+        from app.services.basic_sql_training import examples
+        db.execute(examples.update().where(examples.c.id == saved["id"]).values(user_id=999))
+        db.commit()
+    elif defect == "wording":
+        from app.services.basic_sql_training import examples
+        db.execute(examples.update().where(examples.c.id == saved["id"]).values(question="sales in 2001"))
+        db.commit()
+    elif defect == "unvalidated":
+        edit_example(db.get_bind(), TrustedAiExecutionScope(user_id=USER.id, sap_access="full"), saved["id"], SQL)
+        revision = 2
+    with pytest.raises(HTTPException) as raised:
+        run_basic(api, db, basic_training_example_id=saved["id"], basic_training_revision=revision)
+    assert raised.value.status_code == status
+    assert len(calls) == 1
+
+
+def test_public_api_forwards_the_saved_picker_identity_and_revision(comparison_db, monkeypatch):
+    api, db, _ = comparison_db
+    seen = {}
+    def body(**kwargs):
+        seen.update(kwargs)
+        return {"answer_status": "SUCCESS"}
+    monkeypatch.setattr(api, "_post_query_adaptive_body", body)
+    api.post_query_adaptive(question=QUESTION, db=db, current_user=USER, analysisMode="basic",
+                            basicTrainingExampleId="saved-example", basicTrainingRevision=3)
+    assert seen["basic_training_example_id"] == "saved-example"
+    assert seen["basic_training_revision"] == 3
+    assert seen["analysis_mode"] == "basic"
+
+
+def test_typed_training_question_keeps_provenance_when_newer_memory_has_identical_sql(comparison_db, monkeypatch):
+    from app.services.basic_sql_training import save_run
+    from app.services.basic_rag import load_basic_examples
+    api, db, calls = comparison_db
+    trained = run_training(api, db)
+    saved = save_run(db.get_bind(), TrustedAiExecutionScope(user_id=USER.id, sap_access="full"), trained["run_id"], QUESTION)
+    original = next(e for e in load_basic_examples(db.get_bind(), TrustedAiExecutionScope(user_id=USER.id, sap_access="full"), False)
+                    if e.get("training_example_id") == saved["id"])
+    copied = {key: original[key] for key in ("question", "sql", "source")}
+    monkeypatch.setattr("app.services.basic_rag.load_basic_examples", lambda *_: [copied, original])
+    monkeypatch.setattr("app.services.basic_hosted_provider.basic_llm_enabled", lambda: True)
+    monkeypatch.setattr("app.services.analyst_agent.run_analyst_agent", lambda *_, **__: pytest.fail("Must replay SQL"))
+    result = run_basic(api, db)
+    assert result["answer_status"] == "SUCCESS", result
+    assert result["meta"]["training_example"]["id"] == saved["id"]
+    assert result["llm_calls"] == 0 and len(calls) == 2

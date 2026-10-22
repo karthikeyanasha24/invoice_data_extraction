@@ -8,6 +8,21 @@ from app.services.adaptive_trusted_scope import TrustedAiExecutionScope
 SQL = 'SELECT waerk AS currency, SUM(netwr) AS total_sales FROM "VBRK" GROUP BY waerk'
 
 
+def test_identical_memory_copy_retains_the_checked_training_provenance():
+    question = "total billed sales in 2001"
+    copied = {"question": question, "sql": SQL, "source": "application"}
+    trained = dict(copied, training_example=True, training_example_id="checked", training_revision=3)
+    matches = rag.retrieve_examples(question, [copied, trained], use_embeddings=False)
+    assert len(matches) == 1
+    assert matches[0]["training_example_id"] == "checked"
+    assert matches[0]["training_revision"] == 3
+    for different in (dict(trained, source="business"), dict(trained, sql=SQL + " LIMIT 1")):
+        first = rag.retrieve_examples(question, [copied, different], use_embeddings=False)[0]
+        assert not first.get("training_example")
+    planned = dict(copied, analysis_plan={"strategy": "identified_values"})
+    assert rag.retrieve_examples(question, [planned, trained], use_embeddings=False)[0]["analysis_plan"]
+
+
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     monkeypatch.delenv("BASIC_EMBED_MODEL", raising=False)

@@ -77,6 +77,31 @@ def list_examples(engine, scope, query=""):
                 for row in rows if not needle or needle in row["question"].casefold() or needle in row["sql"].casefold()]
 
 
+def load_replay_example(engine, scope, identifier, revision, question, use_sap):
+    """Resolve a picker selection from owned storage, never client-supplied SQL."""
+    if scope is None or not getattr(scope, "user_id", None):
+        raise PermissionError("Saved SQL Training replay requires an authenticated workspace")
+    if (not isinstance(identifier, str) or not identifier or len(identifier) > 64
+            or isinstance(revision, bool) or not isinstance(revision, int) or revision < 1):
+        raise ValueError("Select a saved SQL Training query and its revision")
+    ensure_tables(engine)
+    with Session(engine) as session:
+        row = session.execute(select(examples).where(
+            examples.c.id == identifier, examples.c.user_id == scope.user_id,
+            examples.c.scope_digest == _digest(scope))).mappings().first()
+        if not row:
+            raise PermissionError("This saved SQL Training query is not available in your workspace")
+        if row["revision"] != revision or row["validation_status"] != "executed":
+            raise ValueError("This saved query changed or needs validation. Refresh the list and run it in SQL Training first")
+        if row["question"].strip() != question.strip():
+            raise ValueError("The question must match the selected saved SQL Training query")
+        if row["source"] not in ({"application", "business"} if use_sap else {"application"}):
+            raise ValueError("The selected query's database source is not configured")
+        return {"question": row["question"], "sql": row["sql"], "source": row["source"],
+                "training_example": True, "training_example_id": row["id"],
+                "training_revision": row["revision"]}
+
+
 def edit_example(engine, scope, identifier, sql):
     if not isinstance(sql, str) or not sql.strip() or len(sql) > 24000:
         raise ValueError("Enter a SQL statement up to 24000 characters")

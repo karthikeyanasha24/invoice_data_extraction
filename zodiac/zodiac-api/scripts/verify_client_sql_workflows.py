@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--user-email', required=True)
     parser.add_argument('--invoice', required=True)
     parser.add_argument('--metadata-only', action='store_true')
+    parser.add_argument('--basic-replay', action='store_true', help='Also rerun the existing saved 1999 comparison without models')
     args = parser.parse_args()
     from dotenv import load_dotenv
     load_dotenv(ROOT / '.env', encoding='utf-8-sig', override=True)
@@ -37,7 +38,8 @@ def main():
         user = SimpleNamespace(**dict(user))
         if user.is_customer_user and not user.is_admin:
             raise SystemExit('This standalone staff acceptance runner does not bypass customer workspace assignments.')
-        scope_token = set_trusted_scope(analyst_scope_for_user(user))
+        scope = analyst_scope_for_user(user)
+        scope_token = set_trusted_scope(scope)
         try:
             schema, origin = load_live_schema(db, {})
             if origin != 'live_database_metadata':
@@ -123,6 +125,49 @@ def main():
                         report['cases'].append({'case': name, 'ok': result.get('ok'), 'rows': result.get('row_count'),
                                                 'error': result.get('error'), 'sql': result.get('sql'), 'data': result.get('rows')})
                         print(f'{name}: ok={result.get("ok")}, rows={result.get("row_count")}, error={result.get("error")}', flush=True)
+                    finally:
+                        end_investigation()
+                        db.rollback()
+                if args.basic_replay:
+                    from sqlalchemy import select
+                    from app.services.analyst_drilldown import scope_digest
+                    from app.services.basic_sql_training import examples, load_replay_example
+                    from app.services.basic_sql_answer import run_basic_sql_answer
+                    wording = 'Identify the difference in the sales amount for order value and invoice value from the year 1999'
+                    stored = db.execute(select(examples.c.id, examples.c.revision).where(
+                        examples.c.user_id == scope.user_id, examples.c.scope_digest == scope_digest(scope),
+                        examples.c.question == wording, examples.c.source == 'application')).mappings().one()
+                    begin_investigation('Read-only saved comparison acceptance')
+                    try:
+                        example = load_replay_example(db.get_bind(), scope, stored['id'], stored['revision'], wording, False)
+                        def execute_saved(sql, step):
+                            return tools.call('run_readonly_sql', {'source': step['source'], 'sql': sql,
+                                                                 'purpose': 'Verify selected checked SQL replay'})
+                        result = run_basic_sql_answer(wording, execute=execute_saved, selected_training_example=example,
+                                                      local_agent=lambda *_: (_ for _ in ()).throw(RuntimeError('Model calls forbidden')))
+                        passed = result['answer_status'].startswith('SUCCESS') and result['llm_calls'] == 0
+                        report['cases'].append({'case': 'selected_basic_replay', 'ok': passed, 'rows': result['rowCount'],
+                                                'model_calls': result['llm_calls'], 'retrieval': result['meta'].get('retrieval'),
+                                                'error': None if passed else result.get('answer')})
+                        print(f'selected_basic_replay: ok={passed}, rows={result["rowCount"]}, model_calls={result["llm_calls"]}', flush=True)
+                        from app.services.basic_rag import load_basic_examples, retrieve_examples
+                        prior_examples = load_basic_examples(db.get_bind(), scope, False)
+                        candidates = retrieve_examples(wording, prior_examples, use_embeddings=False)
+                        selected = next((item for item in candidates if item.get('reusable')), {})
+                        report['typed_basic_match'] = {key: selected.get(key) for key in
+                                                       ('source', 'training_example', 'training_example_id', 'training_revision', 'retrieval')}
+                        print(f'typed_basic_match: {report["typed_basic_match"]}', flush=True)
+                        def execute_typed(sql, step):
+                            if not step.get('training_example'):
+                                raise RuntimeError('Typed replay lost its training provenance')
+                            return execute_saved(sql, step)
+                        typed = run_basic_sql_answer(wording, execute=execute_typed, prior_examples=prior_examples,
+                                                      local_agent=lambda *_: (_ for _ in ()).throw(RuntimeError('Model calls forbidden')))
+                        passed = typed['answer_status'].startswith('SUCCESS') and typed['llm_calls'] == 0
+                        report['cases'].append({'case': 'typed_basic_replay', 'ok': passed, 'rows': typed['rowCount'],
+                                                'model_calls': typed['llm_calls'],
+                                                'error': None if passed else typed.get('answer')})
+                        print(f'typed_basic_replay: ok={passed}, rows={typed["rowCount"]}, model_calls={typed["llm_calls"]}', flush=True)
                     finally:
                         end_investigation()
                         db.rollback()

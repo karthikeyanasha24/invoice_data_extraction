@@ -39,6 +39,7 @@ def test_basic_document_count_states_the_count_not_the_result_row_count(monkeypa
     result = run_basic_sql_answer(
         "How many billing documents are missing a currency code in 2001?",
         execute=lambda sql: {"ok": True, "sql": sql, "rows": [{"billing_document_count": 0}]},
+        approve_predefined=True,
     )
     assert result["answer"].startswith("0 billing documents match the requested filters.")
     assert result["llm_calls"] == 0
@@ -54,7 +55,7 @@ def test_missing_currency_question_uses_the_real_basic_pattern_without_a_model()
         return {"ok": True, "sql": sql, "source": "business",
                 "rows": [{"billing_document_count": 0}]}
 
-    result = run_basic_sql_answer(question, execute=execute)
+    result = run_basic_sql_answer(question, execute=execute, approve_predefined=True)
     assert result["answer_status"] == "SUCCESS"
     assert result["answer"].startswith("0 billing documents match the requested filters.")
     assert result["llm_calls"] == 0
@@ -129,7 +130,7 @@ def test_total_billed_sales_uses_a_saved_pattern_without_a_model():
         seen["sql"] = sql
         return {"ok": True, "sql": sql, "source": "business", "rows": [{"total_sales": "1"}]}
 
-    result = run_basic_sql_answer("total billed sales in 2001", execute=execute)
+    result = run_basic_sql_answer("total billed sales in 2001", execute=execute, approve_predefined=True)
     assert "2001" in seen["sql"]
     assert "total_sales" in seen["sql"]
     assert result["llm_calls"] == 0
@@ -146,7 +147,7 @@ def test_legacy_saved_mixed_currency_total_uses_the_current_safe_pattern():
         return {"ok": True, "sql": sql, "rows": [{"currency": "DEM", "total_sales": "10"}]}
 
     result = run_basic_sql_answer(question, execute=execute,
-                                  prior_examples=[{"question": question, "sql": legacy}])
+                                  prior_examples=[{"question": question, "sql": legacy}], approve_predefined=True)
     assert len(seen) == 1 and seen[0] != legacy
     assert 'GROUP BY' in seen[0] and 'waerk' in seen[0]
     assert result["meta"]["retrieval"]["reused"] is False

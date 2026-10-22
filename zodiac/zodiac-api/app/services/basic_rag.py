@@ -174,7 +174,24 @@ def retrieve_examples(question, examples, top_k=3, *, use_embeddings=True):
     exact = [dict(e, similarity=1.0, retrieval="canonical", reusable=True) for e in candidates
              if fingerprint(question) == fingerprint(e["question"])]
     if exact and wanted:
-        return exact[:top_k]
+        # Automatic memory copies can lack the original training provenance.
+        # Restore it only for identical SQL/source, never a similar query,
+        # another database or a planned/multi-query investigation.
+        def identity(example):
+            return (example.get("source"), parse(example["sql"], read="postgres")[0].sql(dialect="postgres"))
+        trained = {identity(e): e for e in reversed(exact) if e.get("training_example")}
+        exact = [trained.get(identity(e), e) if not e.get("analysis_plan") and not e.get("steps") else e
+                 for e in exact]
+        seen_training = set()
+        distinct = []
+        for example in exact:
+            key = example.get("training_example_id")
+            if key and key in seen_training:
+                continue
+            if key:
+                seen_training.add(key)
+            distinct.append(example)
+        return distinct[:top_k]
     if len(wanted) < 2:
         return []
     ranked = []

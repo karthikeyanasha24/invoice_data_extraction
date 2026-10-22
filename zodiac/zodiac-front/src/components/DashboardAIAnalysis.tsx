@@ -1326,7 +1326,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [loading]);
 
-  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue'; analysisMode?: 'agent' | 'basic'; approveBasicPattern?: boolean; newQuestion?: boolean }) => {
+  const sendQuestion = useCallback(async (question: string, opts?: { asNew?: boolean; retry?: boolean; source?: 'overview-url' | 'overview-chip' | 'followup-chip' | 'explicit-new' | 'saved-restore' | 'typed-continue'; analysisMode?: 'agent' | 'basic'; approveBasicPattern?: boolean; newQuestion?: boolean; trainingExample?: { id: string; revision: number } }) => {
     const q = (question || '').trim().replace(/^undefined/i, '').trim();
     if (!q || loading || !historyLoaded) return;
 
@@ -1407,6 +1407,8 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
         newQuestion: treatAsNew,
         analysisMode: opts?.analysisMode || (analysisMethodRef.current === 'training' ? 'basic' : analysisMethodRef.current),
         basicPresetApproved: opts?.approveBasicPattern === true,
+        basicTrainingExampleId: opts?.trainingExample?.id,
+        basicTrainingRevision: opts?.trainingExample?.revision,
         conversationHistory: treatAsNew ? [] : contextMessages.slice(-40).map(message => ({
           role: message.role, content: message.content.slice(0, 6000), mode: message.result?.mode,
         })),
@@ -1550,10 +1552,10 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     } finally { setTrainedQueriesLoading(false); }
   };
 
-  const runTrainedQuery = (question: string) => {
+  const runTrainedQuery = (example: { id: string; revision: number; question: string }) => {
     setTrainedQueryPickerOpen(false);
     setTrainedQuerySearch('');
-    void sendQuestion(question, { asNew: true, source: 'saved-restore', analysisMode: 'basic' });
+    void sendQuestion(example.question, { asNew: true, source: 'saved-restore', analysisMode: 'basic', trainingExample: example });
   };
 
   const stopAnalysis = () => {
@@ -1897,7 +1899,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             {!trainedQueriesLoading && !trainedQueryError && trainedQueries.length === 0 && <p className="mt-2 text-xs text-slate-500">No saved SQL Training queries yet. In SQL Training, select every table and column your join uses, run the SQL successfully, then choose “Save checked example.”</p>}
             <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">{trainedQueries.filter(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())).map(example => <div key={example.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
               <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-800">{example.question}</p><p className="mt-0.5 text-[10px] text-slate-500">Revision {example.revision} · {Object.keys(example.schema?.tables || {}).join(', ') || example.source}</p></div>
-              <button type="button" onClick={() => runTrainedQuery(example.question)} className="shrink-0 rounded-md bg-indigo-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-800">Run in Basic</button>
+              <button type="button" onClick={() => runTrainedQuery(example)} className="shrink-0 rounded-md bg-indigo-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-800">Run in Basic</button>
             </div>)}</div>
             {trainedQueriesLoaded && trainedQueries.length > 0 && !trainedQueries.some(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())) && <p className="mt-2 text-xs text-slate-500">No saved questions match that search.</p>}
           </div>}
