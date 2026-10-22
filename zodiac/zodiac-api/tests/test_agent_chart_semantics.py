@@ -1,6 +1,18 @@
 from app.api.adaptive_query import _auto_charts
 
 
+def test_order_invoice_comparison_plots_amounts_not_numeric_document_ids():
+    rows = [{"client": "800", "sales_order": "0000000123", "billing_document": "0090000456",
+             "order_date": "20000101", "invoice_date": "20000102",
+             "order_net_value": "100.00", "invoice_net_value": "80.00",
+             "difference_amount": "20.00", "order_currency": "DEM", "invoice_currency": "DEM"}]
+    charts = _auto_charts("Compare order and invoice amounts", "", rows)
+    assert charts
+    assert charts[0]["x_key"] == "billing_document"
+    assert set(charts[0]["y_keys"]) == {"order_net_value", "invoice_net_value", "difference_amount"}
+    assert charts[0]["data"][0]["sales_order"] == "0000000123"
+
+
 def test_billing_chart_does_not_plot_client_or_document_count_as_money():
     rows = [{"sap_client": "800", "billing_document": str(i), "currency": "DEM",
              "net_sales": -i, "total_matching_documents": 13} for i in range(1, 4)]

@@ -1344,6 +1344,8 @@ CHART_COLORS = [
 
 _SAP_ID_NEVER_MEASURE = frozenset({
     "client", "sap_client", "client_id",
+    "sales_order", "sales_document", "purchase_order", "billing_document", "delivery_document",
+    "order_no", "order_number", "invoice_no", "invoice_number", "delivery_no", "delivery_number",
     "mandt", "vbeln", "kunnr", "kunag", "lifnr", "matnr", "werks", "bukrs",
     "vkorg", "vtweg", "spart", "aubel", "vgbel", "fknum", "belnr",
     "buzei", "posnr", "aupos", "ebelp", "ebeln", "knumv",
@@ -1381,7 +1383,8 @@ def _col_role(col: str) -> str:
                    "class","doc","item","line","number","phase","stage","rfc","folio","uuid",
                    "lifnr","kunnr","matnr","prctr","kostl","hkont","waerk","waers",
                    "key","ref","num","no","lang","spras","bukrs","werks","ekorg","ekgrp",
-                   "document","header","partner","channel","division","office","area"}
+                   "document","header","partner","channel","division","office","area",
+                   "order","invoice","delivery","reference"}
 
     # Numeric suffixes that win even when a label keyword is also present
     # e.g. vendor_count → "count" suffix → numeric (not label)
