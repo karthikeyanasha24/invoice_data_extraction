@@ -30,3 +30,31 @@ python scripts/verify_client_sql_workflows.py --user-email YOUR_STAFF_EMAIL --in
 ```
 
 The generated `scripts/client_sql_workflows_live_results.json` is local and Git-ignored because it can contain business records. SQL regression fixtures use synthetic data. No production UI sign-off is claimed until the matching frontend/backend revisions have been deployed and retested.
+
+## Real-provider Agentic verification, 22 October 2026
+
+The configured provider passed a literal-only readiness probe. Real Agentic decisions were then exercised against an isolated, invented SQLite fixture using the normal relationship catalog, plan validator, SQL validator, read-only executor and answer renderer. The model response function was not mocked. Application/SAP records, chat history and connected schema snapshots were not sent to the provider; non-SQLite connections are blocked in the harness.
+
+This uncovered another validator gap: planned quantity measures were treated as money, and a currency-guarded quantity/price diagnostic CASE was treated as an unsupported cross-source subtraction. The validator now distinguishes SAP quantity fields and accepts guarded net-unit-price differences, their quantity-weighted price effect and guarded textual observations. Complete client/document/item identities, displayed currencies, currency equality and independent grain proofs remain required. An unguarded expression or a product of two independent monetary values remains rejected. Provider tool schemas also declare the existing row-limit and column-filter bounds to avoid unnecessary retries.
+
+The real-provider results were:
+
+| Synthetic scenario | Verified behavior |
+| --- | --- |
+| Order 200 USD / 10 EA; invoice 100 USD / 5 EA | Agent repaired rejected SQL and returned net unit values of 20, quantity effect -100, price effect 0 and the lower-billed-quantity observation. |
+| Referenced order item absent | Original order/item references remain visible, target fields are null and the missing evidence is explained. |
+| Order in USD; invoice in EUR | Both currencies are displayed, the mismatch is explained and the numeric difference is null. |
+
+These scenarios used 9, 12 and 5 model calls respectively. They establish these covered workflows, not a guarantee that every new question will finish within its budget. The missing-item case was close to the test's 12-call cap. The actual client's missing order-item records still require a fuller source extract before their precise quantity/price cause can be established.
+
+Reproduce individual real-provider cases (these use configured API credits, with invented data only):
+
+```powershell
+python scripts/verify_agentic_synthetic_provider.py --case quantity
+python scripts/verify_agentic_synthetic_provider.py --case missing
+python scripts/verify_agentic_synthetic_provider.py --case currency
+```
+
+Each run checks returned fields against the fixture oracle and saves a Git-ignored `scripts/agentic_synthetic_*_live_results.json` report. The acceptance harness does not enable model transports on the locally running application/SAP-backed API. A separate regression also corrected inventory charts losing their quantity series after monetary-series filtering; quantities and money remain on separate axes/charts.
+
+After the final changes, all three captured model-generated queries were revalidated and executed again against the synthetic fixture with exact row-oracle checks and zero additional model calls. The focused backend regression run passed 203 tests across Agentic, plan/grain/currency contracts, diagnostic expressions, SQL Training/Basic comparison execution, schema-backed comparisons, ranking, charts and public-research isolation. These changes require deployment before they apply to the live service.

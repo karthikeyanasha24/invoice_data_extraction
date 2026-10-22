@@ -178,7 +178,7 @@ _TOOLS = [
         "strategy": {"type": "string", "enum": ["identified_values", "independent_aggregates"]},
         "sort": {"type": "array", "items": {"type": "object", "additionalProperties": False,
             "properties": {"alias": {"type": "string"}, "direction": {"type": "string", "enum": ["ASC", "DESC"]}}, "required": ["alias", "direction"]}},
-        "limit": {"type": "integer"}, "missing_handling": {"type": "string"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_RESULT_ROWS}, "missing_handling": {"type": "string"},
         "assumptions": {"type": "array", "items": {"type": "string"}},
     }),
     _function("list_tables", "Inspect the connected catalog: exact count and table names, with optional name filter. Credential tables can be listed but cannot be queried.", {
@@ -190,7 +190,7 @@ _TOOLS = [
     }),
     _function("describe_tables", "Inspect columns/types, meanings, metric contracts, grain, and verified joins for up to 10 named tables. column_filter may be comma-separated field names or one name fragment; null returns all columns.", {
         "source": _SOURCE, "tables": {"type": "array", "items": {"type": "string"}},
-        "column_filter": {"type": ["string", "null"]},
+        "column_filter": {"type": ["string", "null"], "maxLength": 100},
     }),
     _function("run_readonly_sql", "Run one read-only PostgreSQL SELECT/WITH over the inspected catalog. Returns actual executed SQL, verified rows, errors, and limits. Use purpose to explain the specific subquestion this query answers.", {
         "source": _SOURCE, "sql": {"type": "string"}, "purpose": {"type": "string"},

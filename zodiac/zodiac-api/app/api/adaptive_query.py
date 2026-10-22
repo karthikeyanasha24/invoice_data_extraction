@@ -1539,7 +1539,9 @@ def _auto_charts(
     monetary_cols = [c for c in numeric_cols
                      if re.search(r"(?:^|_)(?:sales|revenue|amount|value|cost|profit|net|netwr|period_[ab])(?:_|$)", c, re.I)
                      and not re.search(r"(?:^|_)(?:count|qty|quantity|pct|percent|ratio|growth|documents|records|rows)(?:_|$)", c, re.I)]
-    if monetary_cols:
+    quantity_comparison = (all(key in cols for key in ("stock_qty", "billed_qty", "base_unit", "product"))
+                           and all(key in numeric_cols for key in ("stock_qty", "billed_qty")))
+    if monetary_cols and not quantity_comparison:
         numeric_cols = monetary_cols
 
     # Need at least one dimension and one measure
@@ -1567,7 +1569,6 @@ def _auto_charts(
     n_numeric = len(y_candidates)
     x_key = x_candidates[0]
     y_keys = y_candidates[:4]  # max 4 series
-    quantity_comparison = all(key in cols for key in ("stock_qty", "billed_qty", "base_unit", "product"))
     if quantity_comparison:
         # Stock and billed quantities share each row's base unit. Money has a
         # different unit and must not be plotted on this same quantity axis.

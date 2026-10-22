@@ -448,7 +448,12 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
     aggregated in this proof. Equality closure proves every composite link and
     output identity, including bridges and arbitrarily deep CTEs. Fail closed.
     """
-    money = {'netwr', 'wavwr'} | {c.lower() for _, c in (measure_fields or [])}
+    # A plan's measures also include quantities. They still need a proven row
+    # grain, but a quantity difference is not a cross-currency money operation.
+    quantities = {'kwmeng', 'fkimg', 'lfimg', 'rfmng', 'menge'}
+    money = {'netwr', 'wavwr'} | {
+        c.lower() for _, c in (measure_fields or []) if c.lower() not in quantities
+    }
     tree = parse_one(sql, read='postgres')
     root = build_scope(tree)
     errors = []
@@ -513,6 +518,35 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                             and any(c.table == target for c in condition.find_all(exp.Column))):
                         equalities.append(condition)
             return [e for e in equalities if isinstance(e, exp.EQ)]
+
+        def money_sources(value):
+            return {table for column in value.find_all(exp.Column) if column.table in infos
+                    for table, name in infos[column.table][0].get(column.name.lower(), set()) if name in money}
+
+        def currencies_match(tables, equalities):
+            # Every monetary source pair needs displayed currencies and an
+            # enforcing equality; mentioning a currency in a CASE is insufficient.
+            from itertools import combinations
+            for a, b in combinations(sorted(tables), 2):
+                left_owners, right_owners = catalog.priced_by(a), catalog.priced_by(b)
+                if not (currency_outputs & left_owners and currency_outputs & right_owners):
+                    return False
+                matched = False
+                for equality in equalities:
+                    left, right = equality.this, equality.expression
+                    if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
+                        continue
+                    if not all(re.search(r'(?:currency|waerk|waers)', c.name, re.I) for c in (left, right)):
+                        continue
+                    left_origins = infos.get(left.table, ({}, [], set()))[0].get(left.name.lower(), set())
+                    right_origins = infos.get(right.table, ({}, [], set()))[0].get(right.name.lower(), set())
+                    if any((x in left_owners and y in right_owners) or (y in left_owners and x in right_owners)
+                           for x, _ in left_origins for y, _ in right_origins):
+                        matched = True
+                        break
+                if not matched:
+                    return False
+            return True
         for p in select.selects:
             value = p.this if isinstance(p, exp.Alias) else p
             columns = [c for c in value.find_all(exp.Column) if c.table in infos]
@@ -525,11 +559,6 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                 measured_aliases.update(c.table for c in columns if any(name in money for _, name in infos[c.table][0].get(c.name.lower(), set())))
                 measure_tables = {t for t, c in origins if c in money}
                 if len(measure_tables) > 1:
-                    def source_tables(node):
-                        return {table for column in node.find_all(exp.Column) if column.table in infos
-                                for table, name in infos[column.table][0].get(column.name.lower(), set())
-                                if name in money}
-
                     compatible_difference = False
                     difference = value
                     # CASE WHEN <currencies equal> THEN a - b [ELSE NULL] END is
@@ -538,28 +567,29 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                             and isinstance(value.args['ifs'][0].this, (exp.EQ, exp.And, exp.Paren))
                             and (value.args.get('default') is None or isinstance(value.args.get('default'), exp.Null))):
                         difference = value.args['ifs'][0].args.get('true')
-                    if allow_currency_matched_difference and isinstance(difference, exp.Sub):
-                        left_sources, right_sources = source_tables(difference.this), source_tables(difference.expression)
-                        if len(left_sources) == 1 and len(right_sources) == 1 and left_sources != right_sources:
-                            left_owners = catalog.priced_by(next(iter(left_sources)))
-                            right_owners = catalog.priced_by(next(iter(right_sources)))
-                            exposes_both_currencies = bool(currency_outputs & left_owners and currency_outputs & right_owners)
-                            for equality in enforcing_equalities(value):
-                                if equality.find_ancestor(exp.Select) is not select:
-                                    continue
-                                left, right = equality.this, equality.expression
-                                if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
-                                    continue
-                                left_name, right_name = left.name.lower(), right.name.lower()
-                                if not (re.search(r'(?:currency|waerk|waers)', left_name)
-                                        and re.search(r'(?:currency|waerk|waers)', right_name)):
-                                    continue
-                                left_origins = infos.get(left.table, ({}, [], set()))[0].get(left_name, set())
-                                right_origins = infos.get(right.table, ({}, [], set()))[0].get(right_name, set())
-                                if exposes_both_currencies and (any(a in left_owners and b in right_owners for a, _ in left_origins for b, _ in right_origins) or any(
-                                        b in left_owners and a in right_owners for a, _ in left_origins for b, _ in right_origins)):
-                                    compatible_difference = True
-                                    break
+                    # Quantity * (invoice unit net - order unit net) is a price
+                    # effect, not a product of two independent monetary values.
+                    price_effect = isinstance(difference, exp.Mul) and any(
+                        not money_sources(factor) and isinstance(delta, (exp.Sub, exp.Paren))
+                        and isinstance(delta.unnest(), exp.Sub)
+                        for factor, delta in ((difference.this, difference.expression),
+                                              (difference.expression, difference.this))
+                    )
+                    if allow_currency_matched_difference and (isinstance(difference, exp.Sub) or price_effect):
+                        compatible_difference = currencies_match(measure_tables, enforcing_equalities(value))
+                    # A diagnostic CASE returns text, rather than subtracting its
+                    # WHEN inputs. Permit it only when each branch comparing money
+                    # enforces the same currency proof as a numeric calculation.
+                    if allow_currency_matched_difference and isinstance(value, exp.Case):
+                        branches = value.args.get('ifs') or []
+                        outputs = [branch.args.get('true') for branch in branches] + [value.args.get('default')]
+                        literal_text = all(out is None or isinstance(out, exp.Null)
+                                           or (isinstance(out, exp.Literal) and out.is_string) for out in outputs)
+                        if literal_text and branches:
+                            compatible_difference = all(currencies_match(
+                                money_sources(branch.this),
+                                [e for e in conjuncts(branch.this) if isinstance(e, exp.EQ)] + enforcing_equalities(select),
+                            ) for branch in branches)
                     if not compatible_difference:
                         raise ValueError('Compare independently sourced values side by side; calculate a difference only when both currencies are explicitly matched and displayed')
         parent = {}
