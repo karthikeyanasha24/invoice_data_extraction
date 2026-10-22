@@ -13,12 +13,14 @@ Deploy the backend first, then the frontend from the same branch revision. The o
 ## Verification
 
 - 283 backend tests passed across the comparison API, SQL Training, Basic replay/retrieval/local provider, Agentic, ranking, chart and SQL execution contract suites.
-- Frontend TypeScript check passed; 67 UX/context/progress tests passed.
+- Frontend TypeScript check passed; 74 UX/context/progress/presentation tests passed.
 - Read-only checks against the configured extract passed for header pairs, raw item pairs, independently aggregated item pairs, originating-order header references, and preserved missing-item references.
 - The existing saved 1999 comparison returned 200 current rows with zero model calls through both explicit saved-example replay and typed-question retrieval/replay.
 - Item-flow queries may validly return zero rows when referenced source items or links are absent. Successful validation does not establish a price/quantity cause without those records.
 
 Local browser testing also caught a numeric-looking sales-order number being classified as a monetary chart series. Document aliases now remain labels, while amount/value/count suffixes keep their measure roles. The regression fixture uses synthetic records. Typed and selected replay, currency switching, New Chat, schema selection retention and manual item queries have been exercised through the local browser with external model transports blocked.
+
+A subsequent browser check also corrected SAP client aliases being formatted with decimal places in the verified table. Client codes and document identifiers stay verbatim; dates and amounts retain their existing formats. The presentation tests are included in `npm run test:ux`.
 
 Reproduce the connected-data checks without sending records to a model:
 
