@@ -16,28 +16,30 @@ function trimTrailingSlash(url: string): string {
 }
 
 /**
- * Axios baseURL: server-side and explicit NEXT_PUBLIC hit the backend directly.
- * Browser without NEXT_PUBLIC uses same-origin URLs; next.config rewrites proxy /api/v1 → FastAPI (avoids localhost:8000 / wrong-process 404s in dev).
+ * Keep browser requests same-origin so the Next.js proxy can forward them to
+ * FastAPI. This avoids browser CORS failures when the production API origin
+ * does not return the expected CORS headers. Server-side requests may use the
+ * internal backend URL directly.
  */
 function resolveAxiosBaseURL(): string | undefined {
-    const pub = process.env.NEXT_PUBLIC_API_URL?.trim();
     if (typeof window === 'undefined') {
         const internal = process.env.INTERNAL_API_URL?.trim();
-        return trimTrailingSlash(internal || pub || 'http://127.0.0.1:8000');
+        const configured = process.env.BACKEND_URL?.trim() || process.env.NEXT_PUBLIC_API_URL?.trim();
+        return trimTrailingSlash(internal || configured || 'http://127.0.0.1:8000');
     }
-    if (pub) return trimTrailingSlash(pub);
     return undefined;
 }
 
-/** Full origin for download links and logging (browser + no NEXT_PUBLIC → current page origin). */
+/** Same-origin URLs let downloads use the same server-side API proxy as requests. */
 export function getPublicApiBase(): string {
-    const pub = process.env.NEXT_PUBLIC_API_URL?.trim();
     if (typeof window === 'undefined') {
         return trimTrailingSlash(
-            process.env.INTERNAL_API_URL?.trim() || pub || 'http://127.0.0.1:8000'
+            process.env.INTERNAL_API_URL?.trim() ||
+                process.env.BACKEND_URL?.trim() ||
+                process.env.NEXT_PUBLIC_API_URL?.trim() ||
+                'http://127.0.0.1:8000'
         );
     }
-    if (pub) return trimTrailingSlash(pub);
     return trimTrailingSlash(window.location.origin);
 }
 
