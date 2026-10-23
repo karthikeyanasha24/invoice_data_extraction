@@ -1141,7 +1141,7 @@ def technical_understanding_failure(question: str, err: BaseException) -> Dict[s
     elif status_code == 429:
         service_issue = "rate_limited"
         msg = "The AI model service is rate-limiting requests. Please try again shortly."
-    elif status_code in {401, 403, 404}:
+    elif status_code in {401, 403, 404} or code in {'provider_configuration', 'invalid_api_key'}:
         service_issue = "provider_configuration"
         msg = "The AI model service configuration needs attention. Check its API key and model access."
     elif (

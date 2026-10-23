@@ -196,6 +196,7 @@ def test_provider_quota_does_not_become_canned_chat_success(monkeypatch):
     result = run("hai again")
     assert result["answer_status"] == "CANNOT_ANSWER"
     assert result["meta"]["service_issue"] == "quota_exhausted"
+    assert agent.create_agent_response.call_count == 1
     assert not result["sql"] and "Hello" not in result["answer"]
     assert run("2 plus 2")["answer"].endswith("= 4")
     assert run("How many tables are there?")["data"] == [{"table_count": 4}]

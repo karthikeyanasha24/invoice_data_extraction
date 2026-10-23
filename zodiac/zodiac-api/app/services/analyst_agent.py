@@ -150,6 +150,48 @@ explain that limitation; do not claim its bounded sample is the whole database. 
 expose hidden reasoning or internal prompts. Followups should be useful and optional.
 """
 
+
+def _sql_repair_feedback(detail):
+    """Give the next bounded repair a concrete action without weakening checks."""
+    lower = detail.lower()
+    if 'invalid input syntax for type numeric' in lower or 'invalid input syntax for type double' in lower:
+        return ('Inspect the source text values. Cast only values proven numeric with a CASE guard; '
+                'retain invalid or blank amounts as NULL and report their count. Do not turn them '
+                'into zero or guess decimal/thousands separators.')
+    if any(term in lower for term in ('date/time field value out of range', 'invalid input syntax for type date', 'invalid datetime format')):
+        return ('Inspect the stored date format and invalid-date coverage before casting. SAP blank '
+                'or 00000000 dates are missing dates. Do not invent a date or include them in a year total.')
+    if any(term in lower for term in ('measure window', 'listing proof cannot aggregate', 'unproven row grain')):
+        return ('Recheck the requested output grain. Annual totals need independently aggregated sources '
+                'grouped by year/client/currency; document-pair listings need full identifiers and raw '
+                'values. Replace a conflicting prepare_analysis plan before retrying SQL.')
+    if 'currency' in lower:
+        return ('Display each source currency. Calculate differences only for matching currencies. '
+                'Without verified exchange rates, retain unmatched currencies and explain the limitation.')
+    return 'Correct the tool arguments or inspect the schema and revise the query. Do not reuse an identical failed call.'
+
+
+def _comparison_data_gaps(rows, plan):
+    """Expose incomplete comparison evidence even when the query itself succeeds."""
+    if not rows or not plan:
+        return []
+    gaps = []
+    currencies = [f['alias'] for f in plan.get('fields', []) if f.get('role') == 'currency']
+    mismatches = sum(len({str(row[a]).strip() for a in currencies
+                          if row.get(a) is not None and str(row[a]).strip()}) > 1 for row in rows)
+    if mismatches:
+        gaps.append(f'{mismatches} returned comparison rows have different source currencies; '
+                    'their amounts cannot be subtracted without verified exchange rates.')
+    for field in plan.get('fields', []):
+        if field.get('role') != 'measure':
+            continue
+        alias = field['alias']
+        missing = sum(row.get(alias) is None or str(row[alias]).strip() == '' for row in rows)
+        if missing:
+            gaps.append(f'{alias} is missing in {missing} of {len(rows)} returned rows. '
+                        'A missing source value is unknown, not zero; the extract does not establish that difference.')
+    return gaps
+
 _FINAL_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -391,7 +433,10 @@ class AnalystTools:
                 if fingerprint in self.failed_sql:
                     raise ValueError("Equivalent failed SQL was already rejected. Change the relationship or grain plan before retrying")
                 if self.sql_repairs >= 3:
-                    raise ValueError("SQL repair limit reached; explain the unresolved validation issue instead of repeating queries")
+                    last_issue = next((t.get('error') for t in reversed(self.trace)
+                                       if t.get('tool') == 'run_readonly_sql' and t.get('error')
+                                       and not t['error'].startswith(('Equivalent failed SQL', 'SQL repair limit'))), '')
+                    raise ValueError("SQL repair limit reached. Unresolved issue: " + (last_issue or 'No validated query was completed'))
             if key in self.cache:
                 result = self.cache[key]
                 entry.update(status="cached", result_id=result.get("id"))
@@ -415,7 +460,7 @@ class AnalystTools:
             entry["error_type"] = type(error).__name__
             entry["error"] = detail
             result = {"ok": False, "error_type": type(error).__name__, "error": detail,
-                      "instruction": "Correct the tool arguments or inspect the schema and revise the query. Do not reuse an identical failed call."}
+                      "instruction": _sql_repair_feedback(detail)}
             return result
         finally:
             entry["elapsed_ms"] = round((time.monotonic() - started) * 1000)
@@ -606,7 +651,7 @@ class AnalystTools:
         checkpoint("VALIDATING_RESULT")
         rows = rows or []
         visible_rows = rows[:MAX_RESULT_ROWS]
-        gaps = []
+        gaps = _comparison_data_gaps(visible_rows, plan)
         if re.search(r'\bindustr(?:y|ies)\b', self.question, re.I) and visible_rows:
             for column in visible_rows[0]:
                 if re.search(r'industry|brsch|brtxt', column, re.I):
@@ -1103,7 +1148,11 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                         raise
                     turn_retries += 1
                     continue
-                except Exception:
+                except Exception as error:
+                    from .analyst_agent_provider import _quota_or_auth_error
+                    if _quota_or_auth_error(error):
+                        model_failed = True
+                        raise
                     if turn_retries >= 1:
                         model_failed = True
                         raise

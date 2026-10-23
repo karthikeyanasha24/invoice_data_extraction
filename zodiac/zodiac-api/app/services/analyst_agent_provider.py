@@ -61,7 +61,7 @@ def _quota_or_auth_error(error: BaseException) -> bool:
     text = str(error or "").lower()
     status = int(getattr(error, "status_code", 0) or 0)
     return (
-        code in {"insufficient_quota", "credit_balance_exhausted", "invalid_api_key"}
+        code in {"insufficient_quota", "credit_balance_exhausted", "invalid_api_key", "provider_configuration"}
         or "insufficient_quota" in text
         or "credit_balance_exhausted" in text
         or status in {401, 403, 404}
@@ -87,7 +87,9 @@ def create_agent_response(*, instructions: str, input: list[Any], tools: list[di
         raise RuntimeError("Basic mode does not call a paid model")
     key = _openai_key()
     if not key:
-        raise RuntimeError("No OpenAI API key configured for the analyst agent")
+        error = RuntimeError("No OpenAI API key configured for the analyst agent")
+        error.code = 'provider_configuration'
+        raise error
     if not _provider_available("openai"):
         stored = _PROVIDER_FAILURE_ERRORS.get(_provider_identity("openai"))
         if stored is not None:
