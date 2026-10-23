@@ -2,6 +2,43 @@
 from sqlglot import exp, parse_one
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
+
+def _calendar_years_proven(predicates, values):
+    """Recognize an exact year set, never merely a year mentioned in SQL."""
+    from .plan_satisfaction import _expression_time_grain
+    requested = set(values)
+    if not requested or not all(v.isdigit() and len(v) == 4 for v in requested):
+        return False
+
+    def literal(node):
+        if isinstance(node, exp.Cast):
+            node = node.this
+        return str(node.this) if isinstance(node, exp.Literal) else None
+
+    bounds = {}
+    for predicate in predicates:
+        if isinstance(predicate, (exp.Like, exp.ILike)) and len(requested) == 1:
+            if literal(predicate.expression) == next(iter(requested)) + '%':
+                return True
+        if isinstance(predicate, (exp.EQ, exp.In)) and _expression_time_grain(predicate.this.sql()) == 'year':
+            nodes = predicate.expressions if isinstance(predicate, exp.In) else [predicate.expression]
+            if {literal(n) for n in nodes} == requested:
+                return True
+        if isinstance(predicate, (exp.GTE, exp.LT)):
+            value = literal(predicate.expression)
+            if value:
+                bounds.setdefault(predicate.this.sql(), {})[type(predicate)] = value.replace('-', '')
+        if isinstance(predicate, exp.Between):
+            low, high = literal(predicate.args['low']), literal(predicate.args['high'])
+            if low and high:
+                bounds.setdefault(predicate.this.sql(), {}).update({exp.GTE: low.replace('-', ''), exp.LTE: high.replace('-', '')})
+    years = sorted(int(y) for y in requested)
+    if years != list(range(years[0], years[-1] + 1)):
+        return False
+    return any(b.get(exp.GTE) == f'{years[0]}0101' and
+               (b.get(exp.LT) == f'{years[-1] + 1}0101' or b.get(exp.LTE) == f'{years[-1]}1231')
+               for b in bounds.values())
+
 FILTER_SCHEMA = {'type':'array','items':{'type':'object','additionalProperties':False,
     'properties':{'table':{'type':'string'},'column':{'type':'string'},
         'operator':{'type':'string','enum':['eq','neq','in','gte','gt','lte','lt','year','is_null','not_null']},
@@ -46,8 +83,7 @@ def filter_issues(sql, filters):
         if op=='year':
             for scope,_ in candidates:
                 predicates = [p.copy() for s,p in candidates if s is scope]
-                narrowed = exp.select('*').from_('period_source').where(exp.and_(*predicates)).sql(dialect='postgres')
-                if len(values)==1 and values[0].isdigit() and sql_has_calendar_year(narrowed,int(values[0])):
+                if _calendar_years_proven(predicates, values):
                     matched = True
         else:
             classes = {'eq':exp.EQ,'neq':exp.NEQ,'gte':exp.GTE,'gt':exp.GT,'lte':exp.LTE,'lt':exp.LT}

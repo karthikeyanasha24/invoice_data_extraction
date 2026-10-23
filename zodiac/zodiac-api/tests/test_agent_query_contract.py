@@ -38,6 +38,66 @@ def catalog():
     return c
 
 
+ANNUAL_SQL = '''WITH orders AS (
+ SELECT o.mandt AS client, o.waerk AS currency, SUBSTRING(o.audat,1,4) AS year,
+ SUM(CAST(o.netwr AS NUMERIC)) AS amount FROM "VBAK" o
+ WHERE o.audat >= '20000101' AND o.audat < '20020101'
+ GROUP BY o.mandt,o.waerk,SUBSTRING(o.audat,1,4)),
+ bills AS (
+ SELECT b.mandt AS client,b.waerk AS currency,SUBSTRING(b.fkdat,1,4) AS year,
+ SUM(CAST(b.netwr AS NUMERIC)) AS amount FROM "VBRK" b
+ WHERE b.fkdat >= '20000101' AND b.fkdat < '20020101'
+ GROUP BY b.mandt,b.waerk,SUBSTRING(b.fkdat,1,4))
+ SELECT o.client AS order_client,b.client AS invoice_client,
+ o.currency AS order_currency,b.currency AS invoice_currency,
+ o.year AS order_year,b.year AS invoice_year,
+ o.amount AS order_value,b.amount AS invoice_value
+ FROM orders o FULL JOIN bills b
+ ON o.client=b.client AND o.currency=b.currency AND o.year=b.year LIMIT 200'''
+
+
+def annual_catalog():
+    c = RelationshipCatalog(schema(VBAK='mandt vbeln netwr waerk audat', VBRK='mandt vbeln netwr waerk fkdat'))
+    c.keys = {t: [{'mandt','vbeln'}] for t in c.schema}
+    return c
+
+
+def test_independent_annual_totals_join_complete_compatible_dimensions():
+    from app.services.analyst_filters import filter_issues
+    assert identified_value_proof(ANNUAL_SQL, annual_catalog()) == (True, [])
+    rules = [dict(table=t,column=d,operator='year',values=['2000','2001'])
+             for t,d in [('VBAK','audat'),('VBRK','fkdat')]]
+    assert not filter_issues(ANNUAL_SQL, rules)
+
+
+@pytest.mark.parametrize('bad', [
+    ANNUAL_SQL.replace(' AND o.year=b.year', ''),
+    ANNUAL_SQL.replace(' AND o.currency=b.currency', ''),
+    ANNUAL_SQL.replace('o.client=b.client AND ', ''),
+    ANNUAL_SQL.replace('o.year=b.year', 'o.year=b.currency'),
+    ANNUAL_SQL.replace('SUBSTRING(b.fkdat,1,4)', 'SUBSTRING(b.fkdat,5,2)'),
+    ANNUAL_SQL.replace('SUM(CAST(o.netwr AS NUMERIC))', 'CAST(o.netwr AS NUMERIC)'),
+])
+def test_annual_totals_reject_incomplete_or_incompatible_group_joins(bad):
+    assert not identified_value_proof(bad, annual_catalog())[0]
+
+
+def test_annual_total_amounts_keep_unmatched_periods_clients_and_currencies():
+    engine = create_engine('sqlite://')
+    with engine.begin() as conn:
+        conn.execute(text('CREATE TABLE VBAK(mandt TEXT,vbeln TEXT,netwr TEXT,waerk TEXT,audat TEXT)'))
+        conn.execute(text('CREATE TABLE VBRK(mandt TEXT,vbeln TEXT,netwr TEXT,waerk TEXT,fkdat TEXT)'))
+        conn.execute(text("INSERT INTO VBAK VALUES ('800','O1','100','DEM','20000101'),('800','O2','50','DEM','20001231'),('800','O3','90','DEM','20010101'),('810','O1','8','DEM','20000101'),('800','OLD','999','DEM','19990101')"))
+        conn.execute(text("INSERT INTO VBRK VALUES ('800','B1','60','DEM','20000101'),('800','B2','-10','DEM','20001231'),('800','B3','70','DEM','20010101'),('800','B4','5','USD','20010101'),('800','LATE','999','DEM','20020101')"))
+        rows = [dict(r) for r in conn.execute(text(ANNUAL_SQL)).mappings()]
+    paired = {r['order_year']: (r['order_value'],r['invoice_value']) for r in rows
+              if r['order_client'] == '800' and r['order_currency'] == 'DEM'}
+    assert paired == {'2000': (150,50), '2001': (90,70)}
+    assert len(rows) == 4
+    assert any(r['order_client'] == '810' and r['invoice_value'] is None for r in rows)
+    assert any(r['invoice_currency'] == 'USD' and r['order_value'] is None for r in rows)
+
+
 def plan():
     fields = [('VBRK','mandt','client','identifier'),('VBRK','vbeln','billing_document','identifier'),
               ('VBAK','vbeln','sales_order','identifier'),('VBRK','netwr','billing_net_value','measure'),

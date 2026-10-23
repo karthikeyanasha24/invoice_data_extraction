@@ -611,7 +611,7 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
         for join in select.args.get('joins') or []:
             target = join.this.alias_or_name
             on = join.args.get('on')
-            if on is None or on.find(exp.Or) or join.args.get('side') in {'RIGHT', 'FULL'}:
+            if on is None or on.find(exp.Or) or join.args.get('side') == 'RIGHT':
                 raise ValueError('Listing requires explicit verified AND joins; RIGHT/FULL joins need a separate grain proof')
             pairs = []
             def atoms(n):
@@ -644,6 +644,35 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             # fact, e.g. a ranked cohort, without inventing a business relation.
             same_origins = {p for p in physical_pairs if p[0] == p[1]}
             approved = permitted | same_origins
+            # Independent annual totals compare grouped dimensions, not document
+            # relationships. Both inputs must already be aggregated and every
+            # grouping key must participate in the join, so neither can fan out.
+            def aggregate_dimension(alias, column):
+                source = scope.selected_sources[alias][1]
+                if not isinstance(source, Scope) or not infos[alias][2]:
+                    return None
+                projection = next((p for p in source.expression.selects if p.alias_or_name.lower() == column), None)
+                if projection is None:
+                    return None
+                value = projection.this if isinstance(projection, exp.Alias) else projection
+                if isinstance(value, exp.Column) and value.name.lower() in {'mandt', 'waerk'}:
+                    return value.name.lower()
+                from .plan_satisfaction import _expression_time_grain
+                grain = _expression_time_grain(value.sql(dialect='postgres'))
+                return 'period:' + grain if grain == 'year' else None
+
+            aggregate_pairs = bool(pairs)
+            involved = {alias for pair in pairs for alias, _ in pair}
+            for alias in involved:
+                columns = {col for pair in pairs for a, col in pair if a == alias}
+                aggregate_pairs &= bool(infos[alias][2]) and any(key == columns for key in infos[alias][1])
+            aggregate_pairs &= all(aggregate_dimension(a, ac) is not None and
+                                   aggregate_dimension(a, ac) == aggregate_dimension(b, bc)
+                                   for (a, ac), (b, bc) in pairs)
+            if aggregate_pairs:
+                approved |= physical_pairs
+            if join.args.get('side') == 'FULL' and not aggregate_pairs:
+                raise ValueError('FULL joins require independently aggregated facts joined on every compatible grouping key')
             if not physical_pairs or not all(any((left, right) in approved
                     for left in infos[a][0].get(ac, set()) for right in infos[b][0].get(bc, set()))
                     for (a, ac), (b, bc) in pairs):

@@ -84,6 +84,16 @@ inspect other verified document-reference paths when a bridge has no match.
 Do not stop at an empty bridge query when the base document still exists.
 For totals, aggregate independent facts separately BEFORE joining. These are
 different grains. Do not substitute one for the other. Use exact inspected keys.
+For overall order-value versus invoice-value totals by year, prepare an
+independent_aggregates plan. Use one single-header-source aggregate CTE per fact,
+grouped by its own document date year, SAP client and currency. FULL JOIN these
+CTEs on all three grouped dimensions to retain unmatched years and currencies.
+Expose both sides' year/client/currency columns as well as their totals; calculate
+a difference only for explicitly matching currencies. Do not use measure windows,
+document flows, item sources or document ID outputs for an annual total. If a prior
+pair-listing plan conflicts with annual totals, replace it with the aggregate plan.
+An explicit two-year scope applies to each source's own date (order AUDAT, billing
+FKDAT); use a bounded date range or a year IN predicate for the complete year set.
 A bridge may be one-to-many. State that header values repeat per distinct pair and
 are not allocated line revenue. Keep unmatched billing documents with LEFT JOIN
 and null linked values unless the user explicitly wants matched documents only.
