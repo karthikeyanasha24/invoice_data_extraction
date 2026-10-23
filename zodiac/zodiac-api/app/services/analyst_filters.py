@@ -17,6 +17,9 @@ def _calendar_years_proven(predicates, values):
 
     bounds = {}
     for predicate in predicates:
+        # A shifted/concatenated date or year is a different calendar scope.
+        if any(isinstance(n, (exp.Add,exp.Sub,exp.Mul,exp.Div,exp.DPipe,exp.Concat)) for n in predicate.this.walk()):
+            continue
         if isinstance(predicate, (exp.Like, exp.ILike)) and len(requested) == 1:
             if literal(predicate.expression) == next(iter(requested)) + '%':
                 return True
@@ -24,6 +27,11 @@ def _calendar_years_proven(predicates, values):
             nodes = predicate.expressions if isinstance(predicate, exp.In) else [predicate.expression]
             if {literal(n) for n in nodes} == requested:
                 return True
+        if (isinstance(predicate, exp.EQ) and literal(predicate.this) in requested
+                and _expression_time_grain(predicate.expression.sql()) == 'year'
+                and not any(isinstance(n,(exp.Add,exp.Sub,exp.Mul,exp.Div)) for n in predicate.expression.walk())
+                and requested == {literal(predicate.this)}):
+            return True
         if isinstance(predicate, (exp.GTE, exp.LT)):
             value = literal(predicate.expression)
             if value:
@@ -44,6 +52,23 @@ FILTER_SCHEMA = {'type':'array','items':{'type':'object','additionalProperties':
         'operator':{'type':'string','enum':['eq','neq','in','gte','gt','lte','lt','year','is_null','not_null']},
         'values':{'type':'array','items':{'type':'string'}}},
     'required':['table','column','operator','values']}}
+
+
+def comparison_year_scope_issues(sql, years, question):
+    """Each requested document family's own date must have the complete scope."""
+    from .comparison_scope import DOCUMENT_FAMILIES
+    tables = {t.name.upper(): t.name for t in parse_one(sql, read='postgres').find_all(exp.Table)}
+    dates = {'VBAK': ['audat'], 'VBRK': ['fkdat'], 'LIKP': ['wadat_ist', 'wadat'],
+             'EKKO': ['bedat'], 'RBKP': ['budat']}
+    issues = []
+    for pattern, family in DOCUMENT_FAMILIES:
+        if not pattern.search(question):
+            continue
+        headers = family & dates.keys() & tables.keys()
+        if not headers or not any(not filter_issues(sql, [dict(table=tables[t],column=c,operator='year',values=years)])
+                                  for t in headers for c in dates[t]):
+            issues.append('Missing exact year scope on the document date for ' + '/'.join(sorted(family)))
+    return issues
 
 
 def filter_issues(sql, filters):

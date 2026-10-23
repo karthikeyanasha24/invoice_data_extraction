@@ -51,8 +51,10 @@ rows mean no matches, not absence of a dataset. Never invent tables, columns, jo
 IDs, metrics, amounts, or evidence. Use the application source for EDI/SAT processing
 and the business source for SAP business analysis. Sources are configured by the
 server; you cannot select a tenant, connection string, user identity, or another DB.
-For a comparison across monetary sources, use find_relationships, then
-prepare_analysis before generating SQL. The plan must include every requested
+For a document-linked comparison across monetary sources, use find_relationships,
+then prepare_analysis before generating SQL. Independent population totals instead
+need inspected source grains and an independent_aggregates plan; they do not need
+a document relationship. The plan must include every requested
 source/field, each document identity, client, each source currency, date scope,
 output grain, missing-link handling and sorting. A billing-only answer cannot
 complete a billing-versus-order request. Discover additional sources for follow-ups.
@@ -491,7 +493,8 @@ class AnalystTools:
             if not isinstance(names, list) or not names or not all(isinstance(t, str) for t in names):
                 raise ValueError("Name the source tables to connect")
             catalog = self.catalog(source)
-            paths = catalog.paths(names)
+            independent = name == 'prepare_analysis' and arguments.get('strategy') == 'independent_aggregates'
+            paths = [] if independent else catalog.paths(names)
             involved = set(names) | {e[k] for path in paths for e in path for k in ('left', 'right')}
             catalog.inspect_keys(self.session(source), involved)
             if name == "find_relationships":
@@ -754,6 +757,8 @@ def _has_period_restriction(sql: str) -> bool:
 
 def _analysis_issues(question: str, result: dict) -> list[str]:
     from .plan_satisfaction import result_matches_analytical_intent
+    if not str(result.get('sql') or '').strip():
+        return ['No executed SQL is available to verify this database answer']
     columns = _predicate_columns(str(result.get("sql") or ""))
     temporal = {name for name in columns if re.search(r"year|date|fkdat|audat|budat|erdat|gjahr", name)}
     check_question = question

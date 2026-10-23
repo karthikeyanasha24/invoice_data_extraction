@@ -339,7 +339,10 @@ def validate_plan(plan, question, catalog):
     if any(s['alias'].lower() not in aliases for s in plan['sort']):
         raise ValueError('Sort field must name a planned output')
     plan['tables'] = tables
-    plan['relationships'] = catalog.paths(tables)
+    # Population totals compare dimensions, rather than document relationships.
+    # The SQL proof still requires independently aggregated inputs and complete
+    # compatible grouping keys before it authorizes their join.
+    plan['relationships'] = [] if plan.get('strategy') == 'independent_aggregates' else catalog.paths(tables)
     plan['key_evidence'] = {t: catalog.key_evidence.get(t, {}) for t in tables}
     plan['validated'] = True
     return plan
@@ -655,6 +658,8 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                 if projection is None:
                     return None
                 value = projection.this if isinstance(projection, exp.Alias) else projection
+                if any(isinstance(n,(exp.Add,exp.Sub,exp.Mul,exp.Div)) for n in value.walk()):
+                    return None
                 if isinstance(value, exp.Column) and value.name.lower() in {'mandt', 'waerk'}:
                     return value.name.lower()
                 from .plan_satisfaction import _expression_time_grain

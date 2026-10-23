@@ -98,6 +98,34 @@ def test_annual_total_amounts_keep_unmatched_periods_clients_and_currencies():
     assert any(r['invoice_currency'] == 'USD' and r['order_value'] is None for r in rows)
 
 
+def test_annual_plan_does_not_require_a_document_link_between_independent_populations():
+    fields = [('VBAK','mandt','order_client','identifier'),('VBRK','mandt','invoice_client','identifier'),
+              ('VBAK','waerk','order_currency','currency'),('VBRK','waerk','invoice_currency','currency'),
+              ('VBAK','audat','order_year','date'),('VBRK','fkdat','invoice_year','date'),
+              ('VBAK','netwr','order_value','measure'),('VBRK','netwr','invoice_value','measure')]
+    p = dict(tables=['VBAK','VBRK'],grain='year,client,currency',strategy='independent_aggregates',
+             fields=[dict(zip(['table','column','alias','role'], f)) for f in fields],filters=[],sort=[],limit=200)
+    c = annual_catalog()
+    assert not c.edges
+    validated = validate_plan(p,'Compare order value and invoice value for 2000 and 2001',c)
+    assert not validated['relationships']
+    assert not plan_sql_issues(ANNUAL_SQL,validated)
+
+
+def test_annual_plan_does_not_require_a_document_link_between_independent_populations():
+    fields = [('VBAK','mandt','order_client','identifier'),('VBRK','mandt','invoice_client','identifier'),
+              ('VBAK','waerk','order_currency','currency'),('VBRK','waerk','invoice_currency','currency'),
+              ('VBAK','audat','order_year','date'),('VBRK','fkdat','invoice_year','date'),
+              ('VBAK','netwr','order_value','measure'),('VBRK','netwr','invoice_value','measure')]
+    p = dict(tables=['VBAK','VBRK'],grain='year,client,currency',strategy='independent_aggregates',
+             fields=[dict(zip(['table','column','alias','role'], f)) for f in fields],filters=[],sort=[],limit=200)
+    c = annual_catalog()
+    assert not c.edges
+    validated = validate_plan(p,'Compare order value and invoice value for 2000 and 2001',c)
+    assert not validated['relationships']
+    assert not plan_sql_issues(ANNUAL_SQL,validated)
+
+
 def plan():
     fields = [('VBRK','mandt','client','identifier'),('VBRK','vbeln','billing_document','identifier'),
               ('VBAK','vbeln','sales_order','identifier'),('VBRK','netwr','billing_net_value','measure'),

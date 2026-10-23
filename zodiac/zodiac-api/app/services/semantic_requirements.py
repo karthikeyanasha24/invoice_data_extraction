@@ -190,7 +190,10 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
     if isinstance(period, dict) and re.search(_decline_cue, ql):
         period = {**period, "op": "decline", "condition": "decreased"}
     clarification = sem.get("clarification") if isinstance(sem.get("clarification"), dict) else ops.get("clarification")
-    explicit_year_series = bool(
+    source_years = ops.get('cross_source_years') or []
+    if source_years:
+        period = None
+    explicit_year_series = bool(source_years) or bool(
         "year" in group_by
         and re.search(
             r"\b(?:by|per|each)\s+(?:(?:calendar|fiscal)\s+)?years?\b|\byearly\b|\bannually\b",
@@ -303,6 +306,8 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
                 "start_yyyymmdd": start.strftime("%Y%m%d"),
                 "end_yyyymmdd": end.strftime("%Y%m%d"),
             }
+    elif source_years:
+        date_filter = {'type': 'calendar_years', 'years': source_years}
     elif ops.get("years") and not period and len(ops.get("years") or []) == 1:
         years = [str(y) for y in (ops.get("years") or [])]
         date_filter = {
@@ -349,7 +354,7 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
         "comparison": comparison,
         "clarification": clarification,
         "having_distinct": having_distinct,
-        "growth": bool(ops.get("growth") or period),
+        "growth": False if source_years else bool(ops.get("growth") or period),
         "share": bool(ops.get("share") or sem.get("share")),
         "contribution": bool(ops.get("contribution") or (isinstance(period, dict) and period.get("contribution"))),
         "question": question,
@@ -433,12 +438,12 @@ def enrich_semantic_with_requirements(
         sem.pop("negation", None)
     if req.get("date_filter"):
         df = req["date_filter"]
-        if str(df.get("type") or "") == "calendar_year":
+        if str(df.get("type") or "") in {"calendar_year", "calendar_years"}:
             sem["time_filter"] = {
-                "type": "calendar_year",
+                "type": df['type'],
                 "concept": "year",
                 "grain": "year",
-                "operator": df.get("operator") or "equals",
+                "operator": df.get("operator") or ('in' if df['type'] == 'calendar_years' else 'equals'),
                 "value": df.get("value"),
                 "years": df.get("years") or ([df.get("value")] if df.get("value") else []),
             }

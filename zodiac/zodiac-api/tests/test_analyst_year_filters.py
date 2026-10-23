@@ -22,6 +22,8 @@ def test_complete_two_year_scope_is_accepted(predicate):
     "SUBSTRING(o.audat, 1, 4) IN ('2000','2001','2002')",
     "o.audat >= '20000101' OR 1=1",
     "o.audat >= '20000101' AND o.erdat < '20020101'",
+    "EXTRACT(YEAR FROM o.audat::date) + 1 IN (2000,2001)",
+    "o.audat + 1 >= '20000101' AND o.audat + 1 < '20020101'",
 ])
 def test_missing_broadened_or_wrong_column_scope_is_rejected(predicate):
     rule = dict(table='VBAK', column='audat', operator='year', values=['2000','2001'])

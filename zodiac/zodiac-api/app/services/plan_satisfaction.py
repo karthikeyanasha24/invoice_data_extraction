@@ -30,16 +30,7 @@ def _tables_in_sql(sql: str) -> List[str]:
             seen.add(name)
             found.append(name)
     return found
-_COMPARISON = re.compile(r"\b(?:compare|comparison|compared|versus|vs\.?|against|difference\s+between|reconcile)\b", re.I)
-_DOCUMENT_FAMILIES = (
-    (re.compile(r"(?<!purchase )(?<!production )(?<!ascending )(?<!descending )(?<!sort )\b(?:sales\s+)?orders?\b(?!\s+by\b)", re.I),
-     {"VBAK", "VBAP"}),
-    (re.compile(r"(?<!supplier )(?<!vendor )\b(?:billing\s+documents?|billing\s+items?|invoices?|billed)\b", re.I),
-     {"VBRK", "VBRP"}),
-    (re.compile(r"\bdeliver(?:y|ies)\b", re.I), {"LIKP", "LIPS"}),
-    (re.compile(r"\bpurchase\s+orders?\b", re.I), {"EKKO", "EKPO"}),
-    (re.compile(r"\b(?:supplier|vendor)\s+invoices?\b", re.I), {"RBKP", "RSEG"}),
-)
+from .comparison_scope import COMPARISON as _COMPARISON, DOCUMENT_FAMILIES as _DOCUMENT_FAMILIES
 
 
 def missing_compared_documents(sql: str, question: str) -> List[str]:
@@ -475,7 +466,7 @@ def sql_satisfies_analytical_intent(
     date_filter = req.get("date_filter")
     if isinstance(date_filter, dict):
         df_type = str(date_filter.get("type") or "")
-        if df_type == "calendar_year":
+        if df_type in {"calendar_year", "calendar_years"}:
             pass
         elif not (date_filter.get("start_yyyymmdd") or date_filter.get("period")):
             date_filter = None
@@ -548,7 +539,11 @@ def sql_satisfies_analytical_intent(
             if not re.search(r"\bIS\s+NULL\b|\bNOT\s+EXISTS\b", sql, re.I):
                 return False
     if date_filter:
-        if str(date_filter.get("type") or "") == "calendar_year":
+        if str(date_filter.get("type") or "") == "calendar_years":
+            from .analyst_filters import comparison_year_scope_issues
+            if comparison_year_scope_issues(sql, date_filter['years'], question):
+                return False
+        elif str(date_filter.get("type") or "") == "calendar_year":
             year = str(date_filter.get("value") or (date_filter.get("years") or [""])[0] or "")
             if year and not sql_has_calendar_year(sql, year):
                 return False
@@ -633,6 +628,15 @@ def result_matches_analytical_intent(
     req = required_semantics(question, semantic)
     sem = merge_semantic_requirements(question, semantic or {})
     ops = sem.get("analytical_operations") or extract_analytical_operations(question)
+    if (req.get('date_filter') or {}).get('type') == 'calendar_years' and re.search(r'\bdifference\b', question, re.I):
+        from sqlglot import exp, parse_one
+        from .agent_query_contract import output_lineage
+        tree = parse_one(sql, read='postgres') if sql.strip() else None
+        lineage = output_lineage(sql) if tree is not None else {}
+        differences = [p for p in tree.selects if p.find(exp.Sub) is not None] if tree is not None else []
+        if not any(len({t for t,c in lineage.get(p.alias_or_name.lower(), set()) if c in _MEASURE_TOKENS}) >= 2
+                   for p in differences):
+            warnings.append('Requested source-value difference is missing from the executed output')
     group_by = [str(g).lower() for g in (req.get("group_by") or sem.get("group_by") or ops.get("group_by") or [])]
     dims = [str(d).lower() for d in (req.get("dimensions") or sem.get("dimensions") or [])]
     ranking = _normalize_ranking(req.get("ranking") or sem.get("ranking") or ops.get("ranking"))

@@ -634,7 +634,16 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         if not ops.get("aggregation"):
             ops["aggregation"] = "SUM"
 
-    explicit_year_series = bool(
+    from .comparison_scope import cross_source_years
+    source_years = cross_source_years(question)
+    if source_years:
+        ops['cross_source_years'] = source_years
+        ops['period_compare'] = None
+        ops['growth'] = False
+        if not group_by:
+            group_by.append('year')
+            ops['group_by'] = group_by
+    explicit_year_series = bool(source_years) or bool(
         "year" in group_by
         and re.search(r"\b(?:by|per|each)\s+(?:(?:calendar|fiscal)\s+)?years?\b|\byearly\b", ql)
     )
@@ -988,6 +997,8 @@ def merge_semantic_requirements(
         req["negation"] = dict(ops["negation"])
     if ops.get("period_compare"):
         req["period_compare"] = dict(ops["period_compare"])
+    elif ops.get('cross_source_years'):
+        req.pop('period_compare', None)
     if ops.get("contribution"):
         req["contribution"] = True
         if isinstance(req.get("period_compare"), dict):
