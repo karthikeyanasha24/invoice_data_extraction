@@ -257,6 +257,52 @@ def test_basic_replays_saved_training_comparison_and_reads_updated_amounts(compa
     assert result["meta"]["retrieval"]["reused"] is True
 
 
+def test_agentic_finishes_with_verified_missing_item_without_optional_repair_loop(comparison_db, monkeypatch):
+    from app.services import analyst_agent as agent
+    api, db, calls = comparison_db
+    sql = '''SELECT i.mandt AS client,i.vbeln AS invoice_no,i.posnr AS invoice_item,
+                    i.aubel AS linked_order_reference,i.aupos AS linked_order_item,
+                    o.vbeln AS order_no,o.posnr AS order_item,o.netwr AS order_net_value,
+                    i.netwr AS invoice_net_value,h.waerk AS order_currency,b.waerk AS invoice_currency
+             FROM VBRK b JOIN VBRP i ON i.mandt=b.mandt AND i.vbeln=b.vbeln
+             LEFT JOIN VBAP o ON o.mandt=i.mandt AND o.vbeln=i.aubel AND o.posnr=i.aupos
+             LEFT JOIN VBAK h ON h.mandt=i.mandt AND h.vbeln=i.aubel
+             WHERE b.vbeln='B3' LIMIT 200'''
+    fields = [('VBRP','mandt','client','identifier'),('VBRP','vbeln','invoice_no','identifier'),
+              ('VBRP','posnr','invoice_item','identifier'),('VBRP','aubel','linked_order_reference','identifier'),
+              ('VBRP','aupos','linked_order_item','identifier'),('VBAP','vbeln','order_no','identifier'),
+              ('VBAP','posnr','order_item','identifier'),('VBAP','netwr','order_net_value','measure'),
+              ('VBRP','netwr','invoice_net_value','measure'),('VBAK','waerk','order_currency','currency'),
+              ('VBRK','waerk','invoice_currency','currency')]
+    tables = ['VBRK','VBRP','VBAP','VBAK']
+    plan = dict(source='business',tables=tables,
+                fields=[dict(zip(['table','column','alias','role'], f)) for f in fields],
+                strategy='identified_values',grain='one row per referenced order item and invoice item',
+                filters=[dict(table='VBRK',column='vbeln',operator='eq',values=['B3'])],sort=[],limit=200,
+                missing_handling='keep unmatched original invoice item references',assumptions=[])
+    responses = iter([
+        ('find_relationships',dict(source='business',tables=tables)),
+        ('prepare_analysis',plan),
+        ('run_readonly_sql',dict(source='business',sql=sql,purpose='Verify originating item coverage')),
+    ])
+    def respond(**_):
+        name,args = next(responses)  # An extra optional investigation turn fails this test.
+        return SimpleNamespace(output=[dict(type='function_call',name=name,arguments=json.dumps(args),call_id=name)],output_text='')
+    monkeypatch.setattr(agent,'create_agent_response',respond)
+    token = set_trusted_scope(TrustedAiExecutionScope(user_id=1,sap_access='full'))
+    try:
+        result = agent.run_analyst_agent('Why does invoice B3 differ from its referenced sales order item?',
+                                         db,api._execute_sql,schema_loader=lambda:SCHEMA)
+    finally:
+        reset_trusted_scope(token)
+    assert result['answer_status'] == 'SUCCESS',result
+    assert result['llm_calls'] == 3 and len(calls) == 1
+    assert result['meta']['diagnostic_evidence_gap'] is True
+    assert result['data'][0]['linked_order_reference'] == 'MISSING'
+    assert result['data'][0]['order_item'] is None
+    assert 'cannot be established' in result['answer']
+
+
 def test_basic_rechecks_saved_comparison_if_header_keys_become_nonunique(comparison_db):
     from app.services.basic_sql_training import save_run
 

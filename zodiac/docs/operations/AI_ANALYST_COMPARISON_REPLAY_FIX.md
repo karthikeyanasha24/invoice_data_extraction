@@ -58,3 +58,11 @@ python scripts/verify_agentic_synthetic_provider.py --case currency
 Each run checks returned fields against the fixture oracle and saves a Git-ignored `scripts/agentic_synthetic_*_live_results.json` report. The acceptance harness does not enable model transports on the locally running application/SAP-backed API. A separate regression also corrected inventory charts losing their quantity series after monetary-series filtering; quantities and money remain on separate axes/charts.
 
 After the final changes, all three captured model-generated queries were revalidated and executed again against the synthetic fixture with exact row-oracle checks and zero additional model calls. The focused backend regression run passed 203 tests across Agentic, plan/grain/currency contracts, diagnostic expressions, SQL Training/Basic comparison execution, schema-backed comparisons, ranking, charts and public-research isolation. These changes require deployment before they apply to the live service.
+
+## Authorized local browser testing
+
+After the user explicitly approved relevant SAP records and question context being processed by the configured provider, local Agentic chat was enabled. Both the greeting and its conversational follow-up completed in the actual browser.
+
+The first real invoice diagnosis exposed an additional investigation-loop issue: an executed comparison could be lost when optional pricing probes exhausted the SQL repair limit. Agentic now completes a diagnostic request with an explicit data-gap explanation when a verified, unfiltered LEFT JOIN proves that the referenced order item is absent in all returned rows. The original order/item references and NULL target fields remain visible. This does not infer absence from an empty inner join, a filtered target, a truncated result or an unverified relationship, and it does not invent a quantity/price cause.
+
+The original invoice question then completed in local browser chat with the real provider: one verified comparison row and a clear explanation that the missing order item prevents establishing the exact business cause. The final regression run passed 205 tests. The production service still requires deployment of these backend changes.

@@ -625,6 +625,57 @@ def _diagnostic_request(question: str) -> bool:
     return bool(re.search(r'\b(?:why|reasons?|root\s+causes?|explain\s+(?:the\s+)?difference)\b', question, re.I))
 
 
+def _missing_order_item_gap(result: dict) -> str:
+    """A verified, unfiltered LEFT JOIN can establish a missing item in this extract.
+
+    Stop optional price investigations when all returned originating references
+    lack their order item. Never infer absence from a filtered target or an empty
+    inner join, and never turn that absence into a business cause.
+    """
+    from sqlglot import exp, parse_one
+    from .agent_query_contract import output_lineage
+    rows = result.get('rows') or []
+    if not rows or result.get('truncated') or not result.get('identified_pair_listing'):
+        return ''
+    tree = parse_one(result['sql'], read='postgres')
+    targets = [table for table in tree.find_all(exp.Table) if table.name.upper() == 'VBAP']
+    if len(targets) != 1 or not isinstance(targets[0].parent, exp.Join):
+        return ''
+    join = targets[0].parent
+    if join.args.get('side') != 'LEFT':
+        return ''
+    def conjunctions(node):
+        if isinstance(node, exp.Paren):
+            return conjunctions(node.this)
+        if isinstance(node, exp.And):
+            return conjunctions(node.this) + conjunctions(node.expression)
+        return [node]
+    conditions = conjunctions(join.args.get('on'))
+    if len(conditions) != 3 or any(not isinstance(condition, exp.EQ)
+            or not isinstance(condition.this, exp.Column)
+            or not isinstance(condition.expression, exp.Column) for condition in conditions):
+        return ''
+    lineage = {alias: {(table.upper(), column) for table, column in origins}
+               for alias, origins in output_lineage(result['sql']).items()}
+    def aliases(table, column):
+        return [alias for alias, origins in lineage.items() if origins == {(table, column)}]
+    references = [aliases('VBRP', column) for column in ('aubel', 'aupos')]
+    # The preserved AUBEL reference already identifies the order. A NULL POSNR
+    # from a proven non-null target key establishes an unmatched item even when
+    # its redundant target VBELN is not projected separately.
+    target_ids = [aliases('VBAP', 'posnr')]
+    if not all(references + target_ids):
+        return ''
+    if not all(all(any(row.get(alias) is not None and str(row[alias]).strip() for alias in group)
+                       for group in references)
+               and all(all(alias in row and row[alias] is None for alias in group) for group in target_ids)
+               for row in rows):
+        return ''
+    return ('The referenced sales-order item is missing from the connected extract in all returned rows. '
+            'Its quantity, unit price and pricing conditions cannot be verified, so the exact business '
+            'cause of the order/invoice difference cannot be established from these records.')
+
+
 def _predicate_columns(sql: str) -> set[str]:
     from sqlglot import exp, parse_one
     tree = parse_one(sql, read="postgres")
@@ -1078,6 +1129,17 @@ def run_analyst_agent(question: str, db: Any, execute_sql: Callable, *, schema_l
                         feedback_count=feedback_count, tools=tools,
                     )
                 if evidence and not issues and _diagnostic_request(scope) and any(call.get('name') == 'run_readonly_sql' for call in function_calls):
+                    gap_evidence = next((item for item in reversed(_analysis_candidates(tools))
+                                         if not _analysis_issues(scope, item) and _missing_order_item_gap(item)), None)
+                    if gap_evidence and not conditional and not public_research_requested(question):
+                        gap = _missing_order_item_gap(gap_evidence)
+                        gap_evidence.setdefault('data_gaps', []).append(gap)
+                        final = {'kind': 'analysis', 'answer': gap, 'summary': gap,
+                                 'result_ids': [gap_evidence['id']], 'followups': []}
+                        completed = _final_result(question, final, tools, state, calls, scope_question=scope)
+                        completed['meta']['diagnostic_evidence_gap'] = True
+                        return _attach_loop_metrics(completed, started=started, calls=calls,
+                                                    tool_count=tool_count, feedback_count=feedback_count, tools=tools)
                     input_items.append({'role': 'user', 'content':
                         'The query has verified data. This request asks for a reason, so verify the relevant '
                         'item/quantity/unit/price/condition evidence before concluding. A header amount delta '

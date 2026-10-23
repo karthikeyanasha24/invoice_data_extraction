@@ -76,3 +76,22 @@ def test_diagnostic_still_requires_displayed_currencies_and_client_keys():
     for unsafe in [sql.replace('b.waerk AS invoice_currency,h.waerk AS order_currency,', ''),
                    sql.replace('o.mandt=i.mandt AND ', '')]:
         assert not identified_value_proof(unsafe, catalog, MEASURES, allow_currency_matched_difference=True)[0]
+
+
+def test_missing_item_diagnosis_requires_verified_unfiltered_null_target():
+    from app.services.analyst_agent import _missing_order_item_gap
+    _, sql = diagnostic_sql("'Evidence only'")
+    evidence = {'sql': sql, 'identified_pair_listing': True,
+                'rows': [{'aubel': 'SYNTH-O-1', 'aupos': '10', 'order_item': None}]}
+    assert 'cannot be established' in _missing_order_item_gap(evidence)
+    for bad in [
+        {**evidence, 'identified_pair_listing': False},
+        {**evidence, 'truncated': True},
+        {**evidence, 'rows': []},
+        {**evidence, 'rows': [{'aubel': 'SYNTH-O-1', 'aupos': '10', 'order_item': '10'}]},
+        {**evidence, 'rows': [{'aubel': '', 'aupos': '10', 'order_item': None}]},
+        {**evidence, 'rows': [{'aubel': 'SYNTH-O-1', 'aupos': '10'}]},
+        {**evidence, 'sql': sql.replace('LEFT JOIN VBAP', 'JOIN VBAP')},
+        {**evidence, 'sql': sql.replace('AND o.posnr=i.aupos', "AND o.posnr=i.aupos AND o.netwr<0")},
+    ]:
+        assert _missing_order_item_gap(bad) == ''
