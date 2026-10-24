@@ -95,6 +95,19 @@ def test_unsafe_legacy_total_is_excluded_from_basic_suggestions_and_retrieval():
     assert [example["sql"] for example in examples] == [grouped]
 
 
+def test_saved_business_question_is_loaded_when_basic_uses_application_source():
+    engine = create_engine("sqlite://")
+    scope = TrustedAiExecutionScope(user_id=1, sap_access="full")
+    question = "Identify the difference in the sales amount for order value and invoice value from the year 2000 and 2001."
+    sql = "SELECT 2001 AS year, 10 AS order_value, 8 AS invoice_value"
+    assert rag.save_verified_query(engine, scope, "business", question, sql)
+
+    examples = rag.load_basic_examples(engine, scope, use_sap=False)
+
+    assert rag.recall_sql(question, examples) == sql
+    assert next(example for example in examples if example["question"] == question)["source"] == "business"
+
+
 @pytest.mark.parametrize("saved,new", [
     ("sales for Acme", "sales for Beta"),
     ("sales for France", "sales for Germany"),

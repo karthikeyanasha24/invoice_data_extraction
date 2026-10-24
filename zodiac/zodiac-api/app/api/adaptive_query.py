@@ -3660,7 +3660,7 @@ def _post_query_adaptive_body(
                 from ..services.basic_rag import capture_training_reference
                 from ..services.adaptive_trusted_scope import get_trusted_scope
                 # Successful execution offers reuse; the user saves it after checking.
-                capture_training_reference(payload, db.get_bind(), get_trusted_scope())
+                capture_training_reference(payload, db.get_bind(), get_trusted_scope(), _original_question)
             except Exception as memory_error:
                 logger.warning("Basic verified query could not be saved: %s", type(memory_error).__name__)
         budget_now = current_budget()

@@ -439,7 +439,12 @@ def load_verified_queries(engine, scope, source, limit=200):
 
 
 def load_basic_examples(engine, scope, use_sap):
-    sources = ["business", "application"] if use_sap else ["application"]
+    # Both logical sources use the process-configured database when SAP mode is
+    # disabled (AnalystTools.session("business") falls back to the app DB).
+    # Keep checked business examples discoverable in that configuration too;
+    # otherwise an exact saved question can miss retrieval and fall through to
+    # a model merely because AI_CONTEXT_SOURCE changed after it was saved.
+    sources = ["business", "application"]
     examples = [item for source in sources for item in load_verified_queries(engine, scope, source, None)]
     # SQL Training has its own UI and persistence table. Include only examples
     # that were successfully executed and explicitly saved; otherwise Basic
@@ -463,7 +468,7 @@ def load_basic_examples(engine, scope, use_sap):
     return sorted(examples, key=lambda item: item.get("updated_at", 0), reverse=True)
 
 
-def capture_training_reference(payload, engine, scope):
+def capture_training_reference(payload, engine, scope, question=None):
     """Opaque, server-owned evidence used when a person teaches a question alias."""
     from .analyst_drilldown import store_artifact
     steps = investigation_steps(payload)
@@ -475,7 +480,12 @@ def capture_training_reference(payload, engine, scope):
     primary_sql = str(primary.get("sql") or payload.get("sql") or steps[-1]["sql"]).strip().rstrip(";")
     if not any(step["sql"] == primary_sql for step in steps):
         primary_sql = steps[-1]["sql"]
-    question = str(payload.get("query_plan", {}).get("effective_question") or "")
+    effective_question = str(payload.get("query_plan", {}).get("effective_question") or "")
+    # Basic must be able to replay the checked query when the user repeats the
+    # wording they actually asked. Agentic's effective question can be a
+    # rewritten interpretation, so keep it for investigation validation but
+    # use the original prompt as the saved Basic question.
+    question = str(question or payload.get("question") or effective_question).strip()
     primary_step = next((step for step in steps if step.get("primary")),
                         next(step for step in steps if step["sql"] == primary_sql))
     identifier = store_artifact(engine, scope, {"kind": "basic_training", "question": question,
