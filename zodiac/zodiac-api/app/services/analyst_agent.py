@@ -163,10 +163,11 @@ def _sql_repair_feedback(detail):
     if any(term in lower for term in ('date/time field value out of range', 'invalid input syntax for type date', 'invalid datetime format')):
         return ('Inspect the stored date format and invalid-date coverage before casting. SAP blank '
                 'or 00000000 dates are missing dates. Do not invent a date or include them in a year total.')
-    if any(term in lower for term in ('measure window', 'listing proof cannot aggregate', 'unproven row grain')):
+    if any(term in lower for term in ('measure window', 'listing proof cannot aggregate', 'unproven row grain', 'missing planned output')):
         return ('Recheck the requested output grain. Annual totals need independently aggregated sources '
-                'grouped by year/client/currency; document-pair listings need full identifiers and raw '
-                'values. Replace a conflicting prepare_analysis plan before retrying SQL.')
+                'grouped by year/client/currency, with no document-ID outputs; document-pair listings '
+                'need full identifiers and raw values. Replace a conflicting prepare_analysis plan '
+                'before retrying SQL.')
     if 'currency' in lower:
         return ('Display each source currency. Calculate differences only for matching currencies. '
                 'Without verified exchange rates, retain unmatched currencies and explain the limitation.')
@@ -226,7 +227,7 @@ _TOOLS = [
     _function("find_relationships", "Find verified composite-key paths, including intermediate tables, and check connected unique keys. Never join different document IDs because their column names match.", {
         "source": _SOURCE, "tables": {"type": "array", "items": {"type": "string"}},
     }),
-    _function("prepare_analysis", "Validate and save an explicit plan BEFORE a cross-source monetary comparison. Include all original-request fields and sources, document identities, each currency, date filters, intended grain, missing-link handling and sorting. SQL must fulfil this plan.", {
+    _function("prepare_analysis", "Validate and save an explicit plan BEFORE a cross-source monetary comparison. For identified document pairs, include both document identities and each currency. For annual population totals, use strategy independent_aggregates, omit document IDs, and plan separate header totals grouped by each source's own year, client and currency. Include all requested fields, date filters, intended grain, missing-value handling and sorting. SQL must fulfil this plan.", {
         "source": _SOURCE, "tables": {"type": "array", "items": {"type": "string"}},
         "fields": _PLAN_FIELDS, "grain": {"type": "string"}, "filters": FILTER_SCHEMA,
         "strategy": {"type": "string", "enum": ["identified_values", "independent_aggregates"]},
@@ -489,6 +490,9 @@ class AnalystTools:
         from .adaptive_analyst.database_metadata import _table_semantics, _column_meanings
 
         if name in {"find_relationships", "prepare_analysis"}:
+            from .agent_query_contract import canonical_annual_order_invoice_plan
+            if name == "prepare_analysis":
+                arguments = canonical_annual_order_invoice_plan(arguments, self.question, self.catalog(source))
             names = arguments["tables"]
             if not isinstance(names, list) or not names or not all(isinstance(t, str) for t in names):
                 raise ValueError("Name the source tables to connect")
@@ -668,11 +672,18 @@ class AnalystTools:
                          sql=actual, unscoped_sql=sql, tables=tables, purpose=arguments["purpose"],
                          truncated=len(rows) > MAX_RESULT_ROWS, schema_source=schema_source,
                          analysis_plan=plan, coverage_issues=coverage,
-                         identified_pair_listing=proof, data_gaps=gaps)
+                         identified_pair_listing=_is_identified_pair_listing(proof, plan), data_gaps=gaps)
 
 
 def _analysis_candidates(tools: AnalystTools) -> list[dict]:
     return [result for result in tools.results.values() if result.get("kind") == "analysis" and result.get("sql")]
+
+
+def _is_identified_pair_listing(proof: bool, plan: dict | None) -> bool:
+    """Only attach pair-listing guidance to results whose validated grain is pairs."""
+    if not proof:
+        return False
+    return not plan or plan.get("strategy", "identified_values") == "identified_values"
 
 
 def _available_period_request(question: str) -> bool:

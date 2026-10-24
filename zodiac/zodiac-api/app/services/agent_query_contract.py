@@ -254,6 +254,62 @@ def requested_sources(question, schema):
     return found
 
 
+def canonical_annual_order_invoice_plan(plan, question, catalog):
+    """Use independent header aggregates for two-year order/invoice totals.
+
+    A generic document-pair plan requires both document IDs. That grain is
+    incompatible with annual totals, whose rows are grouped by year, client,
+    and currency. Normalize this common request before SQL generation so a
+    model cannot carry the wrong identity requirements into validation.
+    """
+    years = sorted(set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", question)))
+    q = question.lower()
+    if len(years) < 2:
+        return plan
+    if not re.search(r"\b(?:orders?|sales orders?)\b", q) or not re.search(r"\b(?:invoices?|billings?)\b", q):
+        return plan
+    if re.search(r"\b(?:each|per)\s+(?:order|invoice|document|item)|\b(?:list|listing)\b|\b(?:item[- ]level|document[- ]pair|specific invoice)\b|\b\d{8,12}\b", q):
+        return plan
+
+    order = catalog.index.get("vbak")
+    invoice = catalog.index.get("vbrk")
+    if not order or not invoice:
+        return plan
+    required = {
+        order: {"mandt", "audat", "netwr", "waerk"},
+        invoice: {"mandt", "fkdat", "netwr", "waerk"},
+    }
+    if any(not cols <= catalog.columns.get(table, set()) for table, cols in required.items()):
+        return plan
+
+    fields = [
+        {"table": order, "column": "mandt", "alias": "order_client", "role": "dimension"},
+        {"table": order, "column": "audat", "alias": "order_year", "role": "date"},
+        {"table": order, "column": "netwr", "alias": "order_value", "role": "measure"},
+        {"table": order, "column": "waerk", "alias": "order_currency", "role": "currency"},
+        {"table": invoice, "column": "mandt", "alias": "invoice_client", "role": "dimension"},
+        {"table": invoice, "column": "fkdat", "alias": "invoice_year", "role": "date"},
+        {"table": invoice, "column": "netwr", "alias": "invoice_value", "role": "measure"},
+        {"table": invoice, "column": "waerk", "alias": "invoice_currency", "role": "currency"},
+    ]
+    return {
+        **plan,
+        "tables": [order, invoice],
+        "fields": fields,
+        "grain": "independent order-header and invoice-header totals by year, client, and currency",
+        "filters": [
+            {"table": order, "column": "audat", "operator": "year", "values": years},
+            {"table": invoice, "column": "fkdat", "operator": "year", "values": years},
+        ],
+        "strategy": "independent_aggregates",
+        "sort": [],
+        "limit": 200,
+        "missing_handling": "Keep unmatched year/client/currency groups; calculate a difference only when client, year, and currency match.",
+        "assumptions": ["Annual totals use each header's own document date.",
+                        "Document IDs are not output dimensions for annual totals."],
+    }
+
+
 def output_lineage(sql):
     """Resolve output fields to physical origins through arbitrary CTE names."""
     root = build_scope(parse_one(sql, read='postgres'))

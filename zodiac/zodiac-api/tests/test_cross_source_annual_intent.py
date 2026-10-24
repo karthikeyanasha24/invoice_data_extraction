@@ -68,14 +68,13 @@ def test_real_agent_tool_loop_prepares_executes_and_returns_the_annual_compariso
     monkeypatch.setattr(httpx.Client,'send',lambda *_a,**_k: pytest.fail('No external model calls'))
     schema = annual_catalog().schema
     monkeypatch.setattr('app.services.adaptive_analyst.live_schema.load_live_schema', lambda *_: (schema,'live_database_metadata'))
-    fields = [('VBAK','mandt','order_client','identifier'),('VBRK','mandt','invoice_client','identifier'),
-              ('VBAK','waerk','order_currency','currency'),('VBRK','waerk','invoice_currency','currency'),
-              ('VBAK','audat','order_year','date'),('VBRK','fkdat','invoice_year','date'),
-              ('VBAK','netwr','order_value','measure'),('VBRK','netwr','invoice_value','measure')]
-    plan = dict(source='business',tables=['VBAK','VBRK'],strategy='independent_aggregates',grain='year/client/currency',
+    # Simulate the live failure: prepare_analysis incorrectly plans a document
+    # pair, requiring IDs that an annual aggregate SQL result cannot contain.
+    fields = [('VBAK','vbeln','order_document_id','identifier'),
+              ('VBRK','vbeln','invoice_document_id','identifier')]
+    plan = dict(source='business',tables=['VBAK','VBRK'],strategy='identified_values',grain='document pairs',
                 fields=[dict(zip(['table','column','alias','role'],f)) for f in fields],sort=[],limit=200,
-                filters=[dict(table=t,column=d,operator='year',values=['2000','2001']) for t,d in [('VBAK','audat'),('VBRK','fkdat')]],
-                missing_handling='Retain unmatched dimensions as null',assumptions=['Independent annual populations'])
+                filters=[], missing_handling='Keep unmatched',assumptions=[])
     decisions = iter([('prepare_analysis',plan),('run_readonly_sql',dict(source='business',sql=SQL,purpose='Compare annual totals'))])
     def respond(**_kwargs):
         name,args = next(decisions)

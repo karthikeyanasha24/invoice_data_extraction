@@ -9,9 +9,16 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.services.agent_query_contract import (
-    RelationshipCatalog, identified_value_proof, output_lineage, plan_sql_issues,
+    RelationshipCatalog, canonical_annual_order_invoice_plan, identified_value_proof, output_lineage, plan_sql_issues,
     requested_sources, source_coverage_issues, validate_plan, failed_sql_signature,
 )
+from app.services.analyst_agent import _is_identified_pair_listing
+
+
+def test_annual_aggregate_proof_does_not_receive_document_pair_listing_guidance():
+    assert _is_identified_pair_listing(True, {"strategy": "identified_values"})
+    assert not _is_identified_pair_listing(True, {"strategy": "independent_aggregates"})
+    assert not _is_identified_pair_listing(False, {"strategy": "identified_values"})
 
 
 def schema(**tables):
@@ -60,6 +67,38 @@ def annual_catalog():
     c = RelationshipCatalog(schema(VBAK='mandt vbeln netwr waerk audat', VBRK='mandt vbeln netwr waerk fkdat'))
     c.keys = {t: [{'mandt','vbeln'}] for t in c.schema}
     return c
+
+
+def test_two_year_order_invoice_totals_replace_pair_plan_with_independent_aggregates():
+    question = "Identify the difference in the sales amount for order value and invoice value from the year 2000 and 2001."
+    original = {
+        "tables": ["VBAK", "VBRK", "vbrp"],
+        "fields": [
+            {"table": "VBAK", "column": "vbeln", "alias": "order_document_id", "role": "identifier"},
+            {"table": "VBRK", "column": "vbeln", "alias": "invoice_document_id", "role": "identifier"},
+        ],
+        "filters": [], "strategy": "identified_values", "sort": [], "limit": 50,
+        "grain": "document pairs", "missing_handling": "keep unmatched",
+        "assumptions": [],
+    }
+
+    plan = canonical_annual_order_invoice_plan(original, question, annual_catalog())
+    checked = validate_plan(plan, question, annual_catalog())
+
+    assert checked["strategy"] == "independent_aggregates"
+    assert checked["tables"] == ["VBAK", "VBRK"]
+    assert not any(field["column"] == "vbeln" for field in checked["fields"])
+    assert {(f["table"], f["column"], tuple(f["values"])) for f in checked["filters"]} == {
+        ("VBAK", "audat", ("2000", "2001")),
+        ("VBRK", "fkdat", ("2000", "2001")),
+    }
+    assert checked["relationships"] == []
+
+
+def test_two_year_document_pair_question_keeps_identified_value_plan():
+    question = "List each order and its linked invoice document for 2000 and 2001."
+    plan = {"strategy": "identified_values", "fields": [], "tables": [], "filters": [], "sort": []}
+    assert canonical_annual_order_invoice_plan(plan, question, annual_catalog()) is plan
 
 
 def test_independent_annual_totals_join_complete_compatible_dimensions():
