@@ -1471,10 +1471,28 @@ def _auto_charts(
     cols = list(data[0].keys())
     pair_currency_keys = [c for c in cols if c.lower().endswith('_currency')]
     if len(pair_currency_keys) > 1:
-        # Different source currencies cannot share a monetary axis. Keep the
-        # side-by-side verified table when even one pair is incompatible/unknown.
-        if any(not row.get(pair_currency_keys[0]) or len({row.get(c) for c in pair_currency_keys}) != 1 for row in data):
+        # Plot only rows whose compared source amounts share a known currency.
+        # A few unmatched/mismatched rows should not hide useful charts for
+        # compatible document pairs, but they must never be coerced onto that
+        # currency's axis. Split safe pairs into separate charts and leave the
+        # complete result table available for reconciliation.
+        safe_pairs: Dict[str, List[Dict[str, Any]]] = {}
+        for row in data:
+            currencies = [str(row.get(key) or '').strip().upper() for key in pair_currency_keys]
+            if not currencies[0] or len(set(currencies)) != 1:
+                continue
+            safe_pairs.setdefault(currencies[0], []).append(row)
+        if not safe_pairs:
             return []
+        if len(safe_pairs) > 1 or sum(map(len, safe_pairs.values())) < len(data):
+            separated = []
+            for currency, subset in safe_pairs.items():
+                for spec in _auto_charts(question, sql, subset)[:1]:
+                    spec["currency"] = currency
+                    spec["title"] = f"{spec.get('title') or 'Comparison'} ({currency})"
+                    spec["description"] = f"{spec.get('description') or ''} · {currency}; unmatched or other-currency rows remain in the table"
+                    separated.append(spec)
+            return separated
     client_key = next((c for c in cols if c.lower() in {"mandt", "sap_client", "client", "client_id"}), None)
     if client_key:
         clients = list(dict.fromkeys(str(row.get(client_key) or "Unknown client") for row in data))

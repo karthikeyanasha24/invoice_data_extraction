@@ -46,3 +46,23 @@ def test_different_or_missing_source_currencies_use_verified_table():
     assert _auto_charts('Compare documents', '', rows) == []
     rows[0]['order_currency'] = None
     assert _auto_charts('Compare documents', '', rows) == []
+
+
+def test_mixed_currency_document_comparison_charts_only_currency_matched_pairs():
+    rows = [
+        {'billing_document': 'B1', 'order_currency': 'DEM', 'invoice_currency': 'DEM',
+         'order_net_value': 100, 'invoice_net_value': 80, 'difference_amount': 20},
+        {'billing_document': 'B2', 'order_currency': 'DEM', 'invoice_currency': 'DEM',
+         'order_net_value': 120, 'invoice_net_value': 100, 'difference_amount': 20},
+        {'billing_document': 'B3', 'order_currency': 'USD', 'invoice_currency': 'EUR',
+         'order_net_value': 90, 'invoice_net_value': 70, 'difference_amount': None},
+        {'billing_document': 'B4', 'order_currency': 'GBP', 'invoice_currency': None,
+         'order_net_value': 60, 'invoice_net_value': None, 'difference_amount': None},
+    ]
+
+    charts = _auto_charts('Compare order and invoice amounts', '', rows)
+
+    assert len(charts) == 1
+    assert charts[0]['currency'] == 'DEM'
+    assert {row['billing_document'] for row in charts[0]['data']} == {'B1', 'B2'}
+    assert set(charts[0]['y_keys']) == {'order_net_value', 'invoice_net_value', 'difference_amount'}
