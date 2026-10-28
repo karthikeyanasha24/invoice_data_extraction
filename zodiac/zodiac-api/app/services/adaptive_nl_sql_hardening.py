@@ -492,6 +492,13 @@ def apply_statement_timeout(db: Any, timeout_ms: Optional[int] = None) -> None:
     """Bound this transaction's SQL so a cartesian/unindexed join cannot hang the API."""
     if db is None:
         return
+    # SET LOCAL is PostgreSQL-specific. Avoid poisoning transactions on local
+    # SQLite development databases after that unsupported statement fails.
+    try:
+        if db.get_bind().dialect.name != "postgresql":
+            return
+    except Exception:
+        pass
     ms = ADAPTIVE_SQL_TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
     if ms <= 0:
         return

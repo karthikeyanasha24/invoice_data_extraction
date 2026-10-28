@@ -1235,6 +1235,138 @@ def build_linked_order_invoice_totals_sql(
     )
 
 
+def build_sales_order_invoice_customer_comparison_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Compare independently dated order and invoice header totals by customer.
+
+    Order values use VBAK.AUDAT and invoice values use VBRK.FKDAT. This is a
+    customer/year comparison, not a VBFA document-flow reconciliation; values
+    are kept separate by client and currency, with no currency conversion.
+    """
+    q = question or ""
+    if not (
+        re.search(r"\b(?:compare|comparison|difference|differences|versus|vs\.?|against)\b", q, re.I)
+        and re.search(r"\bsales\s+orders?\b", q, re.I)
+        and re.search(r"\binvoices?\b", q, re.I)
+        and re.search(r"\b(?:country|countries)\b", q, re.I)
+        and re.search(r"\bcustomers?\b", q, re.I)
+        and re.search(r"\b(?:value|values|amount|amounts|net|sales|revenue)\b", q, re.I)
+        and not re.search(r"\blinked\b|\breconcil", q, re.I)
+    ):
+        return None
+
+    years = extract_question_years(question)
+    if not years:
+        return None
+    if not all(has_table(name) for name in ("VBAK", "VBRK", "KNA1")):
+        return None
+
+    order, invoice, customer = (
+        resolve_table_name(name) or name for name in ("VBAK", "VBRK", "KNA1")
+    )
+    required = (
+        (order, ("mandt", "vbeln", "kunnr", "audat", "netwr", "waerk")),
+        (invoice, ("mandt", "vbeln", "kunag", "fkdat", "netwr", "waerk")),
+        (customer, ("mandt", "kunnr", "land1")),
+    )
+    if any(not has_column(table, column) for table, columns in required for column in columns):
+        return None
+
+    # The connector identifies a range by its language or dash separator. Two
+    # years joined by a plain "and" remain a discrete selection.
+    year_pair = re.search(r"\b(?:between|from)\s+(20\d{2}|19\d{2})\s+(?:and|to|through|until)\s+(20\d{2}|19\d{2})\b", q, re.I)
+    if not year_pair:
+        year_pair = re.search(r"\b(20\d{2}|19\d{2})\s*[-–—]\s*(20\d{2}|19\d{2})\b", q)
+    if year_pair:
+        first, last = sorted((year_pair.group(1), year_pair.group(2)))
+        order_year_filter = (
+            f'SUBSTRING(TRIM(CAST(o."audat" AS TEXT)), 1, 4) BETWEEN \'{first}\' AND \'{last}\''
+        )
+        invoice_year_filter = (
+            f'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4) BETWEEN \'{first}\' AND \'{last}\''
+        )
+    else:
+        order_year_filter = _sap_year_predicate('o', "audat", years)
+        invoice_year_filter = _sap_year_predicate('k', "fkdat", years)
+    if not order_year_filter or not invoice_year_filter:
+        return None
+
+    order_year = 'SUBSTRING(TRIM(CAST(o."audat" AS TEXT)), 1, 4)'
+    invoice_year = 'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4)'
+    customer_name = (
+        'COALESCE(MAX(TRIM(CAST(c."name1" AS TEXT))), \'\') AS "customer_name"'
+        if has_column(customer, "name1") else '\'\' AS "customer_name"'
+    )
+    invoice_cancelled_filter = (
+        ' AND COALESCE(TRIM(CAST(k."fksto" AS TEXT)), \'\') <> \'X\''
+        if has_column(invoice, "fksto") else ""
+    )
+
+    return (
+        'WITH "customer_dim" AS (\n'
+        '  SELECT c."mandt", c."kunnr", LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\') AS "customer_id", '
+        'MAX(TRIM(CAST(c."land1" AS TEXT))) AS "country_code", '
+        f'{customer_name}\n'
+        f'  FROM "{customer}" c\n'
+        '  GROUP BY c."mandt", c."kunnr"\n'
+        '), "order_rows" AS (\n'
+        '  SELECT DISTINCT o."mandt", o."vbeln", c."customer_id", c."country_code", '
+        f'c."customer_name", {order_year} AS "year", o."waerk" AS "currency", o."netwr" AS "netwr"\n'
+        f'  FROM "{order}" o JOIN "customer_dim" c ON c."mandt" = o."mandt" '
+        'AND c."kunnr" = o."kunnr"\n'
+        f'  WHERE {order_year_filter} AND NULLIF(TRIM(CAST(o."audat" AS TEXT)), \'\') IS NOT NULL\n'
+        '), "invoice_rows" AS (\n'
+        '  SELECT DISTINCT k."mandt", k."vbeln", c."customer_id", c."country_code", '
+        f'c."customer_name", {invoice_year} AS "year", k."waerk" AS "currency", k."netwr" AS "netwr"\n'
+        f'  FROM "{invoice}" k JOIN "customer_dim" c ON c."mandt" = k."mandt" '
+        'AND c."kunnr" = k."kunag"\n'
+        f'  WHERE {invoice_year_filter} AND NULLIF(TRIM(CAST(k."fkdat" AS TEXT)), \'\') IS NOT NULL'
+        f'{invoice_cancelled_filter}\n'
+        '), "order_totals" AS (\n'
+        '  SELECT r."mandt" AS "client", r."customer_id", r."country_code", r."customer_name", r."year", r."currency", '
+        'COUNT(*) AS "sales_order_count", '
+        'SUM(CAST(NULLIF(TRIM(CAST(r."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "sales_order_net_value"\n'
+        '  FROM "order_rows" r GROUP BY r."mandt", r."customer_id", r."country_code", '
+        'r."customer_name", r."year", r."currency"\n'
+        '), "invoice_totals" AS (\n'
+        '  SELECT r."mandt" AS "client", r."customer_id", r."country_code", r."customer_name", r."year", r."currency", '
+        'COUNT(*) AS "invoice_count", '
+        'SUM(CAST(NULLIF(TRIM(CAST(r."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "invoice_net_value"\n'
+        '  FROM "invoice_rows" r GROUP BY r."mandt", r."customer_id", r."country_code", '
+        'r."customer_name", r."year", r."currency"\n'
+        ')\n'
+        'SELECT COALESCE(o."client", i."client") AS "client", '
+        'COALESCE(o."year", i."year") AS "year", '
+        'COALESCE(o."country_code", i."country_code") AS "country_code", '
+        'COALESCE(o."customer_id", i."customer_id") AS "customer_id", '
+        'COALESCE(o."customer_name", i."customer_name") AS "customer_name", '
+        'COALESCE(o."currency", i."currency") AS "currency", '
+        'o."currency" AS "sales_order_currency", i."currency" AS "invoice_currency", '
+        'o."sales_order_count", i."invoice_count", '
+        'o."sales_order_net_value", i."invoice_net_value", '
+        'CASE WHEN o."currency" = i."currency" '
+        'AND o."sales_order_net_value" IS NOT NULL AND i."invoice_net_value" IS NOT NULL '
+        'THEN o."sales_order_net_value" - i."invoice_net_value" END AS "order_minus_invoice_net_value", '
+        'CASE WHEN o."client" IS NULL THEN \'Invoices only for this customer/year/currency\' '
+        'WHEN i."client" IS NULL THEN \'Sales orders only for this customer/year/currency\' '
+        'ELSE \'Compared by customer, document year, client and currency\' END AS "comparison_status", '
+        '\'Order date: AUDAT; invoice date: FKDAT; independent customer/year totals; no document-flow reconciliation or currency conversion\' AS "comparison_scope"\n'
+        'FROM "order_totals" o FULL OUTER JOIN "invoice_totals" i '
+        'ON o."client" IS NOT DISTINCT FROM i."client" '
+        'AND o."customer_id" IS NOT DISTINCT FROM i."customer_id" '
+        'AND o."country_code" IS NOT DISTINCT FROM i."country_code" '
+        'AND o."customer_name" IS NOT DISTINCT FROM i."customer_name" '
+        'AND o."year" IS NOT DISTINCT FROM i."year" '
+        'AND o."currency" IS NOT DISTINCT FROM i."currency"\n'
+        'ORDER BY ABS(COALESCE(o."sales_order_net_value", 0) - COALESCE(i."invoice_net_value", 0)) DESC, '
+        '"country_code", "customer_id", "year", "currency"\n'
+        'LIMIT 200'
+    )
+
+
 def build_dimension_ranking_sql(
     question: str,
     tables: List[str],

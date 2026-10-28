@@ -254,13 +254,15 @@ def _independently_aggregated_row_ctes(sql: str) -> bool:
                     on = join.args.get("on")
                     covered = set()
                     if on is not None and not on.find(exp.Or):
-                        for equality in on.find_all(exp.EQ):
+                        for equality in [*on.find_all(exp.EQ), *on.find_all(exp.NullSafeEQ)]:
                             left, right = equality.this, equality.expression
-                            if not isinstance(left, exp.Column) or not isinstance(right, exp.Column):
-                                continue
-                            if left.table == target_alias:
+                            # A unique target key remains cardinality-safe when
+                            # the source side normalizes its key (for example,
+                            # LPAD(TRIM(source.kunnr), 10, '0')). The proof only
+                            # needs the target's complete unique key in equality.
+                            if isinstance(left, exp.Column) and left.table == target_alias:
                                 covered.add(left.name.lower())
-                            if right.table == target_alias:
+                            if isinstance(right, exp.Column) and right.table == target_alias:
                                 covered.add(right.name.lower())
                     if not unique_keys or not unique_keys <= covered:
                         safe_rows = False
@@ -405,7 +407,7 @@ def _document_measure_lineage(sql: str) -> bool:
                         return conjuncts(node.this) + conjuncts(node.expression)
                     return [node]
                 for atom in conjuncts(on):
-                    if isinstance(atom, exp.EQ) and isinstance(atom.this, exp.Column) and isinstance(atom.expression, exp.Column):
+                    if isinstance(atom, (exp.EQ, exp.NullSafeEQ)) and isinstance(atom.this, exp.Column) and isinstance(atom.expression, exp.Column):
                         a, b = atom.this, atom.expression
                         if a.table in infos and b.table in infos and a.table != b.table:
                             covered[a.table].add(a.name.upper())

@@ -1864,14 +1864,14 @@ export const dashboardApi = {
     executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]>; filters?: { table: string; column: string; operator: 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than'; value: string; upper?: string }[] }) => {
         try {
             const response = await api.post('/api/query/adaptive/basic/training/execute', body, { timeout: 120000 });
-            return response.data as { status: 'executed' | 'failed'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; error?: string; llm_calls: 0 };
+            return response.data as { status: 'executed' | 'needs_review' | 'failed'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; error?: string; answerability_issues?: string[]; llm_calls: 0 };
         } catch (error) {
             throw new Error(publicApiError(error, 'Could not run the training query.'));
         }
     },
     getBasicTrainingExamples: async (q = '') => {
         const response = await api.get('/api/query/adaptive/basic/training/examples', { params: { q }, timeout: 30000 });
-        return response.data as { examples: { id: string; source: 'business' | 'application'; question: string; sql: string; dialect: string; revision: number; validation_status: string; updated_at: string; schema: { tables?: Record<string, { columns: { col: string; type: string }[] }>; relationships?: Record<string, { columns: string[]; references_table?: string; references_columns: string[] }[]> } }[] };
+        return response.data as { examples: { id: string; source: 'business' | 'application'; question: string; sql: string; dialect: string; revision: number; validation_status: string; replayable?: boolean; answerability_issues?: string[]; updated_at: string; schema: { tables?: Record<string, { columns: { col: string; type: string }[] }>; relationships?: Record<string, { columns: string[]; references_table?: string; references_columns: string[] }[]> } }[] };
     },
     saveBasicTrainingExample: async (runId: string, question: string) => {
         try {

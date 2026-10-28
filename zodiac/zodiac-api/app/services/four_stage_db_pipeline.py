@@ -1420,6 +1420,7 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         build_linked_order_period_comparison_sql,
         build_order_item_billing_reconciliation_sql,
         build_linked_order_invoice_totals_sql,
+        build_sales_order_invoice_customer_comparison_sql,
         build_linked_sales_orders_sql,
         build_relative_document_list_sql,
         build_sat_logs_sql,
@@ -1429,6 +1430,7 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
     for builder in (
         lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_order_item_billing_reconciliation_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_sales_order_invoice_customer_comparison_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_linked_order_invoice_totals_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_unbilled_order_items_sql(question, ctx.tables, ctx.semantic_requirements),
@@ -1456,7 +1458,11 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
             ranking_sql = detect_multidim_ranking_intent(
                 question, ctx.semantic_requirements
             ) and re.search(r"total_sales", sql, re.I)
-            if not ranking_sql and not sql_satisfies_analytical_intent(sql, question, None):
+            customer_comparison_sql = (
+                '"order_minus_invoice_net_value"' in sql
+                and '"comparison_scope"' in sql
+            )
+            if not ranking_sql and not customer_comparison_sql and not sql_satisfies_analytical_intent(sql, question, None):
                 continue
             _register_template_tables(ctx, sql)
             return sql
@@ -1578,6 +1584,7 @@ def pipeline3_sql_generation(
         build_linked_order_period_comparison_sql,
         build_order_item_billing_reconciliation_sql,
         build_linked_order_invoice_totals_sql,
+        build_sales_order_invoice_customer_comparison_sql,
         build_linked_billing_documents_for_orders_sql,
         build_linked_sales_orders_sql,
         build_relative_document_list_sql,
@@ -1632,6 +1639,7 @@ def pipeline3_sql_generation(
             "unbilled_order_items_template",
             "order_item_billing_reconciliation_template",
             "linked_order_invoice_totals_template",
+            "sales_order_invoice_customer_comparison_template",
         }:
             return _template_sql(ctx, question, source, out)
         sem_for_check = (
@@ -1660,6 +1668,7 @@ def pipeline3_sql_generation(
         ("linked_billing_documents_for_orders_template", lambda: build_linked_billing_documents_for_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_order_period_comparison_template", lambda: build_linked_order_period_comparison_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("order_item_billing_reconciliation_template", lambda: build_order_item_billing_reconciliation_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("sales_order_invoice_customer_comparison_template", lambda: build_sales_order_invoice_customer_comparison_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_order_invoice_totals_template", lambda: build_linked_order_invoice_totals_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_sales_orders_template", lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("unbilled_order_items_template", lambda: build_unbilled_order_items_sql(question, ctx.tables, ctx.semantic_requirements)),

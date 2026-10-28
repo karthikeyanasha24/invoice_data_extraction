@@ -72,9 +72,19 @@ def list_examples(engine, scope, query=""):
             examples.c.scope_digest == _digest(scope)).order_by(examples.c.updated_at.desc()).limit(200)
         rows = session.execute(statement).mappings().all()
         needle = query.casefold().strip()
-        return [{**{key: row[key] for key in ("id", "source", "question", "sql", "dialect", "revision", "validation_status", "updated_at")},
-                 "schema": json.loads(row["schema_json"]), "history": json.loads(row["history_json"] or "[]")}
-                for row in rows if not needle or needle in row["question"].casefold() or needle in row["sql"].casefold()]
+        output = []
+        for row in rows:
+            if needle and needle not in row["question"].casefold() and needle not in row["sql"].casefold():
+                continue
+            item = {**{key: row[key] for key in ("id", "source", "question", "sql", "dialect", "revision", "validation_status", "updated_at")},
+                    "schema": json.loads(row["schema_json"]), "history": json.loads(row["history_json"] or "[]")}
+            # Old examples can still have validation_status="executed" even
+            # though they predate semantic checks. Recheck them when listing
+            # so Basic's picker can disable stale SQL before the user runs it.
+            item["answerability_issues"] = answerability_issues(item["question"], item["sql"], [])
+            item["replayable"] = item["validation_status"] == "executed" and not item["answerability_issues"]
+            output.append(item)
+        return output
 
 
 def load_replay_example(engine, scope, identifier, revision, question, use_sap):
@@ -97,6 +107,12 @@ def load_replay_example(engine, scope, identifier, revision, question, use_sap):
             raise ValueError("The question must match the selected saved SQL Training query")
         if row["source"] not in ({"application", "business"} if use_sap else {"application"}):
             raise ValueError("The selected query's database source is not configured")
+        issues = answerability_issues(row["question"], row["sql"], [])
+        if issues:
+            raise ValueError(
+                "This saved SQL Training query needs review and cannot run in Basic: "
+                + " ".join(issues)
+            )
         return {"question": row["question"], "sql": row["sql"], "source": row["source"],
                 "training_example": True, "training_example_id": row["id"],
                 "training_revision": row["revision"]}
@@ -296,10 +312,118 @@ def check_query_scope(sql: str, selection: dict):
         safe_sql, _tables = validate_agent_sql(sql, selection)
         return safe_sql
     except SqlglotError as error:
-        raise ValueError("SQL syntax could not be parsed; review the statement and selected schema") from error
+        # SQLGlot's parse diagnostic points to the syntax/position that needs
+        # attention. Keep it short so the training UI can show an actionable
+        # error instead of making every parser rejection look identical.
+        diagnostic = re.sub(r"\s+", " ", str(error)).strip()
+        if len(diagnostic) > 240:
+            diagnostic = diagnostic[:237] + "..."
+        detail = f" ({diagnostic})" if diagnostic else ""
+        raise ValueError(
+            "SQL syntax could not be parsed" + detail
+            + "; check PostgreSQL syntax and selected table/column names"
+        ) from error
 
 
-def record_run(engine, scope, source, question, schema, sql, result):
+def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]:
+    """Catch clear gaps between a training question and its executed result.
+
+    This is a small deterministic check, not a claim that every other query
+    fully answers its question. It keeps obviously incomplete runs out of
+    checked Basic replay while showing the rows and repair guidance.
+    """
+    from sqlglot import exp, parse_one
+
+    try:
+        tree = parse_one(sql, read="postgres")
+    except Exception:
+        return []  # Syntax errors have already been handled by validation.
+    if not isinstance(tree, exp.Select):
+        return []
+    issues = []
+    wording = question.lower()
+    tables = {table.name.lower() for table in tree.find_all(exp.Table)}
+    output = {str(key).lower() for row in rows[:1] for key in row}
+    output.update(str(selection.alias_or_name).lower() for selection in tree.selects)
+
+    if re.search(r"\bcountr(?:y|ies)\b", wording) and not any(
+        "country" in name or name in {"land1", "landx"} for name in output
+    ):
+        issues.append("The question asks for countries, but the result has no country column. Select a country field such as KNA1.LAND1 and join it to the customer.")
+    if ("vbak" in tables and not tables.intersection({"vbrk", "vbrp"})
+            and re.search(r"\binvoices?\b", wording)
+            and re.search(r"\b(?:difference|differences|compare|comparison)\b", wording)):
+        issues.append("The question compares order and invoice values, but the SQL reads no invoice table. Join the sales order to billing data and calculate both values and their difference.")
+
+    years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", wording)))
+    range_wording = len(years) == 2 and bool(re.search(
+        r"\bbetween\b|\b(?:19|20)\d{2}\s+(?:to|through|until)\s+(?:19|20)\d{2}\b",
+        wording,
+    ))
+    if years:
+        date_fields = {"fkdat", "audat", "budat", "bldat", "erdat", "billing_date", "order_date",
+                       "sales_year", "salesyear", "year", "fiscal_year"}
+        year_filters = []
+        for where in tree.find_all(exp.Where):
+            where_columns = {column.name.lower() for column in where.find_all(exp.Column)}
+            if not where_columns.intersection(date_fields):
+                continue
+            where_text = where.sql(dialect="postgres")
+            if range_wording:
+                first, last = map(int, years)
+                upper_bound_years = {str(last), str(last + 1)}
+                matches_years = years[0] in where_text and any(year in where_text for year in upper_bound_years)
+            else:
+                matches_years = all(year in where_text for year in years)
+            if matches_years:
+                year_filters.append(where)
+        if not year_filters:
+            requested = years[0] if len(years) == 1 else f"{years[0]}–{years[-1]}"
+            issues.append(
+                f"The question specifies {requested}, but the SQL has no matching date filter. "
+                "Add a filter on the relevant SAP date field and rerun before saving this example."
+            )
+        observed_years = set()
+        for row in rows:
+            for key, value in row.items():
+                if str(key).lower() not in date_fields:
+                    continue
+                match = re.search(r"((?:19|20)\d{2})", str(value or ""))
+                if match:
+                    observed_years.add(match.group(1))
+        if observed_years and not set(years).intersection(observed_years):
+            actual = ", ".join(sorted(observed_years))
+            issues.append(
+                f"The requested year(s) are {', '.join(years)}, but the returned dates are from {actual}. "
+                "Check the date field and filter before saving this example."
+            )
+
+    if range_wording:
+        limit_node = tree.args.get("limit")
+        try:
+            limit = int(limit_node.expression.this) if limit_node else 0
+        except (TypeError, ValueError, AttributeError):
+            limit = 0
+        if limit >= 10 and len(rows) >= limit:
+            observed = set()
+            for row in rows:
+                for key, value in row.items():
+                    if re.search(r"year|date|fkdat|audat|budat|bldat", str(key), re.I):
+                        match = re.match(r"((?:19|20)\d{2})", str(value or ""))
+                        if match:
+                            observed.add(int(match.group(1)))
+            first, last = map(int, years)
+            if not observed or min(observed) > first or max(observed) < last:
+                shown = ", ".join(str(year) for year in sorted(observed)) or "no visible year"
+                issues.append(
+                    f"The query reached LIMIT {limit} for {first}–{last}, but returned rows show {shown}. "
+                    "This sample cannot establish the full period. Group by year and requested dimensions, "
+                    "or revise the limit and rerun."
+                )
+    return issues
+
+
+def record_run(engine, scope, source, question, schema, sql, result, answer_issues=None):
     ensure_tables(engine)
     identifier = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
@@ -307,7 +431,7 @@ def record_run(engine, scope, source, question, schema, sql, result):
     with Session(engine) as session:
         session.execute(insert(runs).values(id=identifier, user_id=scope.user_id, scope_digest=_digest(scope),
             source=source, question=question, schema_json=json.dumps(schema), sql=result.get("sql") or sql,
-            status="executed" if result.get("ok") else "failed",
+            status="needs_review" if answer_issues else "executed" if result.get("ok") else "failed",
             columns_json=json.dumps(list(rows[0].keys()) if rows else []), rows_json=json.dumps(rows[:500], default=str), created_at=now))
         session.commit()
     return identifier

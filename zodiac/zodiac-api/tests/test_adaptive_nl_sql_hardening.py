@@ -640,6 +640,18 @@ def test_apply_statement_timeout_is_safe_on_none():
     apply_statement_timeout(None, timeout_ms=0)
 
 
+def test_apply_statement_timeout_skips_sqlite_without_poisoning_session():
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+    from app.services.adaptive_nl_sql_hardening import apply_statement_timeout
+
+    engine = create_engine("sqlite://")
+    with Session(engine) as session:
+        apply_statement_timeout(session)
+        assert session.execute(text("SELECT 1")).scalar_one() == 1
+    engine.dispose()
+
+
 def test_ensure_chat_tables_is_cached_after_first_success():
     from app.services.chat_thread_store import (
         ensure_chat_tables,

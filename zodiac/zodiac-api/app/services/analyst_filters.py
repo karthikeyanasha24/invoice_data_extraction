@@ -1,4 +1,5 @@
 """Typed plan predicates must be entailed by conjunctive executed SQL filters."""
+import re
 from sqlglot import exp, parse_one
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
@@ -38,6 +39,15 @@ def _calendar_years_proven(predicates, values):
                 bounds.setdefault(predicate.this.sql(), {})[type(predicate)] = value.replace('-', '')
         if isinstance(predicate, exp.Between):
             low, high = literal(predicate.args['low']), literal(predicate.args['high'])
+            if (
+                low and high
+                and re.fullmatch(r"\d{4}", low)
+                and re.fullmatch(r"\d{4}", high)
+                and _expression_time_grain(predicate.this.sql()) == 'year'
+            ):
+                start, end = int(low), int(high)
+                if start <= end and requested == {str(year) for year in range(start, end + 1)}:
+                    return True
             if low and high:
                 bounds.setdefault(predicate.this.sql(), {}).update({exp.GTE: low.replace('-', ''), exp.LTE: high.replace('-', '')})
     years = sorted(int(y) for y in requested)

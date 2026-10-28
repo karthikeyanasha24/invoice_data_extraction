@@ -21,6 +21,14 @@ def cross_source_years(question):
         return []
     if re.search(r'\b(?:growth|grew|increas\w*|decreas\w*|declin\w*|change|yoy|year[- ]over[- ]year|previous|prior|linked|related|same)\b|'
                  r'\b\d{4}\s*(?:vs\.?|versus|to|against|compared\s+(?:with|to))\s*\d{4}\b|'
-                 r'\b(?:compare|between)\s+(?:the\s+)?(?:years?\s+)?\d{4}\s+and\s+\d{4}\b', q, re.I):
+                 r'\bcompare\s+(?:the\s+)?(?:years?\s+)?\d{4}\s+and\s+\d{4}\b', q, re.I):
         return []
+    year_range = re.search(
+        r'\bbetween\s+(?:(?:calendar|fiscal)\s+)?(?:years?\s+)?(\d{4})\s+and\s+(\d{4})\b',
+        q,
+        re.I,
+    )
+    if year_range:
+        first, last = sorted(map(int, year_range.groups()))
+        return [str(year) for year in range(first, last + 1)]
     return years

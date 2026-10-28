@@ -60,7 +60,11 @@ def continue_basic_question(question: str, previous: str) -> str:
     if not q or not prev:
         return q
     ql = q.lower()
-    pronoun = bool(re.search(r"\b(?:it|that|those|them|same|this)\b", ql))
+    # Conversational follow-ups often refer to a previously ranked/grouped
+    # result with "they" (for example, "which customers and countries are
+    # they?"). Keep that request attached to the prior analytical question so
+    # the Basic provider receives the metric, period, and filters as context.
+    pronoun = bool(re.search(r"\b(?:it|that|those|them|they|their|same|this)\b", ql))
     fragment = bool(pronoun or re.match(
         r"(?:by|per|break|compare|what about|same for|and|in|for|show(?:\s+(?:that|it))?)\b",
         ql,
@@ -78,6 +82,11 @@ def continue_basic_question(question: str, previous: str) -> str:
             # Never turn a profit comparison into billed sales or invent a year.
             return "compare " + re.sub(r"\b" + prior + r"\b", f"{prior} and {year}", prev, count=1)
         return q
+    # Keep entity-identification follow-ups intact. Treating "which customers
+    # and countries are they?" as only a request to regroup by country would
+    # silently discard the customer dimension and the actual follow-up intent.
+    if pronoun and re.match(r"(?:which|what|who|where)\b", ql):
+        return f"{prev}. {q}"
     grains = (
         ("quarter", r"\bquarters?\b|\bquarterly\b"),
         ("month", r"\bmonths?\b|\bmonthly\b"),
@@ -133,10 +142,28 @@ def recall_saved_sql(question: str, examples: list[dict] | None) -> str:
     return recall_sql(question, examples)
 
 
+def _block_unverified_training_example(question: str, example: dict, sql: str,
+                                       issues: list[str], rows: list[dict] | None = None) -> dict[str, Any]:
+    answer = (
+        "Basic blocked this saved SQL Training example because its query does not verify the question. "
+        + " ".join(issues)
+        + " Correct and rerun it in SQL Training before saving it for Basic replay."
+    )
+    result = _payload(question, "CANNOT_ANSWER", answer, sql, rows or [])
+    result["meta"]["training_example"] = {
+        "id": example.get("training_example_id"),
+        "revision": example.get("training_revision"),
+    }
+    result["meta"]["training_validation_issues"] = issues
+    result["sql_status"] = "needs_review"
+    result["llm_calls"] = 0
+    return result
+
+
 def run_basic_sql_answer(
     question: str,
     *,
-    execute: Callable[[str], dict],
+    execute: Callable[..., dict],
     previous_question: str = "",
     previous_sql: str = "",
     prior_examples: list[dict] | None = None,
@@ -226,10 +253,29 @@ def run_basic_sql_answer(
                 field_hint = field_lookup(question) if field_lookup else None
                 return _run_local(local_agent, retrieved, field_hint)
             return _uncovered(question)
+        if reused_example and reused_example.get("training_example"):
+            # Reject obvious question/SQL mismatches before touching the
+            # connected database. The result-based check below still catches
+            # examples whose SQL has a plausible filter but returns dates that
+            # contradict the request.
+            from .basic_sql_training import answerability_issues
+            issues = answerability_issues(question, sql, [])
+            if issues:
+                return _block_unverified_training_example(question, reused_example, sql, issues)
         if not paid_models_blocked():
             raise RuntimeError("Basic mode failed to block paid models")
-        executed = (_invoke_execute(execute, sql.strip().rstrip(";"), reused_example) if reused_example
-                    else execute(sql.strip().rstrip(";"))) or {}
+        predefined_step = _predefined_template_step(sql) if not reused_example else None
+        cleaned_sql = sql.strip().rstrip(";")
+        if predefined_step:
+            # The API's checked executor accepts the server-owned template
+            # marker as its second argument. Keep this path explicit so it
+            # cannot be mistaken for a saved-query replay or lose its proof
+            # marker through a one-argument compatibility callback.
+            executed = execute(cleaned_sql, predefined_step) or {}
+        elif reused_example:
+            executed = _invoke_execute(execute, cleaned_sql, reused_example) or {}
+        else:
+            executed = execute(cleaned_sql) or {}
         if not executed.get("ok"):
             training = bool((reused_example or {}).get("training_example"))
             answer = "Basic mode did not call a model. The saved query was rejected by the database. " + str(executed.get("error") or "")
@@ -244,6 +290,13 @@ def run_basic_sql_answer(
                 }
             return result
         rows = executed.get("rows") or []
+        if reused_example and reused_example.get("training_example"):
+            from .basic_sql_training import answerability_issues
+            issues = answerability_issues(question, executed.get("sql") or sql, rows)
+            if issues:
+                return _block_unverified_training_example(
+                    question, reused_example, executed.get("sql") or sql, issues, rows,
+                )
         if rows:
             method_note = ("Basic adapted the checked SQL Training example to the requested years" if reused_example and reused_example.get("training_year_adaptation")
                            else "Basic reran the checked SQL Training example" if reused_example and reused_example.get("training_example")
@@ -298,6 +351,27 @@ def _invoke_execute(execute, sql, step):
     return execute(sql, step) or {}
 
 
+def _predefined_template_step(sql: str) -> dict | None:
+    """Mark this exact server-owned comparison for the independent-grain proof."""
+    normalized = " ".join(str(sql or "").lower().split())
+    signature = (
+        'with "customer_dim"',
+        '"order_rows" as',
+        '"invoice_rows" as',
+        '"order_totals" as',
+        '"invoice_totals" as',
+        '"sales_order_net_value"',
+        '"invoice_net_value"',
+        '"order_minus_invoice_net_value"',
+    )
+    if all(part in normalized for part in signature):
+        return {
+            "source": "business",
+            "basic_predefined_template": "sales_order_invoice_customer_comparison",
+        }
+    return None
+
+
 def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
     """Explain a supported SQL pattern and flag obvious metric mismatches."""
     import re
@@ -318,7 +392,15 @@ def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
     if any(name in group for name in ("land1", "country")):
         dimensions.append("country")
 
-    if "sum(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
+    compares_orders_to_invoices = (
+        re.search(r"\bvbak\b", normalized)
+        and re.search(r"\bvbrk\b", normalized)
+        and "sales_order_net_value" in normalized
+        and "invoice_net_value" in normalized
+    )
+    if compares_orders_to_invoices:
+        measure = "sales order value, invoice value, and their difference"
+    elif "sum(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
         measure = "total billed sales"
     elif "min(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
         measure = "lowest billed amount"

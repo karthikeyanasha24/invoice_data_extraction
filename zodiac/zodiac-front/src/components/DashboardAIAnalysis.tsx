@@ -1183,7 +1183,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [startFreshQuestion, setStartFreshQuestion] = useState(false);
   const [trainingQuestion, setTrainingQuestion] = useState(initialQuestion || '');
   const [trainedQueryPickerOpen, setTrainedQueryPickerOpen] = useState(false);
-  const [trainedQueries, setTrainedQueries] = useState<{ id: string; question: string; revision: number; source: string; validation_status: string; schema?: { tables?: Record<string, unknown> } }[]>([]);
+  const [trainedQueries, setTrainedQueries] = useState<{ id: string; question: string; revision: number; source: string; validation_status: string; replayable?: boolean; answerability_issues?: string[]; schema?: { tables?: Record<string, unknown> } }[]>([]);
   const [trainedQueriesLoaded, setTrainedQueriesLoaded] = useState(false);
   const [trainedQueriesLoading, setTrainedQueriesLoading] = useState(false);
   const [trainedQuerySearch, setTrainedQuerySearch] = useState('');
@@ -1545,14 +1545,18 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     setTrainedQueriesLoading(true); setTrainedQueryError('');
     try {
       const result = await dashboardApi.getBasicTrainingExamples();
-      setTrainedQueries((result.examples || []).filter(example => example.validation_status === 'executed'));
+      // Fail closed when connected to an API version that does not return the
+      // semantic replay check. A stale checked SQL example must never be run
+      // just because the old server still labels it "executed".
+      setTrainedQueries(result.examples || []);
       setTrainedQueriesLoaded(true);
     } catch (cause) {
       setTrainedQueryError(cause instanceof Error ? cause.message : 'Could not load saved SQL Training queries.');
     } finally { setTrainedQueriesLoading(false); }
   };
 
-  const runTrainedQuery = (example: { id: string; revision: number; question: string }) => {
+  const runTrainedQuery = (example: { id: string; revision: number; question: string; validation_status: string; replayable?: boolean }) => {
+    if (example.validation_status !== 'executed' || example.replayable !== true) return;
     setTrainedQueryPickerOpen(false);
     setTrainedQuerySearch('');
     void sendQuestion(example.question, { asNew: true, source: 'saved-restore', analysisMode: 'basic', trainingExample: example });
@@ -1893,14 +1897,19 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
             {trainedQueriesLoading ? 'Loading saved SQL Training queries…' : 'Choose a saved SQL Training query'}
           </button>
           {trainedQueryPickerOpen && <div className="mt-2 rounded-xl border border-indigo-200 bg-white p-3 shadow-sm">
-            <p className="text-xs text-slate-600">Only queries that ran successfully and were saved with <strong>Save checked example</strong> appear here. Choosing one asks Basic using its saved wording.</p>
+            <p className="text-xs text-slate-600">Saved queries are checked against their question before Basic can replay them. Examples that do not match need review in SQL Training.</p>
             {trainedQueries.length > 0 && <input aria-label="Search saved SQL Training queries" value={trainedQuerySearch} onChange={event => setTrainedQuerySearch(event.target.value)} placeholder="Search saved questions" className="mt-2 w-full rounded-lg border px-3 py-2 text-xs"/>}
             {trainedQueryError && <p role="alert" className="mt-2 text-xs text-red-700">{trainedQueryError}</p>}
             {!trainedQueriesLoading && !trainedQueryError && trainedQueries.length === 0 && <p className="mt-2 text-xs text-slate-500">No saved SQL Training queries yet. In SQL Training, select every table and column your join uses, run the SQL successfully, then choose “Save checked example.”</p>}
-            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">{trainedQueries.filter(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())).map(example => <div key={example.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
-              <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-800">{example.question}</p><p className="mt-0.5 text-[10px] text-slate-500">Revision {example.revision} · {Object.keys(example.schema?.tables || {}).join(', ') || example.source}</p></div>
-              <button type="button" onClick={() => runTrainedQuery(example)} className="shrink-0 rounded-md bg-indigo-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-800">Run in Basic</button>
-            </div>)}</div>
+            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">{trainedQueries.filter(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())).map(example => {
+              const replayable = example.validation_status === 'executed' && example.replayable === true;
+              return <div key={example.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
+                <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-800">{example.question}</p><p className="mt-0.5 text-[10px] text-slate-500">Revision {example.revision} · {Object.keys(example.schema?.tables || {}).join(', ') || example.source}</p>
+                  {!replayable && <><p className="mt-1 text-[11px] font-medium text-amber-800">Needs review · Basic will not run this saved SQL.</p>{example.answerability_issues?.length ? <ul className="mt-1 list-disc pl-4 text-[10px] text-amber-800">{example.answerability_issues.map(issue => <li key={issue}>{issue}</li>)}</ul> : <p className="mt-1 text-[10px] text-slate-500">The connected API has not verified this example against its question.</p>}</>}
+                </div>
+                {replayable ? <button type="button" onClick={() => runTrainedQuery(example)} className="shrink-0 rounded-md bg-indigo-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-800">Run in Basic</button> : <span className="shrink-0 rounded-md border border-amber-300 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900">Review in SQL Training</span>}
+              </div>;
+            })}</div>
             {trainedQueriesLoaded && trainedQueries.length > 0 && !trainedQueries.some(example => !trainedQuerySearch.trim() || example.question.toLowerCase().includes(trainedQuerySearch.trim().toLowerCase())) && <p className="mt-2 text-xs text-slate-500">No saved questions match that search.</p>}
           </div>}
         </div>}

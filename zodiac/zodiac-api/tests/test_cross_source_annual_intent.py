@@ -28,6 +28,16 @@ def test_model_inferred_growth_cannot_override_source_value_comparison():
     assert req['period_compare'] is None
 
 
+def test_cross_source_between_years_is_an_inclusive_date_range():
+    question = 'Compare sales order and invoice values by country and customer between 2000 and 2004'
+    req = required_semantics(question)
+    assert req['period_compare'] is None
+    assert req['date_filter'] == {
+        'type': 'calendar_years',
+        'years': ['2000', '2001', '2002', '2003', '2004'],
+    }
+
+
 @pytest.mark.parametrize('question', [
     'Compare year-over-year growth in order value and invoice value from 2000 to 2001.',
     'Compare 2000 and 2001 sales orders and invoices and show the percentage change.',

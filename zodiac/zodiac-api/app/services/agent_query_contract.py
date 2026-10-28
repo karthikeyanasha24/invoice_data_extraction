@@ -606,6 +606,18 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                 if not matched:
                     return False
             return True
+        nullsafe_full_join_keys = set()
+        for join in select.args.get('joins') or []:
+            if join.args.get('side') != 'FULL':
+                continue
+            for condition in conjuncts(join.args.get('on')):
+                if (isinstance(condition, exp.NullSafeEQ)
+                        and isinstance(condition.this, exp.Column)
+                        and isinstance(condition.expression, exp.Column)):
+                    nullsafe_full_join_keys.add(frozenset((
+                        (condition.this.table, condition.this.name.lower()),
+                        (condition.expression.table, condition.expression.name.lower()),
+                    )))
         for p in select.selects:
             value = p.this if isinstance(p, exp.Alias) else p
             columns = [c for c in value.find_all(exp.Column) if c.table in infos]
@@ -613,6 +625,16 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             refs[p.alias_or_name.lower()] = origins
             if isinstance(value, exp.Column):
                 projected.add((value.table, value.name.lower()))
+            elif isinstance(value, exp.Coalesce):
+                values = [value.this, *(value.expressions or [])]
+                if (len(values) == 2 and all(isinstance(item, exp.Column) for item in values)
+                        and frozenset((
+                            (values[0].table, values[0].name.lower()),
+                            (values[1].table, values[1].name.lower()),
+                        )) in nullsafe_full_join_keys):
+                    # A null-safe FULL JOIN equality makes COALESCE of its
+                    # two grouping keys an output identity for both sides.
+                    projected.update((item.table, item.name.lower()) for item in values)
             if any(c in money for _, c in origins):
                 measures.update(t for t, c in origins if c in money)
                 measured_aliases.update(c.table for c in columns if any(name in money for _, name in infos[c.table][0].get(c.name.lower(), set())))
@@ -680,7 +702,7 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                     return atoms(n.this) + atoms(n.expression)
                 return [n]
             for atom in atoms(on):
-                if isinstance(atom, exp.EQ) and isinstance(atom.this, exp.Column) and isinstance(atom.expression, exp.Column):
+                if isinstance(atom, (exp.EQ, exp.NullSafeEQ)) and isinstance(atom.this, exp.Column) and isinstance(atom.expression, exp.Column):
                     a, b = atom.this, atom.expression
                     if {a.table, b.table} <= set(infos) and target in {a.table, b.table} and ({a.table, b.table} - {target}) <= seen:
                         x, y = (a.table, a.name.lower()), (b.table, b.name.lower())
@@ -716,9 +738,39 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                 value = projection.this if isinstance(projection, exp.Alias) else projection
                 if any(isinstance(n,(exp.Add,exp.Sub,exp.Mul,exp.Div)) for n in value.walk()):
                     return None
-                if isinstance(value, exp.Column) and value.name.lower() in {'mandt', 'waerk'}:
-                    return value.name.lower()
+                # Follow projected aliases through row CTEs before comparing
+                # grouping dimensions. A shared `year` alias may originate
+                # from AUDAT on orders and FKDAT on invoices; their physical
+                # columns differ, while their verified time grain is the same.
+                expression, expression_scope = value, source
+                while isinstance(expression, exp.Column):
+                    child = next((selected for name, (_, selected) in expression_scope.selected_sources.items()
+                                  if name.lower() == expression.table.lower()), None)
+                    if not isinstance(child, Scope):
+                        break
+                    projected = next((p for p in child.expression.selects
+                                      if p.alias_or_name.lower() == expression.name.lower()), None)
+                    if projected is None:
+                        break
+                    expression = projected.this if isinstance(projected, exp.Alias) else projected
+                    expression_scope = child
                 from .plan_satisfaction import _expression_time_grain
+                grain = _expression_time_grain(expression.sql(dialect='postgres'))
+                if grain == 'year':
+                    return 'period:year'
+                if isinstance(value, exp.Column) and value.name.lower() in {'mandt', 'waerk', 'waers'}:
+                    return 'currency' if value.name.lower() in {'waerk', 'waers'} else 'mandt'
+                # Aggregated dimensions such as customer, country, and name
+                # can be compared safely when both sides project the same
+                # physical key. Resolve through CTE lineage so aliases like
+                # customer_id still match KNA1.KUNNR on both independent facts.
+                if isinstance(value, exp.Column):
+                    origins = infos[alias][0].get(value.name.lower(), set())
+                    if len(origins) == 1:
+                        table, column = next(iter(origins))
+                        if column.lower() in {'waerk', 'waers'} or re.search(r'currency', value.name, re.I):
+                            return 'currency'
+                        return f'field:{table.lower()}.{column.lower()}'
                 grain = _expression_time_grain(value.sql(dialect='postgres'))
                 return 'period:' + grain if grain == 'year' else None
 

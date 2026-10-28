@@ -244,17 +244,30 @@ def recall_sql(question, examples):
 
 
 def adapt_training_year_filter(question, examples):
-    """Adapt a checked generic-year SQL Training query to explicit requested years.
+    """Adapt an unambiguous checked year filter to the requested years.
 
-    Reuse is limited to matching question intent and a single SQL IN filter on
-    a recognized date/year field. Semantic similarity alone never authorizes
-    changing or executing a saved query.
+    The saved question must have the same non-date intent. Only a single SQL
+    IN year filter or a full-year, half-open date interval can be changed.
     """
     requested_years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", question or "")))
-    if not requested_years:
+    if not requested_years or len(requested_years) > 2:
         return None
 
-    ignored = {"specific", "sap", "erp", "year", "years", "and", "between", "during"}
+    year = r"(?:19|20)\d{2}"
+    range_request = bool(len(requested_years) == 2 and re.search(
+        rf"\b(?:between\s+{year}\s+(?:and|to)\s+{year}|"
+        rf"{year}\s+(?:to|through|thru|until)\s+{year})\b",
+        question or "", re.I))
+    if range_request:
+        first, last = map(int, requested_years)
+        if first > last or last - first > 15:
+            return None
+        target_years = [str(year) for year in range(first, last + 1)]
+    else:
+        target_years = requested_years
+
+    ignored = {"specific", "sap", "erp", "year", "years", "and", "between", "during",
+               "through", "thru", "until"}
     def core(text):
         return {token for token in intent_tokens(text)
                 if not re.fullmatch(r"(?:19|20)\d{2}", token) and token not in ignored}
@@ -268,30 +281,75 @@ def adapt_training_year_filter(question, examples):
         if not example.get("training_example") or not example.get("question"):
             continue
         saved_question = str(example["question"])
-        if re.search(r"\b(?:19|20)\d{2}\b", saved_question):
-            continue
-        if not re.search(r"\byears?\b", saved_question, re.I) or core(saved_question) != wanted:
+        saved_years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", saved_question)))
+        if len(saved_years) > 1 or core(saved_question) != wanted:
             continue
         try:
             tree = parse_one(str(example.get("sql") or ""), read="postgres")
-            if not isinstance(tree, exp.Select) or len(list(tree.find_all(exp.Select))) != 1:
+            if not isinstance(tree, exp.Select):
                 continue
-            candidates = []
-            for condition in tree.find_all(exp.In):
-                refs = {column.name.lower() for column in condition.this.find_all(exp.Column)}
-                if not refs.intersection({"fkdat", "budat", "bldat", "salesyear", "fiscal_year", "year"}):
+            if range_request:
+                # A sorted detail query with LIMIT can return only the first
+                # year of a multi-year range. Require a year-level breakdown.
+                grouped = tree.args.get("group")
+                year_fields = {"fkdat", "audat", "budat", "bldat", "erdat",
+                               "salesyear", "fiscal_year", "year"}
+                if not grouped or not any(
+                    (isinstance(item, exp.Column) and item.name.lower() in
+                     {"salesyear", "fiscal_year", "year"})
+                    or (isinstance(item, (exp.Substring, exp.Extract)) and
+                        any(col.name.lower() in year_fields for col in item.find_all(exp.Column)))
+                    for item in grouped.expressions
+                ):
                     continue
-                literals = list(condition.expressions)
-                if literals and all(isinstance(value, exp.Literal)
-                                    and re.fullmatch(r"(?:19|20)\d{2}", str(value.this))
-                                    for value in literals):
-                    candidates.append(condition)
-            if len(candidates) != 1:
-                continue
-            candidates[0].set("expressions", [exp.Literal.string(year) for year in requested_years])
+            if not saved_years:
+                if not re.search(r"\byears?\b", saved_question, re.I) or len(list(tree.find_all(exp.Select))) != 1:
+                    continue
+                candidates = []
+                for condition in tree.find_all(exp.In):
+                    refs = {column.name.lower() for column in condition.this.find_all(exp.Column)}
+                    if not refs.intersection({"fkdat", "budat", "bldat", "salesyear", "fiscal_year", "year"}):
+                        continue
+                    literals = list(condition.expressions)
+                    if literals and all(isinstance(value, exp.Literal)
+                                        and re.fullmatch(r"(?:19|20)\d{2}", str(value.this))
+                                        for value in literals):
+                        candidates.append(condition)
+                if len(candidates) != 1:
+                    continue
+                candidates[0].set("expressions", [exp.Literal.string(year) for year in target_years])
+            else:
+                # A saved single-year question can be reused only when its SQL
+                # contains exactly one full-year interval on the same SAP date.
+                if len(requested_years) == 2 and not range_request:
+                    continue
+                lower, upper = [], []
+                for where in tree.find_all(exp.Where):
+                    for condition in where.this.find_all(exp.GTE, exp.LT):
+                        if not isinstance(condition.this, exp.Column) or not isinstance(condition.expression, exp.Literal):
+                            continue
+                        column = condition.this
+                        if column.name.lower() not in {"fkdat", "audat", "budat", "bldat", "erdat"}:
+                            continue
+                        if not re.fullmatch(r"(?:19|20)\d{6}", str(condition.expression.this)):
+                            continue
+                        if condition.find_ancestor(exp.Or) is not None:
+                            continue
+                        (lower if isinstance(condition, exp.GTE) else upper).append(condition)
+                if len(lower) != 1 or len(upper) != 1:
+                    continue
+                start, end = lower[0], upper[0]
+                start_field, end_field = start.this, end.this
+                original_year = int(saved_years[0])
+                if (start_field.sql(dialect="postgres") != end_field.sql(dialect="postgres")
+                        or start.expression.this != f"{original_year}0101"
+                        or end.expression.this != f"{original_year + 1}0101"):
+                    continue
+                start.set("expression", exp.Literal.string(f"{target_years[0]}0101"))
+                end.set("expression", exp.Literal.string(f"{int(target_years[-1]) + 1}0101"))
             adapted = dict(example)
             adapted.update(sql=tree.sql(dialect="postgres"), reusable=True,
-                           retrieval="training_year_filter", training_year_adaptation=requested_years)
+                           retrieval="training_year_filter", training_year_adaptation=target_years)
             return adapted
         except Exception:
             continue
@@ -452,7 +510,7 @@ def load_basic_examples(engine, scope, use_sap):
     try:
         from .basic_sql_training import list_examples
         trained = [item for item in list_examples(engine, scope)
-                   if item.get("validation_status") == "executed" and item.get("source") in sources]
+                   if item.get("replayable") and item.get("source") in sources]
         for item in trained:
             examples.append({"question": item["question"], "sql": item["sql"],
                 "source": item["source"], "updated_at": item.get("updated_at"),

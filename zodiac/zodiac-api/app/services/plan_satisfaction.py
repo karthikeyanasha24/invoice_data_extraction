@@ -161,6 +161,52 @@ def _grouping_matches_required_grain(sql: str, group_by: List[str]) -> bool:
     """A year-shaped SELECT alias cannot conceal date/measure-level grouping."""
     from .analytical_operations import classify_column_role
 
+    def has_fact_aggregation(selections: List[str]) -> bool:
+        """Ignore grouped dimension lookups such as MAX(customer name/country)."""
+        try:
+            from sqlglot import exp, parse_one
+        except Exception:
+            # Preserve the prior conservative behavior if SQLGlot is unavailable.
+            return any(sql_has_aggregation(expression) for expression in selections)
+        for selection in selections:
+            try:
+                tree = parse_one(selection, read="postgres")
+            except Exception:
+                continue
+            for aggregate in tree.find_all(exp.AggFunc):
+                if isinstance(aggregate, exp.Count):
+                    return True
+                if any(
+                    classify_column_role("", column.name) in {"measure", "date"}
+                    for column in aggregate.find_all(exp.Column)
+                ):
+                    return True
+        return False
+
+    def time_grain_for_scope(expression: str, scope: Any, depth: int = 0) -> Optional[str]:
+        """Follow projected CTE columns so a grouped `r.year` keeps its date grain."""
+        try:
+            from sqlglot import exp, parse_one
+            from sqlglot.optimizer.scope import Scope
+
+            node = parse_one(expression, read="postgres") if isinstance(expression, str) else expression
+            grain = _expression_time_grain(node.sql(dialect="postgres"))
+            if grain or not isinstance(node, exp.Column) or not isinstance(scope, Scope) or depth >= 8:
+                return grain
+            source_pair = scope.selected_sources.get(node.table.lower()) if node.table else None
+            source = source_pair[1] if source_pair else None
+            if not isinstance(source, Scope):
+                return None
+            projection = next(
+                (item for item in source.expression.selects if item.alias_or_name.lower() == node.name.lower()),
+                None,
+            )
+            if projection is None:
+                return None
+            return time_grain_for_scope(projection, source, depth + 1)
+        except Exception:
+            return _expression_time_grain(str(expression))
+
     requested_time = next((grain for grain in ("month", "quarter", "year") if grain in group_by), None)
     # Period comparisons intentionally align January with January across two
     # years. In that shape, the grouped SAP month component is a valid month
@@ -173,8 +219,19 @@ def _grouping_matches_required_grain(sql: str, group_by: List[str]) -> bool:
         and re.search(r"SUBSTRING\s*\([\s\S]*?,\s*5\s*,\s*2\s*\)", sql, re.I)
     )
     matched = False
-    for selections, groups in _grouped_selects(sql):
-        if not any(sql_has_aggregation(expression) for expression in selections):
+    grouped_selects = _grouped_selects(sql)
+    try:
+        from sqlglot import parse_one
+        from sqlglot.optimizer.scope import traverse_scope
+
+        tree = parse_one(sql, read="postgres")
+        grouped_scopes = [scope for scope in traverse_scope(tree) if scope.expression.args.get("group")]
+    except Exception:
+        grouped_scopes = []
+    if len(grouped_scopes) != len(grouped_selects):
+        grouped_scopes = [None] * len(grouped_selects)
+    for (selections, groups), scope in zip(grouped_selects, grouped_scopes):
+        if not has_fact_aggregation(selections):
             continue
         aliases = {}
         output = []
@@ -192,13 +249,13 @@ def _grouping_matches_required_grain(sql: str, group_by: List[str]) -> bool:
                 expression = aliases.get(expression.strip('"').lower(), expression)
             resolved.append(expression)
         if requested_time and not (
-            any(_expression_time_grain(expression) == requested_time for expression in resolved)
+            any(time_grain_for_scope(expression, scope) == requested_time for expression in resolved)
             or month_of_year_comparison
         ):
             return False
         matched = True
         for expression in resolved:
-            if _expression_time_grain(expression) or (
+            if time_grain_for_scope(expression, scope) or (
                 month_of_year_comparison
                 and re.search(r"SUBSTRING\s*\([\s\S]*?,\s*5\s*,\s*2\s*\)", expression, re.I)
             ):

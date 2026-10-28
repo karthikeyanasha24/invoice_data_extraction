@@ -1289,7 +1289,8 @@ def _execute_sql(db: Session, sql: str, question: str = "") -> List[Dict[str, An
     except Exception:
         pass
     if budget is not None and budget.diagnostics.get("agent_read_only"):
-        db.execute(text("SET TRANSACTION READ ONLY"))
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SET TRANSACTION READ ONLY"))
     apply_statement_timeout(db)
     from ..services.investigation_budget import current_budget
 
@@ -3041,7 +3042,7 @@ def basic_training_preview_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
 def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Session = Depends(get_db),
                                     current_user: ZodiacUser = Depends(get_current_user)) -> Dict[str, Any]:
     from ..services.analyst_agent import AnalystTools
-    from ..services.basic_sql_training import apply_training_filters, check_query_scope, record_run, selected_schema
+    from ..services.basic_sql_training import answerability_issues, apply_training_filters, check_query_scope, record_run, selected_schema
     from ..services.adaptive_trusted_scope import get_trusted_scope, reset_trusted_scope
     source, question, sql = body.get("source"), body.get("question"), body.get("sql")
     if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
@@ -3085,12 +3086,15 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
                 schema_snapshot["relationships"][table] = [{"columns": item.get("constrained_columns") or [],
                     "references_table": item.get("referred_table"), "references_columns": item.get("referred_columns") or []}
                     for item in foreign]
+            executed_sql = result.get("sql") or sql
+            rows = result.get("rows") or []
+            answer_issues = answerability_issues(question.strip(), executed_sql, rows)
             run_id = record_run(db.get_bind(), get_trusted_scope(), source, question.strip(), schema_snapshot,
-                                result.get("sql") or sql, result)
-            return {"status": "executed", "run_id": run_id, "sql": result.get("sql") or sql,
+                                executed_sql, result, answer_issues=answer_issues)
+            return {"status": "needs_review" if answer_issues else "executed", "run_id": run_id, "sql": executed_sql,
                     "rows": result.get("rows") or [], "row_count": len(result.get("rows") or []),
                     "columns": list((result.get("rows") or [{}])[0].keys()) if result.get("rows") else [],
-                    "schema_source": origin, "llm_calls": 0}
+                    "schema_source": origin, "llm_calls": 0, "answerability_issues": answer_issues}
         raw_error = str(result.get("error") or "Query failed")
         if raw_error.startswith(("Query validation:", "Only one read-only", "Use only tables", "Table ", "Column ", "Provide one SELECT")):
             safe_error = raw_error[:1500]
@@ -3994,7 +3998,16 @@ def _post_query_adaptive_body(
             # examples have no model-generated prepare_analysis plan to replay.
             # Keep a separate executor so other Basic queries and Agentic retain
             # their normal planning requirements and relationship catalogs.
-            active_executor = training_executor if step.get("training_example") else executor
+            if step.get("training_example"):
+                active_executor = training_executor
+            elif step.get("basic_predefined_template") == "sales_order_invoice_customer_comparison":
+                # This fixed, server-owned template aggregates order and invoice
+                # headers independently before joining at customer/year/currency
+                # grain. Use the same row-grain proof as checked SQL Training,
+                # then retain Basic's question/result consistency check below.
+                active_executor = training_executor
+            else:
+                active_executor = executor
             plan = step.get("analysis_plan")
             if not plan:
                 cached = next((item for item in prior_examples

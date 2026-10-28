@@ -31,6 +31,80 @@ def test_basic_pattern_does_not_call_a_model(monkeypatch):
     assert paid_models_blocked() is False
 
 
+def test_order_invoice_comparison_confirmation_names_both_values():
+    from app.services.basic_sql_answer import _describe_predefined_pattern
+
+    logic, warning = _describe_predefined_pattern(
+        "Compare sales order and invoice values by country and customer in 2000",
+        'WITH order_totals AS (SELECT "sales_order_net_value" FROM "VBAK"), '
+        'invoice_totals AS (SELECT "invoice_net_value" FROM "VBRK") '
+        'SELECT order_totals."sales_order_net_value", invoice_totals."invoice_net_value", '
+        'order_totals."sales_order_net_value" - invoice_totals."invoice_net_value" '
+        'AS "order_minus_invoice_net_value" GROUP BY "year", "customer_id", "country_code"',
+    )
+
+    assert "sales order value, invoice value, and their difference" in logic
+    assert "customer" in logic and "country" in logic
+    assert warning == ""
+
+
+def test_order_invoice_comparison_template_is_marked_for_independent_grain_proof():
+    from app.services.basic_sql_answer import _predefined_template_step
+
+    sql = (
+        'WITH "customer_dim" AS (SELECT "kunnr" FROM "KNA1"), '
+        '"order_rows" AS (SELECT "netwr" FROM "VBAK"), '
+        '"invoice_rows" AS (SELECT "netwr" FROM "VBRK"), '
+        '"order_totals" AS (SELECT SUM("netwr") AS "sales_order_net_value" FROM "order_rows"), '
+        '"invoice_totals" AS (SELECT SUM("netwr") AS "invoice_net_value" FROM "invoice_rows") '
+        'SELECT "sales_order_net_value", "invoice_net_value", '
+        '"order_minus_invoice_net_value" FROM "order_totals"'
+    )
+    assert _predefined_template_step(sql)["basic_predefined_template"] == "sales_order_invoice_customer_comparison"
+    assert _predefined_template_step('SELECT "vbeln" FROM "VBAK" LIMIT 10') is None
+
+
+def test_basic_runs_approved_order_invoice_template_with_its_proof_marker(monkeypatch):
+    from app.services.basic_sql_answer import run_basic_sql_answer
+
+    sql = (
+        'WITH "customer_dim" AS (SELECT "kunnr" FROM "KNA1"), '
+        '"order_rows" AS (SELECT "netwr" FROM "VBAK"), '
+        '"invoice_rows" AS (SELECT "netwr" FROM "VBRK"), '
+        '"order_totals" AS (SELECT SUM("netwr") AS "sales_order_net_value" FROM "order_rows"), '
+        '"invoice_totals" AS (SELECT SUM("netwr") AS "invoice_net_value" FROM "invoice_rows") '
+        'SELECT "sales_order_net_value", "invoice_net_value", '
+        '"order_minus_invoice_net_value" FROM "order_totals"'
+    )
+    monkeypatch.setattr(
+        "app.services.four_stage_db_pipeline.pipeline3_sql_generation",
+        lambda question, ctx, templates_only=False: sql,
+    )
+    monkeypatch.setattr(
+        "app.services.schema_intelligence_registry.get_schema_registry",
+        lambda: type("R", (), {"lightweight_table_catalog": lambda self, include_operational=False: [
+            {"table": "VBAK"}, {"table": "VBRK"}, {"table": "KNA1"}
+        ]})(),
+    )
+    seen = {}
+
+    def execute(query, step=None):
+        seen["query"] = query
+        seen["step"] = step
+        return {"ok": True, "sql": query, "source": "business", "rows": []}
+
+    result = run_basic_sql_answer(
+        "Compare sales order and invoice value by country and customer in 2000",
+        execute=execute,
+        approve_predefined=True,
+        prior_examples=[],
+    )
+
+    assert seen["query"] == sql
+    assert seen["step"]["basic_predefined_template"] == "sales_order_invoice_customer_comparison"
+    assert result["answer_status"] == "SUCCESS_EMPTY"
+
+
 def test_basic_document_count_states_the_count_not_the_result_row_count(monkeypatch):
     monkeypatch.setattr(
         "app.services.four_stage_db_pipeline.pipeline3_sql_generation",
@@ -268,6 +342,14 @@ def test_short_followups_stay_on_the_previous_billing_question():
     assert continue_basic_question("for Germany", previous) == "total billed sales in 2001 for Germany"
     assert continue_basic_question("total billed sales in 2002", previous) == "total billed sales in 2002"
     assert continue_basic_question("how many sales orders by year", previous) == "how many sales orders by year"
+
+
+def test_followup_about_which_customers_and_countries_keeps_previous_question():
+    previous = "Compare sales orders and linked invoices by customer and country for 2000"
+    assert continue_basic_question("Which customers and countries are they?", previous) == (
+        "Compare sales orders and linked invoices by customer and country for 2000. "
+        "Which customers and countries are they?"
+    )
 
 
 def test_comparison_preserves_checked_metric_filters_and_requires_explicit_year():
