@@ -174,6 +174,10 @@ def required_semantics(question: str, semantic: Optional[Dict[str, Any]] = None)
     if ranking and not agg:
         if not document_rows:
             agg = "SUM"
+    from .analyst_line_metrics import billing_line_extreme
+    line_extreme = billing_line_extreme(question)
+    if line_extreme:
+        agg = line_extreme
 
     period = sem.get("period_compare") if isinstance(sem.get("period_compare"), dict) else ops.get("period_compare")
     # LLM sometimes emits {"type": null, "base_period": null, ...} — treat as absent.

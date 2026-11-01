@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import pytest
 
 from app.services import adaptive_structured_sql as structured_sql
 from app.services.four_stage_db_pipeline import VerifiedDbContext, pipeline3_sql_generation
@@ -83,9 +84,10 @@ def test_single_year_compares_customer_order_and_invoice_totals_without_stale_ro
     assert not issues, issues
 
 
-def test_inclusive_year_range_is_filtered_on_order_and_invoice_dates(monkeypatch):
+@pytest.mark.parametrize("wording", ["between 2000 and 2004", "2000 to 2004", "2000–2004"])
+def test_inclusive_year_range_is_filtered_on_order_and_invoice_dates(monkeypatch, wording):
     _install_synthetic_schema(monkeypatch)
-    question = "Compare sales order and invoice values by country and customer between 2000 and 2004"
+    question = "Compare sales order and invoice values by country and customer " + wording
 
     sql = structured_sql.build_sales_order_invoice_customer_comparison_sql(
         question, ["VBAK", "VBRK", "KNA1"]

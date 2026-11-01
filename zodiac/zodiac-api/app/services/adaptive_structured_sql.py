@@ -1239,6 +1239,8 @@ def build_sales_order_invoice_customer_comparison_sql(
     question: str,
     tables: List[str],
     semantic: Optional[Dict[str, Any]] = None,
+    *,
+    catalog_schema: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Compare independently dated order and invoice header totals by customer.
 
@@ -1247,6 +1249,17 @@ def build_sales_order_invoice_customer_comparison_sql(
     are kept separate by client and currency, with no currency conversion.
     """
     q = question or ""
+    if catalog_schema is None:
+        table_exists, column_exists, table_name = has_table, has_column, resolve_table_name
+    else:
+        names = {name.upper(): name for name in catalog_schema}
+        for canonical in ("VBAK", "VBRK", "KNA1"):
+            if canonical in catalog_schema:
+                names[canonical] = canonical
+        fields = {name: {c["col"].lower() for c in catalog_schema[physical]} for name, physical in names.items()}
+        table_exists = lambda name: name.upper() in names
+        column_exists = lambda name, column: column.lower() in fields.get(name.upper(), set())
+        table_name = lambda name: names.get(name.upper())
     if not (
         re.search(r"\b(?:compare|comparison|difference|differences|versus|vs\.?|against)\b", q, re.I)
         and re.search(r"\bsales\s+orders?\b", q, re.I)
@@ -1261,23 +1274,25 @@ def build_sales_order_invoice_customer_comparison_sql(
     years = extract_question_years(question)
     if not years:
         return None
-    if not all(has_table(name) for name in ("VBAK", "VBRK", "KNA1")):
+    if not all(table_exists(name) for name in ("VBAK", "VBRK", "KNA1")):
         return None
 
     order, invoice, customer = (
-        resolve_table_name(name) or name for name in ("VBAK", "VBRK", "KNA1")
+        table_name(name) or name for name in ("VBAK", "VBRK", "KNA1")
     )
     required = (
         (order, ("mandt", "vbeln", "kunnr", "audat", "netwr", "waerk")),
         (invoice, ("mandt", "vbeln", "kunag", "fkdat", "netwr", "waerk")),
         (customer, ("mandt", "kunnr", "land1")),
     )
-    if any(not has_column(table, column) for table, columns in required for column in columns):
+    if any(not column_exists(table, column) for table, columns in required for column in columns):
         return None
 
     # The connector identifies a range by its language or dash separator. Two
     # years joined by a plain "and" remain a discrete selection.
     year_pair = re.search(r"\b(?:between|from)\s+(20\d{2}|19\d{2})\s+(?:and|to|through|until)\s+(20\d{2}|19\d{2})\b", q, re.I)
+    if not year_pair:
+        year_pair = re.search(r"\b(20\d{2}|19\d{2})\s+(?:to|through|until)\s+(20\d{2}|19\d{2})\b", q, re.I)
     if not year_pair:
         year_pair = re.search(r"\b(20\d{2}|19\d{2})\s*[-–—]\s*(20\d{2}|19\d{2})\b", q)
     if year_pair:
@@ -1298,11 +1313,11 @@ def build_sales_order_invoice_customer_comparison_sql(
     invoice_year = 'SUBSTRING(TRIM(CAST(k."fkdat" AS TEXT)), 1, 4)'
     customer_name = (
         'COALESCE(MAX(TRIM(CAST(c."name1" AS TEXT))), \'\') AS "customer_name"'
-        if has_column(customer, "name1") else '\'\' AS "customer_name"'
+        if column_exists(customer, "name1") else '\'\' AS "customer_name"'
     )
     invoice_cancelled_filter = (
         ' AND COALESCE(TRIM(CAST(k."fksto" AS TEXT)), \'\') <> \'X\''
-        if has_column(invoice, "fksto") else ""
+        if column_exists(invoice, "fksto") else ""
     )
 
     return (
@@ -1344,6 +1359,7 @@ def build_sales_order_invoice_customer_comparison_sql(
         'COALESCE(o."customer_id", i."customer_id") AS "customer_id", '
         'COALESCE(o."customer_name", i."customer_name") AS "customer_name", '
         'COALESCE(o."currency", i."currency") AS "currency", '
+        'o."client" AS "sales_order_client", i."client" AS "invoice_client", '
         'o."currency" AS "sales_order_currency", i."currency" AS "invoice_currency", '
         'o."sales_order_count", i."invoice_count", '
         'o."sales_order_net_value", i."invoice_net_value", '
@@ -1355,7 +1371,10 @@ def build_sales_order_invoice_customer_comparison_sql(
         'ELSE \'Compared by customer, document year, client and currency\' END AS "comparison_status", '
         '\'Order date: AUDAT; invoice date: FKDAT; independent customer/year totals; no document-flow reconciliation or currency conversion\' AS "comparison_scope"\n'
         'FROM "order_totals" o FULL OUTER JOIN "invoice_totals" i '
-        'ON o."client" IS NOT DISTINCT FROM i."client" '
+        # PostgreSQL needs a hash/merge equality for a FULL JOIN. MANDT is
+        # non-null after the customer joins; nullable descriptive keys below
+        # still use null-safe equality. Expose both clients for the grain proof.
+        'ON o."client" = i."client" '
         'AND o."customer_id" IS NOT DISTINCT FROM i."customer_id" '
         'AND o."country_code" IS NOT DISTINCT FROM i."country_code" '
         'AND o."customer_name" IS NOT DISTINCT FROM i."customer_name" '

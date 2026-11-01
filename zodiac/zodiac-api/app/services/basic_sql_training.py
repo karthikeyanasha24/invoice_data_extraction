@@ -357,42 +357,57 @@ def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]
 
     years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", wording)))
     range_wording = len(years) == 2 and bool(re.search(
-        r"\bbetween\b|\b(?:19|20)\d{2}\s+(?:to|through|until)\s+(?:19|20)\d{2}\b",
+        r"\bbetween\b|\b(?:19|20)\d{2}\s*(?:to|through|until|[-–—])\s*(?:19|20)\d{2}\b",
         wording,
     ))
     if years:
         date_fields = {"fkdat", "audat", "budat", "bldat", "erdat", "billing_date", "order_date",
+                       "invoice_date", "billing_year", "invoice_year", "order_year",
                        "sales_year", "salesyear", "year", "fiscal_year"}
+        required_years = ([str(year) for year in range(min(map(int, years)), max(map(int, years)) + 1)]
+                          if range_wording else years)
+        from .analyst_filters import _calendar_years_proven
+
+        def conjuncts(node):
+            if isinstance(node, exp.Paren):
+                return conjuncts(node.this)
+            if isinstance(node, exp.And):
+                return conjuncts(node.this) + conjuncts(node.expression)
+            return [] if isinstance(node, exp.Or) else [node]
+
         year_filters = []
+        constrained_dates = set()
         for where in tree.find_all(exp.Where):
-            where_columns = {column.name.lower() for column in where.find_all(exp.Column)}
-            if not where_columns.intersection(date_fields):
-                continue
-            where_text = where.sql(dialect="postgres")
-            if range_wording:
-                first, last = map(int, years)
-                upper_bound_years = {str(last), str(last + 1)}
-                matches_years = years[0] in where_text and any(year in where_text for year in upper_bound_years)
-            else:
-                matches_years = all(year in where_text for year in years)
-            if matches_years:
+            predicates = [term for term in conjuncts(where.this)
+                          if {column.name.lower() for column in term.find_all(exp.Column)} & date_fields]
+            if _calendar_years_proven(predicates, required_years):
                 year_filters.append(where)
+                constrained_dates.update(column.name.lower() for term in predicates
+                                         for column in term.find_all(exp.Column)
+                                         if column.name.lower() in date_fields)
         if not year_filters:
+            constrained_dates = date_fields
             requested = years[0] if len(years) == 1 else f"{years[0]}–{years[-1]}"
             issues.append(
                 f"The question specifies {requested}, but the SQL has no matching date filter. "
                 "Add a filter on the relevant SAP date field and rerun before saving this example."
             )
         observed_years = set()
+        from .agent_query_contract import output_lineage
+        lineage = output_lineage(sql)
         for row in rows:
             for key, value in row.items():
-                if str(key).lower() not in date_fields:
+                origins = lineage.get(key, set())
+                # A filtered order-date cohort may legitimately contain later
+                # invoice dates. Check the output dates constrained by SQL.
+                if not ({column.lower() for _, column in origins} & constrained_dates
+                        or str(key).lower() in constrained_dates):
                     continue
                 match = re.search(r"((?:19|20)\d{2})", str(value or ""))
                 if match:
                     observed_years.add(match.group(1))
-        if observed_years and not set(years).intersection(observed_years):
-            actual = ", ".join(sorted(observed_years))
+        if observed_years - set(required_years):
+            actual = ", ".join(sorted(observed_years - set(required_years)))
             issues.append(
                 f"The requested year(s) are {', '.join(years)}, but the returned dates are from {actual}. "
                 "Check the date field and filter before saving this example."
@@ -412,7 +427,7 @@ def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]
                         match = re.match(r"((?:19|20)\d{2})", str(value or ""))
                         if match:
                             observed.add(int(match.group(1)))
-            first, last = map(int, years)
+            first, last = sorted(map(int, years))
             if not observed or min(observed) > first or max(observed) < last:
                 shown = ", ".join(str(year) for year in sorted(observed)) or "no visible year"
                 issues.append(
@@ -420,6 +435,49 @@ def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]
                     "This sample cannot establish the full period. Group by year and requested dimensions, "
                     "or revise the limit and rerun."
                 )
+    # Old saved examples can predate composite-key validation. Flag an
+    # obviously missing SAP client join in the picker, before execution, using
+    # the same mandatory client boundary as the live relationship catalog.
+    from sqlglot.optimizer.scope import Scope, traverse_scope
+    from .agent_query_contract import output_lineage
+    client_tables = {"VBAK", "VBAP", "VBRK", "VBRP", "KNA1", "VBFA", "VBKD", "LIKP", "LIPS", "EKKO", "EKPO"}
+    for scope in traverse_scope(tree):
+        physical = {alias: source.name.upper() for alias, (_, source) in scope.selected_sources.items()
+                    if isinstance(source, exp.Table) and source.name.upper() in client_tables}
+        seen = set()
+        source = scope.expression.args.get("from_") or scope.expression.args.get("from")
+        if source:
+            seen.add(source.this.alias_or_name)
+        def client_column(column):
+            if not isinstance(column, exp.Column):
+                return False
+            source_scope = scope.sources.get(column.table)
+            if isinstance(source_scope, exp.Table):
+                return column.name.lower() == "mandt"
+            if isinstance(source_scope, Scope):
+                origins = output_lineage(source_scope.expression.sql(dialect="postgres")).get(column.name, set())
+                return bool(origins) and all(name.lower() == "mandt" for _, name in origins)
+            return False
+        for join in scope.expression.args.get("joins") or []:
+            target = join.this.alias_or_name
+            if target in physical and seen:
+                def and_terms(node):
+                    if isinstance(node, exp.Paren):
+                        return and_terms(node.this)
+                    if isinstance(node, exp.And):
+                        return and_terms(node.this) + and_terms(node.expression)
+                    return [node]
+                matched = any(
+                    isinstance(term, (exp.EQ, exp.NullSafeEQ))
+                    and isinstance(term.this, exp.Column) and isinstance(term.expression, exp.Column)
+                    and client_column(term.this) and client_column(term.expression)
+                    and target in {term.this.table, term.expression.table}
+                    and bool(({term.this.table, term.expression.table} - {target}) & seen)
+                    for term in and_terms(join.args.get("on"))
+                )
+                if not matched:
+                    issues.append(f"The SAP join to {physical[target]} omits MANDT. Retain the client key as well as the document or customer keys, then rerun SQL Training.")
+            seen.add(target)
     return issues
 
 

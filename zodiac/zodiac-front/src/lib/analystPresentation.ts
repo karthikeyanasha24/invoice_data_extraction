@@ -55,7 +55,8 @@ export function labelComparisonText(value: string, question: string): string {
 
 /** Numeric business keys label a category; their magnitude is not a measure. */
 export function isAnalystChartDimension(key: string): boolean {
-  return /^(client|sap_client|client_id|mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|vtweg|spart|belnr|posnr|ebelp|ebeln|fkdat|budat|gjahr|pernr|aubel|knumv)$/i.test(key)
+  return /(?:^|_)client$/i.test(key)
+    || /^(client|sap_client|client_id|mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|vtweg|spart|belnr|posnr|ebelp|ebeln|fkdat|budat|gjahr|pernr|aubel|knumv)$/i.test(key)
     || /(_id|_code|_no|_key|_num|id$|code$|no$|num$|sno$|ref$|seq$)/i.test(key);
 }
 

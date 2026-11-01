@@ -280,9 +280,16 @@ def run_basic_sql_answer(
             training = bool((reused_example or {}).get("training_example"))
             answer = "Basic mode did not call a model. The saved query was rejected by the database. " + str(executed.get("error") or "")
             answer += (" Open this example in SQL Training to review and rerun it." if training else " " + _SWITCH)
-            if local_agent is not None and not (reused_example or {}).get("training_example"):
+            if local_agent is not None and not predefined_step and not (reused_example or {}).get("training_example"):
                 return _run_local(local_agent, retrieved)
             result = _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or sql, [])
+            result["sql_status"] = "execution_failed"
+            if predefined_step:
+                result["meta"]["basic_predefined_template"] = predefined_step["basic_predefined_template"]
+                result["answer"] = result["summary"] = (
+                    "The approved Basic SQL pattern could not run. No model was called. "
+                    + str(executed.get("error") or "Check the query in SQL Training.")
+                )
             if training:
                 result["meta"]["training_example"] = {
                     "id": reused_example.get("training_example_id"),

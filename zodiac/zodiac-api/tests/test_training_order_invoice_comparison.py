@@ -103,9 +103,9 @@ def comparison_db(monkeypatch):
     engine.dispose()
 
 
-def run_training(api, db, sql=SQL):
+def run_training(api, db, sql=SQL, question=QUESTION):
     return api.basic_training_execute_endpoint({
-        "source": "application", "question": QUESTION, "sql": sql,
+        "source": "application", "question": question, "sql": sql,
         "selected_schema": {t: [c["col"] for c in cols] for t, cols in SCHEMA.items()},
     }, db=db, current_user=USER)
 
@@ -164,7 +164,7 @@ def test_manual_training_rejects_unsafe_comparisons_before_execution(comparison_
 ])
 def test_manual_training_compares_order_and_billing_items_through_document_flow(comparison_db, sql):
     api, db, calls = comparison_db
-    result = run_training(api, db, sql)
+    result = run_training(api, db, sql, question="Compare linked sales order and invoice item values")
     assert result["status"] == "executed", result
     assert [(r["order_no"], r["order_item"], r["invoice_no"], r["invoice_item"], float(r["net_value_difference"]))
             for r in result["rows"]] == [("O1", "10", "B1", "10", 100), ("O1", "20", "B1", "20", 0), ("O1", "10", "B2", "10", 500)]
@@ -182,6 +182,9 @@ def test_manual_training_rejects_item_flow_join_without_client(comparison_db):
 def test_agentic_repairs_item_comparison_and_keeps_missing_links(comparison_db, monkeypatch, invoice, expected_rows, defect):
     """Real validator, relationship discovery, plan, SQL and rows; controlled model only."""
     from app.services import analyst_agent as agent
+    # Exercise the model repair loop independently of the named-invoice probe,
+    # which has its own real-execution regressions.
+    monkeypatch.setattr('app.services.analyst_invoice_diagnostics.invoice_item_evidence_sql', lambda *_: None)
     api, db, calls = comparison_db
     sql = '''WITH invoice_base AS (
         SELECT i.mandt,i.vbeln AS invoice_no,i.posnr AS invoice_item,i.aubel AS ref_order_no,i.aupos AS ref_order_item,
@@ -296,7 +299,7 @@ def test_agentic_finishes_with_verified_missing_item_without_optional_repair_loo
     finally:
         reset_trusted_scope(token)
     assert result['answer_status'] == 'SUCCESS',result
-    assert result['llm_calls'] == 3 and len(calls) == 1
+    assert result['llm_calls'] == 0 and len(calls) == 1
     assert result['meta']['diagnostic_evidence_gap'] is True
     assert result['data'][0]['linked_order_reference'] == 'MISSING'
     assert result['data'][0]['order_item'] is None

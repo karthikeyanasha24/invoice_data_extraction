@@ -43,7 +43,7 @@ import {
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
-import { analystAnswerText, analystChartCurrency, analystDateCell, comparisonColumnLabel, comparisonYears, defaultAnalystCurrency, isAnalystDateColumn, labelComparisonText } from '@/lib/analystPresentation';
+import { analystAnswerText, analystChartCurrency, analystDateCell, comparisonColumnLabel, comparisonYears, defaultAnalystCurrency, isAnalystChartDimension, isAnalystDateColumn, labelComparisonText } from '@/lib/analystPresentation';
 import { analystScrollPosition } from '@/lib/analystChatScroll';
 import remarkGfm from 'remark-gfm';
 import {
@@ -123,6 +123,7 @@ function fmt(v: any): string {
 /** SAP/db key columns and ID-like values must stay verbatim, never formatted. */
 function isIdLike(col: string, val: any): boolean {
   const lk = col.toLowerCase();
+  if (isAnalystChartDimension(col)) return true;
   if (/^(client|sap_client|client_id|mandt|vbeln|kunnr|kunag|lifnr|matnr|werks|bukrs|vkorg|belnr|posnr|ebeln|ebelp|gjahr|uuid|rfc)$/.test(lk)) return true;
   if (/(^year$|_year$|billing_year|fiscal_year)/.test(lk)) return true;
   if (/(_id|_code|_no|_key|_num|id$|code$|uuid|rfc)/.test(lk)) return true;

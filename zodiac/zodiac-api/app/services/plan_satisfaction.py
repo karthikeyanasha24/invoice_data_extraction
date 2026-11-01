@@ -669,6 +669,8 @@ def result_matches_analytical_intent(
 ) -> List[str]:
     """Result-level validation. A successful query can still be the wrong answer."""
     warnings: List[str] = []
+    from .analyst_line_metrics import billing_line_metric_issues
+    warnings.extend(billing_line_metric_issues(question, sql))
     # Explicit SAP document/customer/material numbers are hard scope constraints.
     # A query that silently drops them can return plausible-looking global rows,
     # so reject it before describing the result as an answer. Years and short

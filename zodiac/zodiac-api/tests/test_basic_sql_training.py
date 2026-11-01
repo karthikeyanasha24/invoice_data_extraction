@@ -81,7 +81,7 @@ def test_training_accepts_year_breakdown_with_requested_dimensions():
     sql = ('SELECT SUBSTRING("VBRK"."fkdat" FROM 1 FOR 4) AS "sales_year", '
            '"KNA1"."name1" AS "customer_name", "KNA1"."land1" AS "country", '
            'SUM("VBRK"."netwr") AS "invoice_value" FROM "VBRK" '
-           'JOIN "KNA1" ON "VBRK"."kunag" = "KNA1"."kunnr" '
+           'JOIN "KNA1" ON "VBRK"."kunag" = "KNA1"."kunnr" AND "VBRK"."mandt" = "KNA1"."mandt" '
            'WHERE "VBRK"."fkdat" >= \'20000101\' AND "VBRK"."fkdat" < \'20050101\' '
            'GROUP BY SUBSTRING("VBRK"."fkdat" FROM 1 FOR 4), "KNA1"."name1", "KNA1"."land1" LIMIT 200')
     rows = [{"sales_year": year, "customer_name": "Acme", "country": "DE", "invoice_value": 10}
@@ -423,7 +423,7 @@ def test_basic_replays_changed_single_year_date_bounds_without_a_model():
     saved = {
         "question": "Identify the difference in the sales amount for order value and invoice value from the year 1999",
         "sql": 'SELECT "o"."audat" AS "order_date", "o"."netwr" - "b"."netwr" AS "difference_amount" '
-               'FROM "VBAK" AS "o" JOIN "VBRK" AS "b" ON "o"."vbeln" = "b"."vbeln" '
+               'FROM "VBAK" AS "o" JOIN "VBRK" AS "b" ON "o"."mandt" = "b"."mandt" AND "o"."vbeln" = "b"."vbeln" '
                'WHERE "o"."audat" >= \'19990101\' AND "o"."audat" < \'20000101\'',
         "source": "application", "training_example": True,
     }

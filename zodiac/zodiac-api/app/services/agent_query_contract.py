@@ -764,13 +764,18 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
                 # can be compared safely when both sides project the same
                 # physical key. Resolve through CTE lineage so aliases like
                 # customer_id still match KNA1.KUNNR on both independent facts.
-                if isinstance(value, exp.Column):
-                    origins = infos[alias][0].get(value.name.lower(), set())
-                    if len(origins) == 1:
-                        table, column = next(iter(origins))
-                        if column.lower() in {'waerk', 'waers'} or re.search(r'currency', value.name, re.I):
-                            return 'currency'
-                        return f'field:{table.lower()}.{column.lower()}'
+                origins = infos[alias][0].get(column, set()) if isinstance(value, exp.Column) else set()
+                if origins:
+                    names = {name.lower() for _, name in origins}
+                    if names <= {'waerk', 'waers', 'currency'}:
+                        return 'currency'
+                    if names == {'mandt'}:
+                        return 'mandt'
+                    # Verified equality closure can carry both the fact's
+                    # customer key and its master's key. Shared physical
+                    # provenance, rather than the spelling of an output alias,
+                    # proves the compatible descriptive grouping dimension.
+                    return ('fields', frozenset((table.lower(), name.lower()) for table, name in origins))
                 grain = _expression_time_grain(value.sql(dialect='postgres'))
                 return 'period:' + grain if grain == 'year' else None
 
@@ -779,8 +784,13 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
             for alias in involved:
                 columns = {col for pair in pairs for a, col in pair if a == alias}
                 aggregate_pairs &= bool(infos[alias][2]) and any(key == columns for key in infos[alias][1])
-            aggregate_pairs &= all(aggregate_dimension(a, ac) is not None and
-                                   aggregate_dimension(a, ac) == aggregate_dimension(b, bc)
+            def compatible_dimensions(left, right):
+                if left is None or right is None:
+                    return False
+                if isinstance(left, tuple) and isinstance(right, tuple):
+                    return bool(left[1] & right[1])
+                return left == right
+            aggregate_pairs &= all(compatible_dimensions(aggregate_dimension(a, ac), aggregate_dimension(b, bc))
                                    for (a, ac), (b, bc) in pairs)
             if aggregate_pairs:
                 approved |= physical_pairs

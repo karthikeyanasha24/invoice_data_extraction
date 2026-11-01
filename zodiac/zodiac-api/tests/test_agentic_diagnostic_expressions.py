@@ -93,5 +93,6 @@ def test_missing_item_diagnosis_requires_verified_unfiltered_null_target():
         {**evidence, 'rows': [{'aubel': 'SYNTH-O-1', 'aupos': '10'}]},
         {**evidence, 'sql': sql.replace('LEFT JOIN VBAP', 'JOIN VBAP')},
         {**evidence, 'sql': sql.replace('AND o.posnr=i.aupos', "AND o.posnr=i.aupos AND o.netwr<0")},
+        {**evidence, 'sql': sql + ' WHERE o.posnr IS NULL'},
     ]:
         assert _missing_order_item_gap(bad) == ''

@@ -38,7 +38,7 @@ test('SAP date aliases render YYYYMMDD as dates instead of grouped numbers', () 
 });
 
 test('client codes label charts while four-digit counts remain measures', () => {
-  for (const key of ['client', 'sap_client', 'mandt', 'customer_id']) assert.equal(isAnalystChartDimension(key), true);
+  for (const key of ['client', 'sap_client', 'mandt', 'customer_id', 'invoice_client', 'sales_order_client', 'order_item_client']) assert.equal(isAnalystChartDimension(key), true);
   for (const key of ['billing_document_count', 'netwr', 'billed_sales']) {
     assert.equal(isAnalystChartDimension(key), false);
     assert.equal(isAnalystChartDate(key, '5074'), false);

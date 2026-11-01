@@ -335,6 +335,7 @@ def test_actual_executor_sets_readonly_and_fetches_bounded_rows(monkeypatch):
     budget = begin_investigation("Show billing documents")
     budget.diagnostics.update(agent_read_only=True, agent_schema=SCHEMA, agent_max_rows=201)
     db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
     result = MagicMock()
     result.keys.return_value = ["vbeln"]
     result.fetchmany.return_value = [("A",)]

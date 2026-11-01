@@ -12,6 +12,7 @@ const backendOrigin = (
 const projectRoot = path.resolve(__dirname);
 
 const nextConfig: NextConfig = {
+  distDir: process.env.BRIDGEEDI_TEST_DIST_DIR || ".next",
   turbopack: {
     root: projectRoot,
   },
@@ -34,6 +35,7 @@ const nextConfig: NextConfig = {
     ];
   },
   webpack(config) {
+    if (process.env.BRIDGEEDI_TEST_NO_CACHE === "1") config.cache = false;
     config.resolve.alias = {
       ...config.resolve.alias,
       "@": path.resolve(__dirname, "src"),

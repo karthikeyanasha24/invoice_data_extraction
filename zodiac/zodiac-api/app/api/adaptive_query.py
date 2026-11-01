@@ -4055,6 +4055,7 @@ def _post_query_adaptive_body(
             or bool(basic.get("meta", {}).get("service_issue"))
         )
         if (selected_training_example is None and not basic.get("meta", {}).get("training_example")
+                and not basic.get("meta", {}).get("basic_predefined_template")
                 and not free_model_available and allow_paid_fallback and basic_unanswered):
             # The model-free guard has been restored by run_basic_sql_answer.
             # Call the existing Agentic entry point with its normal context.
