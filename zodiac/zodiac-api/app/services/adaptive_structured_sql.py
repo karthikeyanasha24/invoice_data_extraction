@@ -10,7 +10,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..data_catalog.physical import column_names, has_column, has_table, resolve_table_name
 from .adaptive_analyst.llm_provider import analyze_json
@@ -1242,31 +1242,34 @@ def build_sales_order_invoice_customer_comparison_sql(
     *,
     catalog_schema: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """Compare independently dated order and invoice header totals by customer.
+    """Build year-scoped order/invoice comparisons at the requested business grain.
 
-    Order values use VBAK.AUDAT and invoice values use VBRK.FKDAT. This is a
-    customer/year comparison, not a VBFA document-flow reconciliation; values
-    are kept separate by client and currency, with no currency conversion.
+    Header totals remain at customer/country grain. Product and cost/profit
+    comparisons use independently aggregated order/invoice item facts. Order
+    and invoice dates remain independent, and cross-currency differences are
+    never calculated.
     """
     q = question or ""
     if catalog_schema is None:
         table_exists, column_exists, table_name = has_table, has_column, resolve_table_name
     else:
         names = {name.upper(): name for name in catalog_schema}
-        for canonical in ("VBAK", "VBRK", "KNA1"):
+        for canonical in ("VBAK", "VBRK", "KNA1", "VBAP", "VBRP", "MARA"):
             if canonical in catalog_schema:
                 names[canonical] = canonical
         fields = {name: {c["col"].lower() for c in catalog_schema[physical]} for name, physical in names.items()}
         table_exists = lambda name: name.upper() in names
         column_exists = lambda name, column: column.lower() in fields.get(name.upper(), set())
         table_name = lambda name: names.get(name.upper())
+    wants_product = bool(re.search(r"\b(?:products?|materials?)\b", q, re.I))
+    wants_region = bool(re.search(r"\bregions?\b", q, re.I))
+    wants_customer = bool(re.search(r"\bcustomers?\b", q, re.I))
+    wants_country = bool(re.search(r"\bcountr(?:y|ies)\b", q, re.I))
     if not (
         re.search(r"\b(?:compare|comparison|difference|differences|versus|vs\.?|against)\b", q, re.I)
-        and re.search(r"\bsales\s+orders?\b", q, re.I)
+        and re.search(r"\b(?:(?:sales\s+)?orders?)\b", q, re.I)
         and re.search(r"\binvoices?\b", q, re.I)
-        and re.search(r"\b(?:country|countries)\b", q, re.I)
-        and re.search(r"\bcustomers?\b", q, re.I)
-        and re.search(r"\b(?:value|values|amount|amounts|net|sales|revenue)\b", q, re.I)
+        and re.search(r"\b(?:value|values|amount|amounts|net|sales|revenue|costs?|profits?)\b", q, re.I)
         and not re.search(r"\blinked\b|\breconcil", q, re.I)
     ):
         return None
@@ -1274,6 +1277,24 @@ def build_sales_order_invoice_customer_comparison_sql(
     years = extract_question_years(question)
     if not years:
         return None
+
+    # Item facts are required to compare individual products. Country/customer/
+    # region facts can be carried alongside them through the shared customer
+    # dimension; the year and currency remain part of every comparison key.
+    asks_cost_or_profit = bool(re.search(r"\b(?:costs?|profits?|profitability)\b", q, re.I))
+    if wants_product or wants_region or asks_cost_or_profit or not (wants_country and wants_customer):
+        return _build_sales_order_invoice_grouped_comparison_sql(
+            q,
+            years,
+            table_exists=table_exists,
+            column_exists=column_exists,
+            table_name=table_name,
+            wants_product=wants_product,
+            wants_customer=wants_customer,
+            wants_country=wants_country,
+            wants_region=wants_region,
+        )
+
     if not all(table_exists(name) for name in ("VBAK", "VBRK", "KNA1")):
         return None
 
@@ -1382,6 +1403,244 @@ def build_sales_order_invoice_customer_comparison_sql(
         'AND o."currency" IS NOT DISTINCT FROM i."currency"\n'
         'ORDER BY ABS(COALESCE(o."sales_order_net_value", 0) - COALESCE(i."invoice_net_value", 0)) DESC, '
         '"country_code", "customer_id", "year", "currency"\n'
+        'LIMIT 200'
+    )
+
+
+def _build_sales_order_invoice_grouped_comparison_sql(
+    question: str,
+    years: list[str],
+    *,
+    table_exists: Callable[[str], bool],
+    column_exists: Callable[[str, str], bool],
+    table_name: Callable[[str], Optional[str]],
+    wants_product: bool,
+    wants_customer: bool,
+    wants_country: bool,
+    wants_region: bool,
+) -> Optional[str]:
+    """Build a currency-safe independent-fact comparison at requested detail."""
+    order, invoice = table_name("VBAK") or "VBAK", table_name("VBRK") or "VBRK"
+    if not (table_exists("VBAK") and table_exists("VBRK")):
+        return None
+
+    item_order = table_name("VBAP") or "VBAP"
+    item_invoice = table_name("VBRP") or "VBRP"
+    customer = table_name("KNA1") or "KNA1"
+    material = table_name("MARA") or "MARA"
+    needs_customer = wants_customer or wants_country or wants_region
+    needs_country = wants_country or wants_region
+    asks_cost_or_profit = bool(re.search(r"\b(?:costs?|profits?|profitability)\b", question, re.I))
+    item_level = wants_product or asks_cost_or_profit
+
+    required = [
+        (order, ("mandt", "vbeln", "audat", "netwr", "waerk")),
+        (invoice, ("mandt", "vbeln", "fkdat", "netwr", "waerk")),
+    ]
+    if needs_customer:
+        required.extend([
+            (order, ("kunnr",)), (invoice, ("kunag",)),
+            (customer, ("mandt", "kunnr")),
+        ])
+        if needs_country:
+            required.append((customer, ("land1",)))
+        if wants_region:
+            required.append((customer, ("regio",)))
+    if item_level:
+        required.extend([
+            (item_order, ("mandt", "vbeln", "posnr", "netwr")),
+            (item_invoice, ("mandt", "vbeln", "posnr", "netwr")),
+        ])
+        if wants_product:
+            required.extend([(item_order, ("matnr",)), (item_invoice, ("matnr",))])
+            required.append((material, ("mandt", "matnr")))
+    if any(not table_exists(table) or any(not column_exists(table, col) for col in columns)
+           for table, columns in required):
+        return None
+
+    cost_available = (
+        item_level
+        and column_exists(item_order, "wavwr")
+        and column_exists(item_invoice, "wavwr")
+    )
+    if asks_cost_or_profit and not cost_available:
+        return None
+
+    year_pair = re.search(
+        r"\b(?:between|from)\s+(20\d{2}|19\d{2})\s+(?:and|to|through|until)\s+(20\d{2}|19\d{2})\b",
+        question, re.I,
+    ) or re.search(r"\b(20\d{2}|19\d{2})\s+(?:to|through|until)\s+(20\d{2}|19\d{2})\b", question, re.I) \
+      or re.search(r"\b(20\d{2}|19\d{2})\s*[-–—]\s*(20\d{2}|19\d{2})\b", question)
+    if year_pair:
+        first, last = sorted((year_pair.group(1), year_pair.group(2)))
+        order_filter = f'SUBSTRING(TRIM(CAST(h."audat" AS TEXT)), 1, 4) BETWEEN \'{first}\' AND \'{last}\''
+        invoice_filter = f'SUBSTRING(TRIM(CAST(h."fkdat" AS TEXT)), 1, 4) BETWEEN \'{first}\' AND \'{last}\''
+    else:
+        order_filter = _sap_year_predicate("h", "audat", years)
+        invoice_filter = _sap_year_predicate("h", "fkdat", years)
+    if not order_filter or not invoice_filter:
+        return None
+
+    customer_dim = ""
+    customer_join_order = ""
+    customer_join_invoice = ""
+    dimensions: list[tuple[str, str]] = []
+    if wants_customer:
+        dimensions.append(("customer_id", 'c."customer_id"'))
+    if needs_country:
+        dimensions.append(("country_code", 'c."country_code"'))
+    if wants_region:
+        dimensions.append(("region_code", 'c."region_code"'))
+    if needs_customer:
+        country_expr = (
+            'MAX(TRIM(CAST(c."land1" AS TEXT))) AS "country_code"'
+            if column_exists(customer, "land1") else "NULL AS \"country_code\""
+        )
+        region_expr = (
+            'MAX(TRIM(CAST(c."regio" AS TEXT))) AS "region_code"'
+            if column_exists(customer, "regio") else "NULL AS \"region_code\""
+        )
+        name_expr = (
+            'MAX(TRIM(CAST(c."name1" AS TEXT))) AS "customer_name"'
+            if column_exists(customer, "name1") else "'' AS \"customer_name\""
+        )
+        customer_dim = (
+            '"customer_dim" AS (SELECT c."mandt", c."kunnr", '
+            'LPAD(TRIM(CAST(c."kunnr" AS TEXT)), 10, \'0\') AS "customer_id", '
+            f'{country_expr}, {region_expr}, {name_expr} FROM "{customer}" c '
+            'GROUP BY c."mandt", c."kunnr")'
+        )
+        customer_join_order = (
+            ' LEFT JOIN "customer_dim" c ON c."mandt" = h."mandt" AND c."kunnr" = h."kunnr"'
+        )
+        customer_join_invoice = (
+            ' LEFT JOIN "customer_dim" c ON c."mandt" = h."mandt" AND c."kunnr" = h."kunag"'
+        )
+
+    def row_dimensions(customer_column: str) -> str:
+        values = []
+        for name, expr in dimensions:
+            if name == "customer_id":
+                expr = (
+                    f'COALESCE(c."customer_id", '
+                    f'LPAD(TRIM(CAST(h."{customer_column}" AS TEXT)), 10, \'0\'))'
+                )
+            values.append(f'{expr} AS "{name}"')
+        if wants_product:
+            values.append('COALESCE(m."matnr", p."matnr") AS "product_id"')
+        return ", ".join(values)
+
+    order_row_dims_sql = row_dimensions("kunnr")
+    invoice_row_dims_sql = row_dimensions("kunag")
+    total_dims = ", ".join(f'r."{name}"' for name, _ in dimensions)
+    total_select_dims = ", ".join(f'r."{name}" AS "{name}"' for name, _ in dimensions)
+    output_dims = ", ".join(
+        f'COALESCE(o."{name}", i."{name}") AS "{name}"' for name, _ in dimensions
+    )
+    join_dims = " ".join(
+        f'AND o."{name}" IS NOT DISTINCT FROM i."{name}"' for name, _ in dimensions
+    )
+    grouping = ["r.\"mandt\"", *(total_dims.split(", ") if total_dims else []), 'r."year"', 'r."currency"']
+    grouping_sql = ", ".join(grouping)
+    order_year = 'SUBSTRING(TRIM(CAST(h."audat" AS TEXT)), 1, 4)'
+    invoice_year = 'SUBSTRING(TRIM(CAST(h."fkdat" AS TEXT)), 1, 4)'
+    order_item_join = (
+        f' JOIN "{item_order}" p ON p."mandt" = h."mandt" AND p."vbeln" = h."vbeln"'
+        if item_level else ""
+    )
+    invoice_item_join = (
+        f' JOIN "{item_invoice}" p ON p."mandt" = h."mandt" AND p."vbeln" = h."vbeln"'
+        if item_level else ""
+    )
+    material_join = (
+        f' LEFT JOIN "{material}" m ON m."mandt" = p."mandt" AND m."matnr" = p."matnr"'
+        if wants_product else ""
+    )
+    product_dim = [('product_id', 'COALESCE(m."matnr", p."matnr")')] if wants_product else []
+    all_dims = [*dimensions, *product_dim]
+    if item_level:
+        total_dims = ", ".join(f'r."{name}"' for name, _ in all_dims)
+        total_select_dims = ", ".join(f'r."{name}" AS "{name}"' for name, _ in all_dims)
+        output_dims = ", ".join(
+            f'COALESCE(o."{name}", i."{name}") AS "{name}"' for name, _ in all_dims
+        )
+        join_dims = " ".join(
+            f'AND o."{name}" IS NOT DISTINCT FROM i."{name}"' for name, _ in all_dims
+        )
+        grouping = ["r.\"mandt\"", *(total_dims.split(", ") if total_dims else []), 'r."year"', 'r."currency"']
+        grouping_sql = ", ".join(grouping)
+    order_amount = 'p."netwr"' if item_level else 'h."netwr"'
+    invoice_amount = 'p."netwr"' if item_level else 'h."netwr"'
+    cost_projection = ', p."wavwr" AS "wavwr"' if cost_available else ""
+    cost_sums_order = (
+        ', SUM(CAST(NULLIF(TRIM(CAST(r."wavwr" AS TEXT)), \'\') AS NUMERIC)) AS "sales_order_cost"'
+        if cost_available else ""
+    )
+    cost_sums_invoice = (
+        ', SUM(CAST(NULLIF(TRIM(CAST(r."wavwr" AS TEXT)), \'\') AS NUMERIC)) AS "invoice_cost"'
+        if cost_available else ""
+    )
+    order_count_name = "sales_order_item_count" if item_level else "sales_order_count"
+    invoice_count_name = "invoice_item_count" if item_level else "invoice_count"
+    output_cost = ""
+    if cost_available:
+        output_cost = (
+            ', o."sales_order_cost", i."invoice_cost", '
+            'CASE WHEN o."currency" = i."currency" AND o."sales_order_cost" IS NOT NULL '
+            'AND i."invoice_cost" IS NOT NULL THEN o."sales_order_cost" - i."invoice_cost" '
+            'END AS "order_minus_invoice_cost", '
+            'o."sales_order_net_value" - o."sales_order_cost" AS "sales_order_profit", '
+            'i."invoice_net_value" - i."invoice_cost" AS "invoice_profit", '
+            'CASE WHEN o."currency" = i."currency" AND o."sales_order_net_value" IS NOT NULL '
+            'AND i."invoice_net_value" IS NOT NULL AND o."sales_order_cost" IS NOT NULL '
+            'AND i."invoice_cost" IS NOT NULL THEN '
+            '(o."sales_order_net_value" - o."sales_order_cost") - '
+            '(i."invoice_net_value" - i."invoice_cost") END AS "order_minus_invoice_profit"'
+        )
+
+    cancelled_filter = (
+        ' AND COALESCE(TRIM(CAST(h."fksto" AS TEXT)), \'\') <> \'X\''
+        if column_exists(invoice, "fksto") else ""
+    )
+    order_total_dims = f", {total_select_dims}" if total_select_dims else ""
+    pos_projection = f', p."posnr" AS "posnr"' if item_level else ""
+    material_join_order = material_join
+    material_join_invoice = material_join
+    prefix = f'WITH {customer_dim}, ' if customer_dim else "WITH "
+    return (
+        prefix + '"order_rows" AS (SELECT DISTINCT h."mandt", h."vbeln"' + pos_projection +
+        ', ' + order_year + ' AS "year", h."waerk" AS "currency", ' + order_amount + ' AS "netwr"' +
+        cost_projection + (f', {order_row_dims_sql}' if order_row_dims_sql else "") +
+        f' FROM "{order}" h{order_item_join}{material_join_order}{customer_join_order} '
+        f'WHERE {order_filter} AND NULLIF(TRIM(CAST(h."audat" AS TEXT)), \'\') IS NOT NULL), '
+        '"invoice_rows" AS (SELECT DISTINCT h."mandt", h."vbeln"' + pos_projection +
+        ', ' + invoice_year + ' AS "year", h."waerk" AS "currency", ' + invoice_amount + ' AS "netwr"' +
+        cost_projection + (f', {invoice_row_dims_sql}' if invoice_row_dims_sql else "") +
+        f' FROM "{invoice}" h{invoice_item_join}{material_join_invoice}{customer_join_invoice} '
+        f'WHERE {invoice_filter} AND NULLIF(TRIM(CAST(h."fkdat" AS TEXT)), \'\') IS NOT NULL{cancelled_filter}), '
+        '"order_totals" AS (SELECT r."mandt" AS "client"' + order_total_dims +
+        f', r."year", r."currency", COUNT(*) AS "{order_count_name}", ' +
+        'SUM(CAST(NULLIF(TRIM(CAST(r."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "sales_order_net_value"' +
+        cost_sums_order + f' FROM "order_rows" r GROUP BY {grouping_sql}), '
+        '"invoice_totals" AS (SELECT r."mandt" AS "client"' + order_total_dims +
+        f', r."year", r."currency", COUNT(*) AS "{invoice_count_name}", ' +
+        'SUM(CAST(NULLIF(TRIM(CAST(r."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "invoice_net_value"' +
+        cost_sums_invoice + f' FROM "invoice_rows" r GROUP BY {grouping_sql}) '
+        'SELECT COALESCE(o."client", i."client") AS "client", '
+        'o."client" AS "sales_order_client", i."client" AS "invoice_client", ' +
+        (output_dims + ', ' if output_dims else "") +
+        'COALESCE(o."year", i."year") AS "year", COALESCE(o."currency", i."currency") AS "currency", '
+        'o."currency" AS "sales_order_currency", i."currency" AS "invoice_currency", '
+        f'o."{order_count_name}", i."{invoice_count_name}", o."sales_order_net_value", i."invoice_net_value", ' +
+        'CASE WHEN o."currency" = i."currency" AND o."sales_order_net_value" IS NOT NULL '
+        'AND i."invoice_net_value" IS NOT NULL THEN o."sales_order_net_value" - i."invoice_net_value" '
+        'END AS "order_minus_invoice_net_value"' + output_cost +
+        ' FROM "order_totals" o FULL OUTER JOIN "invoice_totals" i '
+        'ON o."client" = i."client" ' + join_dims +
+        ' AND o."year" IS NOT DISTINCT FROM i."year" '
+        'AND o."currency" IS NOT DISTINCT FROM i."currency" '
+        'ORDER BY CASE WHEN o."currency" = i."currency" THEN '
+        'ABS(o."sales_order_net_value" - i."invoice_net_value") END DESC NULLS LAST '
         'LIMIT 200'
     )
 

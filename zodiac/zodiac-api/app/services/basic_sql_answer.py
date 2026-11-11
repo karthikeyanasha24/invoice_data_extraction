@@ -362,7 +362,6 @@ def _predefined_template_step(sql: str) -> dict | None:
     """Mark this exact server-owned comparison for the independent-grain proof."""
     normalized = " ".join(str(sql or "").lower().split())
     signature = (
-        'with "customer_dim"',
         '"order_rows" as',
         '"invoice_rows" as',
         '"order_totals" as',
@@ -383,7 +382,7 @@ def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
     """Explain a supported SQL pattern and flag obvious metric mismatches."""
     import re
     normalized = re.sub(r"\s+", " ", sql.lower())
-    group = normalized.split(" group by ", 1)[1].split(" order by ", 1)[0] if " group by " in normalized else ""
+    group = " ".join(normalized.split(" group by ")[1:]).split(" order by ", 1)[0] if " group by " in normalized else ""
     dimensions = []
     if any(name in group for name in ("salesyear", "fiscal_year", "extract(year", "year")) \
             or ("fkdat" in group and any(name in group for name in ("substring", "date_part", "extract"))):
@@ -398,6 +397,8 @@ def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
         dimensions.append("material")
     if any(name in group for name in ("land1", "country")):
         dimensions.append("country")
+    if any(name in group for name in ("regio", "region")):
+        dimensions.append("region")
 
     compares_orders_to_invoices = (
         re.search(r"\bvbak\b", normalized)
@@ -406,7 +407,10 @@ def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
         and "invoice_net_value" in normalized
     )
     if compares_orders_to_invoices:
-        measure = "sales order value, invoice value, and their difference"
+        measure = (
+            "sales order and invoice revenue, cost, profit, and their differences"
+            if "wavwr" in normalized else "sales order value, invoice value, and their difference"
+        )
     elif "sum(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
         measure = "total billed sales"
     elif "min(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
