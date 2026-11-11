@@ -301,6 +301,55 @@ def test_generated_product_cost_profit_comparison_preserves_currency_and_year_sc
     db.close()
 
 
+def test_basic_routes_product_region_profit_template_without_model(monkeypatch):
+    from app.services import schema_intelligence_registry
+    from app.services.basic_sql_answer import run_basic_sql_answer
+
+    columns = {
+        "VBAK": {"mandt", "vbeln", "kunnr", "audat", "netwr", "waerk"},
+        "VBAP": {"mandt", "vbeln", "posnr", "matnr", "netwr", "wavwr"},
+        "VBRK": {"mandt", "vbeln", "kunag", "fkdat", "netwr", "waerk", "fksto"},
+        "vbrp": {"mandt", "vbeln", "posnr", "matnr", "netwr", "wavwr"},
+        "KNA1": {"mandt", "kunnr", "land1", "regio", "name1"},
+        "MARA": {"mandt", "matnr"},
+    }
+    by_upper = {table.upper(): table for table in columns}
+    monkeypatch.setattr(structured_sql, "has_table", lambda table: table.upper() in by_upper)
+    monkeypatch.setattr(
+        structured_sql,
+        "has_column",
+        lambda table, column: column.lower() in columns.get(by_upper.get(table.upper(), ""), set()),
+    )
+    monkeypatch.setattr(structured_sql, "resolve_table_name", lambda table: by_upper.get(table.upper()))
+
+    class Registry:
+        def lightweight_table_catalog(self, include_operational=False):
+            return [{"table": table} for table in columns]
+
+    monkeypatch.setattr(schema_intelligence_registry, "get_schema_registry", lambda: Registry())
+    question = (
+        "Compare sales order and invoice revenue, costs, and profits by product, country, "
+        "customer, and region for each year from 1999 through 2004"
+    )
+    executions = []
+
+    def execute(*args, **kwargs):
+        executions.append(args)
+        pytest.fail("Basic must wait for approval before executing the predefined query")
+
+    def local_agent(*args, **kwargs):
+        pytest.fail("The supported comparison must not fall through to Ollama")
+
+    result = run_basic_sql_answer(
+        question, execute=execute, prior_examples=[], local_agent=local_agent,
+    )
+
+    assert result["answer_status"] == "CLARIFICATION"
+    assert result["meta"]["basic_pattern_confirmation"]
+    assert result["llm_calls"] == 0
+    assert executions == []
+
+
 def test_region_only_comparison_groups_by_country_to_keep_region_codes_distinct(monkeypatch):
     _install_synthetic_schema(monkeypatch)
     monkeypatch.setattr(
