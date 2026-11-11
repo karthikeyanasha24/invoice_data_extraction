@@ -1741,8 +1741,9 @@ export const dashboardApi = {
         const response = await api.get(url);
         return response.data;
     },
-    getV2Business: async (days: number = 90, currency?: string | null) => {
+    getV2Business: async (days: number = 90, currency?: string | null, options?: { includeInsights?: boolean }) => {
         let url = `/api/v1/dashboard/v2/business?days=${days}`;
+        if (options?.includeInsights === false) url += '&include_insights=false';
         if (currency && currency !== '') {
             url += `&currency=${encodeURIComponent(currency)}`;
         }

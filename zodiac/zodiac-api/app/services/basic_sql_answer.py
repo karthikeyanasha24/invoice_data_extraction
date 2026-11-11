@@ -181,6 +181,12 @@ def run_basic_sql_answer(
         answer = basic_scope_reply(question)
         return _payload(question, "SUCCESS", answer, "", [], mode="general_chat")
 
+    from .basic_sql_training import needs_specific_years
+    if needs_specific_years(question):
+        return _payload(question, "CLARIFICATION",
+            "Which specific year or range should I use? For example, 2000–2004. "
+            "Say 'all years' if you want every available year.", "", [], mode="clarification")
+
     if previous_question and re.search(r"\bcompare\b.*\b(?:it|that|those|them)\b.*\byear\b", question, re.I) and not re.search(r"\b(?:19|20)\d{2}\b", question):
         return _payload(question, "CLARIFICATION", "Which year should I compare with the previous result? Include the year, for example: compare it with 2002.", "", [], mode="clarification")
 
@@ -420,6 +426,8 @@ def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
         dimensions.append("country")
     if any(name in group for name in ("regio", "region")):
         dimensions.append("region")
+    if "brsch" in group or "industry" in group:
+        dimensions.append("industry")
 
     compares_orders_to_invoices = (
         re.search(r"\bvbak\b", normalized)
@@ -435,9 +443,9 @@ def _describe_predefined_pattern(question: str, sql: str) -> tuple[str, str]:
     elif "sum(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
         measure = "total billed sales"
     elif "min(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
-        measure = "lowest billed amount"
+        measure = "lowest billing line amount" if '"lowest_billing_line_amount"' in normalized else "lowest billed amount"
     elif "max(" in normalized and any(name in normalized for name in ("netwr", "net_value", "billed_sales")):
-        measure = "highest billed amount"
+        measure = "highest billing line amount" if '"highest_billing_line_amount"' in normalized else "highest billed amount"
     elif "count(" in normalized:
         measure = "billing document count"
     else:

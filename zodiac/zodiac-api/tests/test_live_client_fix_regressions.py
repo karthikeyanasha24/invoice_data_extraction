@@ -118,6 +118,55 @@ def test_lowest_billing_line_is_not_an_industry_sum(sql, accepted):
     assert (not billing_line_metric_issues("Lowest billing line amounts by industry in 1999", sql)) is accepted
 
 
+@pytest.mark.parametrize("extreme, expected", [("lowest", 2), ("highest", 9)])
+def test_industry_line_extreme_executes_at_client_currency_year_grain(monkeypatch, extreme, expected):
+    from sqlglot import transpile
+    fields = {**FIELDS, "KNA1": FIELDS["KNA1"] + " brsch"}
+    monkeypatch.setattr(templates, "has_table", lambda t: t.upper() in fields)
+    monkeypatch.setattr(templates, "has_column", lambda t, c: c in fields[t.upper()].split())
+    monkeypatch.setattr(templates, "resolve_table_name", lambda t: t.upper())
+    question = f"Show the {extreme} billing line amounts by industry between 1999 and 2001"
+    sql = templates.build_dimension_ranking_sql(question, list(fields))
+    assert not billing_line_metric_issues(question, sql)
+    engine = create_engine("sqlite://")
+    try:
+        with engine.begin() as conn:
+            for table in ("KNA1", "VBRK", "VBRP"):
+                conn.execute(text(f'CREATE TABLE "{table}" (' + ','.join(c + ' TEXT' for c in fields[table].split()) + ')'))
+            conn.execute(text("INSERT INTO KNA1 VALUES('800','C','AA','Customer','A'),('900','C','BB','Other','B')"))
+            conn.execute(text("INSERT INTO VBRK VALUES('800','I','C','20000101','11','USD',''),('900','I','C','20000101','1','EUR',''),('800','J','UNKNOWN','19990101','3','USD',''),('800','OLD','C','19980101','-99','USD','')"))
+            conn.execute(text("INSERT INTO VBRP VALUES('800','I','1','','','2','1','EA'),('800','I','2','','','9','1','EA'),('900','I','1','','','1','1','EA'),('800','J','1','','','3','1','EA'),('800','OLD','1','','','-99','1','EA')"))
+            rows = [dict(r) for r in conn.execute(text(transpile(sql, read="postgres", write="sqlite")[0])).mappings()]
+        amount = extreme + "_billing_line_amount"
+        assert len(rows) == 3
+        assert next(r for r in rows if r['client'] == '800' and r['industry_code'] == 'A')[amount] == expected
+        assert next(r for r in rows if r['client'] == '900')[amount] == 1
+        assert next(r for r in rows if r['industry_code'] is None)[amount] == 3
+        assert {r['billing_year'] for r in rows} == {'1999', '2000'}
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("extra", ["in USD", "excluding cancellations", "for customer C1", "in the latest year", "with quantity", "for year"])
+def test_industry_line_template_does_not_discard_constraints(extra):
+    assert templates.build_industry_line_extreme_sql("Lowest billing line amounts by industry " + extra) is None
+
+
+@pytest.mark.parametrize("question", ["show me the lowest sales between specific years", "show me the lowest sales for specific years in SAP ERP"])
+def test_saved_specific_years_require_an_actual_period(question):
+    assert any("names no years" in issue for issue in answerability_issues(question, 'SELECT fkdat,netwr FROM VBRK', []))
+
+
+def test_basic_asks_for_missing_years_before_query_or_model():
+    from app.services.basic_sql_answer import run_basic_sql_answer
+    executor = MagicMock(side_effect=AssertionError('No query should be executed'))
+    provider = MagicMock(side_effect=AssertionError('No provider should be called'))
+    result = run_basic_sql_answer('Show lowest sales between specific years', execute=executor, local_agent=provider)
+    assert result['answer_status'] == 'CLARIFICATION' and result['llm_calls'] == 0
+    executor.assert_not_called()
+    provider.assert_not_called()
+
+
 def test_customer_aliases_resolve_the_shared_master_key():
     sql = '''WITH o AS (
       SELECT v.mandt AS client,v.waerk AS currency,k.kunnr AS customer,k.land1 AS country,

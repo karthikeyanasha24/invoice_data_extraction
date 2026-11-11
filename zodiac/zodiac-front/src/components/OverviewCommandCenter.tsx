@@ -27,7 +27,8 @@ function money(n: number | null | undefined): string {
 
 type InboundSummary = { total_documents?: number; merges_pending?: number; merges_sent_to_sap?: number; merges_total?: number };
 type InboundOverview = { summary?: InboundSummary };
-type BusinessOverview = { trend?: { revenue_change_pct?: number | null; current_period_revenue?: number | null } };
+type RevenueTrend = { currency?: string | null; revenue_change_pct?: number | null; current_period_revenue?: number | null; requires_currency_selection?: boolean };
+type BusinessOverview = { trend?: RevenueTrend; trend_by_currency?: RevenueTrend[] };
 
 export default function OverviewCommandCenter() {
   const router = useRouter();
@@ -44,13 +45,19 @@ export default function OverviewCommandCenter() {
       setPartialErrors([]);
       const results = await Promise.allSettled([
         dashboardApi.getV2Inbound(0),
-        dashboardApi.getV2Business(90),
+        dashboardApi.getV2Business(90, undefined, { includeInsights: false }),
       ]);
       const [inb, biz] = results;
       if (inb.status === 'fulfilled') setInbound(inb.value);
-      else setPartialErrors(errors => [...errors, `Inbound operations: ${publicApiError(inb.reason, 'Could not load inbound activity.')}`]);
+      else {
+        setInbound(null);
+        setPartialErrors(errors => [...errors, `Inbound operations: ${publicApiError(inb.reason, 'Could not load inbound activity.')}`]);
+      }
       if (biz.status === 'fulfilled') setBusiness(biz.value);
-      else setPartialErrors(errors => [...errors, `Invoice activity: ${publicApiError(biz.reason, 'Could not load invoice activity.')}`]);
+      else {
+        setBusiness(null);
+        setPartialErrors(errors => [...errors, `Invoice activity: ${publicApiError(biz.reason, 'Could not load invoice activity.')}`]);
+      }
       if (inb.status === 'rejected' && biz.status === 'rejected') {
         setError('Overview data is temporarily unavailable. The inbound-operations and invoice-activity services both failed.');
       }
@@ -68,16 +75,12 @@ export default function OverviewCommandCenter() {
   const summary = inbound?.summary || {};
   const trend = business?.trend;
   const trendPct = typeof trend?.revenue_change_pct === 'number' ? trend.revenue_change_pct : null;
-  const currentRev = Number(trend?.current_period_revenue || 0);
-  const changeLabel =
-    trendPct == null || (currentRev === 0 && Math.abs(trendPct) >= 100)
-      ? null
-      : trendPct;
-  const pending = Number(summary.merges_pending || 0);
-  const docs = Number(summary.total_documents || 0);
-  const sent = Number(summary.merges_sent_to_sap || 0);
+  const changeLabel = trendPct;
+  const pending = inbound ? summary.merges_pending ?? null : null;
+  const docs = inbound ? summary.total_documents ?? null : null;
+  const sent = inbound ? summary.merges_sent_to_sap ?? null : null;
   const nextActions: { label: string; why: string; href?: string; question?: string }[] = [];
-  if (pending > 0) {
+  if (pending != null && pending > 0) {
     nextActions.push({
       label: `Send ${pending} merge${pending === 1 ? '' : 's'} to SAP`,
       why: 'Validated inbound documents are waiting to post.',
@@ -90,7 +93,7 @@ export default function OverviewCommandCenter() {
       why: 'There is no inbound CFDI activity for this account yet.',
       href: '/sat-documents',
     });
-  } else if (pending === 0) {
+  } else if (docs != null && pending === 0) {
     nextActions.push({
       label: 'Investigate highest-profit products',
       why: 'No merges are waiting to send. You can start a new investigation in AI Analyst.',
@@ -170,14 +173,14 @@ export default function OverviewCommandCenter() {
           Needs attention
         </h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div className={cn('rounded-xl border p-4', pending > 0 ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white')}>
+          <div className={cn('rounded-xl border p-4', pending != null && pending > 0 ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white')}>
             <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
-              <AlertTriangle className={cn('h-4 w-4', pending > 0 ? 'text-amber-700' : 'text-slate-400')} />
+              <AlertTriangle className={cn('h-4 w-4', pending != null && pending > 0 ? 'text-amber-700' : 'text-slate-400')} />
               Merges waiting to send
             </div>
-            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{pending}</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{pending ?? '—'}</p>
             <p className="mt-1 text-xs text-slate-600">
-              {pending > 0
+              {pending == null ? 'Inbound activity is unavailable. Retry loading the overview.' : pending > 0
                 ? 'Validated inbound merges have not been sent to SAP yet.'
                 : docs === 0
                   ? 'No inbound documents yet. Upload a CFDI to start the SAT workflow.'
@@ -196,7 +199,7 @@ export default function OverviewCommandCenter() {
               <FileText className="h-4 w-4 text-slate-500" />
               Inbound SAT documents
             </div>
-            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{docs}</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{docs ?? '—'}</p>
             <p className="mt-1 text-xs text-slate-600">
               All-time documents for this account. This is inbound SAT activity, not an ERP push.
             </p>
@@ -222,7 +225,7 @@ export default function OverviewCommandCenter() {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">EDI invoice total</p>
             <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">
-              {money(trend?.current_period_revenue)}
+              {trend?.requires_currency_selection ? 'By currency below' : `${money(trend?.current_period_revenue)}${trend?.currency ? ` ${trend.currency}` : ''}`}
             </p>
             <p className="mt-1 text-xs text-slate-500">Last 90 days · invoice totals</p>
           </div>
@@ -240,16 +243,27 @@ export default function OverviewCommandCenter() {
             </p>
             <p className="mt-1 text-xs text-slate-500">
               {changeLabel == null
-                ? 'Not enough invoice volume in this 90-day window to compare'
+                ? !business ? 'Invoice activity is unavailable'
+                  : trend?.requires_currency_selection ? 'Currencies are compared separately below'
+                  : 'No prior-period amount is available for comparison'
                 : 'Compared with the previous 90 days'}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Sent to SAP</p>
-            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{sent}</p>
-            <p className="mt-1 text-xs text-slate-500">of {Number(summary.merges_total || 0)} merges</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{sent ?? '—'}</p>
+            <p className="mt-1 text-xs text-slate-500">of {summary.merges_total ?? '—'} merges</p>
           </div>
         </div>
+        {trend?.requires_currency_selection && (
+          <ul className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Invoice totals by currency">
+            {(business?.trend_by_currency || []).map(row => <li key={row.currency} className="rounded-xl border border-slate-200 bg-white p-4 text-sm">
+              <span className="font-medium">{row.currency === 'Unknown' ? 'Currency unavailable' : row.currency}</span>
+              <span className="ml-2">{money(row.current_period_revenue)}</span>
+              <p className="mt-1 text-xs text-slate-500">{row.revenue_change_pct == null ? 'No comparable prior-period amount' : `${row.revenue_change_pct > 0 ? '+' : ''}${row.revenue_change_pct.toFixed(1)}% vs prior 90 days`}</p>
+            </li>)}
+          </ul>
+        )}
       </section>
 
       <section aria-labelledby="explore-heading">

@@ -325,6 +325,11 @@ def check_query_scope(sql: str, selection: dict):
         ) from error
 
 
+def needs_specific_years(question: str) -> bool:
+    return not re.search(r"\b(?:19|20)\d{2}\b", question or "") and bool(re.search(
+        r"\b(?:between|for|in)\s+(?:the\s+)?specific\s+years\b", question or "", re.I))
+
+
 def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]:
     """Catch clear gaps between a training question and its executed result.
 
@@ -356,6 +361,12 @@ def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]
         issues.append("The question compares order and invoice values, but the SQL reads no invoice table. Join the sales order to billing data and calculate both values and their difference.")
 
     years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", wording)))
+    if needs_specific_years(question):
+        issues.append(
+            "The saved question asks for specific years but names no years. "
+            "Specify the actual year or range in both the question and SQL, then rerun and save it. "
+            "If every year is intended, state 'all years' in the question."
+        )
     range_wording = len(years) == 2 and bool(re.search(
         r"\bbetween\b|\b(?:19|20)\d{2}\s*(?:to|through|until|[-–—])\s*(?:19|20)\d{2}\b",
         wording,

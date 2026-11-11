@@ -67,7 +67,7 @@ export default function DashboardV2Business() {
   const { products_by_industry, industry_breakdown, quantity_price_analysis, revenue_by_customer, revenue_by_country, revenue_by_currency, customers_by_country, trend, ai_insights } = data;
   const qtyData = (quantity_price_analysis || []).filter((r: any) => r.total_quantity > 0).slice(0, 12);
   const priceData = (quantity_price_analysis || []).filter((r: any) => r.avg_price != null && r.avg_price > 0).sort((a: any, b: any) => (b.avg_price || 0) - (a.avg_price || 0)).slice(0, 12);
-  const trendPct = trend?.revenue_change_pct ?? 0;
+  const trendPct = typeof trend?.revenue_change_pct === 'number' ? trend.revenue_change_pct : null;
 
   return (
     <div className="space-y-6">
@@ -105,7 +105,8 @@ export default function DashboardV2Business() {
       </div>
 
       {/* Trend / prognosis */}
-      {trend && (
+      {trend?.requires_currency_selection && <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Select a currency to compare invoice totals across equal periods.</p>}
+      {trend && !trend.requires_currency_selection && (
         <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
           <h3 className="text-sm font-semibold text-gray-900 mb-3">Revenue Trend</h3>
           <div className="flex flex-wrap items-center gap-6">
@@ -126,6 +127,7 @@ export default function DashboardV2Business() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {trendPct == null ? <span className="text-sm text-gray-500">No prior-period amount available for comparison</span> : <>
               {trendPct >= 0 ? (
                 <TrendingUp className="h-5 w-5 text-green-600" />
               ) : (
@@ -134,6 +136,7 @@ export default function DashboardV2Business() {
               <span className={trendPct >= 0 ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'}>
                 {trendPct >= 0 ? '+' : ''}{trend.revenue_change_pct}% vs previous period
               </span>
+              </>}
             </div>
           </div>
         </div>

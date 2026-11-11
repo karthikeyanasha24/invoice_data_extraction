@@ -19,7 +19,7 @@ export const SUPPORTED_INVESTIGATIONS = [
   { label: 'Products driving growth', question: 'Which products grew the most?' },
   { label: 'Inventory versus sales', question: 'Show inventory versus sales.' },
   { label: 'Why did margin decline?', question: 'Which products had the biggest margin decline?' },
-  { label: 'Customers behind the change', question: 'Show their customers.' },
+  { label: 'Customers by billed sales', question: 'Show billed sales by customer and currency.' },
   { label: 'Supplier concentration', question: 'Show supplier concentration.' },
 ];
 

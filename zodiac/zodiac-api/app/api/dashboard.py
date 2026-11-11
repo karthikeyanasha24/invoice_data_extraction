@@ -1474,6 +1474,8 @@ Respond ONLY with valid JSON, no markdown or extra text.
 async def get_dashboard_v2_business(
     days: int = Query(default=90, ge=1, le=365),
     currency: str = Query(default=None, description="Filter by currency code (e.g. NZD, USD). Omit for all."),
+    include_insights: bool = Query(default=True, description="Generate optional model insights."),
+    backfill: bool = Query(default=False, description="Explicitly request BI backfill from validated invoices."),
     current_user: ZodiacUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1489,7 +1491,7 @@ async def get_dashboard_v2_business(
         ).all()
 
         # If no BI data yet but user has successful validated invoices, backfill from line_items
-        if not rows:
+        if not rows and backfill:
             success_count = db.query(InvoiceV2Validated).join(
                 InvoiceV2Document,
                 InvoiceV2Validated.document_id == InvoiceV2Document.id
@@ -1647,33 +1649,15 @@ async def get_dashboard_v2_business(
             for country, cust_set in sorted(country_customers.items(), key=lambda x: -len(x[1]))
         ][:20]
 
-        mid = cutoff_date + (datetime.utcnow() - cutoff_date) / 2
-        prev_cutoff = cutoff_date - (datetime.utcnow() - cutoff_date)
-        current_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
-            InvoiceV2BusinessData.user_id == current_user.id,
-            InvoiceV2BusinessData.created_at >= mid,
-        ).scalar() or 0
-        previous_revenue = db.query(func.coalesce(func.sum(InvoiceV2BusinessData.total_amount), 0)).filter(
-            InvoiceV2BusinessData.user_id == current_user.id,
-            InvoiceV2BusinessData.created_at >= prev_cutoff,
-            InvoiceV2BusinessData.created_at < mid,
-        ).scalar() or 0
-        try:
-            current_revenue = float(current_revenue)
-            previous_revenue = float(previous_revenue)
-        except Exception:
-            current_revenue = previous_revenue = 0.0
-        trend_pct = ((current_revenue - previous_revenue) / previous_revenue * 100) if previous_revenue else 0.0
-
-        trend = {
-            "current_period_revenue": current_revenue,
-            "previous_period_revenue": previous_revenue,
-            "revenue_change_pct": round(trend_pct, 1),
-        }
+        from ..services.dashboard_business_trend import business_revenue_trends
+        trend, trend_by_currency = business_revenue_trends(db, InvoiceV2BusinessData, current_user.id, days, currency)
+        current_revenue = trend['current_period_revenue']
+        previous_revenue = trend['previous_period_revenue']
+        trend_pct = trend['revenue_change_pct']
 
         # AI insights about the whole business tab (using existing API key)
         ai_insights = None
-        if OPENAI_API_KEY and openai_available and rows:
+        if include_insights and OPENAI_API_KEY and openai_available and rows and trend_pct is not None:
             try:
                 client = OpenAI(api_key=OPENAI_API_KEY)
                 prompt = f"""You are a business analyst. Based on the following dashboard data (from validated invoices), provide concise AI insights in JSON format.
@@ -1734,6 +1718,7 @@ Respond with a single JSON object with this structure (no markdown, only valid J
             "revenue_by_currency": revenue_by_currency,
             "customers_by_country": customers_by_country,
             "trend": trend,
+            "trend_by_currency": trend_by_currency,
             "ai_insights": ai_insights,
         }
     except Exception as e:

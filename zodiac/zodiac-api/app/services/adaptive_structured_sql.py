@@ -1645,6 +1645,55 @@ def _build_sales_order_invoice_grouped_comparison_sql(
     )
 
 
+def build_industry_line_extreme_sql(question: str) -> Optional[str]:
+    """Individual item minima/maxima, grouped without losing unknown industries."""
+    from .analyst_line_metrics import billing_line_extreme
+
+    operation = billing_line_extreme(question)
+    if not operation or not re.search(r"\bindustr(?:y|ies)\b", question, re.I):
+        return None
+    # Only this complete shape is supported. Extra filters or dimensions must
+    # continue through the general planner rather than being silently dropped.
+    remainder = re.sub(r"\b(?:19|20)\d{2}\b", "", question.lower())
+    remainder = re.sub(
+        r"\b(?:show|me|the|what|are|is|find|give|lowest|smallest|minimum|highest|largest|maximum|"
+        r"billing|invoice|invoices|line|lines|item|items|net|amount|amounts|value|values|"
+        r"by|per|each|industry|industries|in|for|year|years|between|and|to|through|all)\b",
+        "", remainder,
+    )
+    if re.sub(r"[\s,.?!–—-]", "", remainder):
+        return None
+    required = {"VBRK": ("mandt", "vbeln", "fkdat", "waerk", "kunag"),
+                "vbrp": ("mandt", "vbeln", "posnr", "netwr"),
+                "KNA1": ("mandt", "kunnr", "brsch")}
+    if not all(has_table(t) and all(has_column(t, c) for c in columns)
+               for t, columns in required.items()):
+        return None
+    header, item, customer = (resolve_table_name(t) or t for t in required)
+    years = extract_question_years(question)
+    if not years and re.search(r"\byears?\b", question, re.I) and not re.search(r"\ball years\b", question, re.I):
+        return None
+    if len(years) == 2 and re.search(r"\bbetween\b|\bto\b|\bthrough\b|[–—-]", question, re.I):
+        years = [str(y) for y in range(min(map(int, years)), max(map(int, years)) + 1)]
+    predicate = _sap_year_predicate("h", "fkdat", years)
+    where = "\nWHERE " + predicate if predicate else ""
+    alias = "lowest_billing_line_amount" if operation == "MIN" else "highest_billing_line_amount"
+    # Keep the industry code as the grouping key. Missing master rows and
+    # missing industry codes remain in the NULL group instead of disappearing.
+    return (
+        f'SELECT h."mandt" AS "client", '
+        'SUBSTRING(TRIM(CAST(h."fkdat" AS TEXT)), 1, 4) AS "billing_year", '
+        'h."waerk" AS "currency", NULLIF(TRIM(CAST(c."brsch" AS TEXT)), \'\') AS "industry_code", '
+        f'{operation}(CAST(NULLIF(TRIM(CAST(p."netwr" AS TEXT)), \'\') AS NUMERIC)) AS "{alias}"\n'
+        f'FROM "{item}" p JOIN "{header}" h ON h."mandt" = p."mandt" AND h."vbeln" = p."vbeln"\n'
+        f'LEFT JOIN "{customer}" c ON c."mandt" = h."mandt" AND c."kunnr" = h."kunag"'
+        + where
+        + '\nGROUP BY h."mandt", SUBSTRING(TRIM(CAST(h."fkdat" AS TEXT)), 1, 4), '
+        'h."waerk", NULLIF(TRIM(CAST(c."brsch" AS TEXT)), \'\')\n'
+        'ORDER BY "client", "billing_year", "currency", "industry_code" LIMIT 200'
+    )
+
+
 def build_dimension_ranking_sql(
     question: str,
     tables: List[str],
@@ -1661,6 +1710,9 @@ def build_dimension_ranking_sql(
     for vendor / purchase-order value rankings.
     """
     q = (question or "").lower()
+    from .analyst_line_metrics import billing_line_extreme
+    if billing_line_extreme(question):
+        return build_industry_line_extreme_sql(question)
     if not re.search(r"\b(top|bottom|highest|lowest|most|least|best|worst|largest|biggest|smallest|leading|rank|ranking|list)\b", q):
         return None
     # "List customers in Germany" is a filtered master list, not a sales ranking.
