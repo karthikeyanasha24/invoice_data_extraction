@@ -118,42 +118,23 @@ def profit_question_without_profit_sql(question, steps):
     """Keep revenue/clearing totals from being replayed as checked profit.
 
     A saved profit answer needs a physical profit measure or an explicit
-    revenue-minus-cost expression. An alias named profit alone is not
+    revenue-minus-cost expression. An alias named ``profit`` alone is not
     evidence of that calculation.
     """
     if "profit" not in intent_tokens(question):
         return False
-    revenue_fields = {
-        "netwr", "revenue", "sales", "net_sales",
-        "sales_order_net_value", "invoice_net_value",
-    }
-    cost_fields = {
-        "cost", "cogs", "expense", "expenses", "wavwr", "vprs",
-        "sales_order_cost", "invoice_cost",
-    }
-    physical_profit_fields = {"profit", "gross_profit", "net_profit", "profit_amount"}
     for step in steps:
         try:
             tree = parse(str(step.get("sql") or ""), read="postgres")[0]
             for selection in tree.selects:
                 expression = selection.this if isinstance(selection, exp.Alias) else selection
                 columns = {column.name.lower() for column in expression.find_all(exp.Column)}
-                if columns.intersection(physical_profit_fields):
+                if columns.intersection({"profit", "gross_profit", "net_profit", "profit_amount"}):
                     return False
-                for subtraction in expression.find_all(exp.Sub):
-                    left = {
-                        column.name.lower()
-                        for column in subtraction.this.find_all(exp.Column)
-                    }
-                    right = {
-                        column.name.lower()
-                        for column in subtraction.expression.find_all(exp.Column)
-                    }
-                    if (
-                        (left.intersection(revenue_fields) and right.intersection(cost_fields))
-                        or (right.intersection(revenue_fields) and left.intersection(cost_fields))
-                    ):
-                        return False
+                if columns.intersection({"cost", "cogs", "expense", "expenses", "wavwr", "vprs", "sales_order_cost", "invoice_cost"}) \
+                        and columns.intersection({"netwr", "revenue", "sales", "net_sales", "sales_order_net_value", "invoice_net_value"}) \
+                        and any(isinstance(node, exp.Sub) for node in expression.walk()):
+                    return False
         except Exception:
             continue
     return True

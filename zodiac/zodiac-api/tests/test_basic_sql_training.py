@@ -464,6 +464,29 @@ def test_basic_discloses_builtin_pattern_and_waits_for_choice(monkeypatch):
     assert executed == [sql]
 
 
+@pytest.mark.parametrize("approve_predefined", [False, True])
+def test_basic_blocks_billing_line_extreme_when_pattern_uses_total_sales(monkeypatch, approve_predefined):
+    from app.services import four_stage_db_pipeline
+    sql = "SELECT industry, SUM(i.netwr) AS total_billed_sales FROM VBRP i GROUP BY industry"
+    monkeypatch.setattr(four_stage_db_pipeline, "pipeline3_sql_generation", lambda *_args, **_kwargs: sql)
+    executed = []
+
+    def execute(statement, step=None):
+        executed.append(statement)
+        return {"ok": True, "sql": statement, "rows": [], "source": "business"}
+
+    result = run_basic_sql_answer(
+        "Show the lowest billing line amounts by industry in 1999",
+        execute=execute,
+        approve_predefined=approve_predefined,
+    )
+    assert result["answer_status"] == "CANNOT_ANSWER"
+    assert result["sql_status"] == "needs_review"
+    assert "basic_pattern_confirmation" not in result["meta"]
+    assert result["meta"]["basic_metric_validation_issues"]
+    assert result["llm_calls"] == 0
+    assert "No query was run" in result["answer"]
+    assert executed == []
 def test_profitability_synonym_does_not_accept_billed_sales_as_profit():
     billed_sales_sql = 'SELECT matnr, SUM(netwr) AS total_billed_sales FROM "VBRP" GROUP BY matnr'
     assert profit_question_without_profit_sql(

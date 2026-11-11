@@ -235,6 +235,27 @@ def run_basic_sql_answer(
             # The generic measure template can otherwise treat an AR clearing
             # amount as "highest profit". Require a real profit calculation.
             sql = ""
+        if sql.strip():
+            # Validate explicit individual billing-line extremes before offering
+            # approval; the result-level guard otherwise runs only after SQL.
+            from .analyst_line_metrics import billing_line_extreme, billing_line_metric_issues
+            if billing_line_extreme(question):
+                try:
+                    metric_issues = billing_line_metric_issues(question, sql)
+                except Exception:
+                    metric_issues = ["Basic could not verify the SQL for this individual billing-line request."]
+                if metric_issues:
+                    answer = (
+                        "Basic blocked this proposed query before execution because it does not match the individual billing-line metric. "
+                        + " ".join(metric_issues)
+                        + " No query was run. Add a checked MIN(VBRP.NETWR) query grouped at the requested industry and currency grain in SQL Training."
+                    )
+                    result = _payload(question, "CANNOT_ANSWER", answer, sql, [], mode="clarification")
+                    result["meta"]["basic_metric_validation_issues"] = metric_issues
+                    result["sql_status"] = "needs_review"
+                    result["llm_calls"] = 0
+                    return result
+
         if sql.strip() and not reused_example and not approve_predefined:
             logic, warning = _describe_predefined_pattern(question, sql)
             answer = f"Basic matched a predefined SQL pattern. Proposed logic: {logic}."
