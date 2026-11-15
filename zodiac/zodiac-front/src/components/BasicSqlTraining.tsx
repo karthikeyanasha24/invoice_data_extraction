@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Ref } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Database, Loader2, Play, RefreshCw, Save, Search, X } from 'lucide-react';
 import { dashboardApi } from '@/lib/api';
 
@@ -12,7 +12,10 @@ type FilterOperator = 'include_value' | 'include_range' | 'exclude_value' | 'exc
 type TrainingFilter = { id: string; table: string; column: string; operator: FilterOperator; value: string; upper: string };
 type PreviewResult = { sql?: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; limit?: number; applied_filters?: number };
 
-export default function BasicSqlTraining({ initialQuestion = '' }: { initialQuestion?: string }) {
+export default function BasicSqlTraining({ initialQuestion = '', questionRef }: {
+  initialQuestion?: string;
+  questionRef?: Ref<HTMLInputElement>;
+}) {
   // The application database is the configured AI catalog in the normal
   // deployment. The API still resolves `auto` from its environment, but the
   // initial value must not briefly point at an unavailable business source
@@ -232,7 +235,7 @@ export default function BasicSqlTraining({ initialQuestion = '' }: { initialQues
         <div className="space-y-4">
           <section className="rounded-2xl border bg-white p-4 shadow-sm">
             <h4 className="font-semibold text-slate-900">Write and run a query</h4>
-            <label className="mt-3 block text-xs font-medium text-slate-600">Business question to save<input value={question} onChange={event => setQuestion(event.target.value)} maxLength={4000} placeholder="e.g. Show the top 10 customers by billed sales in 2001" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"/></label>
+            <label className="mt-3 block text-xs font-medium text-slate-600">Business question to save<input ref={questionRef} value={question} onChange={event => setQuestion(event.target.value)} maxLength={4000} placeholder="e.g. Show the top 10 customers by billed sales in 2001" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"/></label>
             {exactCandidate && <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900"><span>A matching saved question is available, revision {exactCandidate.revision}. This exact wording match is a candidate; run it to validate current data.</span><button type="button" onClick={() => loadExample(exactCandidate)} className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 font-medium">Load candidate SQL</button></div>}
             <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><h5 className="text-sm font-semibold text-slate-800">Selection filters (SAP style)</h5><p className="mt-0.5 text-xs text-slate-500">Add include or exclude values/ranges, or choose greater/less. Filters are added to your SQL before it runs.</p></div><button type="button" disabled={!availableFilterFields.length} onClick={() => { const first = availableFilterFields[0]; if (first) setTrainingFilters(current => [...current, { id: crypto.randomUUID(), table: first.table, column: first.name, operator: 'include_range', value: '', upper: '' }]); }} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-40">Add filter</button></div>

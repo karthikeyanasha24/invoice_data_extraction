@@ -1182,7 +1182,12 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
   const [threadId,   setThreadId]   = useState<string>('');
   const [analysisMethod, setAnalysisMethod] = useState<'agent' | 'basic' | 'training'>('agent');
   const [startFreshQuestion, setStartFreshQuestion] = useState(false);
-  const [trainingQuestion, setTrainingQuestion] = useState(initialQuestion || '');
+  const [trainingQuestion, setTrainingQuestion] = useState(initialQuestion);
+  const [trainingDraftRevision, setTrainingDraftRevision] = useState(0);
+  const trainingQuestionRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (trainingDraftRevision > 0) trainingQuestionRef.current?.focus();
+  }, [trainingDraftRevision]);
   const [trainedQueryPickerOpen, setTrainedQueryPickerOpen] = useState(false);
   const [trainedQueries, setTrainedQueries] = useState<{ id: string; question: string; revision: number; source: string; validation_status: string; replayable?: boolean; answerability_issues?: string[]; schema?: { tables?: Record<string, unknown> } }[]>([]);
   const [trainedQueriesLoaded, setTrainedQueriesLoaded] = useState(false);
@@ -1520,6 +1525,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     if (q && historyLoaded && initialSentRef.current !== q && !loading) {
       initialSentRef.current = q;
       if (analysisMethodRef.current === 'training') {
+        setTrainingQuestion(q);
         setLaunchBanner('Question copied into Basic SQL Training. Review the schema and SQL; no model was called.');
         router.replace(analystPathWithoutQuery(), { scroll: false });
         return;
@@ -1574,7 +1580,7 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     }]);
   };
 
-  const clearAll = () => {
+  const startNewChat = () => {
     followLatestRef.current = true;
     setInput('');
     setStartFreshQuestion(false);
@@ -1584,7 +1590,17 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
     lastSuccessfulAnalyticalRef.current = null;
     setError(null);
     setFailedQuestion(null);
-    setLaunchBanner(investigationLaunch('explicit-new', true).banner);
+    if (analysisMethod === 'training') {
+      setTrainingQuestion('');
+      setTrainingDraftRevision(revision => revision + 1);
+      setLaunchBanner(null);
+      if (initialQuestion) {
+        initialSentRef.current = initialQuestion.trim();
+        router.replace(analystPathWithoutQuery(), { scroll: false });
+      }
+    } else {
+      setLaunchBanner(investigationLaunch('explicit-new', true).banner);
+    }
     // Start a fresh adaptive thread so cleared UI does not reload old turns
     if (typeof window !== 'undefined') {
       const tid = `ada_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -1592,15 +1608,6 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
       setThreadId(tid);
       setHistoryLoaded(true);
     }
-  };
-
-  const startNewChat = () => {
-    if (analysisMethod === 'training') {
-      analysisMethodRef.current = 'agent';
-      setAnalysisMethod('agent');
-      window.localStorage.setItem('ai-analyst-method', 'agent');
-    }
-    clearAll();
   };
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && m.result);
@@ -1685,7 +1692,13 @@ export default function DashboardAIAnalysis({ initialQuestion }: { initialQuesti
 
       {/* ── Messages / Welcome ── */}
       {analysisMethod === 'training' ? (
-        <div className="flex-1 min-h-0"><BasicSqlTraining initialQuestion={trainingQuestion || initialQuestion} /></div>
+        <div className="flex-1 min-h-0">
+          <BasicSqlTraining
+            key={trainingDraftRevision}
+            initialQuestion={trainingQuestion ?? initialQuestion}
+            questionRef={trainingQuestionRef}
+          />
+        </div>
       ) : <>
       <div className="relative flex-1 min-h-0">
       <div ref={conversationRef} role="region" aria-label="Conversation" tabIndex={0}
