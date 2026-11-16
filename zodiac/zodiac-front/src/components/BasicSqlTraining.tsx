@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type Ref } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Database, Loader2, Play, RefreshCw, Save, Search, X } from 'lucide-react';
 import { dashboardApi } from '@/lib/api';
 
@@ -37,7 +37,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const [previewFilters, setPreviewFilters] = useState<TrainingFilter[]>([]);
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [loadingSchema, setLoadingSchema] = useState(false);
+  const [loadingSchema, setLoadingSchema] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -45,6 +45,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const [examples, setExamples] = useState<Example[]>([]);
   const [exampleFilter, setExampleFilter] = useState('');
   const [saving, setSaving] = useState(false);
+  const examplesRequest = useRef(0);
 
   const loadSchema = useCallback(async (nextSource: TrainingSource | 'auto') => {
     setLoadingSchema(true); setError(''); setRun(null); setPreviewFilters([]); setPreviewResult(null); setPreviewFieldSearch('');
@@ -65,12 +66,22 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   }, []);
 
   const loadExamples = useCallback(async (q: string) => {
-    try { const result = await dashboardApi.getBasicTrainingExamples(q); setExamples(result.examples || []); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load saved SQL examples.'); }
+    const request = ++examplesRequest.current;
+    try {
+      const result = await dashboardApi.getBasicTrainingExamples(q);
+      if (request === examplesRequest.current) setExamples(result.examples || []);
+    } catch (cause) {
+      if (request === examplesRequest.current) setError(cause instanceof Error ? cause.message : 'Could not load saved SQL examples.');
+    }
   }, []);
 
   useEffect(() => { void loadSchema('auto'); }, [loadSchema]);
-  useEffect(() => { void loadExamples(''); }, [loadExamples]);
+  useEffect(() => {
+    const refreshExamples = () => { void loadExamples(''); };
+    refreshExamples();
+    window.addEventListener('basic-queries-saved', refreshExamples);
+    return () => window.removeEventListener('basic-queries-saved', refreshExamples);
+  }, [loadExamples]);
   useEffect(() => { if (initialQuestion.trim()) setQuestion(initialQuestion.trim()); }, [initialQuestion]);
 
   const filteredTables = useMemo(() => {
@@ -167,7 +178,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const saveExample = async () => {
     if (!run?.run_id || run.status !== 'executed') return;
     setSaving(true); setError('');
-    try { const result = await dashboardApi.saveBasicTrainingExample(run.run_id, question.trim()); setNotice(`Saved as revision ${result.revision}. In AI Analyst → Basic, find this wording under Questions → Verified saved questions.`); window.dispatchEvent(new Event('basic-queries-saved')); await loadExamples(''); }
+    try { const result = await dashboardApi.saveBasicTrainingExample(run.run_id, question.trim()); setNotice(`Saved as revision ${result.revision}. In AI Analyst → Basic, find this wording under Questions → Verified saved questions.`); window.dispatchEvent(new Event('basic-queries-saved')); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save this example.'); }
     finally { setSaving(false); }
   };
@@ -236,7 +247,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
           <section className="rounded-2xl border bg-white p-4 shadow-sm">
             <h4 className="font-semibold text-slate-900">Write and run a query</h4>
             <label className="mt-3 block text-xs font-medium text-slate-600">Business question to save<input ref={questionRef} value={question} onChange={event => setQuestion(event.target.value)} maxLength={4000} placeholder="e.g. Show the top 10 customers by billed sales in 2001" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"/></label>
-            {exactCandidate && <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900"><span>A matching saved question is available, revision {exactCandidate.revision}. This exact wording match is a candidate; run it to validate current data.</span><button type="button" onClick={() => loadExample(exactCandidate)} className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 font-medium">Load candidate SQL</button></div>}
+            {exactCandidate && <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900"><span>A matching saved question is available, revision {exactCandidate.revision}. This exact wording match is a candidate; run it to validate current data.</span><button type="button" onClick={() => loadExample(exactCandidate)} disabled={loadingSchema} className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 font-medium disabled:opacity-50">Load candidate SQL</button></div>}
             <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><h5 className="text-sm font-semibold text-slate-800">Selection filters (SAP style)</h5><p className="mt-0.5 text-xs text-slate-500">Add include or exclude values/ranges, or choose greater/less. Filters are added to your SQL before it runs.</p></div><button type="button" disabled={!availableFilterFields.length} onClick={() => { const first = availableFilterFields[0]; if (first) setTrainingFilters(current => [...current, { id: crypto.randomUUID(), table: first.table, column: first.name, operator: 'include_range', value: '', upper: '' }]); }} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-40">Add filter</button></div>
               {trainingFilters.map(item => { const fields = availableFilterFields; const selectedField = fields.find(field => field.table === item.table && field.name === item.column); const visibleFields = fields.filter(field => field.table === item.table && (field.name === item.column || !trainingFieldSearch.trim() || field.name.toLowerCase().includes(trainingFieldSearch.trim().toLowerCase()))); const isRange = item.operator === 'include_range' || item.operator === 'exclude_range'; return <div key={item.id} className="mt-2 grid gap-2 rounded-lg border bg-white p-2 sm:grid-cols-2 xl:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(10rem,1fr)_minmax(7rem,0.8fr)_minmax(7rem,0.8fr)_auto]">
@@ -301,7 +312,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
       </section>}
 
       <section className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="font-semibold text-slate-900">Saved SQL examples</h4><p className="mt-1 text-xs text-slate-500">Saved wording and SQL are isolated to your accessible workspace. Load and rerun to check current figures.</p></div><div className="flex gap-2"><input value={exampleFilter} onChange={event => setExampleFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void loadExamples(exampleFilter); }} placeholder="Search saved wording or SQL" className="w-56 rounded-lg border px-3 py-2 text-xs"/><button type="button" onClick={() => void loadExamples(exampleFilter)} className="rounded-lg border px-3 py-2 text-xs">Search</button></div></div>
-        <div className="mt-3 divide-y">{examples.map(example => <div key={example.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-sm font-medium text-slate-800">{example.question}</p><p className="mt-1 text-xs text-slate-500">Revision {example.revision} · {example.dialect} · {example.validation_status} · {new Date(example.updated_at).toLocaleString()}</p><code className="mt-1 block max-w-3xl truncate text-[11px] text-slate-500">{example.sql}</code></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => loadExample(example)} className="rounded-lg border px-3 py-2 text-xs">Load to editor</button><button type="button" onClick={() => void editExample(example)} className="rounded-lg border px-3 py-2 text-xs">Edit SQL</button></div></div>)}{examples.length === 0 && <p className="py-6 text-center text-sm text-slate-500">No saved examples yet. Run a query successfully, then save it here.</p>}</div>
+        <div className="mt-3 divide-y">{examples.map(example => <div key={example.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-sm font-medium text-slate-800">{example.question}</p><p className="mt-1 text-xs text-slate-500">Revision {example.revision} · {example.dialect} · {example.validation_status} · {new Date(example.updated_at).toLocaleString()}</p><code className="mt-1 block max-w-3xl truncate text-[11px] text-slate-500">{example.sql}</code></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => loadExample(example)} disabled={loadingSchema} className="rounded-lg border px-3 py-2 text-xs disabled:opacity-50">Load to editor</button><button type="button" onClick={() => void editExample(example)} className="rounded-lg border px-3 py-2 text-xs">Edit SQL</button></div></div>)}{examples.length === 0 && <p className="py-6 text-center text-sm text-slate-500">No saved examples yet. Run a query successfully, then save it here.</p>}</div>
       </section>
     </div>
   </div>;
