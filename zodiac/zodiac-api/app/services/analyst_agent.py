@@ -641,6 +641,11 @@ class AnalystTools:
         independent_sources = len(measured) > 1 or any(n > 1 for n in references.values())
         from .sql_grain_guard import sql_has_unsafe_monetary_fanout
         from .sql_structure import sql_structure_errors
+        from .analytical_sql_safety import canonicalize_text_joins, scope_master_joins_to_client
+        # Same text-lookup / client-key repairs the shared executor applies before
+        # run. Structure checks must see the repaired form or language tables such
+        # as MAKT fail text_join_errors even when the DB would accept the join.
+        sql = scope_master_joins_to_client(canonicalize_text_joins(sql))
         # Purpose is an explanation of a subtask, not a second user request.
         # Validate technical SQL safety here; validate the selected result against
         # the actual user request when assembling the final answer.

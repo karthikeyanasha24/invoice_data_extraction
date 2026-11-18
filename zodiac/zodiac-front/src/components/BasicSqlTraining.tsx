@@ -69,12 +69,15 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const [exampleFilter, setExampleFilter] = useState('');
   const [saving, setSaving] = useState(false);
   const examplesRequest = useRef(0);
+  const schemaRequest = useRef(0);
 
   const loadSchema = useCallback(async (nextSource: TrainingSource | 'auto') => {
+    const request = ++schemaRequest.current;
     setLoadingSchema(true); setError(''); setRun(null); setPreviewFilters([]); setPreviewResult(null); setPreviewFieldSearch('');
     if (nextSource !== 'auto') setSource(nextSource);
     try {
       const result = await dashboardApi.getBasicTrainingSchema(nextSource);
+      if (request !== schemaRequest.current) return;
       setSource(result.source as TrainingSource);
       setTables(result.tables || []); setSchemaSource(result.schema_source || '');
       setPreviewTable(result.tables?.[0]?.table || '');
@@ -83,9 +86,15 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
       // The live catalog can contain thousands of columns. Load it collapsed
       // and let the user select only the tables/columns needed for the query.
       setSelected({}); setExpanded({});
+      if (!(result.tables || []).length) {
+        setError('No tables were returned for this database. Refresh, or check Business database access.');
+      }
     } catch (cause) {
+      if (request !== schemaRequest.current) return;
       setTables([]); setSelected({}); setError(cause instanceof Error ? cause.message : 'Could not load the database schema.');
-    } finally { setLoadingSchema(false); }
+    } finally {
+      if (request === schemaRequest.current) setLoadingSchema(false);
+    }
   }, []);
 
   const loadExamples = useCallback(async (q: string) => {

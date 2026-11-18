@@ -377,6 +377,14 @@ def test_products_for_identified_invoices_runs_without_model(monkeypatch):
     )
     monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
     monkeypatch.setattr(
+        "app.services.analytical_sql_safety.column_names",
+        lambda table: sorted(columns.get(str(table).upper(), set())),
+    )
+    monkeypatch.setattr(
+        "app.data_catalog.physical.column_names",
+        lambda table: sorted(columns.get(str(table).upper(), set())),
+    )
+    monkeypatch.setattr(
         "app.services.schema_intelligence_registry.get_schema_registry",
         lambda: type(
             "R",
@@ -427,16 +435,20 @@ def test_products_for_identified_invoices_runs_without_model(monkeypatch):
     assert "90000001" in captured["sql"] and "90000002" in captured["sql"] and "90000003" in captured["sql"]
     assert '"VBRP"' in captured["sql"]
     assert "material_id" in captured["sql"]
+    assert 'i."vbeln" = h."vbeln"' in captured["sql"]
+    assert 'LEFT JOIN "MAKT"' not in captured["sql"]
     assert len(result["data"]) == 2
 
 
 def test_products_for_identified_invoices_builder_scopes_prior_ids(monkeypatch):
     from app.services.adaptive_structured_sql import build_products_for_identified_invoices_sql
     from app.services import adaptive_structured_sql as structured
+    from app.services.sql_structure import sql_structure_errors
 
     columns = {
         "VBRK": {"mandt", "vbeln", "waerk"},
         "VBRP": {"mandt", "vbeln", "posnr", "matnr", "netwr"},
+        "MAKT": {"mandt", "matnr", "maktx", "spras"},
     }
     monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in columns)
     monkeypatch.setattr(
@@ -445,12 +457,24 @@ def test_products_for_identified_invoices_builder_scopes_prior_ids(monkeypatch):
         lambda table, column: column.lower() in columns.get(table.upper(), set()),
     )
     monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    monkeypatch.setattr(
+        "app.services.analytical_sql_safety.column_names",
+        lambda table: sorted(columns.get(str(table).upper(), set())),
+    )
+    monkeypatch.setattr(
+        "app.data_catalog.physical.column_names",
+        lambda table: sorted(columns.get(str(table).upper(), set())),
+    )
     sql = build_products_for_identified_invoices_sql(
         "breakdown on product level for the same invoices",
         ["VBRK", "VBRP"],
         {"prior_result_rows": [{"billing_document": "A1"}, {"invoice_number": "B2"}]},
     )
     assert sql and "IN (" in sql and "A1" in sql and "B2" in sql
+    assert 'i."mandt" = h."mandt" AND i."vbeln" = h."vbeln"' in sql
+    # Language text must be a 1-row subquery, not a bare MAKT fact join.
+    assert 'LEFT JOIN "MAKT"' not in sql
+    assert not any("Text lookup MAKT" in error for error in sql_structure_errors(sql))
     assert build_products_for_identified_invoices_sql(
         "show products sold", ["VBRK", "VBRP"], {"prior_result_rows": [{"billing_document": "A1"}]}
     ) is None

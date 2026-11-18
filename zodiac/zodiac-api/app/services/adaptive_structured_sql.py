@@ -1023,13 +1023,18 @@ def build_products_for_identified_invoices_sql(
     if has_column(item, "arktx"):
         select.append('TRIM(CAST(i."arktx" AS TEXT)) AS "material_description"')
         group.append('TRIM(CAST(i."arktx" AS TEXT))')
+    # Plain composite keys so identified-value / relationship proof accepts the
+    # header join. Invoice ID padding stays in WHERE/IN for prior-result scope.
     joins = [
-        f'JOIN "{header}" h ON i."mandt" = h."mandt" '
-        'AND LPAD(TRIM(CAST(i."vbeln" AS TEXT)), 10, \'0\') '
-        '= LPAD(TRIM(CAST(h."vbeln" AS TEXT)), 10, \'0\')'
+        f'JOIN "{header}" h ON i."mandt" = h."mandt" AND i."vbeln" = h."vbeln"'
     ]
     if has_table("MAKT") and has_column("MAKT", "maktx") and has_column(item, "matnr"):
-        joins.append(_makt_join('i."matnr"'))
+        # Plain matnr (+ optional language filter). canonicalize_text_joins below
+        # reduces MAKT to one row per key before fact join validation.
+        makt_on = 'i."matnr" = m."matnr"'
+        if has_column("MAKT", "spras"):
+            makt_on += " AND UPPER(TRIM(CAST(m.\"spras\" AS TEXT))) IN ('E', 'EN')"
+        joins.append(f'LEFT JOIN "MAKT" m ON {makt_on}')
         select.append('TRIM(CAST(m."maktx" AS TEXT)) AS "material_name"')
         group.append('TRIM(CAST(m."maktx" AS TEXT))')
     currency_col = next((c for c in ("waerk", "waers") if has_column(header, c)), None)
@@ -1074,7 +1079,7 @@ def build_products_for_identified_invoices_sql(
     if amount:
         order = f'"billing_document", SUM({amount}) DESC NULLS LAST, "billing_item"'
     aggregate = bool(amount or qty)
-    return (
+    sql = (
         doc_scope
         + ("SELECT " if aggregate else "SELECT DISTINCT ")
         + ", ".join(select) + "\n"
@@ -1085,6 +1090,10 @@ def build_products_for_identified_invoices_sql(
         + f"ORDER BY {order}\n"
         "LIMIT 500"
     )
+    # Agent/Basic validate structure before the shared executor sanitizers run.
+    # Canonicalize here so MAKT never fails text_join_errors on this template.
+    from .analytical_sql_safety import canonicalize_text_joins
+    return canonicalize_text_joins(sql)
 
 
 def build_billing_item_ranking_sql(

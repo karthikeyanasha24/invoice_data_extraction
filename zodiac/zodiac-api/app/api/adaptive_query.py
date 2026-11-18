@@ -2950,12 +2950,21 @@ def basic_training_schema_endpoint(
     try:
         schema, origin = tools.schema(source)
         safe = queryable_schema(schema)
-        inspector = __import__("sqlalchemy").inspect(tools.session(source).get_bind())
         # Bulk reflection avoids issuing PK/FK catalog queries per table. On a
-        # remote PostgreSQL database, N tables × 2 metadata requests made this
-        # schema page time out even though the database was reachable.
-        primary_keys = inspector.get_multi_pk_constraint()
-        foreign_keys_by_table = inspector.get_multi_foreign_keys()
+        # remote PostgreSQL / SAP extract, multi-constraint reflection can still
+        # time out. Never fail the whole Schema Explorer page — return columns
+        # and verified catalog relationships even when PK/FK metadata is empty.
+        primary_keys: Dict[Any, Any] = {}
+        foreign_keys_by_table: Dict[Any, Any] = {}
+        try:
+            inspector = __import__("sqlalchemy").inspect(tools.session(source).get_bind())
+            primary_keys = inspector.get_multi_pk_constraint() or {}
+            foreign_keys_by_table = inspector.get_multi_foreign_keys() or {}
+        except Exception as reflection_error:
+            logger.warning(
+                "Basic training schema PK/FK reflection unavailable for %s: %s",
+                source, type(reflection_error).__name__,
+            )
         # SAP extracts often lack declared PostgreSQL FKs. Merge verified
         # catalog joins (for example KNA1.brsch → T016T.brsch) so Schema
         # Explorer can show usable relationships, not only DB constraints.
@@ -2980,8 +2989,8 @@ def basic_training_schema_endpoint(
         details = []
         for table, columns in safe.items():
             meanings = _column_meanings(table)
-            pk_info = primary_keys.get((None, table)) or {}
-            foreign_keys = foreign_keys_by_table.get((None, table)) or []
+            pk_info = primary_keys.get((None, table)) or primary_keys.get(table) or {}
+            foreign_keys = foreign_keys_by_table.get((None, table)) or foreign_keys_by_table.get(table) or []
             pk = set(pk_info.get("constrained_columns") or [])
             fks = {column for fk in foreign_keys for column in (fk.get("constrained_columns") or [])}
             relationships = [{
