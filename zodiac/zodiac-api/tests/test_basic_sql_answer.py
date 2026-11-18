@@ -436,7 +436,7 @@ def test_products_for_identified_invoices_runs_without_model(monkeypatch):
     assert '"VBRP"' in captured["sql"]
     assert "material_id" in captured["sql"]
     assert 'i."vbeln" = h."vbeln"' in captured["sql"]
-    assert 'LEFT JOIN "MAKT"' not in captured["sql"]
+    assert "MAKT" not in captured["sql"]
     assert len(result["data"]) == 2
 
 
@@ -472,9 +472,9 @@ def test_products_for_identified_invoices_builder_scopes_prior_ids(monkeypatch):
     )
     assert sql and "IN (" in sql and "A1" in sql and "B2" in sql
     assert 'i."mandt" = h."mandt" AND i."vbeln" = h."vbeln"' in sql
-    # Language text must be a 1-row subquery, not a bare MAKT fact join.
-    assert 'LEFT JOIN "MAKT"' not in sql
-    assert not any("Text lookup MAKT" in error for error in sql_structure_errors(sql))
+    # Product drill-down stays on VBRP/VBRK only — no MAKT language join.
+    assert "MAKT" not in sql
+    assert not sql_structure_errors(sql)
     assert build_products_for_identified_invoices_sql(
         "show products sold", ["VBRK", "VBRP"], {"prior_result_rows": [{"billing_document": "A1"}]}
     ) is None
