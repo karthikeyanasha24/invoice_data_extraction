@@ -255,16 +255,28 @@ def requested_sources(question, schema):
 
 
 def canonical_annual_order_invoice_plan(plan, question, catalog):
-    """Use independent header aggregates for two-year order/invoice totals.
+    """Use independent header aggregates for order/invoice population totals.
 
     A generic document-pair plan requires both document IDs. That grain is
     incompatible with annual totals, whose rows are grouped by year, client,
     and currency. Normalize this common request before SQL generation so a
     model cannot carry the wrong identity requirements into validation.
+
+    Two or more years are enough to identify an annual comparison. A single
+    year still qualifies when the user explicitly asks to compare order and
+    invoice values (including customer/country difference requests).
     """
     years = sorted(set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", question)))
     q = question.lower()
-    if len(years) < 2:
+    compares = bool(
+        re.search(
+            r"\b(?:compare|comparison|difference|differences|versus|vs\.?|against)\b",
+            q,
+        )
+    )
+    if len(years) < 1:
+        return plan
+    if len(years) == 1 and not compares:
         return plan
     if not re.search(r"\b(?:orders?|sales orders?)\b", q) or not re.search(r"\b(?:invoices?|billings?)\b", q):
         return plan
@@ -292,11 +304,15 @@ def canonical_annual_order_invoice_plan(plan, question, catalog):
         {"table": invoice, "column": "netwr", "alias": "invoice_value", "role": "measure"},
         {"table": invoice, "column": "waerk", "alias": "invoice_currency", "role": "currency"},
     ]
+    grain = "independent order-header and invoice-header totals by year, client, and currency"
+    if re.search(r"\bcustomers?\b", q) and "kunnr" in catalog.columns.get(order, set()):
+        fields.append({"table": order, "column": "kunnr", "alias": "customer_id", "role": "dimension"})
+        grain = "independent order-header and invoice-header totals by customer, year, client, and currency"
     return {
         **plan,
         "tables": [order, invoice],
         "fields": fields,
-        "grain": "independent order-header and invoice-header totals by year, client, and currency",
+        "grain": grain,
         "filters": [
             {"table": order, "column": "audat", "operator": "year", "values": years},
             {"table": invoice, "column": "fkdat", "operator": "year", "values": years},
@@ -306,7 +322,8 @@ def canonical_annual_order_invoice_plan(plan, question, catalog):
         "limit": 200,
         "missing_handling": "Keep unmatched year/client/currency groups; calculate a difference only when client, year, and currency match.",
         "assumptions": ["Annual totals use each header's own document date.",
-                        "Document IDs are not output dimensions for annual totals."],
+                        "Document IDs are not output dimensions for annual totals.",
+                        "Currency-matched differences only; never convert currencies."],
     }
 
 
@@ -852,10 +869,16 @@ def identified_value_proof(sql, catalog, measure_fields=None, *, allow_currency_
         joined = bool(select.args.get('joins'))
         single_table = len(infos) == 1 and not joined and not isinstance(scope.selected_sources[base][1], Scope)
         if aggregate_nodes:
-            # Summing the driving table's values across joins to unique rows
-            # (items to their header) cannot repeat them; anything else can.
-            if joined and measured_aliases and (multiplying or measured_aliases - {base}):
-                raise aggregate_error()
+            # Aggregation after verified joins is allowed for star-schema /
+            # customer-level totals: SUM(fact) FROM dim JOIN fact GROUP BY dim.
+            # Still reject the classic header×items fan-out where a non-multiplying
+            # measured amount would be duplicated by a 1:N join (e.g. SUM(VBRK.netwr)
+            # while joined to VBRP lines).
+            if joined and measured_aliases:
+                duplicated_headers = (measured_aliases - set(multiplying)) and set(multiplying)
+                stray_measures = measured_aliases - {base} - determined - set(multiplying)
+                if duplicated_headers or stray_measures:
+                    raise aggregate_error()
             if any(info[2] for info in infos.values()):
                 raise ValueError('Do not re-sum already aggregated facts')
             if joined and any(not infos[a][1] for a in measured_aliases):

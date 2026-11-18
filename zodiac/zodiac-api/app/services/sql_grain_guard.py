@@ -81,6 +81,19 @@ def grain_contract(intent: str, dimensions: List[str]) -> Dict[str, Any]:
             "fanout_safe": True,
             "note": "Do not join suppliers into billing amount queries",
         }
+    # Customer / industry / country sales totals should group billing documents
+    # (or items) to that dimension — not rank individual billing lines.
+    dimension_totals = bool(dims & {"customer", "industry", "country", "currency", "year"})
+    item_dimensions = bool(dims & {"product", "material", "product_group"})
+    if dimension_totals and not item_dimensions:
+        return {
+            "fact_grain": "billing_header",
+            "join_grain": "VBRK (+ N:1 KNA1/T016T)",
+            "aggregation_grain": ",".join(sorted(dims)) or "customer,currency",
+            "monetary_source": "VBRK.NETWR grouped to the requested dimensions",
+            "fanout_safe": True,
+            "note": "Group all matching billing documents per dimension; do not return ranked individual billing items unless the question asks for lines/items.",
+        }
     return {
         "fact_grain": "billing_item",
         "join_grain": "vbrp⋈VBRK (+ N:1 KNA1/MAKT/MARA)",

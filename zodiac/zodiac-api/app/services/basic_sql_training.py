@@ -302,6 +302,47 @@ def apply_training_filters(sql: str, filters, selection: dict) -> str:
     return tree.sql(dialect="postgres")
 
 
+_FACT_TABLES_REQUIRING_RESTRICTION = {
+    "vbrk", "vbrp", "vbak", "vbap", "likp", "lips", "ekko", "ekpo", "bkpf", "bseg", "acdoca",
+}
+
+
+def _sql_has_where_restriction(sql: str) -> bool:
+    from sqlglot import exp, parse_one
+    from sqlglot.errors import SqlglotError
+    try:
+        tree = parse_one(sql, read="postgres")
+    except SqlglotError:
+        return False
+    if not isinstance(tree, exp.Select):
+        return False
+    where = tree.args.get("where")
+    return bool(where and where.this)
+
+
+def assert_training_restriction(sql: str, filters, selection: dict, *, allow_unrestricted: bool = False) -> None:
+    """Block unrestricted fact-table scans in SQL Training unless explicitly allowed.
+
+    The guided restriction builder (year / document / customer / vendor) must
+    shape the query before results. Wildcard or unscoped fact reads are rejected
+    so saved Basic examples stay specific instead of full-table scans.
+    """
+    if allow_unrestricted:
+        return
+    if isinstance(filters, list) and len(filters) > 0:
+        return
+    selected = {str(table).lower() for table in (selection or {})}
+    if not selected.intersection(_FACT_TABLES_REQUIRING_RESTRICTION):
+        return
+    if _sql_has_where_restriction(sql):
+        return
+    raise ValueError(
+        "Add a query restriction before running this fact-table SQL. "
+        "Use the Query restriction builder to set a calendar year, document number, "
+        "customer/vendor, or another selection filter — or confirm all years / unrestricted."
+    )
+
+
 def check_query_scope(sql: str, selection: dict):
     # Reuse the same SQLGlot boundary as model-generated SQL. It enforces one
     # read-only SELECT/WITH, validates every physical table/column, expands safe
@@ -326,8 +367,11 @@ def check_query_scope(sql: str, selection: dict):
 
 
 def needs_specific_years(question: str) -> bool:
-    return not re.search(r"\b(?:19|20)\d{2}\b", question or "") and bool(re.search(
-        r"\b(?:between|for|in)\s+(?:the\s+)?specific\s+years\b", question or "", re.I))
+    wording = question or ""
+    if re.search(r"\ball(?:\s+the)?\s+years?\b|\bevery\s+(?:calendar\s+)?year\b", wording, re.I):
+        return False
+    return not re.search(r"\b(?:19|20)\d{2}\b", wording) and bool(re.search(
+        r"\b(?:between|for|in)\s+(?:the\s+)?specific\s+years\b", wording, re.I))
 
 
 def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]:
@@ -360,23 +404,24 @@ def answerability_issues(question: str, sql: str, rows: list[dict]) -> list[str]
             and re.search(r"\b(?:difference|differences|compare|comparison)\b", wording)):
         issues.append("The question compares order and invoice values, but the SQL reads no invoice table. Join the sales order to billing data and calculate both values and their difference.")
 
-    years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", wording)))
+    from .analytical_operations import year_scope_from_question
+    year_scope = year_scope_from_question(question)
+    years = list(year_scope.get("years") or [])
     if needs_specific_years(question):
         issues.append(
             "The saved question asks for specific years but names no years. "
             "Specify the actual year or range in both the question and SQL, then rerun and save it. "
             "If every year is intended, state 'all years' in the question."
         )
-    range_wording = len(years) == 2 and bool(re.search(
-        r"\bbetween\b|\b(?:19|20)\d{2}\s*(?:to|through|until|[-–—])\s*(?:19|20)\d{2}\b",
-        wording,
-    ))
+    range_wording = year_scope.get("mode") == "range"
+    if year_scope.get("mode") == "all_years":
+        # Explicit all-years questions must not invent a FKDAT restriction.
+        years = []
     if years:
         date_fields = {"fkdat", "audat", "budat", "bldat", "erdat", "billing_date", "order_date",
                        "invoice_date", "billing_year", "invoice_year", "order_year",
                        "sales_year", "salesyear", "year", "fiscal_year"}
-        required_years = ([str(year) for year in range(min(map(int, years)), max(map(int, years)) + 1)]
-                          if range_wording else years)
+        required_years = years
         from .analyst_filters import _calendar_years_proven
 
         def conjuncts(node):

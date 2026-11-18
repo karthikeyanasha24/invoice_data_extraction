@@ -166,6 +166,7 @@ def run_basic_sql_answer(
     execute: Callable[..., dict],
     previous_question: str = "",
     previous_sql: str = "",
+    previous_rows: list[dict] | None = None,
     prior_examples: list[dict] | None = None,
     local_agent: Callable[..., dict] | None = None,
     field_lookup: Callable[[str], dict] | None = None,
@@ -195,12 +196,22 @@ def run_basic_sql_answer(
         # An explicit picker selection must replay that server-owned revision.
         # It must not become a follow-up, fuzzy match, template or model request.
         if selected_training_example is not None:
-            previous_question, previous_sql, local_agent = "", "", None
+            previous_question, previous_sql, previous_rows, local_agent = "", "", None, None
         resolved = continue_basic_question(question, previous_question)
         if resolved != (question or "").strip():
-            previous_sql = ""
+            # Referential product drill-downs still need the prior invoice IDs /
+            # SQL. Only clear prior SQL for ordinary rewritten follow-ups.
+            from .adaptive_structured_sql import products_for_identified_invoices_intent
+            if not products_for_identified_invoices_intent(question) and not products_for_identified_invoices_intent(resolved):
+                previous_sql = ""
+                previous_rows = None
         question = prepare_basic_question(resolved)
         semantic = enrich_semantic_with_requirements(question)
+        prior_rows = [row for row in (previous_rows or []) if isinstance(row, dict)][:200]
+        if prior_rows:
+            semantic["prior_result_rows"] = prior_rows
+        if previous_sql:
+            semantic["prior_sql"] = previous_sql
         tables = [
             str(item.get("table") or "")
             for item in get_schema_registry().lightweight_table_catalog(include_operational=False)
@@ -209,6 +220,55 @@ def run_basic_sql_answer(
         ctx = VerifiedDbContext(question=question, tables=tables, semantic_requirements=semantic, prior_sql=previous_sql or "")
         from .basic_rag import (adapt_training_year_filter, mixed_currency_billing_total,
                                 profit_question_without_profit_sql, retrieve_examples, replayable_steps)
+
+        # Deterministic VBRP product drill-down for previously identified invoices.
+        # Run before Ollama/templates so Basic keeps context without a model call.
+        from .adaptive_structured_sql import build_products_for_identified_invoices_sql
+        product_sql = build_products_for_identified_invoices_sql(question, tables, semantic) or ""
+        if product_sql.strip():
+            if not paid_models_blocked():
+                raise RuntimeError("Basic mode failed to block paid models")
+            step = {
+                "source": "business",
+                "basic_predefined_template": "products_for_identified_invoices",
+                "purpose": "Products sold on identified invoices",
+            }
+            executed = _invoke_execute(execute, product_sql.strip().rstrip(";"), step) or {}
+            if not executed.get("ok"):
+                answer = (
+                    "Basic could not list products for the previously identified invoices. "
+                    + str(executed.get("error") or "")
+                )
+                result = _payload(question, "CANNOT_ANSWER", answer, executed.get("sql") or product_sql, [])
+                result["sql_status"] = "execution_failed"
+                result["meta"]["basic_predefined_template"] = "products_for_identified_invoices"
+                return result
+            rows = executed.get("rows") or []
+            if rows:
+                answer = (
+                    f"Verified database result: {len(rows)} product row(s) for the previously "
+                    "identified invoices. Basic used the prior invoice IDs and did not call a model."
+                )
+                status = "SUCCESS"
+            else:
+                answer = (
+                    "No product lines were found for the previously identified invoices. "
+                    "Basic mode did not call a model."
+                )
+                status = "SUCCESS_EMPTY"
+            result = _payload(
+                question, status, answer, executed.get("sql") or product_sql, rows,
+                executed.get("source") or "business", product_sql,
+            )
+            result["sql_status"] = "executed"
+            result["meta"]["basic_predefined_template"] = "products_for_identified_invoices"
+            result["meta"]["result_truncated"] = bool(executed.get("truncated"))
+            from .analyst_evidence import grounded_answer
+            if rows:
+                result["answer"] = result["summary"] = grounded_answer([
+                    {"rows": rows, "truncated": bool(executed.get("truncated"))}
+                ]) + "\n\n" + answer
+            return result
         def safe_examples(embeddings=False):
             candidates = retrieve_examples(question, prior_examples, use_embeddings=embeddings)
             return [example for example in candidates if not any(

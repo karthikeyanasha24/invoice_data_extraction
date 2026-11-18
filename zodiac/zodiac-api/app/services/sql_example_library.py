@@ -481,21 +481,18 @@ SELECT v.matnr, COALESCE(m.maktx, v.matnr) AS material_name, SUM(CAST(NULLIF(TRI
 SELECT m.maktx AS material_name, ci.matnr AS material_number, SUM(ci.wertn) AS total_cost_value, ci.hwaer AS currency FROM CKIS ci LEFT JOIN MAKT m ON ci.matnr = m.matnr AND m.spras = 'E' WHERE ci.matnr IS NOT NULL AND ci.wertn IS NOT NULL GROUP BY ci.matnr, m.maktx, ci.hwaer HAVING SUM(ci.wertn) > 0 ORDER BY total_cost_value DESC LIMIT 20
 '''.strip(),
     },
-    # ── Negative / lowest sales LINE ITEMS for a year (not year totals) ─────
+    # ── Lowest customer-level sales for a year (grouped totals, not line ranks) ─
     {
         "user_query": "Show sales by negative or lowest for year 2000",
         "sql_query": '''
 SELECT
-    v."vbeln" AS billing_doc,
-    v."posnr" AS line_pos,
-    r."fkdat" AS billing_date,
-    r."kunag" AS sold_to_party,
-    NULLIF(TRIM(v."netwr"::text), '')::numeric AS netwr_line_amount,
-    r."waerk" AS currency
-FROM vbrp v
-JOIN "VBRK" r ON LPAD(TRIM(v."vbeln"), 10, '0') = LPAD(TRIM(r."vbeln"), 10, '0')
-WHERE SUBSTRING(TRIM(r."fkdat"), 1, 4) = '2000'
-ORDER BY NULLIF(TRIM(v."netwr"::text), '')::numeric ASC NULLS LAST
+    r."kunag" AS customer,
+    r."waerk" AS currency,
+    SUM(CAST(NULLIF(TRIM(r."netwr"::text), '') AS NUMERIC)) AS total_sales
+FROM "VBRK" r
+WHERE r."fkdat" >= '20000101' AND r."fkdat" < '20010101'
+GROUP BY r."kunag", r."waerk"
+ORDER BY total_sales ASC NULLS LAST
 LIMIT 100
 '''.strip(),
     },

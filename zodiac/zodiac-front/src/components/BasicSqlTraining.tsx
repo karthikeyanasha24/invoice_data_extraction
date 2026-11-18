@@ -3,10 +3,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Database, Loader2, Play, RefreshCw, Save, Search, X } from 'lucide-react';
 import { dashboardApi } from '@/lib/api';
+import {
+  buildRestrictionFilters,
+  buildSuggestedRestrictionSql,
+  detectRestrictionProfile,
+  restrictionQuestionHint,
+  selectedHasFactTable,
+  validateRestrictionDraft,
+  type PeriodMode,
+  type RestrictionDraft,
+  type RestrictionMode,
+} from '@/lib/queryRestrictionBuilder';
+import AIChartRenderer from './ai/AIChartRenderer';
 
 type TrainingSource = 'business' | 'application';
 type SchemaColumn = { name: string; type: string; description?: string; primary_key: boolean; foreign_key: boolean };
-type SchemaTable = { table: string; description?: { description?: string; domain?: string; grain?: string; important_columns?: string }; columns: SchemaColumn[]; relationships: { columns: string[]; references_table?: string; references_columns: string[] }[] };
+type SchemaTable = { table: string; description?: { description?: string; domain?: string; grain?: string; important_columns?: string }; columns: SchemaColumn[]; relationships: { columns: string[]; references_table?: string; references_columns: string[]; note?: string; cardinality?: string }[] };
 type Example = { id: string; source: TrainingSource; question: string; sql: string; dialect: string; revision: number; validation_status: string; updated_at: string; schema: { tables?: Record<string, { columns: { col: string; type: string }[] }>; relationships?: Record<string, { columns: string[]; references_table?: string; references_columns: string[] }[]> } };
 type FilterOperator = 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than';
 type TrainingFilter = { id: string; table: string; column: string; operator: FilterOperator; value: string; upper: string };
@@ -30,6 +42,17 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const [question, setQuestion] = useState(initialQuestion);
   const [sql, setSql] = useState('');
   const [trainingFilters, setTrainingFilters] = useState<TrainingFilter[]>([]);
+  const [restrictionDraft, setRestrictionDraft] = useState<RestrictionDraft>({
+    mode: 'all',
+    period: 'year',
+    year: '2000',
+    yearTo: '2005',
+    specificValue: '',
+    entityValue: '',
+    client: '800',
+    allowUnrestricted: false,
+  });
+  const [restrictionSql, setRestrictionSql] = useState('');
   const [activeTab, setActiveTab] = useState<'training' | 'data'>('training');
   const [previewTable, setPreviewTable] = useState('');
   const [previewColumns, setPreviewColumns] = useState<string[]>([]);
@@ -41,7 +64,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [run, setRun] = useState<{ status: 'executed' | 'needs_review'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; answerability_issues?: string[]; llm_calls: 0 } | null>(null);
+  const [run, setRun] = useState<{ status: 'executed' | 'needs_review'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; charts?: any[]; answerability_issues?: string[]; llm_calls: 0 } | null>(null);
   const [examples, setExamples] = useState<Example[]>([]);
   const [exampleFilter, setExampleFilter] = useState('');
   const [saving, setSaving] = useState(false);
@@ -92,10 +115,50 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
   const selectedTableNames = useMemo(() => Object.keys(selectedSchema), [selectedSchema]);
   const selectedCount = Object.values(selectedSchema).reduce((sum, columns) => sum + columns.length, 0);
   const availableFilterFields = tables.flatMap(table => (selectedSchema[table.table] || []).map(name => ({ table: table.table, name, type: table.columns.find(column => column.name === name)?.type || '' })));
+  const restrictionProfile = useMemo(() => detectRestrictionProfile(selectedTableNames), [selectedTableNames]);
+  const needsRestriction = selectedHasFactTable(selectedTableNames);
   const exactCandidate = useMemo(() => {
     const normalized = question.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
     return normalized ? examples.find(example => example.question.trim().toLocaleLowerCase().replace(/\s+/g, ' ') === normalized) : undefined;
   }, [examples, question]);
+
+  const applyRestrictionBuilder = () => {
+    setError('');
+    const validationError = validateRestrictionDraft(restrictionProfile, restrictionDraft);
+    if (validationError) { setError(validationError); return; }
+    const tableMeta = tables.find(table => table.table.toLowerCase() === restrictionProfile.primaryTable.toLowerCase());
+    if (!tableMeta) { setError('Select the primary table for this domain in the schema explorer first.'); return; }
+    const requiredColumns = [
+      restrictionDraft.documentFieldOverride || restrictionProfile.documentField,
+      restrictionDraft.entityFieldOverride || restrictionProfile.entityField,
+      restrictionDraft.dateFieldOverride || restrictionProfile.dateField,
+      restrictionDraft.client.trim() ? 'mandt' : '',
+      restrictionProfile.amountField,
+      'waerk',
+    ].filter(Boolean) as string[];
+    const available = new Map(tableMeta.columns.map(column => [column.name.toLowerCase(), column.name]));
+    const existing = selected[tableMeta.table] || [];
+    const merged = [...existing];
+    for (const name of requiredColumns) {
+      const actual = available.get(name.toLowerCase());
+      if (actual && !merged.some(item => item.toLowerCase() === actual.toLowerCase())) merged.push(actual);
+    }
+    setSelected(current => ({ ...current, [tableMeta.table]: merged }));
+    const filters = buildRestrictionFilters(restrictionProfile, restrictionDraft)
+      .filter(filter => available.has(filter.column.toLowerCase()))
+      .map(filter => ({ ...filter, table: tableMeta.table, column: available.get(filter.column.toLowerCase()) || filter.column }));
+    const suggested = buildSuggestedRestrictionSql(restrictionProfile, restrictionDraft, merged);
+    setTrainingFilters(filters.map(filter => ({ ...filter, id: crypto.randomUUID() })));
+    setRestrictionSql(suggested);
+    if (!sql.trim()) setSql(suggested);
+    if (!question.trim()) setQuestion(restrictionQuestionHint(restrictionProfile, restrictionDraft));
+    setNotice(
+      filters.length
+        ? `Applied ${filters.length} restriction filter${filters.length === 1 ? '' : 's'}. Review the suggested SQL, then run.`
+        : 'All-years / unrestricted confirmed. Review SQL carefully before running a broad scan.',
+    );
+    setTimeout(() => setNotice(''), 4000);
+  };
 
   const toggleColumn = (table: string, column: string) => setSelected(current => {
     const values = current[table] || [];
@@ -163,9 +226,21 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
     if (!question.trim()) { setError('Write the business question this SQL is intended to answer.'); return; }
     if (!sql.trim()) { setError('Enter or paste a SQL query.'); return; }
     if (!selectedCount) { setError('Select at least one table and column in the schema explorer.'); return; }
+    const allowUnrestricted = restrictionDraft.allowUnrestricted || restrictionDraft.period === 'all_years';
+    if (needsRestriction && !trainingFilters.length && !allowUnrestricted && !/\bwhere\b/i.test(sql)) {
+      setError('Add a query restriction first (year, document, customer/vendor, or selection filter). Wildcard fact-table scans are blocked.');
+      return;
+    }
     setRunning(true);
     try {
-      const result = await dashboardApi.executeBasicTrainingSql({ source, question: question.trim(), sql, selected_schema: selectedSchema, filters: trainingFilters.map(({ table, column, operator, value, upper }) => ({ table, column, operator, value, upper })) });
+      const result = await dashboardApi.executeBasicTrainingSql({
+        source,
+        question: question.trim(),
+        sql,
+        selected_schema: selectedSchema,
+        filters: trainingFilters.map(({ table, column, operator, value, upper }) => ({ table, column, operator, value, upper })),
+        allow_unrestricted: allowUnrestricted,
+      });
       if (result.status === 'failed') { setError(result.error || 'The SQL could not be executed.'); return; }
       setSql(result.sql || sql); setTrainingFilters([]); setRun({ ...result, status: result.status });
       setNotice(result.status === 'needs_review'
@@ -233,7 +308,7 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
               return <div key={table.table} className="rounded-xl border border-slate-200">
                 <div className="flex items-center gap-2 px-3 py-2"><input aria-label={`Select all columns in ${table.table}`} type="checkbox" checked={allChecked} onChange={event => toggleTable(table, event.target.checked)}/><button type="button" onClick={() => setExpanded(current => ({ ...current, [table.table]: !isOpen }))} className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium text-slate-800">{isOpen ? <ChevronDown className="h-4 w-4"/> : <ChevronRight className="h-4 w-4"/>}<span className="truncate">{table.table}</span><span className="text-xs font-normal text-slate-400">{checked.length}/{table.columns.length}</span></button></div>
                 {isOpen && <div className="border-t bg-slate-50 px-3 py-2">{table.columns.map(column => <label key={column.name} title={column.description || undefined} className="flex items-center gap-2 py-1 text-xs text-slate-700"><input type="checkbox" checked={checked.includes(column.name)} onChange={() => toggleColumn(table.table, column.name)}/><span className="min-w-0 truncate font-medium">{column.name}</span><span className="truncate text-slate-400">{column.type}</span>{column.primary_key && <span className="rounded bg-amber-100 px-1 text-amber-800">PK</span>}{column.foreign_key && <span className="rounded bg-sky-100 px-1 text-sky-800">FK</span>}{column.description && <span className="hidden truncate text-slate-500 2xl:inline">· {column.description}</span>}</label>)}
-                  {table.relationships.map((relationship, index) => <p key={index} className="mt-1 text-[11px] text-sky-800">{relationship.columns.join(', ')} → {relationship.references_table}.{relationship.references_columns.join(', ')}</p>)}</div>}
+                  {table.relationships.map((relationship, index) => <p key={index} className="mt-1 text-[11px] text-sky-800">{relationship.columns.join(', ')} → {relationship.references_table}.{relationship.references_columns.join(', ')}{relationship.cardinality ? ` · ${relationship.cardinality}` : ''}{relationship.note ? ` · ${relationship.note}` : ''}</p>)}</div>}
               </div>;
             })}
             {!loadingSchema && filteredTables.length === 0 && <p className="p-4 text-sm text-slate-500">No visible tables. Refresh the connected database catalog or check access.</p>}
@@ -248,6 +323,73 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
             <h4 className="font-semibold text-slate-900">Write and run a query</h4>
             <label className="mt-3 block text-xs font-medium text-slate-600">Business question to save<input ref={questionRef} value={question} onChange={event => setQuestion(event.target.value)} maxLength={4000} placeholder="e.g. Show the top 10 customers by billed sales in 2001" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"/></label>
             {exactCandidate && <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900"><span>A matching saved question is available, revision {exactCandidate.revision}. This exact wording match is a candidate; run it to validate current data.</span><button type="button" onClick={() => loadExample(exactCandidate)} disabled={loadingSchema} className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 font-medium disabled:opacity-50">Load candidate SQL</button></div>}
+            <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/70 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h5 className="text-sm font-semibold text-slate-900">Query restriction builder</h5>
+                  <p className="mt-0.5 text-xs text-slate-600">Force a year, document, or entity scope before results — not only for invoices. Detected domain: <span className="font-medium text-indigo-900">{restrictionProfile.label}</span>{needsRestriction ? ' · fact tables require a restriction or an explicit all-years confirmation' : ''}.</p>
+                </div>
+                <button type="button" disabled={!selectedCount} onClick={applyRestrictionBuilder} className="rounded-lg bg-indigo-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40">Apply restrictions</button>
+              </div>
+              <fieldset className="mt-3">
+                <legend className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">Search method</legend>
+                <div className="mt-2 flex flex-wrap gap-3">
+                  {restrictionProfile.modes.map(mode => (
+                    <label key={mode.id} className="inline-flex items-center gap-2 text-xs text-slate-800">
+                      <input type="radio" name="restriction-mode" checked={restrictionDraft.mode === mode.id} onChange={() => setRestrictionDraft(current => ({ ...current, mode: mode.id as RestrictionMode }))} />
+                      {mode.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <label className="text-[11px] font-medium text-slate-600">Period
+                  <select aria-label="Restriction period" value={restrictionDraft.period} onChange={event => setRestrictionDraft(current => ({ ...current, period: event.target.value as PeriodMode }))} className="mt-1 w-full rounded-md border bg-white px-2 py-1.5 text-xs">
+                    <option value="year">Calendar year</option>
+                    <option value="year_range">Year range</option>
+                    <option value="all_years">All years</option>
+                    <option value="none">No period filter</option>
+                  </select>
+                </label>
+                {(restrictionDraft.period === 'year' || restrictionDraft.period === 'year_range') && (
+                  <label className="text-[11px] font-medium text-slate-600">{restrictionDraft.period === 'year_range' ? 'From year' : 'Calendar year'}
+                    <input aria-label="Calendar year" value={restrictionDraft.year} onChange={event => setRestrictionDraft(current => ({ ...current, year: event.target.value }))} placeholder="2000" className="mt-1 w-full rounded-md border bg-white px-2 py-1.5 text-xs" />
+                  </label>
+                )}
+                {restrictionDraft.period === 'year_range' && (
+                  <label className="text-[11px] font-medium text-slate-600">To year
+                    <input aria-label="To calendar year" value={restrictionDraft.yearTo} onChange={event => setRestrictionDraft(current => ({ ...current, yearTo: event.target.value }))} placeholder="2005" className="mt-1 w-full rounded-md border bg-white px-2 py-1.5 text-xs" />
+                  </label>
+                )}
+                <label className="text-[11px] font-medium text-slate-600">SAP client (optional)
+                  <input aria-label="SAP client" value={restrictionDraft.client} onChange={event => setRestrictionDraft(current => ({ ...current, client: event.target.value }))} placeholder="800" className="mt-1 w-full rounded-md border bg-white px-2 py-1.5 text-xs" />
+                </label>
+                {restrictionDraft.mode === 'specific' && (
+                  <label className="text-[11px] font-medium text-slate-600">Specific value
+                    <input aria-label="Specific document or key" value={restrictionDraft.specificValue} onChange={event => setRestrictionDraft(current => ({ ...current, specificValue: event.target.value }))} placeholder={restrictionProfile.documentField || 'document / key'} className="mt-1 w-full rounded-md border bg-white px-2 py-1.5 text-xs" />
+                  </label>
+                )}
+                {restrictionDraft.mode === 'by_entity' && (
+                  <label className="text-[11px] font-medium text-slate-600">By {restrictionProfile.entityLabel}
+                    <input aria-label={`By ${restrictionProfile.entityLabel}`} value={restrictionDraft.entityValue} onChange={event => setRestrictionDraft(current => ({ ...current, entityValue: event.target.value }))} placeholder={restrictionProfile.entityField || restrictionProfile.entityLabel} className="mt-1 w-full rounded-md border bg-white px-2 py-1.5 text-xs" />
+                  </label>
+                )}
+              </div>
+              <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
+                <input type="checkbox" className="mt-0.5" checked={restrictionDraft.allowUnrestricted || restrictionDraft.period === 'all_years'} onChange={event => setRestrictionDraft(current => ({ ...current, allowUnrestricted: event.target.checked, period: event.target.checked ? 'all_years' : current.period === 'all_years' ? 'year' : current.period }))} />
+                <span>Confirm all years / unrestricted scan. Use only when the question truly needs every year; otherwise pick a year or key filter.</span>
+              </label>
+              {(restrictionSql || sql) && (
+                <div className="mt-3 rounded-lg border bg-white p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold text-slate-700">Suggested restricted SQL</p>
+                    <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(restrictionSql || sql); setNotice('Restricted SQL copied.'); setTimeout(() => setNotice(''), 2000); } catch { setError('Clipboard access failed.'); } }} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]"><Copy className="h-3 w-3"/>Copy SQL</button>
+                  </div>
+                  <pre className="mt-2 max-h-40 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-4 text-slate-100">{restrictionSql || 'Apply restrictions to generate a scoped SQL template.'}</pre>
+                  <p className="mt-1 text-[10px] text-slate-500">The builder produces restricted SQL for training. Parameter binding still uses the PostgreSQL driver format at execution time.</p>
+                </div>
+              )}
+            </div>
             <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><h5 className="text-sm font-semibold text-slate-800">Selection filters (SAP style)</h5><p className="mt-0.5 text-xs text-slate-500">Add include or exclude values/ranges, or choose greater/less. Filters are added to your SQL before it runs.</p></div><button type="button" disabled={!availableFilterFields.length} onClick={() => { const first = availableFilterFields[0]; if (first) setTrainingFilters(current => [...current, { id: crypto.randomUUID(), table: first.table, column: first.name, operator: 'include_range', value: '', upper: '' }]); }} className="rounded-lg border bg-white px-3 py-1.5 text-xs font-medium disabled:opacity-40">Add filter</button></div>
               {trainingFilters.map(item => { const fields = availableFilterFields; const selectedField = fields.find(field => field.table === item.table && field.name === item.column); const visibleFields = fields.filter(field => field.table === item.table && (field.name === item.column || !trainingFieldSearch.trim() || field.name.toLowerCase().includes(trainingFieldSearch.trim().toLowerCase()))); const isRange = item.operator === 'include_range' || item.operator === 'exclude_range'; return <div key={item.id} className="mt-2 grid gap-2 rounded-lg border bg-white p-2 sm:grid-cols-2 xl:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(10rem,1fr)_minmax(7rem,0.8fr)_minmax(7rem,0.8fr)_auto]">
@@ -264,8 +406,9 @@ export default function BasicSqlTraining({ initialQuestion = '', questionRef }: 
             <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" onClick={() => void execute()} disabled={running || loadingSchema} className="inline-flex items-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-800 disabled:opacity-50">{running ? <Loader2 className="h-4 w-4 animate-spin"/> : <Play className="h-4 w-4"/>}{running ? 'Running read-only query…' : 'Run SQL'}</button>{run?.run_id && run.status === 'executed' && <button type="button" onClick={() => void saveExample()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin"/> : <Save className="h-4 w-4"/>}Save checked example</button>}<span className="text-xs text-slate-500">SELECT/WITH only · database scope and selected schema enforced · no model call</span></div>
           </section>
 
-          {run && <section className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="font-semibold text-slate-900">Query results</h4><p className="text-xs text-slate-500">{run.row_count} rows · 0 model calls</p></div><span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${run.status === 'needs_review' ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>{run.status === 'needs_review' ? 'Needs review' : <><Check className="h-3.5 w-3.5"/>Executed</>}</span></div>
+          {run && <section className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="font-semibold text-slate-900">Query results</h4><p className="text-xs text-slate-500">{run.row_count} rows · 0 model calls{run.charts?.length ? ` · ${run.charts.length} chart${run.charts.length === 1 ? '' : 's'}` : ''}</p></div><span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${run.status === 'needs_review' ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>{run.status === 'needs_review' ? 'Needs review' : <><Check className="h-3.5 w-3.5"/>Executed</>}</span></div>
             {!!run.answerability_issues?.length && <div role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">This SQL ran, but the result does not yet verify the question:</p><ul className="mt-1 list-disc space-y-1 pl-5">{run.answerability_issues.map(issue => <li key={issue}>{issue}</li>)}</ul></div>}
+            {!!run.charts?.length && <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3"><p className="mb-2 text-xs font-semibold text-slate-700">Charts from this result</p><AIChartRenderer charts={run.charts as any} /></div>}
             <div className="mt-3 max-h-96 overflow-auto rounded-lg border"><table className="min-w-full text-left text-xs"><thead className="sticky top-0 bg-slate-100"><tr>{run.columns.map(column => <th key={column} className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700">{column}</th>)}</tr></thead><tbody>{run.rows.map((row, index) => <tr key={index} className="border-t">{run.columns.map(column => <td key={column} className="max-w-xs whitespace-nowrap px-3 py-2 text-slate-700">{row[column] == null ? '—' : String(row[column])}</td>)}</tr>)}</tbody></table>{run.rows.length === 0 && <p className="p-4 text-sm text-slate-500">Query ran successfully and returned no rows.</p>}</div>
             <details className="mt-3"><summary className="cursor-pointer text-xs text-slate-600">Executed SQL</summary><pre className="mt-2 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{run.sql}</pre></details>
           </section>}

@@ -75,6 +75,9 @@ def test_sales_choice_resolves_without_reasking():
     assert resolve_sales_choice("first") is None
     assert resolve_sales_choice("first", awaiting=True) == "How many sales orders are there?"
     assert resolve_sales_choice("the second one", awaiting=True) == "Show the top customers by billed sales."
+    both = resolve_sales_choice("both", awaiting=True)
+    assert both and "compare" in both.lower() and "invoice" in both.lower() and "2000" in both
+    assert resolve_sales_choice("3", awaiting=True) == both
     assert resolve_sales_choice("Who had the highest sales in 2004?") is None
     assert _is_sales_vs_billing_clarify(
         "Both sales orders and billed invoices exist. Which one do you want me to use?"

@@ -1,6 +1,56 @@
 """Exact date scope for independent annual order/invoice comparisons."""
 import pytest
 from app.services.analyst_filters import filter_issues
+from app.services.analytical_operations import (
+    extract_analytical_operations, merge_semantic_requirements, year_scope_from_question,
+)
+from app.services.basic_sql_training import answerability_issues, needs_specific_years
+
+
+def test_year_scope_modes_match_client_date_filter_rules():
+    assert year_scope_from_question("lowest sales for all years by industry")["mode"] == "all_years"
+    assert year_scope_from_question("lowest sales for the year 1999") == {"mode": "single", "years": ["1999"]}
+    assert year_scope_from_question("sales between 2000 and 2005")["mode"] == "range"
+    assert year_scope_from_question("sales between 2000 and 2005")["years"] == [
+        "2000", "2001", "2002", "2003", "2004", "2005",
+    ]
+    assert year_scope_from_question("sales for 1999 and 2003") == {
+        "mode": "selected", "years": ["1999", "2003"],
+    }
+    assert not needs_specific_years("lowest sales for all the years by country")
+
+
+def test_multi_year_requirements_emit_fkdat_time_filters():
+    selected = extract_analytical_operations("show sales for 1999 and 2003 by country")
+    assert selected["year_scope"]["mode"] == "selected"
+    selected_req = merge_semantic_requirements("show sales for 1999 and 2003 by country")
+    assert selected_req["date_filter"]["operator"] == "in"
+    assert selected_req["date_filter"]["years"] == ["1999", "2003"]
+    assert selected_req["time_filter"]["years"] == ["1999", "2003"]
+
+    ranged_q = "comparative analysis of sales between the years 2000 to 2005 by country"
+    ranged = extract_analytical_operations(ranged_q)
+    assert ranged["year_scope"]["mode"] == "range"
+    assert "year" in ranged["group_by"]
+    assert not ranged.get("period_compare")
+    ranged_req = merge_semantic_requirements(ranged_q)
+    assert ranged_req["date_filter"]["operator"] == "between"
+    assert ranged_req["date_filter"]["years"][0] == "2000" and ranged_req["date_filter"]["years"][-1] == "2005"
+
+    all_years = extract_analytical_operations("lowest sales for all years by industry and customer")
+    all_req = merge_semantic_requirements("lowest sales for all years by industry and customer")
+    assert all_years.get("years") in (None, [])
+    assert all_req.get("date_filter", {}).get("type") == "all_years"
+    assert not all_req.get("time_filter")
+
+
+def test_all_years_training_examples_do_not_require_fkdat_filters():
+    question = "show me the lowest sales for all the years by industry and customer and country"
+    sql = ('SELECT "KNA1"."land1" AS country, "KNA1"."name1" AS customer, '
+           'SUM(CAST("VBRK"."netwr" AS NUMERIC)) AS total_sales FROM "VBRK" '
+           'JOIN "KNA1" ON "VBRK"."kunag"="KNA1"."kunnr" AND "VBRK"."mandt"="KNA1"."mandt" '
+           'GROUP BY "KNA1"."land1", "KNA1"."name1"')
+    assert answerability_issues(question, sql, [{"country": "DE", "customer": "Acme", "total_sales": 1}]) == []
 
 
 @pytest.mark.parametrize('predicate', [

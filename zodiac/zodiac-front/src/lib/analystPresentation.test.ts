@@ -1,6 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analystAnswerText, analystDateCell, comparisonColumnLabel, comparisonYears, defaultAnalystChartType, isAnalystDateColumn, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate, labelComparisonText } from './analystPresentation.ts';
+import { analystAnswerText, analystDateCell, businessColumnLabel, businessPresentationColumns, comparisonColumnLabel, comparisonYears, defaultAnalystChartType, isAnalystDateColumn, isComparisonMeasure, isAnalystChartDimension, isAnalystChartDate, isTechnicalProofColumn, labelComparisonText, projectBusinessRows } from './analystPresentation.ts';
+
+test('business presentation hides proof columns and keeps Industry | Customer | Total Sales', () => {
+  const question = 'show the lowest sales for the year 1999 by industry and customer';
+  const columns = ['mandt', 'brtxt', 'name1', 'vbeln', 'total_sales', 'kunag'];
+  assert.equal(isTechnicalProofColumn('mandt', question), true);
+  assert.equal(isTechnicalProofColumn('vbeln', question), true);
+  assert.deepEqual(businessPresentationColumns(question, columns), ['brtxt', 'name1', 'total_sales']);
+  assert.equal(businessColumnLabel('brtxt', question), 'Industry');
+  assert.equal(businessColumnLabel('name1', question), 'Customer');
+  assert.equal(businessColumnLabel('total_sales', question), 'Total Sales');
+  const projected = projectBusinessRows([
+    { mandt: '800', brtxt: 'Retail', name1: 'Acme', vbeln: '0090001', total_sales: 12, kunag: '1000' },
+  ], question, columns);
+  assert.deepEqual(projected.columns, ['brtxt', 'name1', 'total_sales']);
+  assert.deepEqual(projected.rows[0], { brtxt: 'Retail', name1: 'Acme', total_sales: 12 });
+});
+
+test('invoice listings still show document numbers while hiding client proof keys', () => {
+  const question = 'list the invoices for customer 1000 in 2000';
+  assert.equal(isTechnicalProofColumn('vbeln', question), false);
+  assert.equal(isTechnicalProofColumn('mandt', question), true);
+  assert.deepEqual(
+    businessPresentationColumns(question, ['mandt', 'vbeln', 'fkdat', 'netwr']),
+    ['vbeln', 'fkdat', 'netwr'],
+  );
+});
 
 test('detailed answers survive alongside their concise overview', () => {
   const answer = ('# Findings\n\n' + 'Explain evidence and its limitations. '.repeat(200)).trim();

@@ -253,6 +253,35 @@ def _extract_measure_comparison(ql: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def year_scope_from_question(question: str) -> Dict[str, Any]:
+    """Classify calendar-year intent for FKDAT filters.
+
+    Modes:
+      all_years — no date filter
+      single    — one calendar year
+      range     — inclusive contiguous years (between / to / through)
+      selected  — explicit year list (e.g. 1999 and 2003), not a filled range
+      unspecified — no year language
+    """
+    q = question or ""
+    ql = q.lower()
+    if re.search(r"\ball(?:\s+the)?\s+years?\b|\bevery\s+(?:calendar\s+)?year\b|\bacross\s+all\s+years?\b", ql):
+        return {"mode": "all_years", "years": []}
+    years = list(dict.fromkeys(re.findall(r"\b(?:19|20)\d{2}\b", q)))
+    if not years:
+        return {"mode": "unspecified", "years": []}
+    if len(years) == 1:
+        return {"mode": "single", "years": years}
+    range_wording = bool(re.search(
+        r"\bbetween\b|\b(?:19|20)\d{2}\s*(?:to|through|until|[-–—])\s*(?:19|20)\d{2}\b",
+        ql,
+    ))
+    if range_wording:
+        low, high = min(map(int, years)), max(map(int, years))
+        return {"mode": "range", "years": [str(year) for year in range(low, high + 1)]}
+    return {"mode": "selected", "years": years}
+
+
 def extract_analytical_operations(question: str) -> Dict[str, Any]:
     """Language → structured operations. Independent of any specific question string."""
     q = (question or "").strip()
@@ -599,10 +628,19 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         ops["compare"] = True
     # Polarity/threshold predicates are applied below as generic comparisons.
 
-    years = _YEAR.findall(q)
-    if years:
-        ops["years"] = sorted(set(years))
+    year_scope = year_scope_from_question(q)
+    ops["year_scope"] = year_scope
+    if year_scope["mode"] == "all_years":
+        ops.pop("years", None)
+    elif year_scope["years"]:
+        # Keep discovery order for selected years; sort only contiguous ranges.
+        ops["years"] = list(year_scope["years"]) if year_scope["mode"] != "range" else list(year_scope["years"])
+    else:
+        years = _YEAR.findall(q)
+        if years:
+            ops["years"] = sorted(set(years))
 
+    years = list(ops.get("years") or [])
     _decline_cue = r"\b(declin\w*|decreas\w*|drop(?:ped|s)?|reduc\w*|fell|falling|falls?|fallen|worse)\b"
     _growth_cue = r"\b(growth|increas\w*|grew|better)\b"
     _contribution_cue = bool(
@@ -647,6 +685,18 @@ def extract_analytical_operations(question: str) -> Dict[str, Any]:
         "year" in group_by
         and re.search(r"\b(?:by|per|each)\s+(?:(?:calendar|fiscal)\s+)?years?\b|\byearly\b", ql)
     )
+    # "Comparative analysis … between the years 2000 to 2005 by country" is a
+    # multi-year series with FKDAT coverage for every year, not a two-period YoY pair.
+    if (
+        year_scope.get("mode") == "range"
+        and len(year_scope.get("years") or []) >= 3
+        and (group_by or re.search(r"\bby\s+(?:countr|industr|customer|product|material)", ql))
+        and not re.search(r"\b(versus|vs\.?|yoy|year[- ]over[- ]year)\b", ql)
+    ):
+        explicit_year_series = True
+        if "year" not in group_by:
+            group_by.append("year")
+            ops["group_by"] = group_by
     if years and len(set(years)) >= 2 and not explicit_year_series and (
         re.search(
             r"\b(growth|increas\w*|decreas\w*|declin\w*|between|versus|vs\.?|compar\w*|"
@@ -1042,15 +1092,41 @@ def merge_semantic_requirements(
         req["condition"] = condition
         req["measure"]["aggregation"] = req["measure"].get("aggregation") or "none"
 
-    if ops.get("years") and not ops.get("period_compare") and len(ops.get("years") or []) == 1:
-        req["time_filter"] = {
-            "type": "calendar_year",
-            "concept": "year",
-            "grain": "year",
-            "operator": "equals",
-            "value": ops["years"][0],
-            "years": list(ops["years"]),
-        }
+    year_scope = ops.get("year_scope") if isinstance(ops.get("year_scope"), dict) else year_scope_from_question(q)
+    if year_scope.get("mode") == "all_years":
+        req.pop("time_filter", None)
+        req["date_filter"] = {"type": "all_years", "years": []}
+    elif ops.get("years") and not ops.get("period_compare"):
+        scoped_years = list(ops["years"])
+        if len(scoped_years) == 1 or year_scope.get("mode") == "single":
+            req["time_filter"] = {
+                "type": "calendar_year",
+                "concept": "year",
+                "grain": "year",
+                "operator": "equals",
+                "value": scoped_years[0],
+                "years": scoped_years,
+            }
+            req["date_filter"] = {
+                "type": "calendar_year",
+                "operator": "equals",
+                "value": scoped_years[0],
+                "years": scoped_years,
+            }
+        else:
+            operator = "between" if year_scope.get("mode") == "range" else "in"
+            req["time_filter"] = {
+                "type": "calendar_years",
+                "concept": "year",
+                "grain": "year",
+                "operator": operator,
+                "years": scoped_years,
+            }
+            req["date_filter"] = {
+                "type": "calendar_years",
+                "operator": operator,
+                "years": scoped_years,
+            }
 
     if ops.get("time_grain") and not req.get("time_filter"):
         req["time_grain"] = ops["time_grain"]

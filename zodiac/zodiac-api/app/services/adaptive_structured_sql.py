@@ -888,6 +888,205 @@ def detect_ranking_measure(
     return "sales"
 
 
+_INVOICE_DOC_KEYS = (
+    "billing_document",
+    "invoice_number",
+    "billing_document_number",
+    "document_number",
+    "vbeln",
+    "invoice_id",
+    "invoice_no",
+)
+
+
+def products_for_identified_invoices_intent(question: str) -> bool:
+    """True when the user asks for products/materials on previously identified invoices."""
+    q = re.sub(r"\s+", " ", (question or "").strip())
+    if not q:
+        return False
+    wants_products = bool(
+        re.search(
+            r"\b(?:products?|materials?|line\s*items?|billing\s*items?|items?\s+sold)\b",
+            q,
+            re.I,
+        )
+        and re.search(
+            r"\b(?:sold|show|list|breakdown|detail|details|for|from|on|of)\b",
+            q,
+            re.I,
+        )
+    )
+    if not wants_products and not re.search(
+        r"\b(?:product|material)\s+level\b|\bbreakdown\s+on\s+product\b",
+        q,
+        re.I,
+    ):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:identified|same|these|those|previous|prior|selected)\s+"
+            r"(?:billing\s+)?(?:documents?|invoices?)\b|"
+            r"\b(?:for|from|on)\s+(?:the\s+)?(?:\d+\s+)?"
+            r"(?:identified\s+)?(?:billing\s+)?(?:documents?|invoices?)\b|"
+            r"\bsame\s+invoices?\b",
+            q,
+            re.I,
+        )
+    )
+
+
+def extract_prior_invoice_document_ids(prior_rows: Optional[List[Any]]) -> List[str]:
+    """Collect verified billing-document IDs from a prior analytical result."""
+    ids: List[str] = []
+    for row in prior_rows or []:
+        if not isinstance(row, dict):
+            continue
+        value = next(
+            (
+                row.get(key)
+                for key in _INVOICE_DOC_KEYS
+                if row.get(key) is not None and str(row.get(key)).strip()
+            ),
+            None,
+        )
+        if value is None:
+            # Case-insensitive fallback for presentation aliases.
+            lowered = {str(k).strip().lower(): v for k, v in row.items()}
+            value = next(
+                (
+                    lowered.get(key)
+                    for key in _INVOICE_DOC_KEYS
+                    if lowered.get(key) is not None and str(lowered.get(key)).strip()
+                ),
+                None,
+            )
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                ids.append(text)
+    return list(dict.fromkeys(ids))
+
+
+def build_products_for_identified_invoices_sql(
+    question: str,
+    tables: List[str],
+    semantic: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """List products/materials sold on invoices identified in the prior result.
+
+    Scope comes only from verified prior-result document IDs (or an equivalent
+    prior SQL that already projects billing_document). This keeps Basic follow-ups
+    model-free when Ollama cannot rewrite the drill-down.
+    """
+    if not products_for_identified_invoices_intent(question):
+        return None
+    if not all(has_table(t) for t in ("VBRK", "VBRP")):
+        return None
+    header = resolve_table_name("VBRK") or "VBRK"
+    item = resolve_table_name("VBRP") or "VBRP"
+    if not all(has_column(item, c) for c in ("mandt", "vbeln", "posnr")):
+        return None
+    if not has_column(item, "matnr") and not has_column(item, "arktx"):
+        return None
+    if not all(has_column(header, c) for c in ("mandt", "vbeln")):
+        return None
+
+    prior_rows = (semantic or {}).get("prior_result_rows") if isinstance(semantic, dict) else []
+    invoice_ids = extract_prior_invoice_document_ids(prior_rows if isinstance(prior_rows, list) else [])
+    prior_sql = str((semantic or {}).get("prior_sql") or "").strip().rstrip(";")
+    if not invoice_ids and not prior_sql:
+        return None
+    if invoice_ids and len(invoice_ids) > 200:
+        return None
+
+    amount = (
+        numeric_cast_expr(item, "netwr").replace(f'"{item}".', "i.")
+        if has_column(item, "netwr")
+        else None
+    )
+    qty = (
+        numeric_cast_expr(item, "fkimg").replace(f'"{item}".', "i.")
+        if has_column(item, "fkimg")
+        else None
+    )
+    select = [
+        'TRIM(CAST(i."vbeln" AS TEXT)) AS "billing_document"',
+        'TRIM(CAST(i."posnr" AS TEXT)) AS "billing_item"',
+    ]
+    group = [
+        'TRIM(CAST(i."vbeln" AS TEXT))',
+        'TRIM(CAST(i."posnr" AS TEXT))',
+    ]
+    if has_column(item, "matnr"):
+        select.append('TRIM(CAST(i."matnr" AS TEXT)) AS "material_id"')
+        group.append('TRIM(CAST(i."matnr" AS TEXT))')
+    if has_column(item, "arktx"):
+        select.append('TRIM(CAST(i."arktx" AS TEXT)) AS "material_description"')
+        group.append('TRIM(CAST(i."arktx" AS TEXT))')
+    joins = [
+        f'JOIN "{header}" h ON i."mandt" = h."mandt" '
+        'AND LPAD(TRIM(CAST(i."vbeln" AS TEXT)), 10, \'0\') '
+        '= LPAD(TRIM(CAST(h."vbeln" AS TEXT)), 10, \'0\')'
+    ]
+    if has_table("MAKT") and has_column("MAKT", "maktx") and has_column(item, "matnr"):
+        joins.append(_makt_join('i."matnr"'))
+        select.append('TRIM(CAST(m."maktx" AS TEXT)) AS "material_name"')
+        group.append('TRIM(CAST(m."maktx" AS TEXT))')
+    currency_col = next((c for c in ("waerk", "waers") if has_column(header, c)), None)
+    if currency_col:
+        select.append(f'TRIM(CAST(h."{currency_col}" AS TEXT)) AS "currency"')
+        group.append(f'TRIM(CAST(h."{currency_col}" AS TEXT))')
+    if qty:
+        select.append(f'SUM({qty}) AS "billed_quantity"')
+    if amount:
+        select.append(f'SUM({amount}) AS "billed_item_net_value"')
+
+    if invoice_ids:
+        id_values = ", ".join(
+            f"LPAD('{value.replace(chr(39), chr(39) * 2)}', 10, '0')"
+            for value in invoice_ids
+        )
+        doc_scope = ""
+        where = [f"LPAD(TRIM(CAST(i.\"vbeln\" AS TEXT)), 10, '0') IN ({id_values})"]
+    else:
+        # Fall back to the prior query only when it already projects a billing
+        # document identity column the follow-up can join on.
+        if not re.search(
+            r'\b(?:as\s+)?"?(?:billing_document|invoice_number|vbeln)"?\b',
+            prior_sql,
+            re.I,
+        ):
+            return None
+        doc_scope = (
+            'WITH "identified_invoices" AS (\n'
+            '  SELECT DISTINCT LPAD(TRIM(CAST(prior_docs."billing_document" AS TEXT)), 10, \'0\') '
+            "AS billing_document\n"
+            f"  FROM (\n{prior_sql}\n  ) prior_docs\n"
+            "  WHERE NULLIF(TRIM(CAST(prior_docs.\"billing_document\" AS TEXT)), '') IS NOT NULL\n"
+            ")\n"
+        )
+        where = [
+            'EXISTS (SELECT 1 FROM "identified_invoices" d '
+            "WHERE d.billing_document = LPAD(TRIM(CAST(i.\"vbeln\" AS TEXT)), 10, '0'))",
+        ]
+
+    order = '"billing_document", "billing_item"'
+    if amount:
+        order = f'"billing_document", SUM({amount}) DESC NULLS LAST, "billing_item"'
+    aggregate = bool(amount or qty)
+    return (
+        doc_scope
+        + ("SELECT " if aggregate else "SELECT DISTINCT ")
+        + ", ".join(select) + "\n"
+        f'FROM "{item}" i\n'
+        + "\n".join(joins) + "\n"
+        "WHERE " + "\n  AND ".join(where) + "\n"
+        + ("GROUP BY " + ", ".join(group) + "\n" if aggregate else "")
+        + f"ORDER BY {order}\n"
+        "LIMIT 500"
+    )
+
+
 def build_billing_item_ranking_sql(
     question: str,
     tables: List[str],

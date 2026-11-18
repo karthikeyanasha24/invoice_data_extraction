@@ -3,8 +3,9 @@ from sqlalchemy import create_engine
 
 from app.services.adaptive_trusted_scope import TrustedAiExecutionScope
 from app.services.basic_sql_training import (
-    answerability_issues, apply_training_filters, check_query_scope, edit_example,
-    list_examples, load_replay_example, record_run, save_run,
+    answerability_issues, apply_training_filters, assert_training_restriction,
+    check_query_scope, edit_example, list_examples, load_replay_example, record_run,
+    save_run,
 )
 from app.services.basic_rag import adapt_training_year_filter, load_basic_examples
 from app.services.basic_rag import profit_question_without_profit_sql
@@ -29,6 +30,28 @@ def test_schema_scoped_read_only_sql_validation():
         check_query_scope("DELETE FROM billing", SCHEMA)
     with pytest.raises(ValueError):
         check_query_scope("SELECT customer_id FROM billing; SELECT net_value FROM billing", SCHEMA)
+
+
+def test_training_blocks_unrestricted_fact_table_scans():
+    selection = {"VBRK": [{"col": "vbeln", "type": "text"}, {"col": "fkdat", "type": "text"}, {"col": "netwr", "type": "text"}]}
+    with pytest.raises(ValueError, match="Add a query restriction"):
+        assert_training_restriction("SELECT vbeln, fkdat, netwr FROM VBRK", [], selection)
+    assert_training_restriction(
+        "SELECT vbeln FROM VBRK WHERE fkdat >= '20000101' AND fkdat < '20010101'",
+        [],
+        selection,
+    )
+    assert_training_restriction(
+        "SELECT vbeln FROM VBRK",
+        [{"table": "VBRK", "column": "vbeln", "operator": "include_value", "value": "0090000123"}],
+        selection,
+    )
+    assert_training_restriction("SELECT vbeln FROM VBRK", [], selection, allow_unrestricted=True)
+    assert_training_restriction(
+        "SELECT customer_id FROM billing",
+        [],
+        {"billing": [{"col": "customer_id", "type": "text"}]},
+    )
 
 
 def test_sql_training_reports_the_parser_diagnostic_for_invalid_sql():

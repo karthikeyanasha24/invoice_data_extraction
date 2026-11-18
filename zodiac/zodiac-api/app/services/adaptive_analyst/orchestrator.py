@@ -42,7 +42,8 @@ def orchestrator_enabled() -> bool:
 
 SALES_ORDERS_VS_BILLED = (
     "I found both sales-order data (VBAK/VBAP) and invoiced/billed sales (VBRK/VBRP). "
-    "Do you want: 1) Sales orders  2) Invoiced/billed sales?"
+    "Do you want: 1) Sales orders  2) Invoiced/billed sales  "
+    "3) Compare sales orders vs invoices (currency-matched differences)?"
 )
 
 _GENERAL_CHAT_SYSTEM = (
@@ -251,6 +252,17 @@ def resolve_sales_choice(question: str, awaiting: bool = False) -> Optional[str]
         return "How many sales orders are there?"
     if awaiting and re.fullmatch(r"(2|2\))", ql):
         return "Show the top customers by billed sales."
+    # "Both" / compare answers should run a currency-matched order vs invoice
+    # comparison, not force the user into a single source.
+    if awaiting and re.fullmatch(
+        r"(3|3\)|both|compare( them)?|comparison|differences?|order\s+and\s+invoice|"
+        r"sales\s+orders?\s+and\s+(?:billed\s+)?invoices?)",
+        ql,
+    ):
+        return (
+            "Compare sales order and invoice value differences by customer "
+            "and country for the 2000 year"
+        )
     if re.fullmatch(r"(orders?|sales\s*orders?|sales-order|vbak|vbap)", ql):
         return "How many sales orders are there?"
     if re.fullmatch(
@@ -263,6 +275,11 @@ def resolve_sales_choice(question: str, awaiting: bool = False) -> Optional[str]
         return "How many sales orders are there?"
     if awaiting and re.fullmatch(r"(second|the second( one)?)", ql):
         return "Show the top customers by billed sales."
+    if awaiting and re.fullmatch(r"(third|the third( one)?)", ql):
+        return (
+            "Compare sales order and invoice value differences by customer "
+            "and country for the 2000 year"
+        )
     return None
 
 
@@ -858,6 +875,7 @@ def run_adaptive_orchestrator(
             "suggested_followups": [
                 "How many sales orders are there?",
                 "Show the top customers by billed sales.",
+                "Compare sales order and invoice values by customer and country",
             ],
             "meta": {"selected_capability": "clarification", "understanding_model_called": False},
         }

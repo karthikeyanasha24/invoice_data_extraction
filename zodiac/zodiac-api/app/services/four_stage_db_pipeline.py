@@ -1407,6 +1407,7 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         build_country_customer_list_sql,
         build_customer_industry_revenue_sql,
         build_billing_item_ranking_sql,
+        build_products_for_identified_invoices_sql,
         build_unbilled_order_items_sql,
         build_billing_document_ranking_sql,
         build_dimension_period_sales_sql,
@@ -1434,6 +1435,7 @@ def _execution_fallback_sql(question: str, ctx: VerifiedDbContext) -> Optional[s
         lambda: build_linked_order_invoice_totals_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_unbilled_order_items_sql(question, ctx.tables, ctx.semantic_requirements),
+        lambda: build_products_for_identified_invoices_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_billing_item_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
         lambda: build_multidim_ranking_sql(question, ctx.tables, ctx.semantic_requirements),
@@ -1566,6 +1568,7 @@ def pipeline3_sql_generation(
         build_country_customer_list_sql,
         build_customer_industry_revenue_sql,
         build_billing_item_ranking_sql,
+        build_products_for_identified_invoices_sql,
         build_unbilled_order_items_sql,
         build_billing_document_ranking_sql,
         build_dimension_period_sales_sql,
@@ -1677,6 +1680,9 @@ def pipeline3_sql_generation(
 
     # Prefer semantic templates for first-class ops before free-form plan/LLM SQL.
     # Ranking templates must beat structured/LLM paths so CAST-safe SUM wins over bare SUM(text).
+    if ctx.prior_sql:
+        ctx.semantic_requirements = dict(ctx.semantic_requirements or {})
+        ctx.semantic_requirements.setdefault("prior_sql", ctx.prior_sql)
     template_builders = (
         ("document_total_count_template", lambda: build_document_total_count_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_billing_documents_for_orders_template", lambda: build_linked_billing_documents_for_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
@@ -1686,6 +1692,7 @@ def pipeline3_sql_generation(
         ("linked_order_invoice_totals_template", lambda: build_linked_order_invoice_totals_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("linked_sales_orders_template", lambda: build_linked_sales_orders_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("unbilled_order_items_template", lambda: build_unbilled_order_items_sql(question, ctx.tables, ctx.semantic_requirements)),
+        ("products_for_identified_invoices_template", lambda: build_products_for_identified_invoices_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("billing_item_ranking_template", lambda: build_billing_item_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("billing_document_ranking_template", lambda: build_billing_document_ranking_sql(question, ctx.tables, ctx.semantic_requirements)),
         ("dimension_period_sales", lambda: build_dimension_period_sales_sql(question, ctx.tables, ctx.semantic_requirements)),

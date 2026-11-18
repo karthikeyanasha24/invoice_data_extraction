@@ -101,6 +101,33 @@ def test_two_year_document_pair_question_keeps_identified_value_plan():
     assert canonical_annual_order_invoice_plan(plan, question, annual_catalog()) is plan
 
 
+def test_single_year_order_invoice_difference_uses_independent_aggregates():
+    question = (
+        "Show major differences in sales order value and invoice by country "
+        "and customer value for the 2000 year"
+    )
+    original = {
+        "tables": ["VBAK", "VBRK"],
+        "fields": [
+            {"table": "VBAK", "column": "vbeln", "alias": "order_document_id", "role": "identifier"},
+            {"table": "VBRK", "column": "vbeln", "alias": "invoice_document_id", "role": "identifier"},
+        ],
+        "filters": [], "strategy": "identified_values", "sort": [], "limit": 50,
+        "grain": "document pairs", "missing_handling": "keep unmatched", "assumptions": [],
+    }
+    plan = canonical_annual_order_invoice_plan(original, question, annual_catalog())
+    assert plan["strategy"] == "independent_aggregates"
+    assert plan is not original
+    assert {(f["table"], f["column"], tuple(f["values"])) for f in plan["filters"]} == {
+        ("VBAK", "audat", ("2000",)),
+        ("VBRK", "fkdat", ("2000",)),
+    }
+    # Bare single-year sales without compare wording stays untouched.
+    assert canonical_annual_order_invoice_plan(
+        original, "sales orders and invoices in 2000", annual_catalog()
+    ) is original
+
+
 def test_independent_annual_totals_join_complete_compatible_dimensions():
     from app.services.analyst_filters import filter_issues
     assert identified_value_proof(ANNUAL_SQL, annual_catalog()) == (True, [])
@@ -344,6 +371,49 @@ def test_validation_errors_name_the_join_and_the_aggregate_sources():
     ok, errors = identified_value_proof(summed, catalog(), [('VBRK', 'netwr')])
     assert not ok
     assert 'SUM over joined sources VBRK b, vbrp p' in errors[0]
+
+
+def test_customer_level_totals_allow_aggregation_after_verified_dimension_joins():
+    """Option B: verified N:1 / star-schema joins may aggregate after the join.
+
+    Ranking individual billing items is the wrong grain for industry/customer
+    sales totals; SUM(VBRK.netwr) GROUP BY industry, customer must be accepted
+    whether the SQL starts from the fact or from customer master.
+    """
+    c = RelationshipCatalog(schema(
+        VBRK='mandt vbeln kunag fkdat netwr waerk',
+        KNA1='mandt kunnr name1 brsch land1',
+        T016T='brsch brtxt',
+    ))
+    c.keys = {
+        'VBRK': [{'mandt', 'vbeln'}],
+        'KNA1': [{'mandt', 'kunnr'}],
+        'T016T': [{'brsch'}],
+    }
+    c.master_tables = {'KNA1', 'T016T'}
+    c.add_edge('VBRK', 'KNA1', [('kunag', 'kunnr')], 'test')
+    c.add_edge('KNA1', 'T016T', [('brsch', 'brsch')], 'test')
+    measures = [('VBRK', 'netwr')]
+    fact_first = '''
+        SELECT t.brtxt AS industry, k.name1 AS customer,
+               SUM(CAST(NULLIF(TRIM(b.netwr),'') AS NUMERIC)) AS total_sales
+        FROM VBRK b
+        JOIN KNA1 k ON k.mandt=b.mandt AND k.kunnr=b.kunag
+        JOIN T016T t ON t.brsch=k.brsch
+        WHERE b.fkdat >= '20040101' AND b.fkdat < '20050101'
+        GROUP BY t.brtxt, k.name1
+        ORDER BY total_sales ASC LIMIT 10'''
+    dim_first = '''
+        SELECT t.brtxt AS industry, k.name1 AS customer,
+               SUM(CAST(NULLIF(TRIM(b.netwr),'') AS NUMERIC)) AS total_sales
+        FROM KNA1 k
+        JOIN VBRK b ON b.mandt=k.mandt AND b.kunag=k.kunnr
+        JOIN T016T t ON t.brsch=k.brsch
+        WHERE b.fkdat >= '20040101' AND b.fkdat < '20050101'
+        GROUP BY t.brtxt, k.name1
+        ORDER BY total_sales ASC LIMIT 10'''
+    assert identified_value_proof(fact_first, c, measures) == (True, [])
+    assert identified_value_proof(dim_first, c, measures) == (True, [])
 
 
 def test_item_difference_uses_header_currency_in_a_guarded_case():

@@ -359,3 +359,98 @@ def test_comparison_preserves_checked_metric_filters_and_requires_explicit_year(
         execute=lambda *_: pytest.fail("Ambiguous year must not execute SQL"),
         local_agent=lambda *_: pytest.fail("Ambiguous year needs no model"))
     assert result["answer_status"] == "CLARIFICATION" and result["llm_calls"] == 0
+
+
+def test_products_for_identified_invoices_runs_without_model(monkeypatch):
+    from app.services import adaptive_structured_sql as structured
+
+    columns = {
+        "VBRK": {"mandt", "vbeln", "fkdat", "waerk", "netwr"},
+        "VBRP": {"mandt", "vbeln", "posnr", "matnr", "arktx", "netwr", "fkimg"},
+        "MAKT": {"matnr", "maktx", "spras"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    monkeypatch.setattr(
+        "app.services.schema_intelligence_registry.get_schema_registry",
+        lambda: type(
+            "R",
+            (),
+            {"lightweight_table_catalog": lambda self, include_operational=False: [
+                {"table": "VBRK"}, {"table": "VBRP"}, {"table": "MAKT"},
+            ]},
+        )(),
+    )
+    monkeypatch.setattr(
+        "app.services.four_stage_db_pipeline.pipeline3_sql_generation",
+        lambda *args, **kwargs: pytest.fail("Product drill-down must not fall through to templates"),
+    )
+
+    captured = {}
+
+    def execute(sql, step=None):
+        captured["sql"] = sql
+        captured["step"] = step
+        assert paid_models_blocked()
+        assert step and step.get("basic_predefined_template") == "products_for_identified_invoices"
+        return {
+            "ok": True,
+            "sql": sql,
+            "source": "business",
+            "rows": [
+                {"billing_document": "90000001", "billing_item": "10", "material_id": "M1"},
+                {"billing_document": "90000002", "billing_item": "10", "material_id": "M2"},
+            ],
+        }
+
+    prior_rows = [
+        {"billing_document": "90000001", "billed_amount": 100},
+        {"billing_document": "90000002", "billed_amount": 80},
+        {"billing_document": "90000003", "billed_amount": 60},
+    ]
+    result = run_basic_sql_answer(
+        "for the three identified invoices show me the products sold",
+        execute=execute,
+        previous_question="top 3 billing documents by billed sales in 2001",
+        previous_sql='SELECT vbeln AS billing_document FROM "VBRK" LIMIT 3',
+        previous_rows=prior_rows,
+        local_agent=lambda *_: pytest.fail("Product drill-down must not call Ollama"),
+    )
+    assert result["answer_status"] == "SUCCESS"
+    assert result["llm_calls"] == 0
+    assert result["meta"]["basic_predefined_template"] == "products_for_identified_invoices"
+    assert "90000001" in captured["sql"] and "90000002" in captured["sql"] and "90000003" in captured["sql"]
+    assert '"VBRP"' in captured["sql"]
+    assert "material_id" in captured["sql"]
+    assert len(result["data"]) == 2
+
+
+def test_products_for_identified_invoices_builder_scopes_prior_ids(monkeypatch):
+    from app.services.adaptive_structured_sql import build_products_for_identified_invoices_sql
+    from app.services import adaptive_structured_sql as structured
+
+    columns = {
+        "VBRK": {"mandt", "vbeln", "waerk"},
+        "VBRP": {"mandt", "vbeln", "posnr", "matnr", "netwr"},
+    }
+    monkeypatch.setattr(structured, "has_table", lambda table: table.upper() in columns)
+    monkeypatch.setattr(
+        structured,
+        "has_column",
+        lambda table, column: column.lower() in columns.get(table.upper(), set()),
+    )
+    monkeypatch.setattr(structured, "resolve_table_name", lambda table: table.upper())
+    sql = build_products_for_identified_invoices_sql(
+        "breakdown on product level for the same invoices",
+        ["VBRK", "VBRP"],
+        {"prior_result_rows": [{"billing_document": "A1"}, {"invoice_number": "B2"}]},
+    )
+    assert sql and "IN (" in sql and "A1" in sql and "B2" in sql
+    assert build_products_for_identified_invoices_sql(
+        "show products sold", ["VBRK", "VBRP"], {"prior_result_rows": [{"billing_document": "A1"}]}
+    ) is None

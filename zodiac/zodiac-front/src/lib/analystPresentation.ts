@@ -3,6 +3,98 @@ export function analystAnswerText(result: { answer?: string; summary?: string })
   return result.answer?.trim() || result.summary?.trim() || '';
 }
 
+/**
+ * Technical proof / SAP join keys that validate SQL integrity but should not
+ * dominate the user-facing business report. Full rows stay available when the
+ * analyst expands “Show technical columns”.
+ */
+const ALWAYS_TECHNICAL_PROOF = /^(mandt|sap_client|client_id|posnr|etenr|knumv|aubel|vgbel|vgpos|fkart|fktyp|vbtyp|rfbsk|waers_match|currency_match|proof_|join_key)$/i;
+const DOCUMENT_PROOF = /^(vbeln|billing_document|billing_doc|invoice_number|document_number|sales_order|order_number|ebeln)$/i;
+
+export function isTechnicalProofColumn(key: string, question = ''): boolean {
+  const normalized = String(key || '').trim();
+  if (!normalized) return false;
+  const wording = question.toLowerCase();
+  if (ALWAYS_TECHNICAL_PROOF.test(normalized)) {
+    if (/mandt|client/i.test(normalized) && /\b(client|mandt|sap client)\b/i.test(wording)) return false;
+    return true;
+  }
+  if (DOCUMENT_PROOF.test(normalized)) {
+    const asksDocuments = /\b(invoice|billing document|document number|sales order|purchase order|vbeln|ebeln)\b/i.test(wording);
+    const asksAggregatedBusiness = /\b(by industry|by customer|by country|total sales|annual sales|lowest sales|highest sales|aggregate|grouped|industry and customer)\b/i.test(wording);
+    if (asksAggregatedBusiness) return true;
+    if (asksDocuments) return false;
+    // Aggregate-looking amount columns in the same result imply document IDs are proof grain.
+    return false;
+  }
+  return false;
+}
+
+type BusinessConcept = { ask: RegExp; column: RegExp; label: string };
+
+const BUSINESS_CONCEPTS: BusinessConcept[] = [
+  { ask: /\bindustr(?:y|ies)|sector|brsch|brtxt\b/i, column: /industr|sector|brsch|brtxt/i, label: 'Industry' },
+  { ask: /\bcustomer|sold[- ]?to|ship[- ]?to|name1|kunag|kunnr\b/i, column: /customer|sold.?to|ship.?to|name1|kunag|kunnr/i, label: 'Customer' },
+  { ask: /\bcountr(?:y|ies)|land1|landx\b/i, column: /country|land1|landx/i, label: 'Country' },
+  { ask: /\bcurrency|waerk|waers\b/i, column: /currency|waerk|waers/i, label: 'Currency' },
+  { ask: /\byear|annual|fkdat|calendar\b/i, column: /year|fkdat|billing_year|sales_year|calendar/i, label: 'Year' },
+  { ask: /\bsales|revenue|turnover|total|netwr|amount|billed\b/i, column: /sales|revenue|turnover|total|netwr|amount|billed|net_value/i, label: 'Total Sales' },
+  { ask: /\bproduct|material|matnr|arktx\b/i, column: /product|material|matnr|arktx/i, label: 'Product' },
+];
+
+/** Prefer business-facing columns for the asked question; keep proof keys hidden by default. */
+export function businessPresentationColumns(question: string, columns: string[]): string[] {
+  const unique = [...new Set(columns.filter(Boolean))];
+  if (!unique.length) return [];
+  const wording = question || '';
+  const business = unique.filter(column => !isTechnicalProofColumn(column, wording));
+  const pool = business.length ? business : unique;
+  const matched: string[] = [];
+  for (const concept of BUSINESS_CONCEPTS) {
+    if (!concept.ask.test(wording)) continue;
+    const hit = pool.find(column => concept.column.test(column) && !matched.includes(column));
+    if (hit) matched.push(hit);
+  }
+  // Collapse to the asked business concepts when leftover columns are only IDs /
+  // codes used for validation — but never drop document columns from listings.
+  const asksDocuments = /\b(invoice|billing document|document number|sales order|purchase order|vbeln|ebeln|list)\b/i.test(wording);
+  if (matched.length >= 2 && !asksDocuments) {
+    const extras = pool.filter(column => !matched.includes(column));
+    const extrasAreNoise = extras.every(column =>
+      DOCUMENT_PROOF.test(column)
+      || /^(kunag|kunnr|brsch|lifnr|matnr|bukrs|vkorg)$/i.test(column)
+      || /(_id|_code|_key|id$|code$)/i.test(column),
+    );
+    if (extras.length && extrasAreNoise) return matched;
+  }
+  return pool;
+}
+
+export function businessColumnLabel(key: string, question = ''): string {
+  const comparison = comparisonColumnLabel(key, question);
+  if (comparison !== key.replace(/_/g, ' ')) return comparison;
+  for (const concept of BUSINESS_CONCEPTS) {
+    if (concept.column.test(key)) return concept.label;
+  }
+  return key.replace(/_/g, ' ');
+}
+
+/** Project rows onto the business presentation columns without mutating source data. */
+export function projectBusinessRows(
+  rows: Record<string, unknown>[],
+  question: string,
+  columns?: string[],
+): { columns: string[]; rows: Record<string, unknown>[] } {
+  const sourceColumns = columns?.length
+    ? columns
+    : (rows[0] ? Object.keys(rows[0]) : []);
+  const visible = businessPresentationColumns(question, sourceColumns);
+  return {
+    columns: visible,
+    rows: rows.map(row => Object.fromEntries(visible.map(column => [column, row[column]]))),
+  };
+}
+
 /** Named comparison measures are amounts, not chronological axes. */
 export function isComparisonMeasure(key: string): boolean {
   return /^(period_[ab]|(?:base|comparison)_period(?:_amount|_value|_total)?|(?:sales|netwr|amount|total)_\d{4})$/i.test(key);

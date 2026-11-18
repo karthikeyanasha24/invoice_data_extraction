@@ -2956,6 +2956,27 @@ def basic_training_schema_endpoint(
         # schema page time out even though the database was reachable.
         primary_keys = inspector.get_multi_pk_constraint()
         foreign_keys_by_table = inspector.get_multi_foreign_keys()
+        # SAP extracts often lack declared PostgreSQL FKs. Merge verified
+        # catalog joins (for example KNA1.brsch → T016T.brsch) so Schema
+        # Explorer can show usable relationships, not only DB constraints.
+        from ..data_catalog.registry import RELATIONSHIPS as CATALOG_RELATIONSHIPS
+        catalog_by_table: Dict[str, List[Dict[str, Any]]] = {}
+        live_names = {str(name) for name in safe}
+        live_upper = {str(name).upper(): str(name) for name in live_names}
+        for link in CATALOG_RELATIONSHIPS or []:
+            src = live_upper.get(str(link.get("source_table") or "").upper())
+            tgt = live_upper.get(str(link.get("target_table") or "").upper())
+            src_col = str(link.get("source_column") or "").strip()
+            tgt_col = str(link.get("target_column") or "").strip()
+            if not src or not tgt or not src_col or not tgt_col:
+                continue
+            catalog_by_table.setdefault(src, []).append({
+                "columns": [src_col],
+                "references_table": tgt,
+                "references_columns": [tgt_col],
+                "cardinality": link.get("cardinality"),
+                "note": link.get("fanout") or link.get("source") or "catalog relationship",
+            })
         details = []
         for table, columns in safe.items():
             meanings = _column_meanings(table)
@@ -2963,12 +2984,34 @@ def basic_training_schema_endpoint(
             foreign_keys = foreign_keys_by_table.get((None, table)) or []
             pk = set(pk_info.get("constrained_columns") or [])
             fks = {column for fk in foreign_keys for column in (fk.get("constrained_columns") or [])}
+            relationships = [{
+                "columns": fk.get("constrained_columns") or [],
+                "references_table": fk.get("referred_table"),
+                "references_columns": fk.get("referred_columns") or [],
+            } for fk in foreign_keys]
+            seen = {
+                (
+                    tuple(str(c).lower() for c in (item.get("columns") or [])),
+                    str(item.get("references_table") or "").upper(),
+                    tuple(str(c).lower() for c in (item.get("references_columns") or [])),
+                )
+                for item in relationships
+            }
+            for item in catalog_by_table.get(table, []):
+                key = (
+                    tuple(str(c).lower() for c in (item.get("columns") or [])),
+                    str(item.get("references_table") or "").upper(),
+                    tuple(str(c).lower() for c in (item.get("references_columns") or [])),
+                )
+                if key in seen:
+                    continue
+                relationships.append(item)
+                seen.add(key)
+                fks.update(str(c) for c in (item.get("columns") or []))
             details.append({"table": table, "description": _table_semantics(table), "columns": [{"name": str(col.get("col")), "type": str(col.get("type") or "unknown"),
-                "description": meanings.get(col.get("col"), meanings.get(str(col.get("col", "")).upper(), "")),
+                "description": meanings.get(str(col.get("col", "")).lower(), meanings.get(str(col.get("col", "")).upper(), "")),
                 "primary_key": col.get("col") in pk, "foreign_key": col.get("col") in fks} for col in columns],
-                "relationships": [{"columns": fk.get("constrained_columns") or [],
-                    "references_table": fk.get("referred_table"),
-                    "references_columns": fk.get("referred_columns") or []} for fk in foreign_keys]})
+                "relationships": relationships})
         return {"source": source, "dialect": "postgres", "schema_source": origin, "tables": details}
     finally:
         tools.close()
@@ -3042,7 +3085,10 @@ def basic_training_preview_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
 def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Session = Depends(get_db),
                                     current_user: ZodiacUser = Depends(get_current_user)) -> Dict[str, Any]:
     from ..services.analyst_agent import AnalystTools
-    from ..services.basic_sql_training import answerability_issues, apply_training_filters, check_query_scope, record_run, selected_schema
+    from ..services.basic_sql_training import (
+        answerability_issues, apply_training_filters, assert_training_restriction,
+        check_query_scope, record_run, selected_schema,
+    )
     from ..services.adaptive_trusted_scope import get_trusted_scope, reset_trusted_scope
     source, question, sql = body.get("source"), body.get("question"), body.get("sql")
     if source not in {"business", "application"} or (source == "business" and not USE_SAP_DB_FOR_AI):
@@ -3051,6 +3097,7 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
         raise HTTPException(status_code=400, detail="Enter a question up to 4000 characters")
     if not isinstance(sql, str) or not sql.strip() or len(sql) > 24000:
         raise HTTPException(status_code=400, detail="Paste a SQL query up to 24000 characters")
+    allow_unrestricted = bool(body.get("allow_unrestricted"))
     token = _basic_training_scope(db, current_user)
     from ..services.investigation_budget import begin_investigation, end_investigation
     begin_investigation("Basic SQL Training: " + question[:200], owner_id=int(current_user.id))
@@ -3063,6 +3110,9 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
         selection = selected_schema(live_schema, body.get("selected_schema"))
         if not selection:
             raise ValueError("Select at least one table and its columns")
+        assert_training_restriction(
+            sql, body.get("filters"), selection, allow_unrestricted=allow_unrestricted,
+        )
         sql = apply_training_filters(sql, body.get("filters"), selection)
         sql = check_query_scope(sql, selection)
         result = tools.call("run_readonly_sql", {"source": source, "sql": sql, "purpose": "User-authored SQL training query"})
@@ -3091,9 +3141,19 @@ def basic_training_execute_endpoint(body: Dict[str, Any] = Body(...), db: Sessio
             answer_issues = answerability_issues(question.strip(), executed_sql, rows)
             run_id = record_run(db.get_bind(), get_trusted_scope(), source, question.strip(), schema_snapshot,
                                 executed_sql, result, answer_issues=answer_issues)
+            charts: List[Dict[str, Any]] = []
+            try:
+                charts = sanitize_chart_payloads(
+                    _auto_charts(question.strip(), executed_sql, rows) or [],
+                    question.strip(),
+                ) or []
+            except Exception as chart_error:
+                logger.warning("SQL Training charts unavailable: %s", type(chart_error).__name__)
+                charts = []
             return {"status": "needs_review" if answer_issues else "executed", "run_id": run_id, "sql": executed_sql,
                     "rows": result.get("rows") or [], "row_count": len(result.get("rows") or []),
                     "columns": list((result.get("rows") or [{}])[0].keys()) if result.get("rows") else [],
+                    "charts": charts,
                     "schema_source": origin, "llm_calls": 0, "answerability_issues": answer_issues}
         raw_error = str(result.get("error") or "Query failed")
         if raw_error.startswith(("Query validation:", "Only one read-only", "Use only tables", "Table ", "Column ", "Provide one SELECT")):
@@ -4006,6 +4066,11 @@ def _post_query_adaptive_body(
                 # grain. Use the same row-grain proof as checked SQL Training,
                 # then retain Basic's question/result consistency check below.
                 active_executor = training_executor
+            elif step.get("basic_predefined_template") == "products_for_identified_invoices":
+                # Prior-result invoice IDs scope a VBRP product listing. Use the
+                # training executor so Basic can replay this without a fresh
+                # prepare_analysis plan from a model.
+                active_executor = training_executor
             else:
                 active_executor = executor
             plan = step.get("analysis_plan")
@@ -4022,7 +4087,12 @@ def _post_query_adaptive_body(
                 active_executor.plans.pop(step_source, None)
             purpose = str(step.get("purpose") or "Basic verified query")
             executed = active_executor.call("run_readonly_sql", {"source": step_source, "sql": sql, "purpose": purpose})
-            if executed.get("ok") and not step.get("checked_investigation") and not step.get("training_example"):
+            skip_consistency = (
+                step.get("checked_investigation")
+                or step.get("training_example")
+                or step.get("basic_predefined_template") == "products_for_identified_invoices"
+            )
+            if executed.get("ok") and not skip_consistency:
                 from ..services.analyst_agent import _analysis_issues
                 from ..services.basic_sql_answer import continue_basic_question, prepare_basic_question
                 check_question = prepare_basic_question(continue_basic_question(
@@ -4034,11 +4104,13 @@ def _post_query_adaptive_body(
                             "error": "The saved query did not satisfy the current request: " + "; ".join(issues[:4])}
             return executed
         try:
+            prior_rows = prior.get("data") if isinstance(prior.get("data"), list) else []
             basic = run_basic_sql_answer(
                 _original_question,
                 execute=_execute_basic,
                 previous_question=str(prior.get("previousQuestion") or ""),
                 previous_sql=str(prior.get("previousSQL") or ""),
+                previous_rows=[row for row in prior_rows if isinstance(row, dict)],
                 prior_examples=prior_examples,
                 local_agent=_basic_free_agent if free_model_available else None,
                 field_lookup=_basic_field_lookup if free_model_available else None,

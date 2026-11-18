@@ -1862,10 +1862,10 @@ export const dashboardApi = {
             throw new Error(publicApiError(error, 'Could not preview this table.'));
         }
     },
-    executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]>; filters?: { table: string; column: string; operator: 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than'; value: string; upper?: string }[] }) => {
+    executeBasicTrainingSql: async (body: { source: 'business' | 'application'; question: string; sql: string; selected_schema: Record<string, string[]>; filters?: { table: string; column: string; operator: 'include_value' | 'include_range' | 'exclude_value' | 'exclude_range' | 'greater_than' | 'less_than'; value: string; upper?: string }[]; allow_unrestricted?: boolean }) => {
         try {
             const response = await api.post('/api/query/adaptive/basic/training/execute', body, { timeout: 120000 });
-            return response.data as { status: 'executed' | 'needs_review' | 'failed'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; error?: string; answerability_issues?: string[]; llm_calls: 0 };
+            return response.data as { status: 'executed' | 'needs_review' | 'failed'; run_id?: string; sql: string; rows: Record<string, unknown>[]; columns: string[]; row_count: number; charts?: unknown[]; error?: string; answerability_issues?: string[]; llm_calls: 0 };
         } catch (error) {
             throw new Error(publicApiError(error, 'Could not run the training query.'));
         }

@@ -43,7 +43,7 @@ import {
   type LastSuccessfulAnalyticalContext,
 } from '@/lib/adaptiveChatContext';
 import ReactMarkdown from 'react-markdown';
-import { analystAnswerText, analystChartCurrency, analystDateCell, comparisonColumnLabel, comparisonYears, defaultAnalystCurrency, isAnalystChartDimension, isAnalystDateColumn, labelComparisonText } from '@/lib/analystPresentation';
+import { analystAnswerText, analystChartCurrency, analystDateCell, businessColumnLabel, businessPresentationColumns, comparisonYears, defaultAnalystCurrency, isAnalystChartDimension, isAnalystDateColumn, isTechnicalProofColumn, labelComparisonText } from '@/lib/analystPresentation';
 import { analystScrollPosition } from '@/lib/analystChatScroll';
 import remarkGfm from 'remark-gfm';
 import {
@@ -389,19 +389,23 @@ function DataTable({
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(0);
   const [filter, setFilter] = useState('');
+  const [showTechnical, setShowTechnical] = useState(false);
   const pageSize = 25;
 
   if (!data?.length) return null;
 
-  const headers = data?.length ? Object.keys(data[0]) : [];
+  const allHeaders = data?.length ? Object.keys(data[0]) : [];
+  const businessHeaders = businessPresentationColumns(question, allHeaders);
+  const technicalCount = allHeaders.filter(column => isTechnicalProofColumn(column, question)).length;
+  const headers = showTechnical ? allHeaders : businessHeaders;
   const isEmpty = !data?.length;
   const filtered = (data || []).filter((row) => {
     if (!filter.trim()) return true;
     const q = filter.trim().toLowerCase();
-    return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(q));
+    return headers.some((column) => String(row[column] ?? '').toLowerCase().includes(q));
   });
   const sorted = [...filtered].sort((a, b) => {
-    if (!sortKey) return 0;
+    if (!sortKey || !headers.includes(sortKey)) return 0;
     const av = a[sortKey];
     const bv = b[sortKey];
     const an = cellNum(av);
@@ -435,6 +439,16 @@ function DataTable({
           </span>
         </div>
         <div className="flex w-full sm:w-auto items-center gap-2 min-w-0">
+          {!isEmpty && technicalCount > 0 && (
+            <label className="inline-flex items-center gap-2 text-[11px] text-slate-600 whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={showTechnical}
+                onChange={(event) => { setShowTechnical(event.target.checked); setPage(0); }}
+              />
+              Show technical columns
+            </label>
+          )}
           {!isEmpty && (
             <input
               type="search"
@@ -448,7 +462,10 @@ function DataTable({
           {!isEmpty && (
             <button
               type="button"
-              onClick={() => exportCsv(sorted, 'bridgeedi-analysis.csv')}
+              onClick={() => exportCsv(
+                sorted.map((row) => Object.fromEntries(headers.map((column) => [businessColumnLabel(column, question), row[column]]))),
+                'bridgeedi-analysis.csv',
+              )}
               className="shrink-0 min-h-10 text-xs font-medium text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50"
             >
               Export CSV
@@ -456,6 +473,11 @@ function DataTable({
           )}
         </div>
       </div>
+      {!isEmpty && !showTechnical && technicalCount > 0 && (
+        <p className="px-3 sm:px-4 py-2 text-[11px] text-slate-500 border-b border-slate-100">
+          Showing business columns for this question. {technicalCount} technical validation column{technicalCount === 1 ? '' : 's'} hidden (SAP keys / proof fields).
+        </p>
+      )}
 
       {!isEmpty && (
         <>
@@ -466,7 +488,7 @@ function DataTable({
                   {headers.map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-semibold text-slate-600 uppercase tracking-wide whitespace-nowrap border-b border-slate-200" scope="col" aria-sort={sortKey === h ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                       <button type="button" onClick={() => toggleSort(h)} className="min-h-8 hover:text-slate-900">
-                        {comparisonColumnLabel(h, question)}{sortKey === h ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                        {businessColumnLabel(h, question)}{sortKey === h ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
                       </button>
                     </th>
                   ))}
